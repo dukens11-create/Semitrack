@@ -1,0 +1,7 @@
+app.use("/loads", loadRouter);
+app.use("/dispatch", dispatchRouter);
+app.use("/trip-status", tripStatusRouter);
+app.use("/notifications", notificationRouter);
+app.use("/analytics", analyticsRouter);
+app.use("/moderation", moderationRouter);
+app.use("/documents", documentRouter);

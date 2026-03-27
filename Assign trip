@@ -1,0 +1,8 @@
+POST /dispatch/assign
+{
+  "tripId": "trip_xxx",
+  "driverId": "user_xxx",
+  "truckId": "truck_xxx",
+  "loadId": "load_xxx",
+  "message": "Pickup at 8 AM. Check in at gate 3."
+}

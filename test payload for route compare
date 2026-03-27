@@ -1,0 +1,13 @@
+{
+  "origin": { "lat": 45.5231, "lng": -122.6765 },
+  "destination": { "lat": 39.5296, "lng": -119.8138 },
+  "truck": {
+    "heightFt": 13.5,
+    "weightLbs": 80000,
+    "widthFt": 8.5,
+    "lengthFt": 72,
+    "hazmatEnabled": false,
+    "axleCount": 5
+  },
+  "routeMode": "fastest"
+}

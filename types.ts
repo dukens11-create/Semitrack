@@ -1,24 +1,22 @@
-export type LatLng = { lat: number; lng: number };
-
-export type TruckProfile = {
-  heightFt: number;
-  weightLbs: number;
-  widthFt: number;
-  lengthFt: number;
-  hazmatEnabled: boolean;
-  axleCount: number;
-  avoidTolls?: boolean;
-  avoidFerries?: boolean;
-  avoidResidential?: boolean;
+export type EldDriverClock = {
+  provider: string;
+  driverId: string;
+  dutyStatus?: string;
+  breakMinutesLeft?: number | null;
+  driveMinutesLeft?: number | null;
+  shiftMinutesLeft?: number | null;
+  cycleMinutesLeft?: number | null;
 };
 
-export type RouteMode = "fastest" | "fuel_optimized" | "shortest";
-
-export type RouteRequest = {
-  origin: LatLng;
-  destination: LatLng;
-  viaStops?: LatLng[];
-  truck: TruckProfile;
-  routeMode?: RouteMode;
-  avoidZones?: string[];
+export type EldVehicleLocation = {
+  provider: string;
+  vehicleId: string;
+  latitude: number;
+  longitude: number;
+  recordedAt?: string;
 };
+
+export interface EldProvider {
+  getDriverClocks(): Promise<EldDriverClock[]>;
+  getVehicleLocations(): Promise<EldVehicleLocation[]>;
+}

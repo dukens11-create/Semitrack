@@ -1,0 +1,1 @@
+app.get("/admin/users", requireAuth, requireRole(["ADMIN", "FLEET_ADMIN"]), async (_req, res) => {

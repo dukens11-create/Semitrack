@@ -1,0 +1,12 @@
+POST /loads
+{
+  "brokerName": "ABC Logistics",
+  "shipperName": "Main Warehouse",
+  "originCity": "Portland",
+  "originState": "OR",
+  "destinationCity": "Reno",
+  "destinationState": "NV",
+  "equipmentType": "Dry Van",
+  "weightLbs": 42000,
+  "rateUsd": 1800
+}

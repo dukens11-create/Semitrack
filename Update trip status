@@ -1,0 +1,5 @@
+PATCH /trip-status/trip_xxx/status
+{
+  "status": "LOADED",
+  "notes": "Loaded and departing shipper"
+}

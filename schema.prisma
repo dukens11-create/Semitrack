@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  DRIVER
+  ADMIN
+  FLEET_ADMIN
+  DISPATCHER
+}
+
+enum SubscriptionPlan {
+  FREE
+  GOLD
+  DIAMOND
+  TEAM
+}
+
+enum MessageThreadType {
+  TRIP
+  LOAD
+  DISPATCH
+  GENERAL
+}
+
+enum MaintenanceStatus {
+  OPEN
+  DONE
+  OVERDUE
+}
+
+enum ComplianceItemType {
+  REGISTRATION
+  INSURANCE
+  PERMIT
+  ANNUAL_INSPECTION
+  IFTA
+  OTHER
+}
+
+model User {
+  id               String           @id @default(cuid())
+  email            String           @unique
+  passwordHash     String
+  fullName         String
+  role             UserRole         @default(DRIVER)
+  plan             SubscriptionPlan @default(FREE)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  messages         Message[]
+  notifications    Notification[]
+}
+
+model Truck {
+  id                 String             @id @default(cuid())
+  unitNumber         String?
+  name               String
+  vin                String?
+  plateNumber        String?
+  odometerMiles      Float?
+  engineHours        Float?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  maintenanceItems   MaintenanceItem[]
+  complianceItems    ComplianceItem[]
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  userId     String
+  title      String
+  body       String
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MessageThread {
+  id          String            @id @default(cuid())
+  type        MessageThreadType
+  tripId      String?
+  loadId      String?
+  title       String
+  createdAt   DateTime          @default(now())
+
+  messages    Message[]
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  threadId    String
+  senderId    String
+  body        String
+  createdAt   DateTime @default(now())
+
+  thread      MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sender      User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+}
+
+model MaintenanceItem {
+  id            String             @id @default(cuid())
+  truckId        String
+  title          String
+  dueDate        DateTime?
+  dueMiles       Float?
+  dueEngineHours Float?
+  status         MaintenanceStatus @default(OPEN)
+  notes          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  truck          Truck             @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+model ComplianceItem {
+  id            String             @id @default(cuid())
+  truckId       String
+  type          ComplianceItemType
+  title         String
+  expiresAt     DateTime
+  notes         String?
+  createdAt     DateTime           @default(now())
+
+  truck         Truck              @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+model EldSnapshot {
+  id                 String   @id @default(cuid())
+  provider           String
+  driverExternalId   String?
+  vehicleExternalId  String?
+  dutyStatus         String?
+  driveMinutesLeft   Int?
+  shiftMinutesLeft   Int?
+  cycleMinutesLeft   Int?
+  breakMinutesLeft   Int?
+  latitude           Float?
+  longitude          Float?
+  rawJson            Json?
+  createdAt          DateTime @default(now())
+}

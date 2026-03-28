@@ -17,7 +17,7 @@ export class MapboxRouteProvider implements RouteProvider {
     const url =
       `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
       `?access_token=${encodeURIComponent(env.mapboxToken)}` +
-      `&geometries=polyline6&steps=true&overview=full&annotations=duration,distance,speed`;
+      `&geometries=geojson&steps=true&overview=full&annotations=duration,distance,speed`;
 
     const res = await fetch(url);
     if (!res.ok) {
@@ -34,7 +34,7 @@ export class MapboxRouteProvider implements RouteProvider {
       provider: "Mapbox",
       distanceMiles: metersToMiles(route.distance ?? 0),
       etaMinutes: Math.round((route.duration ?? 0) / 60),
-      routePolyline: route.geometry ?? "",
+      routeGeometry: (route.geometry?.coordinates ?? []) as number[][],
       turnByTurn: (leg.steps ?? []).slice(0, 10).map((s: any, index: number) => ({
         step: index + 1,
         instruction: s.maneuver?.instruction ?? "Continue",

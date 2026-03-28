@@ -8,7 +8,7 @@ import 'package:latlong2/latlong.dart';
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
-/// route from the backend, decodes and draws the returned polyline, and
+/// route from the backend, parses the returned GeoJSON geometry, and
 /// displays dynamic ETA / distance / maneuver information together with the
 /// Phase 5 intelligence overlay (driveMinutesLeft, weather, riskScore).
 class TruckMapScreen extends StatefulWidget {
@@ -29,7 +29,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Full route response ────────────────────────────────────────────────────
   Map<String, dynamic>? _routeData;
 
-  // ── Map route points (decoded polyline) ────────────────────────────────────
+  // ── Map route points (from GeoJSON coordinates) ────────────────────────────
   List<LatLng> _routePoints = const [];
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
@@ -63,8 +63,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Mapbox Directions API integration ─────────────────────────────────────
 
   /// Fetches a driving route from the Mapbox Directions API and updates all
-  /// relevant state fields, including the decoded polyline used by
-  /// [drawRouteOnMap].
+  /// relevant state fields, including the GeoJSON coordinates used to draw the
+  /// route on the map.
   Future<void> fetchRoute() async {
     print("fetchRoute started");
 
@@ -77,17 +77,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     try {
       final url =
-          "https://api.mapbox.com/directions/v5/mapbox/driving/"
+          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
           "-122.6765,45.5231;-119.8138,39.5296"
-          "?geometries=polyline6&access_token=$_mapboxToken";
+          "?overview=full"
+          "&geometries=geojson"
+          "&steps=true"
+          "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
       print("MAPBOX RESPONSE: ${res.body}");
 
       final data = jsonDecode(res.body);
       final route = data["routes"][0];
-      final polyline = route["geometry"] as String;
-      final newPoints = drawRouteOnMap(polyline, provider: 'mapbox');
+
+      // Use GeoJSON coordinates directly — no polyline decoding required.
+      final coordinates =
+          (route["geometry"]["coordinates"] as List).cast<List<dynamic>>();
+      final newPoints = coordinates
+          .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
+          .toList();
 
       setState(() {
         _routeData = {
@@ -120,186 +128,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         padding: const EdgeInsets.all(50),
       ),
     );
-  }
-
-  // ── Polyline rendering ─────────────────────────────────────────────────────
-
-  /// Decodes [encodedPolyline] returned by the Mapbox Directions API (or
-  /// backend Mapbox provider) into a GeoJSON-style list of [lng, lat]
-  /// coordinate pairs (precision 6 / polyline6).
-  ///
-  /// Returns multiple intermediate points — not just start/end — as produced
-  /// by the standard Google/Mapbox polyline6 algorithm.
-  List<List<double>> decodePolylineToGeoJson(String encodedPolyline) {
-    final points = <List<double>>[];
-    int index = 0;
-    final length = encodedPolyline.length;
-    int lat = 0;
-    int lng = 0;
-    const factor = 1e6; // precision 6 (polyline6)
-
-    while (index < length) {
-      int b;
-      int shift = 0;
-      int result = 0;
-      do {
-        b = encodedPolyline.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encodedPolyline.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      // GeoJSON order: [longitude, latitude]
-      points.add([lng / factor, lat / factor]);
-    }
-
-    return points;
-  }
-
-  // ── HERE flexible-polyline decoder ────────────────────────────────────────
-
-  /// HERE flexible-polyline encoding alphabet (A–Z a–z 0–9 - _).
-  static const _kHereAlphabet =
-      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-  /// Inverse lookup: ASCII code → alphabet index (0-63), or -1 if invalid.
-  static final _kHereInverse = () {
-    final t = List<int>.filled(128, -1);
-    for (int i = 0; i < _kHereAlphabet.length; i++) {
-      t[_kHereAlphabet.codeUnitAt(i)] = i;
-    }
-    return t;
-  }();
-
-  /// Returns 10^[exp] as a double without requiring dart:math.
-  static double _pow10(int exp) {
-    double r = 1.0;
-    for (int i = 0; i < exp; i++) {
-      r *= 10.0;
-    }
-    return r;
-  }
-
-  /// Decodes one unsigned varint from [encoded] starting at [idx][0] and
-  /// advances [idx][0] past the consumed characters.
-  int _hereDecodeUnsigned(String encoded, List<int> idx) {
-    int result = 0;
-    int shift = 0;
-    while (true) {
-      if (idx[0] >= encoded.length) {
-        throw const FormatException('Truncated HERE flexible polyline');
-      }
-      final code = encoded.codeUnitAt(idx[0]++);
-      final c = (code < 128) ? _kHereInverse[code] : -1;
-      if (c < 0) throw const FormatException('Invalid HERE flexible polyline character');
-      result |= (c & 0x1F) << shift;
-      shift += 5;
-      if ((c & 0x20) == 0) break;
-    }
-    return result;
-  }
-
-  /// Decodes one signed varint (sign encoded in LSB) using [_hereDecodeUnsigned].
-  int _hereDecodeSigned(String encoded, List<int> idx) {
-    final unsigned = _hereDecodeUnsigned(encoded, idx);
-    return (unsigned & 1) != 0 ? ~(unsigned >> 1) : (unsigned >> 1);
-  }
-
-  /// Decodes a HERE flexible-polyline [encoded] string into GeoJSON-order
-  /// [lng, lat] coordinate pairs.  The precision and optional third dimension
-  /// are read from the encoded header.
-  List<List<double>> decodeHereFlexPolyline(String encoded) {
-    if (encoded.isEmpty) return const [];
-    final idx = [0];
-
-    // Header is two separate varints:
-    //   1st varint: FORMAT_VERSION (must be 1)
-    //   2nd varint: (third_dim_precision << 7) | (third_dim << 4) | precision
-    _hereDecodeUnsigned(encoded, idx); // skip FORMAT_VERSION
-    final headerVal = _hereDecodeUnsigned(encoded, idx);
-    final precision = headerVal & 0x0F;
-    final thirdDim = (headerVal >> 4) & 0x07;
-    final factor = _pow10(precision);
-
-    int lastLat = 0;
-    int lastLng = 0;
-    final points = <List<double>>[];
-
-    while (idx[0] < encoded.length) {
-      lastLat += _hereDecodeSigned(encoded, idx);
-      lastLng += _hereDecodeSigned(encoded, idx);
-      if (thirdDim != 0) {
-        _hereDecodeSigned(encoded, idx); // skip altitude / elevation
-      }
-      // GeoJSON order: [longitude, latitude]
-      points.add([lastLng / factor, lastLat / factor]);
-    }
-
-    return points;
-  }
-
-  // ── Route smoothing ───────────────────────────────────────────────────────
-
-  /// Applies one iteration of Chaikin's corner-cutting algorithm to produce a
-  /// smoother route line.  The first and last points are kept exactly so the
-  /// route still reaches its origin and destination.
-  List<LatLng> _smoothRoute(List<LatLng> points) {
-    if (points.length < 3) return points;
-    final result = <LatLng>[points.first];
-    for (int i = 0; i < points.length - 1; i++) {
-      final p0 = points[i];
-      final p1 = points[i + 1];
-      result.add(LatLng(
-        0.75 * p0.latitude + 0.25 * p1.latitude,
-        0.75 * p0.longitude + 0.25 * p1.longitude,
-      ));
-      result.add(LatLng(
-        0.25 * p0.latitude + 0.75 * p1.latitude,
-        0.25 * p0.longitude + 0.75 * p1.longitude,
-      ));
-    }
-    result.add(points.last);
-    return result;
-  }
-
-  /// Decodes [encodedPolyline] returned by the backend and returns a list of
-  /// [LatLng] points ready for rendering on the map widget.
-  ///
-  /// Dispatches to the correct decoder based on [provider]:
-  /// - `'here'` (case-insensitive) → HERE flexible-polyline decoder
-  /// - anything else (including `'mapbox'`) → polyline6 decoder (precision 1e6)
-  ///
-  /// The decoded route is smoothed with one pass of Chaikin's algorithm before
-  /// being returned.  Returns an empty list on error or empty input.
-  List<LatLng> drawRouteOnMap(
-    String encodedPolyline, {
-    String provider = '',
-  }) {
-    if (encodedPolyline.isEmpty) return const [];
-    try {
-      final List<List<double>> geoJsonPoints;
-      if (provider.toLowerCase() == 'here') {
-        geoJsonPoints = decodeHereFlexPolyline(encodedPolyline);
-      } else {
-        geoJsonPoints = decodePolylineToGeoJson(encodedPolyline);
-      }
-      if (geoJsonPoints.isEmpty) return const [];
-      final latLngPoints = geoJsonPoints
-          .map((p) => LatLng(p[1], p[0])) // lat = p[1], lng = p[0]
-          .toList();
-      return _smoothRoute(latLngPoints);
-    } catch (_) {
-      return const [];
-    }
   }
 
   // ── Phase 5 intelligence helpers ──────────────────────────────────────────

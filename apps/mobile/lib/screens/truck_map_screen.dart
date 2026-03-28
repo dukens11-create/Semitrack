@@ -59,10 +59,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     fetchRoute();
   }
 
-  // ── Backend integration ────────────────────────────────────────────────────
+  // ── Mapbox Directions API integration ─────────────────────────────────────
 
-  /// Fetches a route from the Mapbox Directions API and updates all relevant
-  /// state fields, including the decoded polyline used by [drawRouteOnMap].
+  /// Fetches a driving route from the Mapbox Directions API and updates all
+  /// relevant state fields, including the decoded polyline used by
+  /// [drawRouteOnMap].
   Future<void> fetchRoute() async {
     setState(() {
       _isLoading = true;
@@ -70,48 +71,58 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
 
     try {
-      final url = Uri.parse(
-        'https://api.mapbox.com/directions/v5/mapbox/driving/'
-        '$_originLng,$_originLat;$_destLng,$_destLat'
-        '?geometries=polyline&access_token=$_mapboxToken',
-      );
+      final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
+          '$_originLng,$_originLat;$_destLng,$_destLat'
+          '?geometries=polyline6&access_token=$_mapboxToken';
 
-      final res = await http.get(url);
-      if (res.statusCode != 200) {
-        throw Exception('Mapbox API error ${res.statusCode}: ${res.body}');
-      }
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final res = await http.get(Uri.parse(url));
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
 
-      final routes = data['routes'] as List<dynamic>?;
-      if (routes == null || routes.isEmpty) {
-        throw Exception('No routes returned by Mapbox.');
+      if (res.statusCode != 200 ||
+          (body['routes'] as List?)?.isEmpty != false) {
+        throw Exception(
+          body['message'] as String? ?? 'No route found',
+        );
       }
 
-      final route = routes[0] as Map<String, dynamic>;
-      final polyline = route['geometry'] as String? ?? '';
-      final distanceMeters = (route['distance'] as num?)?.toDouble() ?? 0.0;
-      final durationSeconds = (route['duration'] as num?)?.toDouble() ?? 0.0;
-
-      final distanceMiles = (distanceMeters / 1609).round();
+      final route = body['routes'][0] as Map<String, dynamic>;
+      final polyline = route['geometry'] as String;
+      final distanceMeters = (route['distance'] as num).toDouble();
+      final durationSeconds = (route['duration'] as num).toDouble();
       final etaMinutes = (durationSeconds / 60).round();
 
-      setState(() {
-        _routeData = {
-          'distanceMiles': distanceMiles,
-          'etaMinutes': etaMinutes,
-          'turnByTurn': [
-            {'instruction': 'Follow route'}
-          ],
-        };
+      // Extract turn-by-turn steps from each leg of the route.
+      final legs = route['legs'] as List? ?? const [];
+      final steps = <Map<String, dynamic>>[];
+      for (final leg in legs) {
+        final legSteps = (leg as Map<String, dynamic>)['steps'] as List? ?? [];
+        for (final step in legSteps) {
+          final maneuver =
+              (step as Map<String, dynamic>)['maneuver'] as Map<String, dynamic>?;
+          final instruction = maneuver?['instruction'] as String?;
+          if (instruction != null && instruction.isNotEmpty) {
+            steps.add({'instruction': instruction});
+          }
+        }
+      }
 
-        // Draw decoded polyline on the map.
+      final routeData = <String, dynamic>{
+        'distanceMiles': (distanceMeters / 1609).round(),
+        'etaMinutes': etaMinutes,
+        'turnByTurn': steps.isNotEmpty ? steps : [{'instruction': 'Follow route'}],
+      };
+
+      setState(() {
+        _routeData = routeData;
+
+        // Draw decoded polyline on the map (Mapbox uses precision-6 encoding).
         _routePoints = drawRouteOnMap(polyline);
 
         // Phase 5 intelligence fields stored as a Map.
         _intelligence = {
           'driveMinutesLeft': etaMinutes,
-          'weather': _extractWeather(_routeData!),
-          'riskScore': _computeRiskScore(_routeData!),
+          'weather': _extractWeather(routeData),
+          'riskScore': _computeRiskScore(routeData),
         };
 
         _isLoading = false;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api_client.dart';
 
@@ -11,6 +12,7 @@ class TruckMapScreen extends StatefulWidget {
 
 class _TruckMapScreenState extends State<TruckMapScreen> {
   final _api = ApiClient();
+  MapboxMap? mapboxMap;
   Map<String, dynamic>? _route;
   bool _isLoading = true;
   String? _error;
@@ -55,15 +57,44 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Semitrack')),
+      body: Stack(
+        children: [
+          MapWidget(
+            key: const ValueKey("mapWidget"),
+            resourceOptions: ResourceOptions(
+              accessToken: "YOUR_MAPBOX_TOKEN",
+            ),
+            onMapCreated: (map) {
+              mapboxMap = map;
+            },
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _buildRoutePanel(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoutePanel() {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+      return Container(
+        color: Colors.white,
+        padding: const EdgeInsets.all(16),
+        child: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (_error != null) {
-      return Scaffold(
-        body: Center(child: Text('Error: $_error')),
+      return Container(
+        color: Colors.white,
+        padding: const EdgeInsets.all(16),
+        child: Text('Error: $_error'),
       );
     }
 
@@ -73,18 +104,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ? turnByTurn[0]["instruction"] as String
         : '';
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Truck Route')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("${route["distanceMiles"]} mi"),
-            Text("${route["etaMinutes"] ~/ 60}h ${route["etaMinutes"] % 60}m"),
-            Text(firstInstruction),
-          ],
-        ),
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text("${route["distanceMiles"]} mi"),
+          Text("${route["etaMinutes"] ~/ 60}h ${route["etaMinutes"] % 60}m"),
+          Text(firstInstruction),
+        ],
       ),
     );
   }

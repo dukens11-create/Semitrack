@@ -23,11 +23,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _isLoading = false;
   String? _error;
 
+  // ── Map ready state ────────────────────────────────────────────────────────
+  bool _mapReady = false;
+
   // ── Full route response ────────────────────────────────────────────────────
   Map<String, dynamic>? _routeData;
 
   // ── Map route points (decoded polyline) ────────────────────────────────────
-  List<LatLng> _routePoints = const [_origin, _destination];
+  List<LatLng> _routePoints = const [];
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   Map<String, dynamic> _intelligence = const {
@@ -65,30 +68,58 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> fetchRoute() async {
     print("fetchRoute started");
 
-    final url =
-        "https://api.mapbox.com/directions/v5/mapbox/driving/"
-        "-122.6765,45.5231;-119.8138,39.5296"
-        "?geometries=polyline&access_token=YOUR_MAPBOX_TOKEN";
-
-    final res = await http.get(Uri.parse(url));
-    print("MAPBOX RESPONSE: ${res.body}");
-
-    final data = jsonDecode(res.body);
-    final route = data["routes"][0];
-    final polyline = route["geometry"];
-
+    // Clear the old route line before fetching a new one.
     setState(() {
-      _routeData = {
-        "distanceMiles": (route["distance"] / 1609.34).round(),
-        "etaMinutes": (route["duration"] / 60).round(),
-        "turnByTurn": [
-          {"instruction": "Follow mapped route"}
-        ]
-      };
-      _isLoading = false;
+      _isLoading = true;
+      _routePoints = [];
+      _error = null;
     });
 
-    _routePoints = drawRouteOnMap(polyline as String);
+    try {
+      final url =
+          "https://api.mapbox.com/directions/v5/mapbox/driving/"
+          "-122.6765,45.5231;-119.8138,39.5296"
+          "?geometries=polyline&access_token=$_mapboxToken";
+
+      final res = await http.get(Uri.parse(url));
+      print("MAPBOX RESPONSE: ${res.body}");
+
+      final data = jsonDecode(res.body);
+      final route = data["routes"][0];
+      final polyline = route["geometry"] as String;
+      final newPoints = drawRouteOnMap(polyline);
+
+      setState(() {
+        _routeData = {
+          "distanceMiles": (route["distance"] / 1609.34).round(),
+          "etaMinutes": (route["duration"] / 60).round(),
+          "turnByTurn": [
+            {"instruction": "Follow mapped route"}
+          ]
+        };
+        _routePoints = newPoints;
+        _isLoading = false;
+      });
+
+      _fitCameraToRoute(newPoints);
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Fits the map camera to the bounding box of [points].
+  void _fitCameraToRoute(List<LatLng> points) {
+    if (!_mapReady || points.length < 2) return;
+    final bounds = LatLngBounds.fromPoints(points);
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(50),
+      ),
+    );
   }
 
   // ── Polyline rendering ─────────────────────────────────────────────────────
@@ -137,21 +168,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [LatLng] points ready for rendering on the map widget.
   ///
   /// Calls [decodePolylineToGeoJson] to obtain [lng, lat] pairs, then converts
-  /// them to [LatLng].  Falls back to the static origin → destination pair on
-  /// error or empty input.
+  /// them to [LatLng].  Returns an empty list on error or empty input — no
+  /// straight origin→destination fallback is used.
   List<LatLng> drawRouteOnMap(
     String encodedPolyline, {
     String provider = '',
   }) {
-    if (encodedPolyline.isEmpty) return const [_origin, _destination];
+    if (encodedPolyline.isEmpty) return const [];
     try {
       final geoJsonPoints = decodePolylineToGeoJson(encodedPolyline);
-      if (geoJsonPoints.isEmpty) return const [_origin, _destination];
+      if (geoJsonPoints.isEmpty) return const [];
       return geoJsonPoints
           .map((p) => LatLng(p[1], p[0])) // lat = p[1], lng = p[0]
           .toList();
     } catch (_) {
-      return const [_origin, _destination];
+      return const [];
     }
   }
 
@@ -232,7 +263,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       (_originLng + _destLng) / 2,
                     ),
                     initialZoom: 6,
-                    onMapReady: fetchRoute,
+                    onMapReady: () {
+                      _mapReady = true;
+                      fetchRoute();
+                    },
                   ),
                   children: [
                     TileLayer(
@@ -248,11 +282,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     PolylineLayer(
                       polylines: [
-                        Polyline(
-                          points: _routePoints,
-                          strokeWidth: 5,
-                          color: Colors.blue,
-                        ),
+                        if (_routePoints.isNotEmpty)
+                          Polyline(
+                            points: _routePoints,
+                            strokeWidth: 5,
+                            color: Colors.blue,
+                            strokeJoin: StrokeJoin.round,
+                            strokeCap: StrokeCap.round,
+                          ),
                       ],
                     ),
                     MarkerLayer(

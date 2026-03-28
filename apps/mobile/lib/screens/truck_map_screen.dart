@@ -77,9 +77,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     try {
       final url =
-          "https://api.mapbox.com/directions/v5/mapbox/driving/"
-          "-122.6765,45.5231;-119.8138,39.5296"
-          "?geometries=polyline6&access_token=$_mapboxToken";
+          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
+          "${_originLng},${_originLat};${_destLng},${_destLat}"
+          "?overview=full&geometries=polyline6&steps=true"
+          "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
       print("MAPBOX RESPONSE: ${res.body}");

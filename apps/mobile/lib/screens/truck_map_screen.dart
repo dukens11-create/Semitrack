@@ -50,9 +50,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
 
-  // ── Mapbox public tile access token (set via --dart-define=MAPBOX_TOKEN=...) ─
+  // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
-      String.fromEnvironment('MAPBOX_TOKEN', defaultValue: '');
+      'pk.eyJ1Ijoic2VtaXRyYWNrLTExIiwiYSI6ImNtbmFoeHRoNjBqcjcycXE2ZWk5cGpzNGMifQ.09eo4qJKyLZq_3aUEXWiAA';
 
   @override
   void initState() {

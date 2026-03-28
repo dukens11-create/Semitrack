@@ -22,15 +22,11 @@ class TruckMapScreen extends StatefulWidget {
 
 class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Loading / error ────────────────────────────────────────────────────────
-  bool _loading = false;
+  bool _isLoading = false;
   String? _error;
 
-  // ── Route data ─────────────────────────────────────────────────────────────
-  double? _distanceMiles;
-  int? _etaMinutes;
-  String _nextManeuver = '';
-  String _provider = '';
-  List<String> _alerts = [];
+  // ── Full route response ────────────────────────────────────────────────────
+  Map<String, dynamic>? _routeData;
 
   // ── Map route points (decoded polyline) ────────────────────────────────────
   List<LatLng> _routePoints = const [_origin, _destination];
@@ -45,9 +41,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
 
-  // ── Default route endpoints (Portland → Eugene, OR) ───────────────────────
-  static const _origin = LatLng(45.5231, -122.6765);
-  static const _destination = LatLng(44.0521, -123.0868);
+  // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
+  static const _originLat = 45.5231;
+  static const _originLng = -122.6765;
+  static const _destLat = 40.7580;
+  static const _destLng = -119.8160;
+
+  static const _origin = LatLng(_originLat, _originLng);
+  static const _destination = LatLng(_destLat, _destLng);
 
   // ── Mapbox public tile access token (set via --dart-define=MAPBOX_TOKEN=...) ─
   static const _mapboxToken =
@@ -66,7 +67,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// polyline used by [drawRouteOnMap].
   Future<void> fetchRoute() async {
     setState(() {
-      _loading = true;
+      _isLoading = true;
       _error = null;
     });
 
@@ -77,44 +78,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final data = await ApiClient().post(
         '/routing/truck-route',
         {
-          'origin': {
-            'lat': _origin.latitude,
-            'lng': _origin.longitude,
-          },
-          'destination': {
-            'lat': _destination.latitude,
-            'lng': _destination.longitude,
-          },
+          'origin': {'lat': _originLat, 'lng': _originLng},
+          'destination': {'lat': _destLat, 'lng': _destLng},
           'truck': {
-            'heightFt': 13.6,
+            'heightFt': 13.5,
             'weightLbs': 80000,
             'widthFt': 8.5,
-            'lengthFt': 53.0,
+            'lengthFt': 70.0,
             'hazmatEnabled': false,
             'axleCount': 5,
+            'avoidTolls': false,
+            'avoidFerries': true,
+            'avoidResidential': true,
           },
+          'routeMode': 'fastest',
         },
         token: token,
       );
 
-      final steps = (data['turnByTurn'] as List?) ?? <dynamic>[];
       final routePolyline = data['routePolyline'] as String? ?? '';
       final provider = data['provider'] as String? ?? '';
       final etaMinutes = (data['etaMinutes'] as num?)?.toInt();
-      final distanceMiles = (data['distanceMiles'] as num?)?.toDouble();
-      final alerts = (data['alerts'] as List?)?.cast<String>() ?? <String>[];
 
       setState(() {
-        _distanceMiles = distanceMiles;
-        _etaMinutes = etaMinutes;
-        _provider = provider;
-        _nextManeuver = steps.isNotEmpty
-            ? (steps.first as Map<String, dynamic>)['instruction'] as String? ??
-                ''
-            : '';
-        _alerts = alerts;
+        _routeData = data;
 
-        // Draw decoded polyline on the Mapbox map.
+        // Draw decoded polyline on the map.
         _routePoints = drawRouteOnMap(routePolyline, provider: provider);
 
         // Phase 5 intelligence fields stored as a Map.
@@ -124,12 +113,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'riskScore': _computeRiskScore(data),
         };
 
-        _loading = false;
+        _isLoading = false;
       });
     } catch (e) {
       setState(() {
-        _error = 'Failed to fetch route. Please try again.';
-        _loading = false;
+        _error = e is Exception
+            ? e.toString().replaceFirst('Exception: ', '')
+            : 'Failed to load route. Please try again.';
+        _isLoading = false;
       });
     }
   }
@@ -137,7 +128,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Polyline rendering ─────────────────────────────────────────────────────
 
   /// Decodes [encodedPolyline] returned by the backend and returns a list of
-  /// [LatLng] points ready for rendering on the Mapbox map widget.
+  /// [LatLng] points ready for rendering on the map widget.
   ///
   /// Dispatches to [_decodeHereFlexiblePolyline] when [provider] is `"HERE"`,
   /// and to [_decodeGooglePolyline] (precision 6) for Mapbox or any other
@@ -244,9 +235,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Phase 5 intelligence helpers ──────────────────────────────────────────
 
   /// Extracts a human-readable weather summary from the route response.
-  ///
-  /// If a `/weather/route` response is merged into [data] this will surface
-  /// the first checkpoint's condition; otherwise returns `'Clear skies'`.
   String _extractWeather(Map<String, dynamic> data) {
     final items = data['weather'] as List?;
     if (items != null && items.isNotEmpty) {
@@ -263,8 +251,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Computes a 0–100 risk score from the alerts list in [data].
-  ///
-  /// Each hazmat or restriction alert deducts points from the baseline of 100.
   double _computeRiskScore(Map<String, dynamic> data) {
     final alerts = (data['alerts'] as List?) ?? const <dynamic>[];
     double score = 100.0;
@@ -287,11 +273,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return h > 0 ? '${h}h ${m}m' : '${m}m';
   }
 
-  String _formatDistance(double? miles) {
-    if (miles == null) return '—';
-    return '${miles.toStringAsFixed(1)} mi';
-  }
-
   String _formatRisk(double? score) {
     if (score == null) return '—';
     if (score >= 90) return '${score.toStringAsFixed(0)} (Low)';
@@ -303,233 +284,282 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final intelligence = _intelligence;
-    final driveMinutesLeft = intelligence['driveMinutesLeft'] as int?;
-    final weather = intelligence['weather'] as String?;
-    final riskScore = intelligence['riskScore'] as double?;
-
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Truck Map'),
+        title: const Text('Truck Route Map'),
         actions: [
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.only(right: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh route',
-              onPressed: fetchRoute,
-            ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _isLoading ? null : fetchRoute,
+          ),
         ],
       ),
-      body: ListView(
+      body: Column(
         children: [
-          // ── Mapbox map widget ────────────────────────────────────────────
-          SizedBox(
-            height: 320,
-            child: FlutterMap(
-              mapController: _mapController,
-              options: const MapOptions(
-                initialCenter: _origin,
-                initialZoom: 8,
-              ),
+          // ── Mapbox map widget (flutter_map) ──────────────────────────────
+          Expanded(
+            flex: 2,
+            child: Stack(
               children: [
-                TileLayer(
-                  // When a MAPBOX_TOKEN is provided (via --dart-define), use
-                  // Mapbox Streets tiles. Restrict the token to your app's
-                  // bundle ID and allowed URLs in the Mapbox dashboard to
-                  // limit its exposure. Falls back to OpenStreetMap otherwise.
-                  urlTemplate: _mapboxToken.isNotEmpty
-                      ? 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
-                          '?access_token=$_mapboxToken'
-                      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.semitrack.mobile',
-                ),
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _routePoints,
-                      strokeWidth: 5,
-                      color: Colors.blue,
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: LatLng(
+                      (_originLat + _destLat) / 2,
+                      (_originLng + _destLng) / 2,
+                    ),
+                    initialZoom: 6,
+                  ),
+                  children: [
+                    TileLayer(
+                      // When a MAPBOX_TOKEN is provided (via --dart-define),
+                      // use Mapbox Streets tiles. Restrict the token to your
+                      // app's bundle ID in the Mapbox dashboard to limit its
+                      // exposure. Falls back to OpenStreetMap otherwise.
+                      urlTemplate: _mapboxToken.isNotEmpty
+                          ? 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
+                              '?access_token=$_mapboxToken'
+                          : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.semitrack.mobile',
+                    ),
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: _routePoints,
+                          strokeWidth: 5,
+                          color: Colors.blue,
+                        ),
+                      ],
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: _origin,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(
+                            Icons.local_shipping,
+                            size: 34,
+                            color: Colors.blue,
+                          ),
+                        ),
+                        Marker(
+                          point: _destination,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(
+                            Icons.location_on,
+                            size: 34,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      point: _origin,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.local_shipping,
-                        size: 34,
-                        color: Colors.blue,
-                      ),
-                    ),
-                    Marker(
-                      point: _destination,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.location_on,
-                        size: 34,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ],
-                ),
+                if (_isLoading)
+                  const Center(child: CircularProgressIndicator()),
               ],
             ),
           ),
 
           // ── Error banner ─────────────────────────────────────────────────
           if (_error != null)
-            Container(
-              color: Colors.red.shade50,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline, color: Colors.red),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ),
-                ],
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Error: $_error',
+                style: const TextStyle(color: Colors.red),
               ),
             ),
 
-          // ── Live route card ───────────────────────────────────────────────
-          Card(
-            margin: const EdgeInsets.all(12),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Live Truck Route',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (_provider.isNotEmpty)
-                        Chip(
-                          label: Text(_provider),
-                          padding: EdgeInsets.zero,
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _InfoRow(
-                    label: 'Next maneuver',
-                    value: _loading
-                        ? 'Calculating route…'
-                        : _nextManeuver.isEmpty
-                            ? '—'
-                            : _nextManeuver,
-                  ),
-                  _InfoRow(
-                    label: 'ETA',
-                    value: _loading ? '…' : _formatEta(_etaMinutes),
-                  ),
-                  _InfoRow(
-                    label: 'Distance',
-                    value: _loading ? '…' : _formatDistance(_distanceMiles),
-                  ),
-                  if (_alerts.isNotEmpty) ...[
-                    const SizedBox(height: 8),
+          // ── Route info + Phase 5 intelligence ────────────────────────────
+          if (_routeData != null)
+            Expanded(
+              flex: 1,
+              child: _buildRouteInfo(_routeData!),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteInfo(Map<String, dynamic> route) {
+    final distanceMiles = route['distanceMiles'];
+    final etaMinutes = (route['etaMinutes'] as num?)?.toInt();
+    final tollsUsd = route['tollsUsd'];
+    final fuelGallons = route['fuelGallonsEstimate'];
+    final routeMode = route['routeMode'] ?? 'fastest';
+    final provider = route['provider'] as String? ?? '';
+    final live = route['live'] as Map<String, dynamic>?;
+    final warnings =
+        (route['truckWarnings'] as List?)?.cast<String>() ?? const <String>[];
+    final steps =
+        (route['turnByTurn'] as List?)?.cast<Map<String, dynamic>>() ??
+            const <Map<String, dynamic>>[];
+
+    final etaText = _formatEta(etaMinutes);
+
+    // Phase 5 intelligence from state.
+    final driveMinutesLeft =
+        _intelligence['driveMinutesLeft'] as int?;
+    final weather = _intelligence['weather'] as String?;
+    final riskScore = _intelligence['riskScore'] as double?;
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 16),
+      children: [
+        // ── Route Summary ────────────────────────────────────────────────
+        Card(
+          margin: const EdgeInsets.all(12),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
                     const Text(
-                      'Alerts',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                      'Route Summary',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 18),
                     ),
-                    for (final alert in _alerts)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(
-                              Icons.info_outline,
-                              size: 16,
-                              color: Colors.orange,
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                alert,
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                            ),
-                          ],
-                        ),
+                    const Spacer(),
+                    if (provider.isNotEmpty)
+                      Chip(
+                        label: Text(provider),
+                        padding: EdgeInsets.zero,
                       ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                _labelValue('Mode', routeMode),
+                if (distanceMiles != null)
+                  _labelValue('Distance', '$distanceMiles mi'),
+                if (etaText.isNotEmpty) _labelValue('ETA', etaText),
+                if (tollsUsd != null)
+                  _labelValue(
+                      'Tolls', '\$${(tollsUsd as num).toStringAsFixed(2)}'),
+                if (fuelGallons != null)
+                  _labelValue('Fuel estimate', '$fuelGallons gal'),
+                if (live != null) ...[
+                  _labelValue('Traffic', '${live['traffic']}'),
+                  _labelValue('Incidents', '${live['incidents']}'),
                 ],
-              ),
+              ],
             ),
           ),
+        ),
 
-          // ── Phase 5 intelligence card ─────────────────────────────────────
+        // ── Phase 5: Drive Intelligence ──────────────────────────────────
+        Card(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Drive Intelligence',
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                _labelValue('Drive time left', _formatEta(driveMinutesLeft)),
+                _labelValue('Weather', weather ?? '—'),
+                _labelValue('Risk score', _formatRisk(riskScore)),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Truck Warnings ───────────────────────────────────────────────
+        if (warnings.isNotEmpty)
           Card(
-            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Drive Intelligence',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    'Truck Warnings',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16),
                   ),
-                  const SizedBox(height: 12),
-                  _InfoRow(
-                    label: 'Drive time left',
-                    value: _loading ? '…' : _formatEta(driveMinutesLeft),
-                  ),
-                  _InfoRow(
-                    label: 'Weather',
-                    value: _loading ? 'Loading…' : (weather ?? '—'),
-                  ),
-                  _InfoRow(
-                    label: 'Risk score',
-                    value: _loading ? '…' : _formatRisk(riskScore),
-                  ),
+                  const SizedBox(height: 8),
+                  for (final w in warnings)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.warning_amber,
+                              size: 18, color: Colors.orange),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(w)),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
           ),
-        ],
-      ),
+
+        // ── Turn-by-Turn ─────────────────────────────────────────────────
+        if (steps.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Turn-by-Turn',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final step in steps)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 12,
+                            child: Text(
+                              '${step['step']}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${step['instruction']}'),
+                                Text(
+                                  '${step['distanceMiles']} mi',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
-}
 
-// ── Shared row widget ──────────────────────────────────────────────────────────
-
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _labelValue(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(

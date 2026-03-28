@@ -1,11 +1,10 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-import '../core/api_client.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -60,11 +59,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     fetchRoute();
   }
 
-  // ── Backend integration ────────────────────────────────────────────────────
+  // ── Mapbox Directions API integration ─────────────────────────────────────
 
-  /// Fetches a truck-safe route from the backend `/routing/truck-route`
-  /// endpoint and updates all relevant state fields, including the decoded
-  /// polyline used by [drawRouteOnMap].
+  /// Fetches a driving route from the Mapbox Directions API and updates all
+  /// relevant state fields, including the decoded polyline used by
+  /// [drawRouteOnMap].
   Future<void> fetchRoute() async {
     setState(() {
       _isLoading = true;
@@ -72,45 +71,58 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token');
+      final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
+          '$_originLng,$_originLat;$_destLng,$_destLat'
+          '?geometries=polyline6&access_token=$_mapboxToken';
 
-      final data = await ApiClient().post(
-        '/routing/truck-route',
-        {
-          'origin': {'lat': _originLat, 'lng': _originLng},
-          'destination': {'lat': _destLat, 'lng': _destLng},
-          'truck': {
-            'heightFt': 13.5,
-            'weightLbs': 80000,
-            'widthFt': 8.5,
-            'lengthFt': 70.0,
-            'hazmatEnabled': false,
-            'axleCount': 5,
-            'avoidTolls': false,
-            'avoidFerries': true,
-            'avoidResidential': true,
-          },
-          'routeMode': 'fastest',
-        },
-        token: token,
-      );
+      final res = await http.get(Uri.parse(url));
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
 
-      final routePolyline = data['routePolyline'] as String? ?? '';
-      final provider = data['provider'] as String? ?? '';
-      final etaMinutes = (data['etaMinutes'] as num?)?.toInt();
+      if (res.statusCode != 200 ||
+          (body['routes'] as List?)?.isEmpty != false) {
+        throw Exception(
+          body['message'] as String? ?? 'No route found',
+        );
+      }
+
+      final route = body['routes'][0] as Map<String, dynamic>;
+      final polyline = route['geometry'] as String;
+      final distanceMeters = (route['distance'] as num).toDouble();
+      final durationSeconds = (route['duration'] as num).toDouble();
+      final etaMinutes = (durationSeconds / 60).round();
+
+      // Extract turn-by-turn steps from each leg of the route.
+      final legs = route['legs'] as List? ?? const [];
+      final steps = <Map<String, dynamic>>[];
+      for (final leg in legs) {
+        final legSteps = (leg as Map<String, dynamic>)['steps'] as List? ?? [];
+        for (final step in legSteps) {
+          final maneuver =
+              (step as Map<String, dynamic>)['maneuver'] as Map<String, dynamic>?;
+          final instruction = maneuver?['instruction'] as String?;
+          if (instruction != null && instruction.isNotEmpty) {
+            steps.add({'instruction': instruction});
+          }
+        }
+      }
+
+      final routeData = <String, dynamic>{
+        'distanceMiles': (distanceMeters / 1609).round(),
+        'etaMinutes': etaMinutes,
+        'turnByTurn': steps.isNotEmpty ? steps : [{'instruction': 'Follow route'}],
+      };
 
       setState(() {
-        _routeData = data;
+        _routeData = routeData;
 
-        // Draw decoded polyline on the map.
-        _routePoints = drawRouteOnMap(routePolyline, provider: provider);
+        // Draw decoded polyline on the map (Mapbox uses precision-6 encoding).
+        _routePoints = drawRouteOnMap(polyline);
 
         // Phase 5 intelligence fields stored as a Map.
         _intelligence = {
           'driveMinutesLeft': etaMinutes,
-          'weather': _extractWeather(data),
-          'riskScore': _computeRiskScore(data),
+          'weather': _extractWeather(routeData),
+          'riskScore': _computeRiskScore(routeData),
         };
 
         _isLoading = false;

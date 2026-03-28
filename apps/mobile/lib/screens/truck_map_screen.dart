@@ -18,7 +18,8 @@ class TruckMapScreen extends StatefulWidget {
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
 
-class _TruckMapScreenState extends State<TruckMapScreen> {
+class _TruckMapScreenState extends State<TruckMapScreen>
+    with SingleTickerProviderStateMixin {
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -31,6 +32,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Map route points (decoded polyline) ────────────────────────────────────
   List<LatLng> _routePoints = const [];
+
+  // ── Truck marker animation ─────────────────────────────────────────────────
+  late AnimationController _animController;
+  int _truckIndex = 0;
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   Map<String, dynamic> _intelligence = const {
@@ -58,6 +63,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 30),
+    )..addListener(_onAnimTick);
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  /// Advances the truck marker to the route point corresponding to the current
+  /// animation value (0.0 = origin, 1.0 = destination).
+  void _onAnimTick() {
+    if (_routePoints.isEmpty) return;
+    final idx = (_animController.value * (_routePoints.length - 1))
+        .floor()
+        .clamp(0, _routePoints.length - 1);
+    if (idx != _truckIndex) {
+      setState(() => _truckIndex = idx);
+    }
   }
 
   // ── Mapbox Directions API integration ─────────────────────────────────────
@@ -79,7 +106,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving/"
           "-122.6765,45.5231;-119.8138,39.5296"
-          "?geometries=polyline6&access_token=$_mapboxToken";
+          "?geometries=polyline6&steps=true&overview=full"
+          "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
       print("MAPBOX RESPONSE: ${res.body}");
@@ -89,19 +117,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final polyline = route["geometry"] as String;
       final newPoints = drawRouteOnMap(polyline, provider: 'mapbox');
 
+      // Extract the first step instruction from the directions response.
+      final firstInstruction = _extractFirstInstruction(route);
+
       setState(() {
         _routeData = {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": [
-            {"instruction": "Follow mapped route"}
+            {"instruction": firstInstruction}
           ]
         };
         _routePoints = newPoints;
+        _truckIndex = 0;
         _isLoading = false;
       });
 
       _fitCameraToRoute(newPoints);
+      _animController.forward(from: 0);
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -110,14 +143,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Fits the map camera to the bounding box of [points].
+  /// Extracts the instruction text from the first maneuver step of [route].
+  ///
+  /// Returns the instruction string from `legs[0].steps[0].maneuver.instruction`,
+  /// or `'Follow mapped route'` when the field is absent.
+  String _extractFirstInstruction(Map<String, dynamic> route) {
+    final legs = route['legs'] as List?;
+    if (legs == null || legs.isEmpty) return 'Follow mapped route';
+    final steps = legs[0]['steps'] as List?;
+    if (steps == null || steps.isEmpty) return 'Follow mapped route';
+    final maneuver = (steps[0] as Map<String, dynamic>)['maneuver']
+        as Map<String, dynamic>?;
+    return maneuver?['instruction'] as String? ?? 'Follow mapped route';
+  }
+
+  /// Fits the map camera to the first segment of [points] at navigation zoom.
+  ///
+  /// Uses only the leading portion of the route (up to 10 points) so the
+  /// camera opens close to the active leg rather than showing the entire
+  /// multi-hour route from above.
   void _fitCameraToRoute(List<LatLng> points) {
     if (!_mapReady || points.length < 2) return;
-    final bounds = LatLngBounds.fromPoints(points);
+    final segment = points.length > 10 ? points.sublist(0, 10) : points;
+    final bounds = LatLngBounds.fromPoints(segment);
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: bounds,
-        padding: const EdgeInsets.all(50),
+        padding: const EdgeInsets.all(40),
+        maxZoom: 14.0,
       ),
     );
   }
@@ -411,7 +464,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     MarkerLayer(
                       markers: [
                         Marker(
-                          point: _origin,
+                          point: _routePoints.isNotEmpty
+                              ? _routePoints[_truckIndex]
+                              : _origin,
                           width: 40,
                           height: 40,
                           child: const Icon(
@@ -615,7 +670,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('TEST MANEUVER'),
+                                Text(step['instruction'] as String? ?? 'No instruction available'),
                                 Text(
                                   '${step['distanceMiles']} mi',
                                   style: const TextStyle(

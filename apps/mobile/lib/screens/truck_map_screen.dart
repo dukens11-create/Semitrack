@@ -359,7 +359,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 const SizedBox(height: 12),
                 _labelValue('Mode', routeMode),
                 const Text('Distance: 9999 mi'),
-                const Text('ETA: 99h 99m'),
+                const Text('ETA: TEST'),
                 if (tollsUsd != null)
                   _labelValue(
                       'Tolls', '\$${(tollsUsd as num).toStringAsFixed(2)}'),

@@ -255,7 +255,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Truck Route Map'),
+        title: const Text('Semitrack NEW'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -404,9 +404,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
                 const SizedBox(height: 12),
                 _labelValue('Mode', routeMode),
-                if (distanceMiles != null)
-                  _labelValue('Distance', '$distanceMiles mi'),
-                if (etaText.isNotEmpty) _labelValue('ETA', etaText),
+                const Text('Distance: 9999 mi'),
+                const Text('ETA: 99h 99m'),
                 if (tollsUsd != null)
                   _labelValue(
                       'Tolls', '\$${(tollsUsd as num).toStringAsFixed(2)}'),
@@ -509,7 +508,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('${step['instruction']}'),
+                                const Text('TEST MANEUVER'),
                                 Text(
                                   '${step['distanceMiles']} mi',
                                   style: const TextStyle(

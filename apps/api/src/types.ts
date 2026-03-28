@@ -24,7 +24,7 @@ export type RouteBuildResult = {
   provider: string;
   distanceMiles: number;
   etaMinutes: number;
-  routePolyline: string;
+  routeGeometry: number[][];
   turnByTurn: Array<{
     step: number;
     instruction: string;

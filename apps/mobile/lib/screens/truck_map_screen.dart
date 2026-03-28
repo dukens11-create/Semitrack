@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../core/api_client.dart';
+
+const _apiBase = 'http://10.0.2.2:4000';
 
 class TruckMapScreen extends StatefulWidget {
   const TruckMapScreen({super.key});
@@ -12,12 +14,10 @@ class TruckMapScreen extends StatefulWidget {
 }
 
 class _TruckMapScreenState extends State<TruckMapScreen> {
-  final _api = ApiClient();
-
+  MapboxMap? mapboxMap;
   Map<String, dynamic>? _routeData;
   bool _isLoading = false;
   String? _error;
-  List<LatLng> _routePoints = _defaultRoutePoints;
 
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -27,14 +27,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _origin = {'lat': _originLat, 'lng': _originLng};
   static const _destination = {'lat': _destLat, 'lng': _destLng};
 
-  // Fallback waypoints from Portland, OR to Reno, NV used until a real
-  // encoded-polyline decoder is wired in.
-  static const _defaultRoutePoints = [
-    LatLng(_originLat, _originLng),
-    LatLng(45.60, -122.80),
-    LatLng(45.70, -123.00),
-    LatLng(_destLat, _destLng),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchRoute();
+  }
 
   Future<void> _fetchRoute() async {
     setState(() {
@@ -46,9 +43,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token');
 
-      final data = await _api.post(
-        '/routing/truck-route',
-        {
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+
+      final res = await http.post(
+        Uri.parse('$_apiBase/routing/truck-route'),
+        headers: headers,
+        body: jsonEncode({
           'origin': _origin,
           'destination': _destination,
           'truck': {
@@ -63,54 +64,71 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             'avoidResidential': true,
           },
           'routeMode': 'fastest',
-        },
-        token: token,
+        }),
       );
 
-      setState(() {
-        _routeData = data;
-        // If the API returns real geometry in the future, decode and replace
-        // _routePoints here. Until then, origin and destination markers are
-        // updated from the response so the map reflects the fetched trip.
-        _routePoints = _buildRoutePoints(data);
-        _isLoading = false;
-      });
+      if (res.statusCode != 200) {
+        throw Exception('Route request failed (${res.statusCode})');
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      setState(() => _routeData = data);
+      if (mapboxMap != null) {
+        await _drawRoute(data);
+      }
     } catch (e) {
       setState(() {
         _error = e is Exception
             ? e.toString().replaceFirst('Exception: ', '')
             : 'Failed to load route. Please try again.';
-        _isLoading = false;
       });
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
-  /// Derives map waypoints from the API response.
-  ///
-  /// When the backend returns a real encoded polyline, this method should
-  /// decode it into a full list of [LatLng] points.  For now it reconstructs
-  /// the origin → intermediate waypoints → destination path from the
-  /// turn-by-turn steps so the polyline reflects the fetched trip rather than
-  /// the hard-coded fallback.
-  List<LatLng> _buildRoutePoints(Map<String, dynamic> data) {
-    final originLat = (_origin['lat'] as num).toDouble();
-    final originLng = (_origin['lng'] as num).toDouble();
-    final destLat = (_destination['lat'] as num).toDouble();
-    final destLng = (_destination['lng'] as num).toDouble();
+  Future<void> _drawRoute(Map<String, dynamic> data) async {
+    if (mapboxMap == null) return;
 
-    // Use intermediate waypoints from the fallback list and bookend with the
-    // actual origin/destination from this trip.
-    return [
-      LatLng(originLat, originLng),
-      ..._defaultRoutePoints.sublist(1, _defaultRoutePoints.length - 1),
-      LatLng(destLat, destLng),
+    final coordinates = [
+      Position(_originLng, _originLat),
+      Position(_destLng, _destLat),
     ];
+
+    final lineManager =
+        await mapboxMap!.annotations.createPolylineAnnotationManager();
+    await lineManager.create(
+      PolylineAnnotationOptions(
+        geometry: LineString(coordinates: coordinates),
+        lineColor: Colors.blue.value,
+        lineWidth: 5.0,
+      ),
+    );
+
+    final pointManager =
+        await mapboxMap!.annotations.createPointAnnotationManager();
+    await pointManager.create(
+      PointAnnotationOptions(
+        geometry: Point(coordinates: Position(_originLng, _originLat)),
+        textField: 'Origin',
+        textOffset: [0.0, -2.0],
+        iconSize: 1.5,
+      ),
+    );
+    await pointManager.create(
+      PointAnnotationOptions(
+        geometry: Point(coordinates: Position(_destLng, _destLat)),
+        textField: 'Destination',
+        textOffset: [0.0, -2.0],
+        iconSize: 1.5,
+      ),
+    );
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _fetchRoute();
+  void _onMapCreated(MapboxMap map) {
+    mapboxMap = map;
+    if (_routeData != null) {
+      _drawRoute(_routeData!);
+    }
   }
 
   @override
@@ -125,51 +143,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ],
       ),
-      body: ListView(
+      body: Column(
         children: [
-          SizedBox(
-            height: 320,
+          Expanded(
+            flex: 2,
             child: Stack(
               children: [
-                FlutterMap(
-                  options: MapOptions(
-                    initialCenter: _routePoints.first,
-                    initialZoom: 6,
+                MapWidget(
+                  onMapCreated: _onMapCreated,
+                  styleUri: MapboxStyles.MAPBOX_STREETS,
+                  cameraOptions: CameraOptions(
+                    center: Point(
+                      coordinates: Position(
+                        (_originLng + _destLng) / 2,
+                        (_originLat + _destLat) / 2,
+                      ),
+                    ),
+                    zoom: 6.0,
                   ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.semitrack.mobile',
-                    ),
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: _routePoints,
-                          strokeWidth: 5,
-                          color: Colors.blue,
-                        ),
-                      ],
-                    ),
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: _routePoints.first,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(Icons.local_shipping,
-                              size: 34, color: Colors.blue),
-                        ),
-                        Marker(
-                          point: _routePoints.last,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(Icons.flag,
-                              size: 34, color: Colors.red),
-                        ),
-                      ],
-                    ),
-                  ],
                 ),
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
@@ -184,7 +175,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 style: const TextStyle(color: Colors.red),
               ),
             ),
-          if (_routeData != null) _buildRouteInfo(_routeData!),
+          if (_routeData != null)
+            Expanded(
+              flex: 1,
+              child: _buildRouteInfo(_routeData!),
+            ),
         ],
       ),
     );
@@ -208,32 +203,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       etaText = h > 0 ? '${h}h ${m}m' : '${m}m';
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 16),
       children: [
         Card(
           margin: const EdgeInsets.all(12),
           child: Padding(
             padding: const EdgeInsets.all(16),
-            children: [
-              const Text(
-                'Route Summary',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-              const SizedBox(height: 12),
-              _labelValue('Mode', routeMode),
-              if (distanceMiles != null)
-                _labelValue('Distance', '$distanceMiles mi'),
-              if (etaText.isNotEmpty) _labelValue('ETA', etaText),
-              if (tollsUsd != null)
-                _labelValue('Tolls', '\$${tollsUsd.toStringAsFixed(2)}'),
-              if (fuelGallons != null)
-                _labelValue('Fuel estimate', '$fuelGallons gal'),
-              if (live != null) ...[
-                _labelValue('Traffic', '${live['traffic']}'),
-                _labelValue('Incidents', '${live['incidents']}'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Route Summary',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+                const SizedBox(height: 12),
+                _labelValue('Mode', routeMode),
+                if (distanceMiles != null)
+                  _labelValue('Distance', '$distanceMiles mi'),
+                if (etaText.isNotEmpty) _labelValue('ETA', etaText),
+                if (tollsUsd != null)
+                  _labelValue('Tolls', '\$${tollsUsd.toStringAsFixed(2)}'),
+                if (fuelGallons != null)
+                  _labelValue('Fuel estimate', '$fuelGallons gal'),
+                if (live != null) ...[
+                  _labelValue('Traffic', '${live['traffic']}'),
+                  _labelValue('Incidents', '${live['incidents']}'),
+                ],
               ],
-            ],
+            ),
           ),
         ),
         if (warnings.isNotEmpty)
@@ -241,26 +239,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Padding(
               padding: const EdgeInsets.all(16),
-              children: [
-                const Text(
-                  'Truck Warnings',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                const SizedBox(height: 8),
-                for (final w in warnings)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.warning_amber,
-                            size: 18, color: Colors.orange),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(w)),
-                      ],
-                    ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Truck Warnings',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
-              ],
+                  const SizedBox(height: 8),
+                  for (final w in warnings)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.warning_amber,
+                              size: 18, color: Colors.orange),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(w)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         if (steps.isNotEmpty)
@@ -268,46 +270,49 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Padding(
               padding: const EdgeInsets.all(16),
-              children: [
-                const Text(
-                  'Turn-by-Turn',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                const SizedBox(height: 8),
-                for (final step in steps)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CircleAvatar(
-                          radius: 12,
-                          child: Text(
-                            '${step['step']}',
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${step['instruction']}'),
-                              Text(
-                                '${step['distanceMiles']} mi',
-                                style: const TextStyle(
-                                    fontSize: 12, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Turn-by-Turn',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
-              ],
+                  const SizedBox(height: 8),
+                  for (final step in steps)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 12,
+                            child: Text(
+                              '${step['step']}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${step['instruction']}'),
+                                Text(
+                                  '${step['distanceMiles']} mi',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
-        const SizedBox(height: 16),
       ],
     );
   }

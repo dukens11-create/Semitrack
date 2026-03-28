@@ -63,78 +63,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// relevant state fields, including the decoded polyline used by
   /// [drawRouteOnMap].
   Future<void> fetchRoute() async {
+    print("fetchRoute started");
+
+    final url =
+        "https://api.mapbox.com/directions/v5/mapbox/driving/"
+        "-122.6765,45.5231;-119.8138,39.5296"
+        "?geometries=polyline&access_token=YOUR_MAPBOX_TOKEN";
+
+    final res = await http.get(Uri.parse(url));
+    print("MAPBOX RESPONSE: ${res.body}");
+
+    final data = jsonDecode(res.body);
+    final route = data["routes"][0];
+    final polyline = route["geometry"];
+
     setState(() {
-      _isLoading = true;
-      _error = null;
+      _routeData = {
+        "distanceMiles": (route["distance"] / 1609.34).round(),
+        "etaMinutes": (route["duration"] / 60).round(),
+        "turnByTurn": [
+          {"instruction": "Follow mapped route"}
+        ]
+      };
+      _isLoading = false;
     });
 
-    try {
-      final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
-          '$_originLng,$_originLat;$_destLng,$_destLat'
-          '?geometries=polyline&access_token=$_mapboxToken';
-
-      final res = await http.get(Uri.parse(url));
-      print('MAPBOX RESPONSE: ${res.body}');
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-
-      if (res.statusCode != 200 ||
-          (body['routes'] as List?)?.isEmpty != false) {
-        throw Exception(
-          body['message'] as String? ?? 'No route found',
-        );
-      }
-
-      final route = body['routes'][0] as Map<String, dynamic>;
-      final polyline = route['geometry'] as String;
-      print('POLYLINE: $polyline');
-      final distanceMeters = (route['distance'] as num).toDouble();
-      final durationSeconds = (route['duration'] as num).toDouble();
-      final etaMinutes = (durationSeconds / 60).round();
-
-      // Extract turn-by-turn steps from each leg of the route.
-      final legs = route['legs'] as List? ?? const [];
-      final steps = <Map<String, dynamic>>[];
-      for (final leg in legs) {
-        final legSteps = (leg as Map<String, dynamic>)['steps'] as List? ?? [];
-        for (final step in legSteps) {
-          final maneuver =
-              (step as Map<String, dynamic>)['maneuver'] as Map<String, dynamic>?;
-          final instruction = maneuver?['instruction'] as String?;
-          if (instruction != null && instruction.isNotEmpty) {
-            steps.add({'instruction': instruction});
-          }
-        }
-      }
-
-      final routeData = <String, dynamic>{
-        'distanceMiles': (distanceMeters / 1609).round(),
-        'etaMinutes': etaMinutes,
-        'turnByTurn': steps.isNotEmpty ? steps : [{'instruction': 'Follow route'}],
-      };
-
-      setState(() {
-        _routeData = routeData;
-
-        // Draw decoded polyline on the map (standard precision-5 encoding).
-        _routePoints = drawRouteOnMap(polyline);
-
-        // Phase 5 intelligence fields stored as a Map.
-        _intelligence = {
-          'driveMinutesLeft': etaMinutes,
-          'weather': _extractWeather(routeData),
-          'riskScore': _computeRiskScore(routeData),
-        };
-
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = e is Exception
-            ? e.toString().replaceFirst('Exception: ', '')
-            : 'Failed to load route. Please try again.';
-        _isLoading = false;
-      });
-    }
+    _routePoints = drawRouteOnMap(polyline as String);
   }
 
   // ── Polyline rendering ─────────────────────────────────────────────────────

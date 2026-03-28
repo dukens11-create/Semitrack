@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
@@ -18,8 +21,7 @@ class TruckMapScreen extends StatefulWidget {
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
 
-class _TruckMapScreenState extends State<TruckMapScreen>
-    with SingleTickerProviderStateMixin {
+class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -33,9 +35,17 @@ class _TruckMapScreenState extends State<TruckMapScreen>
   // ── Map route points (from GeoJSON coordinates) ────────────────────────────
   List<LatLng> _routePoints = const [];
 
-  // ── Truck marker animation ─────────────────────────────────────────────────
-  late AnimationController _animController;
+  // ── Truck marker position, bearing, and current route index ───────────────
+  LatLng? _truckPosition;
+  double _truckBearing = 0.0;
   int _truckIndex = 0;
+
+  // ── GPS subscription + route animation timer ──────────────────────────────
+  StreamSubscription<Position>? _gpsSubscription;
+  Timer? _animTimer;
+  // True while the GPS stream is delivering real position fixes so that the
+  // periodic animation timer defers to the GPS-driven updates.
+  bool _gpsActive = false;
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   Map<String, dynamic> _intelligence = const {
@@ -63,28 +73,135 @@ class _TruckMapScreenState extends State<TruckMapScreen>
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 30),
-    )..addListener(_onAnimTick);
+    _startGps();
   }
 
   @override
   void dispose() {
-    _animController.dispose();
+    _gpsSubscription?.cancel();
+    _animTimer?.cancel();
     super.dispose();
   }
 
-  /// Advances the truck marker to the route point corresponding to the current
-  /// animation value (0.0 = origin, 1.0 = destination).
-  void _onAnimTick() {
-    if (_routePoints.isEmpty) return;
-    final idx = (_animController.value * (_routePoints.length - 1))
-        .floor()
-        .clamp(0, _routePoints.length - 1);
-    if (idx != _truckIndex) {
-      setState(() => _truckIndex = idx);
+  // ── GPS tracking ──────────────────────────────────────────────────────────
+
+  /// Requests location permission and subscribes to the device GPS stream.
+  ///
+  /// Each position update snaps the truck marker to the nearest route point
+  /// ahead of the current position, so the marker always follows the real
+  /// device location when available.
+  Future<void> _startGps() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
     }
+    if (permission == LocationPermission.deniedForever) return;
+
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 10,
+    );
+
+    _gpsSubscription = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen(_onGpsPosition);
+  }
+
+  /// Handles a new GPS position by snapping the truck to the nearest route
+  /// point that is at or ahead of its current index.
+  void _onGpsPosition(Position position) {
+    if (_routePoints.isEmpty) return;
+    _gpsActive = true;
+    final gpsPoint = LatLng(position.latitude, position.longitude);
+    final nearest = _nearestRouteIndex(gpsPoint);
+    if (nearest != _truckIndex) {
+      _advanceTruckTo(nearest);
+    }
+  }
+
+  /// Returns the index of the route point closest to [point], searching only
+  /// from the current truck index onward to prevent backward snapping.
+  int _nearestRouteIndex(LatLng point) {
+    double minDist = double.infinity;
+    int nearest = _truckIndex;
+    for (int i = _truckIndex; i < _routePoints.length; i++) {
+      final d = _distanceBetween(point, _routePoints[i]);
+      if (d < minDist) {
+        minDist = d;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
+
+  // ── Route animation ───────────────────────────────────────────────────────
+
+  /// Starts a periodic timer that advances the truck marker one step along the
+  /// route every 500 ms, simulating movement when GPS alone is insufficient.
+  void _startRouteAnimation() {
+    _animTimer?.cancel();
+    _truckIndex = 0;
+    _truckPosition =
+        _routePoints.isNotEmpty ? _routePoints.first : null;
+
+    _animTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      // Yield to GPS-driven updates when real position fixes are available.
+      if (_gpsActive) return;
+      if (_routePoints.isEmpty) return;
+      final nextIndex = _truckIndex + 1;
+      if (nextIndex >= _routePoints.length) {
+        _animTimer?.cancel();
+        return;
+      }
+      _advanceTruckTo(nextIndex);
+    });
+  }
+
+  /// Moves the truck marker to the route point at [index], updates the
+  /// bearing, and pans the camera to follow.
+  void _advanceTruckTo(int index) {
+    if (index < 0 || index >= _routePoints.length) return;
+    final prev = _routePoints[_truckIndex];
+    final next = _routePoints[index];
+    setState(() {
+      _truckBearing = _bearingBetween(prev, next);
+      _truckIndex = index;
+      _truckPosition = next;
+    });
+    if (_mapReady) {
+      _mapController.move(next, _mapController.camera.zoom);
+    }
+  }
+
+  // ── Bearing / distance helpers ────────────────────────────────────────────
+
+  /// Returns the initial bearing in degrees (0–360) from [from] to [to].
+  double _bearingBetween(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180.0;
+    final lat2 = to.latitude * math.pi / 180.0;
+    final dLng = (to.longitude - from.longitude) * math.pi / 180.0;
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+    return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
+  }
+
+  /// Returns the approximate great-circle distance in metres between [a] and
+  /// [b] using the Haversine formula.
+  double _distanceBetween(LatLng a, LatLng b) {
+    final lat1 = a.latitude * math.pi / 180.0;
+    final lat2 = b.latitude * math.pi / 180.0;
+    final dLat = lat2 - lat1;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180.0;
+    final sinDLat = math.sin(dLat / 2);
+    final sinDLng = math.sin(dLng / 2);
+    final ax =
+        sinDLat * sinDLat + math.cos(lat1) * math.cos(lat2) * sinDLng * sinDLng;
+    return 6371000 * 2 * math.atan2(math.sqrt(ax), math.sqrt(1 - ax));
   }
 
   // ── Mapbox Directions API integration ─────────────────────────────────────
@@ -136,12 +253,11 @@ class _TruckMapScreenState extends State<TruckMapScreen>
           ]
         };
         _routePoints = newPoints;
-        _truckIndex = 0;
         _isLoading = false;
       });
 
       _fitCameraToRoute(newPoints);
-      _animController.forward(from: 0);
+      _startRouteAnimation();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -290,18 +406,24 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                     ),
                     MarkerLayer(
                       markers: [
+                        // ── Truck marker (animated + rotated) ──────────────
                         Marker(
-                          point: _routePoints.isNotEmpty
-                              ? _routePoints[_truckIndex]
-                              : _origin,
+                          point: _truckPosition ??
+                              (_routePoints.isNotEmpty
+                                  ? _routePoints.first
+                                  : _origin),
                           width: 40,
                           height: 40,
-                          child: const Icon(
-                            Icons.local_shipping,
-                            size: 34,
-                            color: Colors.blue,
+                          child: Transform.rotate(
+                            angle: _truckBearing * math.pi / 180.0,
+                            child: const Icon(
+                              Icons.local_shipping,
+                              size: 34,
+                              color: Colors.blue,
+                            ),
                           ),
                         ),
+                        // ── Destination marker ──────────────────────────────
                         Marker(
                           point: _destination,
                           width: 40,

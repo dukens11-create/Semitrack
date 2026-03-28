@@ -1,11 +1,10 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-import '../core/api_client.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -62,9 +61,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Backend integration ────────────────────────────────────────────────────
 
-  /// Fetches a truck-safe route from the backend `/routing/truck-route`
-  /// endpoint and updates all relevant state fields, including the decoded
-  /// polyline used by [drawRouteOnMap].
+  /// Fetches a route from the Mapbox Directions API and updates all relevant
+  /// state fields, including the decoded polyline used by [drawRouteOnMap].
   Future<void> fetchRoute() async {
     setState(() {
       _isLoading = true;
@@ -72,45 +70,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token');
-
-      final data = await ApiClient().post(
-        '/routing/truck-route',
-        {
-          'origin': {'lat': _originLat, 'lng': _originLng},
-          'destination': {'lat': _destLat, 'lng': _destLng},
-          'truck': {
-            'heightFt': 13.5,
-            'weightLbs': 80000,
-            'widthFt': 8.5,
-            'lengthFt': 70.0,
-            'hazmatEnabled': false,
-            'axleCount': 5,
-            'avoidTolls': false,
-            'avoidFerries': true,
-            'avoidResidential': true,
-          },
-          'routeMode': 'fastest',
-        },
-        token: token,
+      final url = Uri.parse(
+        'https://api.mapbox.com/directions/v5/mapbox/driving/'
+        '$_originLng,$_originLat;$_destLng,$_destLat'
+        '?geometries=polyline&access_token=$_mapboxToken',
       );
 
-      final routePolyline = data['routePolyline'] as String? ?? '';
-      final provider = data['provider'] as String? ?? '';
-      final etaMinutes = (data['etaMinutes'] as num?)?.toInt();
+      final res = await http.get(url);
+      if (res.statusCode != 200) {
+        throw Exception('Mapbox API error ${res.statusCode}: ${res.body}');
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+
+      final routes = data['routes'] as List<dynamic>?;
+      if (routes == null || routes.isEmpty) {
+        throw Exception('No routes returned by Mapbox.');
+      }
+
+      final route = routes[0] as Map<String, dynamic>;
+      final polyline = route['geometry'] as String? ?? '';
+      final distanceMeters = (route['distance'] as num?)?.toDouble() ?? 0.0;
+      final durationSeconds = (route['duration'] as num?)?.toDouble() ?? 0.0;
+
+      final distanceMiles = (distanceMeters / 1609).round();
+      final etaMinutes = (durationSeconds / 60).round();
 
       setState(() {
-        _routeData = data;
+        _routeData = {
+          'distanceMiles': distanceMiles,
+          'etaMinutes': etaMinutes,
+          'turnByTurn': [
+            {'instruction': 'Follow route'}
+          ],
+        };
 
         // Draw decoded polyline on the map.
-        _routePoints = drawRouteOnMap(routePolyline, provider: provider);
+        _routePoints = drawRouteOnMap(polyline);
 
         // Phase 5 intelligence fields stored as a Map.
         _intelligence = {
           'driveMinutesLeft': etaMinutes,
-          'weather': _extractWeather(data),
-          'riskScore': _computeRiskScore(data),
+          'weather': _extractWeather(_routeData!),
+          'riskScore': _computeRiskScore(_routeData!),
         };
 
         _isLoading = false;

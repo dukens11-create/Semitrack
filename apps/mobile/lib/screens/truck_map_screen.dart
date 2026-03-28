@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -43,8 +42,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
-  static const _destLat = 40.7580;
-  static const _destLng = -119.8160;
+  static const _destLat = 39.5296;
+  static const _destLng = -119.8138;
 
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
@@ -56,7 +55,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void initState() {
     super.initState();
-    fetchRoute();
   }
 
   // ── Mapbox Directions API integration ─────────────────────────────────────
@@ -73,9 +71,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     try {
       final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
           '$_originLng,$_originLat;$_destLng,$_destLat'
-          '?geometries=polyline6&access_token=$_mapboxToken';
+          '?geometries=polyline&access_token=$_mapboxToken';
 
       final res = await http.get(Uri.parse(url));
+      print('MAPBOX RESPONSE: ${res.body}');
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode != 200 ||
@@ -87,6 +86,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final route = body['routes'][0] as Map<String, dynamic>;
       final polyline = route['geometry'] as String;
+      print('POLYLINE: $polyline');
       final distanceMeters = (route['distance'] as num).toDouble();
       final durationSeconds = (route['duration'] as num).toDouble();
       final etaMinutes = (durationSeconds / 60).round();
@@ -115,7 +115,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       setState(() {
         _routeData = routeData;
 
-        // Draw decoded polyline on the map (Mapbox uses precision-6 encoding).
+        // Draw decoded polyline on the map (standard precision-5 encoding).
         _routePoints = drawRouteOnMap(polyline);
 
         // Phase 5 intelligence fields stored as a Map.
@@ -139,43 +139,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Polyline rendering ─────────────────────────────────────────────────────
 
-  /// Decodes [encodedPolyline] returned by the backend and returns a list of
-  /// [LatLng] points ready for rendering on the map widget.
+  /// Decodes [encodedPolyline] returned by the Mapbox Directions API into a
+  /// GeoJSON-style list of [lng, lat] coordinate pairs (precision 5).
   ///
-  /// Dispatches to [_decodeHereFlexiblePolyline] when [provider] is `"HERE"`,
-  /// and to [_decodeGooglePolyline] (precision 6) for Mapbox or any other
-  /// provider.  Falls back to the static origin → destination pair on error.
-  List<LatLng> drawRouteOnMap(
-    String encodedPolyline, {
-    String provider = '',
-  }) {
-    if (encodedPolyline.isEmpty) return const [_origin, _destination];
-    try {
-      if (provider == 'HERE') {
-        return _decodeHereFlexiblePolyline(encodedPolyline);
-      }
-      // Mapbox uses Google Polyline encoding at precision 6.
-      return _decodeGooglePolyline(encodedPolyline, precision: 6);
-    } catch (_) {
-      return const [_origin, _destination];
-    }
-  }
-
-  /// Decodes a Google-encoded polyline at the given [precision] (5 or 6).
-  List<LatLng> _decodeGooglePolyline(String encoded, {int precision = 5}) {
-    final points = <LatLng>[];
+  /// Returns multiple intermediate points — not just start/end — as produced
+  /// by the standard Google/Mapbox polyline algorithm.
+  List<List<double>> decodePolylineToGeoJson(String encodedPolyline) {
+    final points = <List<double>>[];
     int index = 0;
-    final length = encoded.length;
+    final length = encodedPolyline.length;
     int lat = 0;
     int lng = 0;
-    final factor = math.pow(10, precision).toDouble();
+    const factor = 1e5; // precision 5
 
     while (index < length) {
       int b;
       int shift = 0;
       int result = 0;
       do {
-        b = encoded.codeUnitAt(index++) - 63;
+        b = encodedPolyline.codeUnitAt(index++) - 63;
         result |= (b & 0x1F) << shift;
         shift += 5;
       } while (b >= 0x20);
@@ -184,64 +166,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       shift = 0;
       result = 0;
       do {
-        b = encoded.codeUnitAt(index++) - 63;
+        b = encodedPolyline.codeUnitAt(index++) - 63;
         result |= (b & 0x1F) << shift;
         shift += 5;
       } while (b >= 0x20);
       lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
 
-      points.add(LatLng(lat / factor, lng / factor));
+      // GeoJSON order: [longitude, latitude]
+      points.add([lng / factor, lat / factor]);
     }
 
-    return points.isEmpty ? const [_origin, _destination] : points;
+    return points;
   }
 
-  /// Decodes a HERE Flexible Polyline encoded string.
+  /// Decodes [encodedPolyline] returned by the backend and returns a list of
+  /// [LatLng] points ready for rendering on the map widget.
   ///
-  /// The header byte encodes the coordinate precision; subsequent characters
-  /// are base64url-encoded zigzag-delta values for (lat, lng) pairs.
-  List<LatLng> _decodeHereFlexiblePolyline(String encoded) {
-    const encTable =
-        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-    if (encoded.isEmpty) return const [_origin, _destination];
-
-    int index = 0;
-
-    int decodeUnsignedValue() {
-      int result = 0;
-      int shift = 0;
-      int c;
-      do {
-        c = encTable.indexOf(encoded[index++]);
-        if (c < 0) throw const FormatException('Invalid HERE polyline char');
-        result |= (c & 0x1F) << shift;
-        shift += 5;
-      } while (c >= 0x20 && index < encoded.length);
-      return result;
+  /// Calls [decodePolylineToGeoJson] to obtain [lng, lat] pairs, then converts
+  /// them to [LatLng].  Falls back to the static origin → destination pair on
+  /// error or empty input.
+  List<LatLng> drawRouteOnMap(
+    String encodedPolyline, {
+    String provider = '',
+  }) {
+    if (encodedPolyline.isEmpty) return const [_origin, _destination];
+    try {
+      final geoJsonPoints = decodePolylineToGeoJson(encodedPolyline);
+      if (geoJsonPoints.isEmpty) return const [_origin, _destination];
+      return geoJsonPoints
+          .map((p) => LatLng(p[1], p[0])) // lat = p[1], lng = p[0]
+          .toList();
+    } catch (_) {
+      return const [_origin, _destination];
     }
-
-    int decodeSignedValue() {
-      final val = decodeUnsignedValue();
-      return (val & 1) != 0 ? ~(val >> 1) : (val >> 1);
-    }
-
-    // First character: header containing precision in the lower 4 bits.
-    final headerVal = encTable.indexOf(encoded[index++]);
-    if (headerVal < 0) return const [_origin, _destination];
-    final precision = headerVal & 0x0F;
-    final factor = math.pow(10, precision).toDouble();
-
-    final points = <LatLng>[];
-    int lastLat = 0;
-    int lastLng = 0;
-
-    while (index < encoded.length) {
-      lastLat += decodeSignedValue();
-      lastLng += decodeSignedValue();
-      points.add(LatLng(lastLat / factor, lastLng / factor));
-    }
-
-    return points.isEmpty ? const [_origin, _destination] : points;
   }
 
   // ── Phase 5 intelligence helpers ──────────────────────────────────────────
@@ -321,6 +278,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       (_originLng + _destLng) / 2,
                     ),
                     initialZoom: 6,
+                    onMapReady: fetchRoute,
                   ),
                   children: [
                     TileLayer(

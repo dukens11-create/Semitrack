@@ -37,13 +37,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<LatLng> _routePoints = const [];
 
   // ── Truck marker position, bearing, and current route index ───────────────
-  LatLng? _truckPosition;
-  double _truckBearing = 0.0;
-  int _truckIndex = 0;
+  LatLng? _currentTruckPosition;
+  double _currentBearing = 0.0;
+  int _currentRouteIndex = 0;
 
   // ── GPS subscription + route animation timer ──────────────────────────────
   StreamSubscription<Position>? _gpsSubscription;
-  Timer? _animTimer;
+  Timer? _driveTimer;
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
@@ -108,7 +108,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void dispose() {
     _gpsSubscription?.cancel();
-    _animTimer?.cancel();
+    _driveTimer?.cancel();
     _tts.stop();
     super.dispose();
   }
@@ -171,7 +171,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Snap truck marker to nearest route point ─────────────────────────────
     final nearest = _nearestRouteIndex(gpsPoint);
-    if (nearest != _truckIndex) {
+    if (nearest != _currentRouteIndex) {
       _advanceTruckTo(nearest);
     }
   }
@@ -211,8 +211,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// from the current truck index onward to prevent backward snapping.
   int _nearestRouteIndex(LatLng point) {
     double minDist = double.infinity;
-    int nearest = _truckIndex;
-    for (int i = _truckIndex; i < _routePoints.length; i++) {
+    int nearest = _currentRouteIndex;
+    for (int i = _currentRouteIndex; i < _routePoints.length; i++) {
       final d = _distanceBetween(point, _routePoints[i]);
       if (d < minDist) {
         minDist = d;
@@ -222,31 +222,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return nearest;
   }
 
-  // ── Route animation ───────────────────────────────────────────────────────
+  // ── Truck simulation ──────────────────────────────────────────────────────
 
-  /// Starts a periodic timer that advances the truck marker one step along the
-  /// route every 300 ms, balancing smooth GPS-style movement against battery
+  /// Starts the truck simulation by setting up a [Timer.periodic] that steps
+  /// through [_routePoints] every 300 ms, updating [_currentTruckPosition] and
+  /// [_currentBearing] with [setState], and animating the camera to follow the
+  /// truck marker in navigation mode.
+  ///
+  /// The 300 ms interval balances smooth GPS-style movement against battery
   /// and CPU usage on mobile devices.
   ///
-  /// Switches to navigation mode so the camera stays close to the truck at
-  /// zoom 14.0 (within the 12.5–15 navigation range).
-  void _startRouteAnimation() {
-    _animTimer?.cancel();
-    _truckIndex = 0;
-    _truckPosition =
+  /// Should be called after a successful route load (decodedPoints logic in
+  /// [fetchRoute]).  Any previously running simulation is cancelled first via
+  /// [_driveTimer].cancel().
+  void _startTruckSimulation() {
+    _driveTimer?.cancel();
+    _currentRouteIndex = 0;
+    _currentTruckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
     setState(() => _navigationMode = true);
-    if (_mapReady && _truckPosition != null) {
-      _mapController.move(_truckPosition!, _navigationZoomLevel);
+    if (_mapReady && _currentTruckPosition != null) {
+      _mapController.move(_currentTruckPosition!, _navigationZoomLevel);
     }
 
-    _animTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
+    _driveTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (_routePoints.isEmpty) return;
-      final nextIndex = _truckIndex + 1;
+      final nextIndex = _currentRouteIndex + 1;
       if (nextIndex >= _routePoints.length) {
-        _animTimer?.cancel();
+        // Simulation complete – all route points visited.
+        _driveTimer?.cancel();
         return;
       }
       _advanceTruckTo(nextIndex);
@@ -257,17 +263,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// bearing, and pans the camera to follow in navigation mode.
   void _advanceTruckTo(int index) {
     if (index < 0 || index >= _routePoints.length) return;
-    final prev = _routePoints[_truckIndex];
+    final prev = _routePoints[_currentRouteIndex];
     final next = _routePoints[index];
     setState(() {
-      // calculateBearing (_bearingBetween) gives the precise clockwise angle
-      // from north; the truck icon rotates to match the direction of travel.
-      _truckBearing = _bearingBetween(prev, next);
-      _truckIndex = index;
-      _truckPosition = next;
+      // _calculateBearing (calculateBearing) computes the precise clockwise
+      // angle from north using the spherical law of cosines; the truck icon
+      // rotates to match the real direction of travel between route points.
+      _currentBearing = _calculateBearing(prev, next);
+      _currentRouteIndex = index;
+      _currentTruckPosition = next;
     });
     // Only follow the truck with the camera while in navigation mode;
     // overview mode keeps the full-route view undisturbed.
+    // animateCamera: moves the map to the new truck position at the current
+    // zoom level, giving a smooth follow-cam effect during simulation.
     if (_mapReady && _navigationMode) {
       _mapController.move(next, _mapController.camera.zoom);
     }
@@ -275,8 +284,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Bearing / distance helpers ────────────────────────────────────────────
 
-  /// Returns the initial bearing in degrees (0–360) from [from] to [to].
-  double _bearingBetween(LatLng from, LatLng to) {
+  /// Computes the initial bearing in degrees (0–360, clockwise from north)
+  /// from [from] to [to] using the spherical law of cosines.
+  ///
+  /// High-accuracy formula – uses full double-precision trig via [math.atan2],
+  /// matching the precision expected by [_advanceTruckTo] for smooth truck
+  /// rotation.  Required by [_startTruckSimulation] to determine the direction
+  /// of travel between successive route points.
+  double _calculateBearing(LatLng from, LatLng to) {
     final lat1 = from.latitude * math.pi / 180.0;
     final lat2 = to.latitude * math.pi / 180.0;
     final dLng = (to.longitude - from.longitude) * math.pi / 180.0;
@@ -362,8 +377,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _crossTrackDistance(LatLng p, LatLng a, LatLng b) {
     const r = 6371000.0;
     final d13 = _distanceBetween(p, a) / r;
-    final theta13 = _bearingBetween(a, p) * math.pi / 180.0;
-    final theta12 = _bearingBetween(a, b) * math.pi / 180.0;
+    final theta13 = _calculateBearing(a, p) * math.pi / 180.0;
+    final theta12 = _calculateBearing(a, b) * math.pi / 180.0;
     final sinXte = math.sin(d13) * math.sin(theta13 - theta12);
     return (math.asin(sinXte.clamp(-1.0, 1.0)) * r).abs();
   }
@@ -515,7 +530,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
 
       _fitCameraToRoute(newPoints);
-      _startRouteAnimation();
+      _startTruckSimulation();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -668,9 +683,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
             onPressed: () {
               setState(() => _navigationMode = !_navigationMode);
-              if (_navigationMode && _truckPosition != null && _mapReady) {
+              if (_navigationMode && _currentTruckPosition != null && _mapReady) {
                 // Switch to navigation mode: zoom close to truck.
-                _mapController.move(_truckPosition!, _navigationZoomLevel);
+                _mapController.move(_currentTruckPosition!, _navigationZoomLevel);
               } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
                 // Switch to overview mode: fit the full route.
                 _fitCameraToRoute(_routePoints);
@@ -730,44 +745,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     MarkerLayer(
                       markers: [
                         // ── Truck marker (animated + rotated) ──────────────
-                        // alignment: Alignment.center pins the visual centre
-                        // of the icon to the GPS coordinate, preventing the
-                        // icon from drifting as it rotates.
-                        // AnimatedRotation smoothly interpolates between
-                        // successive bearing values (calculated via
-                        // _bearingBetween / calculateBearing) so the truck
-                        // icon turns fluidly rather than snapping abruptly.
-                        // The top-down truck PNG (truck_top.png) is used when
-                        // available; falls back to the Material icon otherwise.
-                        Marker(
-                          point: _truckPosition ??
-                              (_routePoints.isNotEmpty
-                                  ? _routePoints.first
-                                  : _origin),
-                          width: 36,
-                          height: 36,
-                          // Anchor the marker at its visual centre so the
-                          // rotation pivot matches the GPS coordinate.
-                          alignment: Alignment.center,
-                          child: AnimatedRotation(
-                            // Convert bearing degrees → fractional turns
-                            // (AnimatedRotation uses 0.0–1.0 full circles).
-                            turns: _truckBearing / 360.0,
-                            duration: const Duration(milliseconds: 300),
-                            // Top-down truck PNG navigation icon; falls back to
-                            // the Material icon when the PNG is not yet present.
-                            child: Image.asset(
-                              'assets/icons/truck_top.png',
-                              width: 28,
-                              height: 28,
-                              errorBuilder: (_, __, ___) => const Icon(
-                                Icons.local_shipping,
-                                size: 28,
-                                color: Colors.blue,
-                              ),
-                            ),
-                          ),
-                        ),
+                        // Extracted to _buildTruckMarker() to keep the build
+                        // method clean and to allow independent testing of the
+                        // marker widget.
+                        _buildTruckMarker(),
                         // ── Destination marker ──────────────────────────────
                         Marker(
                           point: _destination,
@@ -806,6 +787,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               child: _buildRouteInfo(_routeData!),
             ),
         ],
+      ),
+    );
+  }
+
+  /// Builds the animated, rotating truck [Marker] used in the [MarkerLayer].
+  ///
+  /// Uses [_currentTruckPosition] as the map coordinate (falls back to the
+  /// first route point or the hardcoded origin when not yet set).  The truck
+  /// PNG icon (assets/icons/truck_top.png) is rendered inside an
+  /// [AnimatedRotation] that converts [_currentBearing] to fractional turns
+  /// so the icon turns smoothly as the bearing updates between route points.
+  ///
+  /// The marker is anchored at [Alignment.center] (equivalent to anchor
+  /// (0.5, 0.5)) so the rotation pivot aligns with the GPS coordinate and
+  /// the icon does not drift when rotating.  In flutter_map the marker sits
+  /// flat on the map by default (equivalent to `flat: true` in Google Maps).
+  Marker _buildTruckMarker() {
+    return Marker(
+      point: _currentTruckPosition ??
+          (_routePoints.isNotEmpty ? _routePoints.first : _origin),
+      width: 36,
+      height: 36,
+      // anchor: (0.5, 0.5) — keeps the rotation pivot on the GPS coordinate.
+      alignment: Alignment.center,
+      child: AnimatedRotation(
+        // Convert bearing degrees → fractional turns
+        // (AnimatedRotation expects 0.0–1.0 full circles).
+        turns: _currentBearing / 360.0,
+        duration: const Duration(milliseconds: 300),
+        // Top-down truck PNG from assets/icons/truck_top.png; falls back to
+        // the built-in Material icon when the asset is unavailable.
+        child: Image.asset(
+          'assets/icons/truck_top.png',
+          width: 28,
+          height: 28,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.local_shipping,
+            size: 28,
+            color: Colors.blue,
+          ),
+        ),
       ),
     );
   }

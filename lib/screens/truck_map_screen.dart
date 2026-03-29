@@ -737,6 +737,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         // successive bearing values (calculated via
                         // _bearingBetween / calculateBearing) so the truck
                         // icon turns fluidly rather than snapping abruptly.
+                        // The top-down truck PNG (truck_top.png) is used when
+                        // available; falls back to the Material icon otherwise.
                         Marker(
                           point: _truckPosition ??
                               (_routePoints.isNotEmpty
@@ -752,10 +754,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             // (AnimatedRotation uses 0.0–1.0 full circles).
                             turns: _truckBearing / 360.0,
                             duration: const Duration(milliseconds: 300),
-                            child: const Icon(
-                              Icons.local_shipping,
-                              size: 28,
-                              color: Colors.blue,
+                            // Top-down truck PNG navigation icon; falls back to
+                            // the Material icon when the PNG is not yet present.
+                            child: Image.asset(
+                              'assets/icons/truck_top.png',
+                              width: 28,
+                              height: 28,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.local_shipping,
+                                size: 28,
+                                color: Colors.blue,
+                              ),
                             ),
                           ),
                         ),

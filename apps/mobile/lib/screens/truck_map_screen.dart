@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -47,6 +48,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
 
+  // ── Turn-by-turn navigation steps (from Mapbox route) ─────────────────────
+  //
+  // Each entry holds the instruction text and the maneuver LatLng so the
+  // driver's current position can be compared to the next waypoint.
+  List<_NavStep> _navSteps = const [];
+  int _currentStepIndex = 0;
+
+  // ── Flutter TTS engine for voice guidance ────────────────────────────────
+  final FlutterTts _tts = FlutterTts();
+
+  // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
+  bool _isRerouting = false;
+
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   Map<String, dynamic> _intelligence = const {
     'driveMinutesLeft': null,
@@ -73,6 +87,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void initState() {
     super.initState();
+    _initTts();
     _startGps();
   }
 
@@ -80,7 +95,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void dispose() {
     _gpsSubscription?.cancel();
     _animTimer?.cancel();
+    _tts.stop();
     super.dispose();
+  }
+
+  // ── TTS initialisation ────────────────────────────────────────────────────
+
+  Future<void> _initTts() async {
+    await _tts.setLanguage('en-US');
+    await _tts.setSpeechRate(0.5);
+    await _tts.setVolume(1.0);
+    await _tts.setPitch(1.0);
+  }
+
+  /// Speaks [text] via the TTS engine, interrupting any current utterance.
+  Future<void> _speak(String text) async {
+    await _tts.stop();
+    await _tts.speak(text);
   }
 
   // ── GPS tracking ──────────────────────────────────────────────────────────
@@ -117,9 +148,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_routePoints.isEmpty) return;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
+
+    // ── Step advancement: speak instruction when nearing next maneuver ──────
+    _checkStepAdvancement(gpsPoint);
+
+    // ── Off-route detection: reroute when >30 m from the route line ─────────
+    _checkOffRoute(gpsPoint);
+
+    // ── Snap truck marker to nearest route point ─────────────────────────────
     final nearest = _nearestRouteIndex(gpsPoint);
     if (nearest != _truckIndex) {
       _advanceTruckTo(nearest);
+    }
+  }
+
+  /// Advances to the next step when the driver comes within 30 m of the
+  /// upcoming maneuver point, then speaks the new instruction aloud.
+  void _checkStepAdvancement(LatLng current) {
+    if (_navSteps.isEmpty) return;
+    final nextIdx = _currentStepIndex + 1;
+    if (nextIdx >= _navSteps.length) return;
+    final nextStep = _navSteps[nextIdx];
+    final dist = _distanceBetween(current, nextStep.location);
+    if (dist <= 30.0) {
+      setState(() => _currentStepIndex = nextIdx);
+      _speak(nextStep.instruction);
+    }
+  }
+
+  /// Detects whether [current] has strayed more than 30 m from the nearest
+  /// point on the route polyline.  When off-route, triggers a full reroute.
+  void _checkOffRoute(LatLng current) {
+    if (_routePoints.length < 2 || _isRerouting) return;
+    double minDist = double.infinity;
+    // Check cross-track distance against each route segment.
+    for (int i = 0; i < _routePoints.length - 1; i++) {
+      final d = _crossTrackDistance(current, _routePoints[i], _routePoints[i + 1]);
+      if (d < minDist) minDist = d;
+    }
+    if (minDist > 30.0) {
+      _isRerouting = true;
+      _speak('Recalculating route');
+      fetchRoute().then((_) => _isRerouting = false);
     }
   }
 
@@ -374,20 +444,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return;
       }
 
-      // Extract the first step instruction from the directions response.
-      final firstInstruction = _extractFirstInstruction(route);
+      // Extract all turn-by-turn steps (instruction + maneuver location).
+      final allSteps = _extractAllSteps(route);
+      // Build the legacy turnByTurn list for the route info panel.
+      final turnByTurnList = allSteps
+          .map((s) => {'instruction': s.instruction})
+          .toList();
 
       setState(() {
+        _navSteps = allSteps;
+        _currentStepIndex = 0;
         _routeData = {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
-          "turnByTurn": [
-            {"instruction": firstInstruction}
-          ]
+          "turnByTurn": turnByTurnList,
         };
         _routePoints = newPoints;
         _isLoading = false;
       });
+
+      // Speak the first instruction when the route is (re-)loaded.
+      if (allSteps.isNotEmpty) {
+        _speak(allSteps.first.instruction);
+      }
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
@@ -399,18 +478,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Extracts the instruction text from the first maneuver step of [route].
+  /// Extracts all turn-by-turn navigation steps from [route].
   ///
-  /// Returns the instruction string from `legs[0].steps[0].maneuver.instruction`,
-  /// or `'Follow mapped route'` when the field is absent.
-  String _extractFirstInstruction(Map<String, dynamic> route) {
+  /// Each [_NavStep] carries the maneuver instruction and its geographic
+  /// location so that proximity checks can trigger step advancement at
+  /// runtime.  Falls back to a single "Follow mapped route" step when the
+  /// API response is missing the expected fields.
+  List<_NavStep> _extractAllSteps(Map<String, dynamic> route) {
     final legs = route['legs'] as List?;
-    if (legs == null || legs.isEmpty) return 'Follow mapped route';
+    if (legs == null || legs.isEmpty) {
+      return [_NavStep('Follow mapped route', _origin)];
+    }
     final steps = legs[0]['steps'] as List?;
-    if (steps == null || steps.isEmpty) return 'Follow mapped route';
-    final maneuver = (steps[0] as Map<String, dynamic>)['maneuver']
-        as Map<String, dynamic>?;
-    return maneuver?['instruction'] as String? ?? 'Follow mapped route';
+    if (steps == null || steps.isEmpty) {
+      return [_NavStep('Follow mapped route', _origin)];
+    }
+    return steps.map<_NavStep>((dynamic s) {
+      final step = s as Map<String, dynamic>;
+      final maneuver = step['maneuver'] as Map<String, dynamic>?;
+      final instruction = maneuver?['instruction'] as String? ?? 'Continue';
+      // Mapbox maneuver locations are [lng, lat] arrays.
+      final loc = maneuver?['location'] as List?;
+      final lat = loc != null && loc.length >= 2
+          ? (loc[1] as num).toDouble()
+          : _originLat;
+      final lng = loc != null && loc.length >= 2
+          ? (loc[0] as num).toDouble()
+          : _originLng;
+      return _NavStep(instruction, LatLng(lat, lng));
+    }).toList();
   }
 
   /// Fits the map camera to the first segment of [points] at navigation zoom.
@@ -722,37 +818,50 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Builder(builder: (context) {
-              final Map<String, dynamic>? step0 =
-                  steps != null && steps.isNotEmpty
-                      ? (steps[0] is Map<String, dynamic>
-                          ? steps[0] as Map<String, dynamic>
-                          : null)
-                      : null;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Turn-by-Turn',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Turn-by-Turn',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const Spacer(),
+                    if (_navSteps.isNotEmpty)
+                      Text(
+                        'Step ${_currentStepIndex + 1}/${_navSteps.length}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.grey),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Current active maneuver instruction.
+                Text(
+                  _navSteps.isNotEmpty
+                      ? _navSteps[_currentStepIndex].instruction
+                      : (steps != null && steps.isNotEmpty
+                          ? (steps[0] as Map<String, dynamic>)['instruction']
+                                  as String? ??
+                              'Continue'
+                          : 'Loading...'),
+                  style: const TextStyle(fontSize: 15),
+                ),
+                // Upcoming step preview.
+                if (_navSteps.isNotEmpty &&
+                    _currentStepIndex + 1 < _navSteps.length)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Then: ${_navSteps[_currentStepIndex + 1].instruction}',
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.grey),
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    step0 != null
-                        ? step0['instruction'] as String? ?? 'Continue'
-                        : 'Loading...',
-                  ),
-                  Text(
-                    step0 != null
-                        ? '${step0['distance'] ?? '--'} mi'
-                        : '--',
-                    style:
-                        const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              );
-            }),
+              ],
+            ),
           ),
         ),
       ],
@@ -775,4 +884,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
     );
   }
+}
+
+/// A single turn-by-turn navigation step, holding the driver instruction text
+/// and the geographic location of the maneuver.
+class _NavStep {
+  const _NavStep(this.instruction, this.location);
+
+  final String instruction;
+  final LatLng location;
 }

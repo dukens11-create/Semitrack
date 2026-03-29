@@ -40,20 +40,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //
   // These three fields drive the animated truck marker and correspond to the
   // Google Maps pattern:
-  //   currentTruckPosition → _currentTruckPosition  (LatLng)
-  //   currentBearing       → _currentBearing        (degrees, 0–360 clockwise from N)
-  //   currentRouteIndex    → _currentRouteIndex     (index into _routePoints)
-  LatLng? _currentTruckPosition;
-  double _currentBearing = 0.0;
-  int _currentRouteIndex = 0;
+  //   currentTruckPosition → _truckPosition  (LatLng)
+  //   currentBearing       → _truckBearing   (degrees, 0–360 clockwise from N)
+  //   currentRouteIndex    → _truckIndex     (index into _routePoints)
+  LatLng? _truckPosition;
+  double _truckBearing = 0.0;
+  int _truckIndex = 0;
 
   // ── GPS subscription + route animation timer ──────────────────────────────
   //
-  // _driveTimer drives the simulated step-by-step truck movement (equivalent
+  // _animTimer drives the simulated step-by-step truck movement (equivalent
   // to `driveTimer` in the Google Maps tutorial pattern).  The GPS stream
   // takes priority when real device location fixes are available.
   StreamSubscription<Position>? _gpsSubscription;
-  Timer? _driveTimer; // ≡ driveTimer in the Google Maps pattern
+  Timer? _animTimer; // ≡ driveTimer
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
@@ -118,7 +118,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void dispose() {
     _gpsSubscription?.cancel();
-      _driveTimer?.cancel();
+    _animTimer?.cancel(); // ≡ driveTimer?.cancel() in the Google Maps pattern
     _tts.stop();
     super.dispose();
   }
@@ -157,7 +157,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// producing a natural turning motion as the truck follows the route.
   Marker _buildTruckMarker() {
     return Marker(
-      point: _currentTruckPosition ??
+      point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : _origin),
       // 40 × 40 logical-pixel bounding box; the icon itself is 32 × 32.
       width: 40,
@@ -166,8 +166,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       alignment: Alignment.center,
       child: AnimatedRotation(
         // AnimatedRotation expects fractional turns (0.0–1.0 = 360°); convert
-        // from the 0–360° bearing returned by _calculateBearing.
-        turns: _currentBearing / 360.0,
+        // from the 0–360° bearing returned by _bearingBetween / calculateBearing.
+        turns: _truckBearing / 360.0,
         duration: const Duration(milliseconds: 300),
         // Top-down truck PNG (truck_top.png).  Falls back to the Material
         // shipping icon when the PNG has not yet been placed in the assets dir.
@@ -210,7 +210,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!mounted) return;
     setState(() {
       // Marker rebuild is implicit: build() calls _buildTruckMarker() which
-      // reads the already-updated _currentTruckPosition and _currentBearing fields.
+      // reads the already-updated _truckPosition and _truckBearing fields.
     });
   }
 
@@ -272,7 +272,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Snap truck marker to nearest route point ─────────────────────────────
     final nearest = _nearestRouteIndex(gpsPoint);
-    if (nearest != _currentRouteIndex) {
+    if (nearest != _truckIndex) {
       _advanceTruckTo(nearest);
     }
   }
@@ -312,8 +312,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// from the current truck index onward to prevent backward snapping.
   int _nearestRouteIndex(LatLng point) {
     double minDist = double.infinity;
-    int nearest = _currentRouteIndex;
-    for (int i = _currentRouteIndex; i < _routePoints.length; i++) {
+    int nearest = _truckIndex;
+    for (int i = _truckIndex; i < _routePoints.length; i++) {
       final d = _distanceBetween(point, _routePoints[i]);
       if (d < minDist) {
         minDist = d;
@@ -323,40 +323,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return nearest;
   }
 
-  // ── Truck simulation ──────────────────────────────────────────────────────
+  // ── Route animation ───────────────────────────────────────────────────────
 
-  /// Starts the truck simulation by setting up a [Timer.periodic] that steps
-  /// through [_routePoints] every 300 ms, updating [_currentTruckPosition] and
-  /// [_currentBearing] with [setState], and animating the camera to follow the
-  /// truck marker in navigation mode.
-  ///
-  /// The 300 ms interval balances smooth GPS-style movement against battery
+  /// Starts a periodic timer that advances the truck marker one step along the
+  /// route every 300 ms, balancing smooth GPS-style movement against battery
   /// and CPU usage on mobile devices.
   ///
-    /// Should be called after a successful route load (decodedPoints logic in
-    /// [fetchRoute]).  Any previously running simulation is cancelled first.
-    ///
-    /// Equivalent to the Google Maps `startTruckSimulation()` pattern; the
-    /// timer is stored in [_driveTimer] (≡ `driveTimer` in that pattern) and
-    /// cancelled in [dispose].
-    void _startTruckSimulation() {
-      _driveTimer?.cancel();
-      _currentRouteIndex = 0;
-      _currentTruckPosition =
+  /// Switches to navigation mode so the camera stays close to the truck at
+  /// zoom 14.0 (within the 12.5–15 navigation range).
+  ///
+  /// Equivalent to the Google Maps `startTruckSimulation()` pattern; the
+  /// timer is stored in [_animTimer] (≡ `driveTimer` in that pattern) and
+  /// cancelled in [dispose].
+  void _startRouteAnimation() {
+    _animTimer?.cancel();
+    _truckIndex = 0;
+    _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
     setState(() => _navigationMode = true);
-    if (_mapReady && _currentTruckPosition != null) {
-      _mapController.move(_currentTruckPosition!, _navigationZoomLevel);
+    if (_mapReady && _truckPosition != null) {
+      _mapController.move(_truckPosition!, _navigationZoomLevel);
     }
 
-    _driveTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
+    _animTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (_routePoints.isEmpty) return;
-      final nextIndex = _currentRouteIndex + 1;
+      final nextIndex = _truckIndex + 1;
       if (nextIndex >= _routePoints.length) {
-        // Simulation complete – all route points visited.
-        _driveTimer?.cancel();
+        _animTimer?.cancel();
         return;
       }
       _advanceTruckTo(nextIndex);
@@ -370,22 +365,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// through the same path as explicit marker-set refreshes.
   void _advanceTruckTo(int index) {
     if (index < 0 || index >= _routePoints.length) return;
-    final prev = _routePoints[_currentRouteIndex];
+    final prev = _routePoints[_truckIndex];
     final next = _routePoints[index];
-      // Update position / bearing fields, then call _updateMarkers() to
-      // trigger a rebuild — mirrors the Google Maps pattern:
-      //   currentTruckPosition = to;
-      //   currentBearing = calculateBearing(from, to);
-      //   currentRouteIndex++;
-      //   setState(() => markers = {buildTruckMarker(), …});
-      _currentBearing = _calculateBearing(prev, next);
-      _currentRouteIndex = index;
-      _currentTruckPosition = next;
-      _updateMarkers();
+    // Update position / bearing fields, then call _updateMarkers() to
+    // trigger a rebuild — mirrors the Google Maps pattern:
+    //   currentTruckPosition = to;
+    //   currentBearing = calculateBearing(from, to);
+    //   currentRouteIndex++;
+    //   setState(() => markers = {buildTruckMarker(), …});
+    _truckBearing = _bearingBetween(prev, next);
+    _truckIndex = index;
+    _truckPosition = next;
+    _updateMarkers();
     // Only follow the truck with the camera while in navigation mode;
     // overview mode keeps the full-route view undisturbed.
-    // animateCamera: moves the map to the new truck position at the current
-    // zoom level, giving a smooth follow-cam effect during simulation.
     if (_mapReady && _navigationMode) {
       _mapController.move(next, _mapController.camera.zoom);
     }
@@ -399,7 +392,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// described in the smooth-movement implementation guide, using the
   /// standard spherical bearing formula (atan2 of the cross-product
   /// of the start/end lat-lon pairs).
-  double _calculateBearing(LatLng from, LatLng to) {
+  double _bearingBetween(LatLng from, LatLng to) {
     final lat1 = from.latitude * math.pi / 180.0;
     final lat2 = to.latitude * math.pi / 180.0;
     final dLng = (to.longitude - from.longitude) * math.pi / 180.0;
@@ -485,8 +478,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _crossTrackDistance(LatLng p, LatLng a, LatLng b) {
     const r = 6371000.0;
     final d13 = _distanceBetween(p, a) / r;
-    final theta13 = _calculateBearing(a, p) * math.pi / 180.0;
-    final theta12 = _calculateBearing(a, b) * math.pi / 180.0;
+    final theta13 = _bearingBetween(a, p) * math.pi / 180.0;
+    final theta12 = _bearingBetween(a, b) * math.pi / 180.0;
     final sinXte = math.sin(d13) * math.sin(theta13 - theta12);
     return (math.asin(sinXte.clamp(-1.0, 1.0)) * r).abs();
   }
@@ -638,7 +631,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
 
       _fitCameraToRoute(newPoints);
-      _startTruckSimulation();
+      _startRouteAnimation();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -791,9 +784,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
             onPressed: () {
               setState(() => _navigationMode = !_navigationMode);
-              if (_navigationMode && _currentTruckPosition != null && _mapReady) {
+              if (_navigationMode && _truckPosition != null && _mapReady) {
                 // Switch to navigation mode: zoom close to truck.
-                _mapController.move(_currentTruckPosition!, _navigationZoomLevel);
+                _mapController.move(_truckPosition!, _navigationZoomLevel);
               } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
                 // Switch to overview mode: fit the full route.
                 _fitCameraToRoute(_routePoints);
@@ -856,8 +849,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       // the GoogleMap widget; _updateMarkers() triggers setState
                       // to rebuild this layer whenever position/bearing changes.
                       markers: [
-                          _buildTruckMarker(),
-                          _buildDestinationMarker(),
+                        _buildTruckMarker(),
+                        _buildDestinationMarker(),
                       ],
                     ),
                   ],

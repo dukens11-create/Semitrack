@@ -257,6 +257,55 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return points;
   }
 
+  /// Returns the perpendicular (cross-track) distance in metres from [p] to
+  /// the great-circle line defined by segment [a]→[b].
+  ///
+  /// Uses the spherical cross-track distance formula, which gives accurate
+  /// results in metres regardless of latitude.
+  double _crossTrackDistance(LatLng p, LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final d13 = _distanceBetween(p, a) / r;
+    final theta13 = _bearingBetween(a, p) * math.pi / 180.0;
+    final theta12 = _bearingBetween(a, b) * math.pi / 180.0;
+    final sinXte = math.sin(d13) * math.sin(theta13 - theta12);
+    return (math.asin(sinXte.clamp(-1.0, 1.0)) * r).abs();
+  }
+
+  /// Simplifies [points] using the Ramer–Douglas–Peucker algorithm.
+  ///
+  /// Points that deviate less than [epsilonMeters] from the straight line
+  /// between their neighbours are removed, eliminating micro-jogs and
+  /// duplicate-back artefacts while preserving all meaningful curves and turns.
+  List<LatLng> _simplifyRoute(
+    List<LatLng> points, {
+    double epsilonMeters = 10.0,
+  }) {
+    if (points.length <= 2) return points;
+
+    double maxDist = 0.0;
+    int maxIndex = 0;
+    for (int i = 1; i < points.length - 1; i++) {
+      final d = _crossTrackDistance(points[i], points.first, points.last);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIndex = i;
+      }
+    }
+
+    if (maxDist > epsilonMeters) {
+      final left = _simplifyRoute(
+        points.sublist(0, maxIndex + 1),
+        epsilonMeters: epsilonMeters,
+      );
+      final right = _simplifyRoute(
+        points.sublist(maxIndex),
+        epsilonMeters: epsilonMeters,
+      );
+      return [...left.sublist(0, left.length - 1), ...right];
+    }
+    return [points.first, points.last];
+  }
+
   /// Returns `true` when none of the [routePoints] pass within 100 m of a
   /// restricted zone in [_restrictedZones].
   bool _isTruckSafe(List<LatLng> routePoints) {
@@ -310,8 +359,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           (alternative && routes.length > 1) ? 1 : 0;
       final route = routes[routeIndex] as Map<String, dynamic>;
 
-      // Decode polyline6 geometry into LatLng points.
-      final newPoints = _decodePolyline6(route["geometry"] as String);
+      // Decode polyline6 geometry (1×10⁶ precision) and simplify to remove
+      // micro-jogs that cause loops and double-back artefacts.
+      final decoded = _decodePolyline6(route["geometry"] as String);
+      final newPoints = _simplifyRoute(decoded);
 
       // Check whether the decoded route avoids all restricted zones.
       // If it does not, automatically re-fetch using the alternative route.

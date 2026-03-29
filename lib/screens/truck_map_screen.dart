@@ -296,7 +296,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "&geometries=polyline6"
           "&steps=true"
           "&alternatives=true"
-          "&exclude=toll,motorway,ferry"
+          "&exclude=ferry"
           "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));

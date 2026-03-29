@@ -58,7 +58,7 @@ export class MapboxRouteProvider implements RouteProvider {
       `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
       `?access_token=${encodeURIComponent(env.mapboxToken)}` +
       `&geometries=polyline6&steps=true&overview=full&annotations=duration,distance,speed` +
-      `&exclude=toll,motorway,ferry`;
+      `&exclude=ferry`;
 
     const res = await fetch(url);
     if (!res.ok) {
@@ -84,7 +84,7 @@ export class MapboxRouteProvider implements RouteProvider {
       alerts: [
         "Mapbox live traffic route calculated",
         "Mapbox driving-traffic profile used",
-        "Route avoids tolls, motorways, and ferries",
+        "Route may include interstates/highways and avoids ferries",
       ],
     };
   }

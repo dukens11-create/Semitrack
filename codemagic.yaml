@@ -5,6 +5,7 @@ workflows:
     instance_type: mac_mini_m1
     environment:
       flutter: stable
+      java: 17  # AGP 8.6.0+ requires JDK 17
     scripts:
       - name: Get dependencies
         script: flutter pub get

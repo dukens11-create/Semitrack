@@ -248,17 +248,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
-  /// Moves the truck marker to the route point at [index], updates the
-  /// bearing, and pans the camera to follow.
+  /// Moves the truck marker to the route point at [index], recalculates the
+  /// bearing so the truck icon points in the direction of travel, and
+  /// re-centres the map camera on the new position.
+  ///
+  /// Re-centring is equivalent to calling
+  ///   mapController.animateCamera(CameraUpdate.newLatLng(currentPosition))
+  /// in Google Maps; it keeps the truck visible at all times during navigation.
   void _advanceTruckTo(int index) {
     if (index < 0 || index >= _routePoints.length) return;
     final prev = _routePoints[_truckIndex];
     final next = _routePoints[index];
     setState(() {
+      // Recalculate bearing so the truck icon points in the direction of travel
       _truckBearing = _bearingBetween(prev, next);
       _truckIndex = index;
       _truckPosition = next;
     });
+    // Re-centre map on the new truck position (navigation follow mode).
+    // Equivalent to animateCamera(CameraUpdate.newLatLng(next)) in Google Maps.
     if (_mapReady) {
       _mapController.move(next, _mapController.camera.zoom);
     }
@@ -675,25 +683,61 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     MarkerLayer(
                       markers: [
-                        // ── Truck marker (animated + rotated) ──────────────
-                        // Marker size is scaled to ~0.7 of the original 40 px
-                        // widget so it does not obscure the route polyline.
-                        // _truckBearing is computed via _bearingBetween (the
-                        // calculateBearing function) and applied as a rotation
-                        // so the icon visually points along the route.
+                        // ── Truck navigation marker ────────────────────
+                        //
+                        // 1. POSITION: Snapped to the nearest route point;
+                        //    falls back to the route start or the default
+                        //    origin when no live position is available yet.
+                        //
+                        // 2. SIZE: 28 × 28 px – small enough not to obscure
+                        //    the route polyline or neighbouring roads.
+                        //
+                        // 3. ANCHOR: alignment: Alignment.center places the
+                        //    icon centred on its map coordinate (equivalent
+                        //    to anchor Offset(0.5, 0.5) in Google Maps).
+                        //
+                        // 4. FLAT: rotate: false keeps the widget in screen
+                        //    space (equivalent to flat: true in Google Maps)
+                        //    so Transform.rotate, not the map, drives the
+                        //    heading.
+                        //
+                        // 5. BEARING: _truckBearing is computed by
+                        //    _bearingBetween(routePoints[i], routePoints[i+1])
+                        //    (forward-azimuth formula) and converted from
+                        //    degrees to radians for Transform.rotate.
+                        //
+                        // 6. ICON: assets/icons/truck_top.png is a top-down
+                        //    truck PNG that must be placed by the user before
+                        //    building.  The errorBuilder falls back to the
+                        //    Material local_shipping icon so the app works
+                        //    during development without the PNG.
                         Marker(
+                          // Position: current truck location on route
                           point: _truckPosition ??
                               (_routePoints.isNotEmpty
                                   ? _routePoints.first
                                   : _origin),
                           width: 28,
                           height: 28,
+                          // Anchor: centre the icon exactly on its map coordinate
+                          alignment: Alignment.center,
+                          // Flat/screen-space: keep widget upright in screen coords
+                          // so Transform.rotate (not the map) drives the heading
+                          rotate: false,
+                          // Bearing rotation: angle of travel in radians
                           child: Transform.rotate(
                             angle: _truckBearing * math.pi / 180.0,
-                            child: const Icon(
-                              Icons.local_shipping,
-                              size: 20,
-                              color: Colors.blue,
+                            // Top-down truck PNG navigation icon
+                            child: Image.asset(
+                              'assets/icons/truck_top.png',
+                              width: 28,
+                              height: 28,
+                              // Fallback icon when PNG is not yet present
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.local_shipping,
+                                size: 20,
+                                color: Colors.blue,
+                              ),
                             ),
                           ),
                         ),

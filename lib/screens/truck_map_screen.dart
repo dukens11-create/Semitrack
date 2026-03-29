@@ -61,6 +61,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
+  // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
+  bool _isLoadingRoute = false;
+
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   Map<String, dynamic> _intelligence = const {
     'driveMinutesLeft': null,
@@ -398,12 +401,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// instead of the primary one, allowing the caller to avoid a route that
   /// fails the [_isTruckSafe] check.
   Future<void> fetchRoute({bool alternative = false}) async {
+    // Guard: prevent simultaneous or repeated API calls that would layer a new
+    // route on top of the previous one, causing "spaghetti" polyline artefacts.
+    if (_isLoadingRoute) {
+      print("fetchRoute already in progress – skipping duplicate call");
+      return;
+    }
+    _isLoadingRoute = true;
     print("fetchRoute started (alternative: $alternative)");
 
-    // Clear the old route line before fetching a new one.
+    // Hard-reset the route state before fetching to ensure no stale points
+    // from a previous route are left in _routePoints or rendered on the map.
     setState(() {
       _isLoading = true;
-      _routePoints = [];
+      _routePoints = []; // 🔥 FULL RESET – prevents route duplication
       _error = null;
     });
 
@@ -440,6 +451,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // no further candidates are available to try.
       if (!_isTruckSafe(newPoints) && !alternative) {
         print("Route is not truck-safe – fetching alternative route");
+        // Release the loading guard before the recursive call so the inner
+        // fetchRoute() is not blocked by the guard we set above.
+        _isLoadingRoute = false;
         await fetchRoute(alternative: true);
         return;
       }
@@ -459,9 +473,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": turnByTurnList,
         };
+        // Clean replacement – never use addAll() here, which would layer new
+        // points on top of previous route points and cause spaghetti lines.
         _routePoints = newPoints;
+        // Deduplicate to remove any repeated coordinates that could cause
+        // overlapping polyline segments near the route origin/destination.
+        _routePoints = _routePoints.toSet().toList();
         _isLoading = false;
       });
+
+      // Log the final route point count for debugging route-duplication issues.
+      print("Route points count: ${_routePoints.length}");
 
       // Speak the first instruction when the route is (re-)loaded.
       if (allSteps.isNotEmpty) {
@@ -475,6 +497,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _error = e.toString();
         _isLoading = false;
       });
+    } finally {
+      // Always release the loading guard so future fetchRoute() calls succeed.
+      _isLoadingRoute = false;
     }
   }
 

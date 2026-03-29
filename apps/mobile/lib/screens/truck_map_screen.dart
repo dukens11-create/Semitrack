@@ -37,13 +37,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<LatLng> _routePoints = const [];
 
   // ── Truck marker position, bearing, and current route index ───────────────
+  //
+  // These three fields drive the animated truck marker and correspond to the
+  // Google Maps pattern:
+  //   currentTruckPosition → _currentTruckPosition  (LatLng)
+  //   currentBearing       → _currentBearing        (degrees, 0–360 clockwise from N)
+  //   currentRouteIndex    → _currentRouteIndex     (index into _routePoints)
   LatLng? _currentTruckPosition;
   double _currentBearing = 0.0;
   int _currentRouteIndex = 0;
 
   // ── GPS subscription + route animation timer ──────────────────────────────
+  //
+  // _driveTimer drives the simulated step-by-step truck movement (equivalent
+  // to `driveTimer` in the Google Maps tutorial pattern).  The GPS stream
+  // takes priority when real device location fixes are available.
   StreamSubscription<Position>? _gpsSubscription;
-  Timer? _driveTimer;
+  Timer? _driveTimer; // ≡ driveTimer in the Google Maps pattern
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
@@ -108,9 +118,100 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void dispose() {
     _gpsSubscription?.cancel();
-    _driveTimer?.cancel();
+      _driveTimer?.cancel();
     _tts.stop();
     super.dispose();
+  }
+
+  // ── Truck marker builders ─────────────────────────────────────────────────
+  //
+  // flutter_map uses Widget-based, stateless markers that are rebuilt each
+  // frame from the current state variables.  The three helpers below mirror
+  // the Google Maps Flutter pattern:
+  //
+  //   Google Maps Flutter              flutter_map equivalent
+  //   ─────────────────────────────    ────────────────────────────────────────
+  //   BitmapDescriptor.fromAssetImage  Image.asset (warmed by Flutter cache)
+  //   Marker(anchor: Offset(0.5,0.5))  Marker(alignment: Alignment.center)
+  //   marker.rotation = bearing        AnimatedRotation(turns: bearing/360)
+  //   markers = {truckMarker, …}       MarkerLayer(markers: […]) in build()
+  //   setState(() => markers = …)      _updateMarkers() → setState(() {})
+  //
+  // NOTE: truck_top.png (32 × 32 px, top-down red/white semi-truck) must be
+  // placed at assets/icons/truck_top.png before building the app.
+
+  /// Returns a [Marker] for the truck at its current position and bearing.
+  ///
+  /// **Icon loading** — Flutter's asset image cache warms the PNG on first
+  /// render (equivalent to `await BitmapDescriptor.fromAssetImage(
+  /// ImageConfiguration(size: Size(32, 32)), 'assets/icons/truck_top.png')`
+  /// in the Google Maps SDK).  An [Image.asset] [errorBuilder] gracefully
+  /// degrades to a [Icons.local_shipping] icon while the PNG is absent.
+  ///
+  /// **Anchor** — `alignment: Alignment.center` pins the visual centre of the
+  /// 40 × 40 bounding box to the GPS coordinate, matching `Offset(0.5, 0.5)`
+  /// in the Google Maps `Marker` API.
+  ///
+  /// **Rotation** — [AnimatedRotation] smoothly interpolates between bearing
+  /// values (equivalent to `flat: true, rotation: bearing` in Google Maps),
+  /// producing a natural turning motion as the truck follows the route.
+  Marker _buildTruckMarker() {
+    return Marker(
+      point: _currentTruckPosition ??
+          (_routePoints.isNotEmpty ? _routePoints.first : _origin),
+      // 40 × 40 logical-pixel bounding box; the icon itself is 32 × 32.
+      width: 40,
+      height: 40,
+      // Anchor the widget centre to the GPS coordinate (≡ Offset(0.5, 0.5)).
+      alignment: Alignment.center,
+      child: AnimatedRotation(
+        // AnimatedRotation expects fractional turns (0.0–1.0 = 360°); convert
+        // from the 0–360° bearing returned by _calculateBearing.
+        turns: _currentBearing / 360.0,
+        duration: const Duration(milliseconds: 300),
+        // Top-down truck PNG (truck_top.png).  Falls back to the Material
+        // shipping icon when the PNG has not yet been placed in the assets dir.
+        child: Image.asset(
+          'assets/icons/truck_top.png',
+          width: 32,
+          height: 32,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.local_shipping,
+            size: 32,
+            color: Colors.blue,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Returns the fixed destination [Marker] (red pin at [_destination]).
+  Marker _buildDestinationMarker() {
+    return const Marker(
+      point: _destination,
+      width: 40,
+      height: 40,
+      child: Icon(Icons.location_on, size: 34, color: Colors.red),
+    );
+  }
+
+  /// Triggers a rebuild of the [MarkerLayer] with the latest truck position
+  /// and bearing.
+  ///
+  /// Equivalent to the Google Maps pattern:
+  /// ```dart
+  /// setState(() => markers = {buildTruckMarker(), destinationMarker});
+  /// ```
+  /// In flutter_map there is no separate marker set — calling [setState]
+  /// causes [build] to re-invoke [_buildTruckMarker], which reads the updated
+  /// state fields.  This helper is provided so call-sites remain readable and
+  /// consistent with the Google Maps idiom.
+  void _updateMarkers() {
+    if (!mounted) return;
+    setState(() {
+      // Marker rebuild is implicit: build() calls _buildTruckMarker() which
+      // reads the already-updated _currentTruckPosition and _currentBearing fields.
+    });
   }
 
   // ── TTS initialisation ────────────────────────────────────────────────────
@@ -232,13 +333,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The 300 ms interval balances smooth GPS-style movement against battery
   /// and CPU usage on mobile devices.
   ///
-  /// Should be called after a successful route load (decodedPoints logic in
-  /// [fetchRoute]).  Any previously running simulation is cancelled first via
-  /// [_driveTimer].cancel().
-  void _startTruckSimulation() {
-    _driveTimer?.cancel();
-    _currentRouteIndex = 0;
-    _currentTruckPosition =
+    /// Should be called after a successful route load (decodedPoints logic in
+    /// [fetchRoute]).  Any previously running simulation is cancelled first.
+    ///
+    /// Equivalent to the Google Maps `startTruckSimulation()` pattern; the
+    /// timer is stored in [_driveTimer] (≡ `driveTimer` in that pattern) and
+    /// cancelled in [dispose].
+    void _startTruckSimulation() {
+      _driveTimer?.cancel();
+      _currentRouteIndex = 0;
+      _currentTruckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
@@ -261,18 +365,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Moves the truck marker to the route point at [index], updates the
   /// bearing, and pans the camera to follow in navigation mode.
+  ///
+  /// State is committed via [_updateMarkers] so all marker changes flow
+  /// through the same path as explicit marker-set refreshes.
   void _advanceTruckTo(int index) {
     if (index < 0 || index >= _routePoints.length) return;
     final prev = _routePoints[_currentRouteIndex];
     final next = _routePoints[index];
-    setState(() {
-      // _calculateBearing (calculateBearing) computes the precise clockwise
-      // angle from north using the spherical law of cosines; the truck icon
-      // rotates to match the real direction of travel between route points.
+      // Update position / bearing fields, then call _updateMarkers() to
+      // trigger a rebuild — mirrors the Google Maps pattern:
+      //   currentTruckPosition = to;
+      //   currentBearing = calculateBearing(from, to);
+      //   currentRouteIndex++;
+      //   setState(() => markers = {buildTruckMarker(), …});
       _currentBearing = _calculateBearing(prev, next);
       _currentRouteIndex = index;
       _currentTruckPosition = next;
-    });
+      _updateMarkers();
     // Only follow the truck with the camera while in navigation mode;
     // overview mode keeps the full-route view undisturbed.
     // animateCamera: moves the map to the new truck position at the current
@@ -284,13 +393,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Bearing / distance helpers ────────────────────────────────────────────
 
-  /// Computes the initial bearing in degrees (0–360, clockwise from north)
-  /// from [from] to [to] using the spherical law of cosines.
+  /// Returns the initial bearing in degrees (0–360) from [from] to [to].
   ///
-  /// High-accuracy formula – uses full double-precision trig via [math.atan2],
-  /// matching the precision expected by [_advanceTruckTo] for smooth truck
-  /// rotation.  Required by [_startTruckSimulation] to determine the direction
-  /// of travel between successive route points.
+  /// This is the `calculateBearing(LatLng start, LatLng end)` function
+  /// described in the smooth-movement implementation guide, using the
+  /// standard spherical bearing formula (atan2 of the cross-product
+  /// of the start/end lat-lon pairs).
   double _calculateBearing(LatLng from, LatLng to) {
     final lat1 = from.latitude * math.pi / 180.0;
     final lat2 = to.latitude * math.pi / 180.0;
@@ -585,7 +693,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: bounds,
-        padding: const EdgeInsets.all(40),
+        padding: const EdgeInsets.all(50),
         maxZoom: 14.0,
       ),
     );
@@ -743,23 +851,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ],
                     ),
                     MarkerLayer(
+                      // _buildTruckMarker() + _buildDestinationMarker() are
+                      // the flutter_map equivalent of passing a Set<Marker> to
+                      // the GoogleMap widget; _updateMarkers() triggers setState
+                      // to rebuild this layer whenever position/bearing changes.
                       markers: [
-                        // ── Truck marker (animated + rotated) ──────────────
-                        // Extracted to _buildTruckMarker() to keep the build
-                        // method clean and to allow independent testing of the
-                        // marker widget.
-                        _buildTruckMarker(),
-                        // ── Destination marker ──────────────────────────────
-                        Marker(
-                          point: _destination,
-                          width: 40,
-                          height: 40,
-                          child: const Icon(
-                            Icons.location_on,
-                            size: 34,
-                            color: Colors.red,
-                          ),
-                        ),
+                          _buildTruckMarker(),
+                          _buildDestinationMarker(),
                       ],
                     ),
                   ],
@@ -787,47 +885,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               child: _buildRouteInfo(_routeData!),
             ),
         ],
-      ),
-    );
-  }
-
-  /// Builds the animated, rotating truck [Marker] used in the [MarkerLayer].
-  ///
-  /// Uses [_currentTruckPosition] as the map coordinate (falls back to the
-  /// first route point or the hardcoded origin when not yet set).  The truck
-  /// PNG icon (assets/icons/truck_top.png) is rendered inside an
-  /// [AnimatedRotation] that converts [_currentBearing] to fractional turns
-  /// so the icon turns smoothly as the bearing updates between route points.
-  ///
-  /// The marker is anchored at [Alignment.center] (equivalent to anchor
-  /// (0.5, 0.5)) so the rotation pivot aligns with the GPS coordinate and
-  /// the icon does not drift when rotating.  In flutter_map the marker sits
-  /// flat on the map by default (equivalent to `flat: true` in Google Maps).
-  Marker _buildTruckMarker() {
-    return Marker(
-      point: _currentTruckPosition ??
-          (_routePoints.isNotEmpty ? _routePoints.first : _origin),
-      width: 36,
-      height: 36,
-      // anchor: (0.5, 0.5) — keeps the rotation pivot on the GPS coordinate.
-      alignment: Alignment.center,
-      child: AnimatedRotation(
-        // Convert bearing degrees → fractional turns
-        // (AnimatedRotation expects 0.0–1.0 full circles).
-        turns: _currentBearing / 360.0,
-        duration: const Duration(milliseconds: 300),
-        // Top-down truck PNG from assets/icons/truck_top.png; falls back to
-        // the built-in Material icon when the asset is unavailable.
-        child: Image.asset(
-          'assets/icons/truck_top.png',
-          width: 28,
-          height: 28,
-          errorBuilder: (_, __, ___) => const Icon(
-            Icons.local_shipping,
-            size: 28,
-            color: Colors.blue,
-          ),
-        ),
       ),
     );
   }

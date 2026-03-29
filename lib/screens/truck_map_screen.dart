@@ -902,45 +902,125 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the [IconData] matching the Mapbox maneuver [modifier] string.
   ///
-  /// Covers the most common Mapbox modifier values:
-  ///   'left' / 'sharp left' / 'slight left'  → turn_left
-  ///   'right' / 'sharp right' / 'slight right' → turn_right
-  ///   'straight' / 'continue' (no modifier)   → straight
-  ///   all other values (uturn, etc.)           → navigation (default)
+  /// Covers the full set of Mapbox modifier and type values:
+  ///   'left' / 'sharp left' / 'slight left' / 'turn-left'  → turn_left
+  ///   'right' / 'sharp right' / 'slight right' / 'turn-right' → turn_right
+  ///   'uturn' / 'u-turn'                                    → u_turn_left
+  ///   'straight' / 'continue'                               → straight
+  ///   'merge'                                               → straight
+  ///   'roundabout' / 'rotary'                               → roundabout_left
+  ///   'arrive' / 'destination'                              → flag (destination)
+  ///   'depart' / 'head'                                     → near_me (start)
+  ///   all other values                                       → navigation (default)
   IconData _maneuverIcon(String modifier) {
     switch (modifier.toLowerCase()) {
       case 'left':
       case 'sharp left':
       case 'slight left':
+      case 'turn-left':
         return Icons.turn_left;
       case 'right':
       case 'sharp right':
       case 'slight right':
+      case 'turn-right':
         return Icons.turn_right;
+      case 'uturn':
+      case 'u-turn':
+        return Icons.u_turn_left;
       case 'straight':
       case 'continue':
         return Icons.straight;
+      case 'merge':
+        return Icons.straight; // merge onto highway — keep straight icon
+      case 'roundabout':
+      case 'rotary':
+        return Icons.roundabout_left;
+      case 'arrive':
+      case 'destination':
+        return Icons.flag;
+      case 'depart':
+      case 'head':
+        return Icons.near_me;
       default:
         return Icons.navigation;
     }
   }
 
-  /// Sums the [distanceMeters] of all steps from [_currentStepIndex] onward
-  /// and returns a formatted string in km (≥ 1 km) or metres (< 1 km).
-  String _remainingDistanceKm() {
-    if (_navSteps.isEmpty) return '';
-    final totalMeters = _navSteps
-        .skip(_currentStepIndex)
-        .fold(0.0, (double sum, _NavStep s) => sum + s.distanceMeters);
-    if (totalMeters >= 1000.0) {
-      return '${(totalMeters / 1000.0).toStringAsFixed(1)} km';
+  /// Formats [meters] as a human-readable distance string.
+  ///
+  /// Returns metres for distances below 1 km (e.g. "350 m") and kilometres
+  /// with one decimal place for longer distances (e.g. "2.4 km").  Matches
+  /// the Google Maps / Waze distance display convention.
+  String _formatDistance(double meters) {
+    if (meters < 1000.0) {
+      return '${meters.toInt()} m';
     }
-    return '${totalMeters.toStringAsFixed(0)} m';
+    return '${(meters / 1000.0).toStringAsFixed(1)} km';
   }
 
-  /// Builds the turn-by-turn navigation banner that floats at the top of the
-  /// map.  Shows the current maneuver icon, the instruction text, and the
-  /// remaining route distance.
+  /// Returns the distance in metres from the truck's current position to the
+  /// next maneuver waypoint (i.e. the upcoming turn, not the total remaining
+  /// route distance).
+  ///
+  /// Falls back to the current step's stored [distanceMeters] when the truck
+  /// position is not yet known (e.g. before the first GPS fix).
+  double _distanceToNextStep() {
+    if (_navSteps.isEmpty) return 0.0;
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final nextStep = _navSteps[safeIndex];
+    // Use the live truck position when available for real-time accuracy.
+    if (_truckPosition != null) {
+      return _distanceBetween(_truckPosition!, nextStep.location);
+    }
+    // Fallback: use the stored step distance before the first GPS fix.
+    return nextStep.distanceMeters;
+  }
+
+  /// Converts a verbose Mapbox instruction into a concise, GPS-style phrase.
+  ///
+  /// Examples:
+  ///   "Head west on West Burnside Street"   → "Continue on W Burnside St"
+  ///   "Turn left onto NW 23rd Avenue"       → "Turn left onto NW 23rd Ave"
+  ///   "Turn right onto Main Street"         → "Turn right onto Main St"
+  ///   "Continue straight on the highway"    → "Continue straight"
+  ///   "You have arrived at your destination"→ "Arrived"
+  String _shortenInstruction(String instruction) {
+    // Destination arrival — very common final step.
+    if (instruction.toLowerCase().contains('arrived') ||
+        instruction.toLowerCase().contains('destination')) {
+      return 'Arrived';
+    }
+    // Replace verbose "Head <direction> on" with "Continue on".
+    String result = instruction.replaceAllMapped(
+      RegExp(r'^Head\s+\w+\s+on\s+', caseSensitive: false),
+      (_) => 'Continue on ',
+    );
+    // Abbreviate common street suffixes for a cleaner display.
+    result = result
+        .replaceAll(RegExp(r'\bStreet\b', caseSensitive: false), 'St')
+        .replaceAll(RegExp(r'\bAvenue\b', caseSensitive: false), 'Ave')
+        .replaceAll(RegExp(r'\bBoulevard\b', caseSensitive: false), 'Blvd')
+        .replaceAll(RegExp(r'\bDrive\b', caseSensitive: false), 'Dr')
+        .replaceAll(RegExp(r'\bRoad\b', caseSensitive: false), 'Rd')
+        .replaceAll(RegExp(r'\bHighway\b', caseSensitive: false), 'Hwy')
+        .replaceAll(RegExp(r'\bFreeway\b', caseSensitive: false), 'Fwy')
+        .replaceAll(RegExp(r'\bLane\b', caseSensitive: false), 'Ln')
+        .replaceAll(RegExp(r'\bCourt\b', caseSensitive: false), 'Ct')
+        .replaceAll(RegExp(r'\bPlace\b', caseSensitive: false), 'Pl');
+    // Remove trailing distance phrases like "for 0.3 miles" or "for 500 m"
+    // since the banner already shows the distance separately.
+    result = result.replaceAll(
+      RegExp(r'\s+for\s+[\d.]+ ?(m|km|miles?|mi)\b.*$', caseSensitive: false),
+      '',
+    );
+    return result.trim();
+  }
+
+  /// Builds the premium turn-by-turn navigation banner that floats at the top
+  /// of the map, styled like a modern GPS app (Google Maps / Waze).
+  ///
+  /// Layout (left → right):
+  ///   [Turn icon] | [Current instruction + next-step preview] | [Distance]
   ///
   /// The banner is only rendered while [_navSteps] is non-empty so it never
   /// appears before a route has been loaded.
@@ -948,45 +1028,90 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Guard: clamp index so an out-of-sync state never throws a RangeError.
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
-    return Container(
-      // Semi-transparent dark background so the banner is readable over any
-      // map tile colour without fully obscuring the road behind it.
-      color: Colors.black87,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: SafeArea(
-        bottom: false,
-        child: Row(
-          children: [
-            // Maneuver icon — left/right/straight/navigation based on modifier.
-            Icon(
-              _maneuverIcon(step.maneuver),
-              color: Colors.white,
-              size: 32,
-            ),
-            const SizedBox(width: 12),
-            // Instruction text takes all available horizontal space.
-            Expanded(
-              child: Text(
-                step.instruction,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+
+    // Next step for driver preview (shown in a smaller, dimmed font below).
+    final hasNextStep = safeIndex + 1 < _navSteps.length;
+    final nextStep = hasNextStep ? _navSteps[safeIndex + 1] : null;
+
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        // Horizontal margin and top gap so the banner floats over the map with
+        // visible rounded corners on all sides.
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            // Dark glassy background — matches the Google Maps nav banner style.
+            color: Colors.black.withOpacity(0.85),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.35),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Turn icon (left side) ─────────────────────────────────────
+              // White icon on dark background mirrors the Google Maps design.
+              Icon(
+                _maneuverIcon(step.maneuver),
+                color: Colors.white,
+                size: 34,
+              ),
+              const SizedBox(width: 14),
+              // ── Instruction text + next-step preview (centre, expands) ────
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Current step — bold and prominent for at-a-glance reading.
+                    Text(
+                      _shortenInstruction(step.instruction),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    // Next step preview — lighter and smaller for driver preview.
+                    if (nextStep != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Then: ${_shortenInstruction(nextStep.instruction)}',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 13,
+                          height: 1.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            const SizedBox(width: 12),
-            // Remaining distance, right-aligned for quick at-a-glance reading.
-            Text(
-              _remainingDistanceKm(),
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 14,
+              const SizedBox(width: 12),
+              // ── Distance to next turn (right side) ────────────────────────
+              // Shows only the distance to the *next* maneuver, not total route.
+              Text(
+                _formatDistance(_distanceToNextStep()),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

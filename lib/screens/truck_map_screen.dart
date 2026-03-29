@@ -110,9 +110,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _navigationZoomLevel = 14.0;
 
   // Camera-follow zoom level for GPS navigation mode.
-  // Zoom 16 keeps the truck close and road detail visible; mirrors the
-  // CameraPosition(zoom: 16) used in Google Maps navigation implementations.
-  static const _followCameraZoomLevel = 16.0;
+  // Zoom 17 keeps the truck close and road detail visible at a true
+  // street-level view; mirrors CameraPosition(zoom: 17) in Google Maps
+  // navigation.  Adjust to 16 or 18 if surrounding road context is needed.
+  static const _followCameraZoomLevel = 17.0;
+
+  // Latitude offset applied to the camera target so that more road *ahead* of
+  // the truck is visible on screen.  A negative value shifts the target south
+  // (down-screen), revealing the upcoming road — identical to the Google Maps
+  // navigation trick.  Tune between −0.001 and −0.002 for your zoom level.
+  static const _cameraLeadLatitude = 0.0015;
 
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
@@ -226,15 +233,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Animates the map camera to follow the truck in navigation mode.
   ///
-  /// Equivalent to the Google Maps pattern:
+  /// Equivalent to the Google Maps navigation camera pattern:
   /// ```dart
   /// Future<void> followTruckCamera() async {
   ///   await mapController.animateCamera(
   ///     CameraUpdate.newCameraPosition(CameraPosition(
-  ///       target: currentTruckPosition,
-  ///       zoom: 16,
-  ///       bearing: currentBearing,
-  ///       tilt: 45,        // 3-D navigation feel (Google Maps only)
+  ///       target: LatLng(
+  ///         currentTruckPosition.latitude - 0.0015, // shift ahead for road visibility
+  ///         currentTruckPosition.longitude,
+  ///       ),
+  ///       zoom: 17,           // close street-level navigation zoom
+  ///       bearing: currentBearing, // rotate map to match truck heading
+  ///       tilt: 45,           // 3-D navigation feel (Google Maps only)
   ///     )),
   ///   );
   /// }
@@ -245,15 +255,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// API feature and is not available in flutter_map; the heading rotation
   /// achieves a similar GPS-navigation feel on a flat map.
   ///
+  /// The camera target is shifted slightly south (latitude − [_cameraLeadLatitude] °) so that
+  /// more road *ahead* of the truck is visible on screen — identical to the
+  /// Google Maps real-navigation feel described in the feature spec.
+  ///
   /// Call this after every truck position/bearing update while [_navigationMode]
   /// is active.  Guards against calls before the map widget is ready with
   /// [_mapReady].
   void _followTruckCamera() {
     if (!_mapReady || _truckPosition == null) return;
-    // Move to truck position at navigation zoom and rotate map so the truck's
-    // heading is always at the top of the screen (GPS navigation style).
+    // Shift the camera target slightly ahead of the truck (−_cameraLeadLatitude°)
+    // so the road in front is always visible, matching Google Maps navigation.
+    final cameraTarget = LatLng(
+      _truckPosition!.latitude - _cameraLeadLatitude,
+      _truckPosition!.longitude,
+    );
+    // Rotate the map to the truck's current heading and zoom to street level.
     _mapController.moveAndRotate(
-      _truckPosition!,
+      cameraTarget,
       _followCameraZoomLevel,
       _truckBearing,
     );

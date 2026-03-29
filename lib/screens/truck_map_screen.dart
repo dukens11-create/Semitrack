@@ -76,6 +76,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
 
+  // ── Navigation vs overview mode ────────────────────────────────────────────
+  // When true the camera stays close to the truck (navigation zoom 12.5–15).
+  // When false the camera shows the full-route overview.
+  bool _navigationMode = false;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -85,9 +90,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
 
-  // Zoom level used when navigation starts so the driver sees street-level
-  // detail around the truck rather than a distant bird's-eye view.
-  static const _navigationZoomLevel = 13.5;
+  // Navigation-mode zoom level (12.5–15) — close enough for street detail
+  // without losing surrounding road context.
+  static const _navigationZoomLevel = 14.0;
 
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
@@ -223,16 +228,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// route every 300 ms, balancing smooth GPS-style movement against battery
   /// and CPU usage on mobile devices.
   ///
-  /// On navigation start the camera is zoomed to the truck's starting position
-  /// at zoom level 13.5 so the driver sees their immediate surroundings
-  /// rather than the full-route overview.
+  /// Switches to navigation mode so the camera stays close to the truck at
+  /// zoom 14.0 (within the 12.5–15 navigation range).
   void _startRouteAnimation() {
     _animTimer?.cancel();
     _truckIndex = 0;
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
-    // Zoom map to truck starting position at a close navigation zoom level.
+    // Enter navigation mode: camera zooms to truck position (12.5–15 range).
+    setState(() => _navigationMode = true);
     if (_mapReady && _truckPosition != null) {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
     }
@@ -248,26 +253,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
-  /// Moves the truck marker to the route point at [index], recalculates the
-  /// bearing so the truck icon points in the direction of travel, and
-  /// re-centres the map camera on the new position.
-  ///
-  /// Re-centring is equivalent to calling
-  ///   mapController.animateCamera(CameraUpdate.newLatLng(currentPosition))
-  /// in Google Maps; it keeps the truck visible at all times during navigation.
+  /// Moves the truck marker to the route point at [index], updates the
+  /// bearing, and pans the camera to follow in navigation mode.
   void _advanceTruckTo(int index) {
     if (index < 0 || index >= _routePoints.length) return;
     final prev = _routePoints[_truckIndex];
     final next = _routePoints[index];
     setState(() {
-      // Recalculate bearing so the truck icon points in the direction of travel
+      // calculateBearing (_bearingBetween) gives the precise clockwise angle
+      // from north; the truck icon rotates to match the direction of travel.
       _truckBearing = _bearingBetween(prev, next);
       _truckIndex = index;
       _truckPosition = next;
     });
-    // Re-centre map on the new truck position (navigation follow mode).
-    // Equivalent to animateCamera(CameraUpdate.newLatLng(next)) in Google Maps.
-    if (_mapReady) {
+    // Only follow the truck with the camera while in navigation mode;
+    // overview mode keeps the full-route view undisturbed.
+    if (_mapReady && _navigationMode) {
       _mapController.move(next, _mapController.camera.zoom);
     }
   }
@@ -557,12 +558,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }).toList();
   }
 
-  /// Fits the map camera to the first 10 route points at navigation zoom
-  /// so the view opens close to the truck's starting position.
+  /// Fits the map camera to show the full route in overview mode.
+  ///
+  /// When in overview mode (not navigating) the full route is fitted so the
+  /// driver can see the entire trip.  Navigation mode bypasses this method and
+  /// keeps the camera close to the truck instead.
   void _fitCameraToRoute(List<LatLng> points) {
     if (!_mapReady || points.length < 2) return;
-    final segment = points.length > 10 ? points.sublist(0, 10) : points;
-    final bounds = LatLngBounds.fromPoints(segment);
+    // Overview: fit the full route bounding box so all waypoints are visible.
+    final bounds = LatLngBounds.fromPoints(points);
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: bounds,
@@ -606,6 +610,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Formatting helpers ─────────────────────────────────────────────────────
 
+  /// Converts a raw route-mode API key (e.g. 'fastest') into a
+  /// user-friendly display label (e.g. 'Fastest Route').
+  ///
+  /// Uses a switch statement so future mode keys can be added in one place.
+  String _formatRouteMode(String mode) {
+    switch (mode.toLowerCase()) {
+      case 'fastest':
+        return 'Fastest Route';
+      case 'shortest':
+        return 'Shortest Route';
+      case 'eco':
+        return 'Eco Route';
+      case 'truck':
+        return 'Truck Route';
+      case 'driving-traffic':
+        return 'Live Traffic Route';
+      case 'driving':
+        return 'Driving Route';
+      default:
+        // Capitalise the first letter for any unrecognised key so the UI
+        // still looks polished rather than showing a raw lowercase string.
+        return mode.isNotEmpty
+            ? '${mode[0].toUpperCase()}${mode.substring(1)}'
+            : '—';
+    }
+  }
+
   String _formatEta(int? minutes) {
     if (minutes == null) return '—';
     final h = minutes ~/ 60;
@@ -628,6 +659,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       appBar: AppBar(
         title: const Text('Semitrack NEW'),
         actions: [
+          // Toggle between navigation mode (close zoom, follows truck) and
+          // overview mode (full-route view so the driver can see the whole trip).
+          IconButton(
+            tooltip: _navigationMode ? 'Show full route' : 'Navigation mode',
+            icon: Icon(
+              _navigationMode ? Icons.map_outlined : Icons.navigation,
+            ),
+            onPressed: () {
+              setState(() => _navigationMode = !_navigationMode);
+              if (_navigationMode && _truckPosition != null && _mapReady) {
+                // Switch to navigation mode: zoom close to truck.
+                _mapController.move(_truckPosition!, _navigationZoomLevel);
+              } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
+                // Switch to overview mode: fit the full route.
+                _fitCameraToRoute(_routePoints);
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _isLoading ? null : () => fetchRoute(),
@@ -680,59 +729,40 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     MarkerLayer(
                       markers: [
-                        // ── Truck navigation marker ────────────────────
-                        //
-                        // 1. POSITION: Snapped to the nearest route point;
-                        //    falls back to the route start or the default
-                        //    origin when no live position is available yet.
-                        //
-                        // 2. SIZE: 28 × 28 px – small enough not to obscure
-                        //    the route polyline or neighbouring roads.
-                        //
-                        // 3. ANCHOR: alignment: Alignment.center places the
-                        //    icon centred on its map coordinate (equivalent
-                        //    to anchor Offset(0.5, 0.5) in Google Maps).
-                        //
-                        // 4. FLAT: rotate: false keeps the widget in screen
-                        //    space (equivalent to flat: true in Google Maps)
-                        //    so Transform.rotate, not the map, drives the
-                        //    heading.
-                        //
-                        // 5. BEARING: _truckBearing is computed by
-                        //    _bearingBetween(routePoints[i], routePoints[i+1])
-                        //    (forward-azimuth formula) and converted from
-                        //    degrees to radians for Transform.rotate.
-                        //
-                        // 6. ICON: assets/icons/truck_top.png is a top-down
-                        //    truck PNG that must be placed by the user before
-                        //    building.  The errorBuilder falls back to the
-                        //    Material local_shipping icon so the app works
-                        //    during development without the PNG.
+                        // ── Truck marker (animated + rotated) ──────────────
+                        // alignment: Alignment.center pins the visual centre
+                        // of the icon to the GPS coordinate, preventing the
+                        // icon from drifting as it rotates.
+                        // AnimatedRotation smoothly interpolates between
+                        // successive bearing values (calculated via
+                        // _bearingBetween / calculateBearing) so the truck
+                        // icon turns fluidly rather than snapping abruptly.
+                        // The top-down truck PNG (truck_top.png) is used when
+                        // available; falls back to the Material icon otherwise.
                         Marker(
-                          // Position: current truck location on route
                           point: _truckPosition ??
                               (_routePoints.isNotEmpty
                                   ? _routePoints.first
                                   : _origin),
-                          width: 28,
-                          height: 28,
-                          // Anchor: centre the icon exactly on its map coordinate
+                          width: 36,
+                          height: 36,
+                          // Anchor the marker at its visual centre so the
+                          // rotation pivot matches the GPS coordinate.
                           alignment: Alignment.center,
-                          // Flat/screen-space: keep widget upright in screen coords
-                          // so Transform.rotate (not the map) drives the heading
-                          rotate: false,
-                          // Bearing rotation: angle of travel in radians
-                          child: Transform.rotate(
-                            angle: _truckBearing * math.pi / 180.0,
-                            // Top-down truck PNG navigation icon
+                          child: AnimatedRotation(
+                            // Convert bearing degrees → fractional turns
+                            // (AnimatedRotation uses 0.0–1.0 full circles).
+                            turns: _truckBearing / 360.0,
+                            duration: const Duration(milliseconds: 300),
+                            // Top-down truck PNG navigation icon; falls back to
+                            // the Material icon when the PNG is not yet present.
                             child: Image.asset(
                               'assets/icons/truck_top.png',
                               width: 28,
                               height: 28,
-                              // Fallback icon when PNG is not yet present
                               errorBuilder: (_, __, ___) => const Icon(
                                 Icons.local_shipping,
-                                size: 20,
+                                size: 28,
                                 color: Colors.blue,
                               ),
                             ),
@@ -785,16 +815,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final etaMinutes = (route['etaMinutes'] as num?)?.toInt();
     final tollsUsd = route['tollsUsd'];
     final fuelGallons = route['fuelGallonsEstimate'];
-    final routeMode = route['routeMode'] ?? 'fastest';
+    // Raw mode key (e.g. 'fastest') is converted to a friendly label below.
+    final routeMode = route['routeMode'] as String? ?? 'fastest';
     final provider = route['provider'] as String? ?? '';
     final live = route['live'] as Map<String, dynamic>?;
     final warnings =
         (route['truckWarnings'] as List?)?.cast<String>() ?? const <String>[];
     final steps = route['turnByTurn'] as List?;
 
-    final etaText = _formatEta(etaMinutes);
+    // Trip ETA: total trip duration derived from the route's distance/speed.
+    final tripEtaText = _formatEta(etaMinutes);
 
     // Phase 5 intelligence from state.
+    // Time Left: remaining drive minutes sourced from Drive Intelligence, which
+    // is separate from the total trip ETA — a route with an initial 10 h Trip
+    // ETA may show 6 h Time Left after 4 hours of driving (or sooner if HOS
+    // rules, breaks, or real-time traffic adjustments are factored in).
     final driveMinutesLeft =
         _intelligence['driveMinutesLeft'] as int?;
     final weather = _intelligence['weather'] as String?;
@@ -804,6 +840,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       padding: const EdgeInsets.only(bottom: 16),
       children: [
         // ── Route Summary ────────────────────────────────────────────────
+        // Visual hierarchy: Trip ETA is the primary hero value (large + bold),
+        // secondary details (distance, mode, tolls) are displayed below it in
+        // a smaller weight so the driver's eye goes straight to arrival time.
         Card(
           margin: const EdgeInsets.all(12),
           child: Padding(
@@ -827,9 +866,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                _labelValue('Mode', routeMode),
-                Text('Distance: ${distanceMiles ?? "--"} mi'),
-                Text('ETA: $etaText'),
+                // ── Trip ETA hero row ──────────────────────────────────
+                // The arrival duration is the most important single value
+                // on this screen; make it the visual focal point.
+                Text(
+                  tripEtaText,
+                  style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Text(
+                  'Trip ETA',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 12),
+                // ── Secondary details ──────────────────────────────────
+                // _formatRouteMode converts raw API keys to friendly labels.
+                _labelValue('Mode', _formatRouteMode(routeMode)),
+                _labelValue('Distance', '${distanceMiles ?? "--"} mi'),
                 if (tollsUsd != null)
                   _labelValue(
                       'Tolls', '\$${(tollsUsd as num).toStringAsFixed(2)}'),
@@ -845,6 +900,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ),
 
         // ── Phase 5: Drive Intelligence ──────────────────────────────────
+        // "Time Left" here is intentionally distinct from "Trip ETA" above:
+        // Trip ETA = total route duration; Time Left = remaining drive time
+        // reported by the Phase 5 intelligence engine (may reflect HOS rules,
+        // break requirements, or real-time traffic adjustments).
         Card(
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           child: Padding(
@@ -858,7 +917,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 8),
-                _labelValue('Drive time left', _formatEta(driveMinutesLeft)),
+                // Time Left is derived from _intelligence['driveMinutesLeft'],
+                // not from the route's etaMinutes, so the two values can
+                // diverge as the trip progresses.
+                _labelValue('Time Left', _formatEta(driveMinutesLeft)),
                 _labelValue('Weather', weather ?? '—'),
                 _labelValue('Risk score', _formatRisk(riskScore)),
               ],

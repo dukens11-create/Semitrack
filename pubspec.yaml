@@ -26,8 +26,17 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # Register the top-down truck image used as the navigation marker.
-  # NOTE: The user must place assets/icons/truck_top.png in the project
-  # before running a build.  The PR cannot include the PNG itself.
+  # Asset registration for the Semitrack Flutter app.
+  #
+  # truck_top.png — 64×64 px RGBA PNG, top-down view of a red/white semi-truck.
+  # Used as the live-position marker on the TruckMapScreen flutter_map overlay.
+  #
+  # Usage in code:
+  #   Image.asset('assets/icons/truck_top.png', width: 32, height: 32)
+  #
+  # To replace the marker with a custom image:
+  #   1. Overwrite assets/icons/truck_top.png with your PNG (recommended: 64×64 px RGBA).
+  #   2. Run `flutter pub get` to re-bundle assets.
+  #   3. Hot-reload or rebuild the app.
   assets:
     - assets/icons/truck_top.png

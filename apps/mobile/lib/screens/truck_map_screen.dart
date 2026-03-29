@@ -143,46 +143,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //   markers = {truckMarker, …}       MarkerLayer(markers: […]) in build()
   //   setState(() => markers = …)      _updateMarkers() → setState(() {})
   //
-  // NOTE: truck_top.png (32 × 32 px, top-down red/white semi-truck) must be
+  // NOTE: truck_top.png (64 × 192 px portrait, red cab facing UP) must be
   // placed at assets/icons/truck_top.png before building the app.
 
   /// Returns a [Marker] for the truck at its current position and bearing.
   ///
-  /// **Icon loading** — Flutter's asset image cache warms the PNG on first
-  /// render (equivalent to `await BitmapDescriptor.fromAssetImage(
-  /// ImageConfiguration(size: Size(32, 32)), 'assets/icons/truck_top.png')`
-  /// in the Google Maps SDK).  An [Image.asset] [errorBuilder] gracefully
-  /// degrades to a [Icons.local_shipping] icon while the PNG is absent.
+  /// **Icon** — portrait 64 × 192 px PNG (red cab at top, white trailer
+  /// below) rendered at 20 × 60 logical pixels so the semi-truck proportions
+  /// are preserved on screen.
   ///
-  /// **Anchor** — `alignment: Alignment(0.0, 0.2)` pins the visual centre of
-  /// the marker slightly below the midpoint (≡ `anchor: Offset(0.5, 0.6)` in
-  /// the Google Maps API) so the truck sits precisely on the route line.
+  /// **Rotation** — the sprite faces UP (north = 0°), so bearing maps
+  /// directly to fractional turns with no offset: `turns: _truckBearing / 360`.
+  /// [AnimatedRotation] interpolates smoothly between bearing changes.
   ///
-  /// **Rotation** — [AnimatedRotation] smoothly interpolates between bearing
-  /// values.  A +90° offset corrects for the truck_top.png sprite facing up
-  /// rather than right — matching `rotation: currentBearing + 90` from the
-  /// professional-marker implementation guide (try -90 if the icon is mirrored).
+  /// **Anchor** — `alignment: Alignment(0.0, 0.2)` (≡ `anchor: Offset(0.5, 0.6)`)
+  /// shifts the anchor point slightly below centre so the cab sits on the road
+  /// coordinate rather than floating above it.
   Marker _buildTruckMarker() {
     return Marker(
       point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : _origin),
-      // 40 × 40 logical-pixel bounding box; the icon itself is 32 × 32.
-      width: 40,
-      height: 40,
-      // Anchor slightly below centre (≡ Offset(0.5, 0.6) / flat: true) so the
-      // truck base sits on the road polyline rather than floating above it.
+      // Bounding box matches the portrait sprite: 24 wide × 72 tall (logical px).
+      width: 24,
+      height: 72,
+      // Anchor cab (top of sprite) to GPS point — shifts marker so the cab,
+      // not the trailer centre, sits on the road coordinate.
       alignment: const Alignment(0.0, 0.2),
       child: AnimatedRotation(
-        // +90° corrects for the top-down PNG pointing up instead of right;
-        // convert total degrees to fractional turns expected by AnimatedRotation.
-        turns: (_truckBearing + 90) / 360.0,
+        // Sprite faces UP → bearing maps directly; no offset needed.
+        turns: _truckBearing / 360.0,
         duration: const Duration(milliseconds: 300),
-        // Top-down truck PNG (truck_top.png).  Falls back to the Material
-        // shipping icon when the PNG has not yet been placed in the assets dir.
+        // Portrait top-down truck (truck_top.png: 64 × 192 px).
         child: Image.asset(
           'assets/icons/truck_top.png',
-          width: 32,
-          height: 32,
+          width: 20,
+          height: 60,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.local_shipping,
             size: 32,

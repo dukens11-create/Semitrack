@@ -19,7 +19,7 @@ The Android build is currently configured with:
 
 | Component | Version | File |
 |---|---|---|
-| Kotlin Gradle Plugin | **2.1.20** | `android/build.gradle` (`ext.kotlin_version`) |
+| Kotlin Gradle Plugin | **2.2.20** | `android/build.gradle` (`ext.kotlin_version`) and `android/settings.gradle` (plugins DSL) |
 | Android Gradle Plugin (AGP) | **8.6.0** | `android/build.gradle` (classpath) and `android/settings.gradle` (plugins DSL) |
 | Gradle wrapper | **8.11.1** | `android/gradle/wrapper/gradle-wrapper.properties` |
 | flutter_tts | **^4.0.2** | `pubspec.yaml` |
@@ -28,21 +28,8 @@ The Android build is currently configured with:
 
 - AGP 8.6.0 requires **Gradle 8.7 or higher** (the wrapper is set to 8.11.1 — no change needed).
 - **AGP 8.6.0 requires JDK 17.** Codemagic is configured with `java: 17`. If building locally, make sure your `JAVA_HOME` points to a JDK 17 installation.
+- Kotlin 2.2.20 resolves the `compilerOptions {}` DSL incompatibility that affected `flutter_tts` and `shared_preferences_android` 2.4.1+ with older KGP versions.
 - Flutter 3.x will emit a build warning and eventually drop support for AGP < 8.6.0; this upgrade resolves that warning.
-- `flutter_tts ^4.0.2` is compatible with Kotlin 2.1.x; no pubspec.yaml change is required.
-
-### shared_preferences_android version override
-
-`pubspec.yaml` pins `shared_preferences_android` to **2.4.0** via `dependency_overrides`:
-
-```yaml
-dependency_overrides:
-  shared_preferences_android: 2.4.0
-```
-
-Versions 2.4.1+ use the `compilerOptions {}` Kotlin Gradle DSL block, which is incompatible with the current KGP (2.1.20) and triggers a build failure. The pin keeps the build green until the upstream plugin is updated to handle this correctly.
-
-> **TODO:** Remove the `dependency_overrides` entry once `shared_preferences_android` (or the Flutter plugin ecosystem) publishes a version that is compatible with KGP 2.1.x without the `compilerOptions {}` conflict.
 
 ### After merging
 
@@ -51,11 +38,11 @@ Run the following commands locally to clean build artifacts and verify the app b
 ```bash
 flutter clean
 flutter pub get
-flutter build apk
+flutter build apk --release
 ```
 
-> **Reminder:** After merging any change to `android/build.gradle` or `pubspec.yaml`, always run
-> `flutter clean && flutter pub get && flutter build apk` locally (or let CI confirm a green build) before releasing.
+> **Reminder:** After merging any change to `android/build.gradle`, `android/settings.gradle`, or `pubspec.yaml`, always run
+> `flutter clean && flutter pub get && flutter build apk --release` locally (or let CI confirm a green build) before releasing.
 
 Includes:
 - Prisma schema

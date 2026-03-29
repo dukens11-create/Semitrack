@@ -25,3 +25,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Register the top-down truck image used as the navigation marker.
+  # NOTE: The user must place assets/icons/truck_top.png in the project
+  # before running a build.  The PR cannot include the PNG itself.
+  assets:
+    - assets/icons/truck_top.png

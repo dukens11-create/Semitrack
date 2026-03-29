@@ -49,11 +49,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── GPS subscription + route animation timer ──────────────────────────────
   //
-  // _animTimer drives the simulated step-by-step truck movement (equivalent
-  // to `driveTimer` in the Google Maps tutorial pattern).  The GPS stream
-  // takes priority when real device location fixes are available.
+  // _animTimer is kept for cancellation (e.g. in dispose) even though
+  // route animation is now driven by _runSmoothRouteAnimation.  The GPS
+  // stream takes priority when real device location fixes are available.
   StreamSubscription<Position>? _gpsSubscription;
-  Timer? _animTimer; // ≡ driveTimer
+  Timer? _animTimer; // kept for dispose / GPS-mode cancellation
+
+  // Generation counter — incremented each time a new smooth animation is
+  // started so that any in-flight async animation loop can self-cancel when
+  // it detects a stale generation value.
+  int _animGeneration = 0;
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
@@ -118,7 +123,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void dispose() {
     _gpsSubscription?.cancel();
-    _animTimer?.cancel(); // ≡ driveTimer?.cancel() in the Google Maps pattern
+    _animTimer?.cancel();
+    _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
     super.dispose();
   }
@@ -137,44 +143,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //   markers = {truckMarker, …}       MarkerLayer(markers: […]) in build()
   //   setState(() => markers = …)      _updateMarkers() → setState(() {})
   //
-  // NOTE: truck_top.png (32 × 32 px, top-down red/white semi-truck) must be
+  // NOTE: truck_top.png (64 × 192 px portrait, red cab facing UP) must be
   // placed at assets/icons/truck_top.png before building the app.
 
   /// Returns a [Marker] for the truck at its current position and bearing.
   ///
-  /// **Icon loading** — Flutter's asset image cache warms the PNG on first
-  /// render (equivalent to `await BitmapDescriptor.fromAssetImage(
-  /// ImageConfiguration(size: Size(32, 32)), 'assets/icons/truck_top.png')`
-  /// in the Google Maps SDK).  An [Image.asset] [errorBuilder] gracefully
-  /// degrades to a [Icons.local_shipping] icon while the PNG is absent.
+  /// **Icon** — portrait 64 × 192 px PNG (red cab at top, white trailer
+  /// below) rendered at 20 × 60 logical pixels so the semi-truck proportions
+  /// are preserved on screen.
   ///
-  /// **Anchor** — `alignment: Alignment.center` pins the visual centre of the
-  /// 40 × 40 bounding box to the GPS coordinate, matching `Offset(0.5, 0.5)`
-  /// in the Google Maps `Marker` API.
+  /// **Rotation** — the sprite faces UP (north = 0°), so bearing maps
+  /// directly to fractional turns with no offset: `turns: _truckBearing / 360`.
+  /// [AnimatedRotation] interpolates smoothly between bearing changes.
   ///
-  /// **Rotation** — [AnimatedRotation] smoothly interpolates between bearing
-  /// values (equivalent to `flat: true, rotation: bearing` in Google Maps),
-  /// producing a natural turning motion as the truck follows the route.
+  /// **Anchor** — `alignment: Alignment(0.0, 0.2)` (≡ `anchor: Offset(0.5, 0.6)`)
+  /// shifts the anchor point slightly below centre so the cab sits on the road
+  /// coordinate rather than floating above it.
   Marker _buildTruckMarker() {
     return Marker(
       point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : _origin),
-      // 40 × 40 logical-pixel bounding box; the icon itself is 32 × 32.
-      width: 40,
-      height: 40,
-      // Anchor the widget centre to the GPS coordinate (≡ Offset(0.5, 0.5)).
-      alignment: Alignment.center,
+      // Bounding box matches the portrait sprite: 24 wide × 72 tall (logical px).
+      width: 24,
+      height: 72,
+      // Anchor cab (top of sprite) to GPS point — shifts marker so the cab,
+      // not the trailer centre, sits on the road coordinate.
+      alignment: const Alignment(0.0, 0.2),
       child: AnimatedRotation(
-        // AnimatedRotation expects fractional turns (0.0–1.0 = 360°); convert
-        // from the 0–360° bearing returned by _bearingBetween / calculateBearing.
+        // Sprite faces UP → bearing maps directly; no offset needed.
         turns: _truckBearing / 360.0,
         duration: const Duration(milliseconds: 300),
-        // Top-down truck PNG (truck_top.png).  Falls back to the Material
-        // shipping icon when the PNG has not yet been placed in the assets dir.
+        // Portrait top-down truck (truck_top.png: 64 × 192 px).
         child: Image.asset(
           'assets/icons/truck_top.png',
-          width: 32,
-          height: 32,
+          width: 20,
+          height: 60,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.local_shipping,
             size: 32,
@@ -325,18 +328,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Route animation ───────────────────────────────────────────────────────
 
-  /// Starts a periodic timer that advances the truck marker one step along the
-  /// route every 300 ms, balancing smooth GPS-style movement against battery
-  /// and CPU usage on mobile devices.
+  /// Starts smooth interpolated truck movement along the loaded route.
   ///
-  /// Switches to navigation mode so the camera stays close to the truck at
-  /// zoom 14.0 (within the 12.5–15 navigation range).
+  /// Replaces the previous `Timer.periodic` jump-to-point approach with a
+  /// continuous async animation cascade — see [_runSmoothRouteAnimation] and
+  /// [_moveTruckSmoothly].  Switches to navigation mode so the camera stays
+  /// close to the truck at zoom 14.0 (within the 12.5–15 navigation range).
   ///
-  /// Equivalent to the Google Maps `startTruckSimulation()` pattern; the
-  /// timer is stored in [_animTimer] (≡ `driveTimer` in that pattern) and
-  /// cancelled in [dispose].
+  /// Equivalent to the Google Maps `startTruckSimulation()` pattern; any
+  /// existing animation is invalidated via [_animGeneration] before the new
+  /// one begins.
   void _startRouteAnimation() {
     _animTimer?.cancel();
+    // Invalidate any in-flight smooth animation loop.
+    _animGeneration++;
     _truckIndex = 0;
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
@@ -347,15 +352,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
     }
 
-    _animTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
-      if (_routePoints.isEmpty) return;
-      final nextIndex = _truckIndex + 1;
-      if (nextIndex >= _routePoints.length) {
-        _animTimer?.cancel();
-        return;
+    // Launch smooth async animation; pass the current generation so the
+    // loop can self-cancel if _startRouteAnimation is called again.
+    _runSmoothRouteAnimation(_animGeneration);
+  }
+
+  /// Drives smooth truck movement through every segment of [_routePoints].
+  ///
+  /// Iterates each consecutive pair of route points and awaits
+  /// [_moveTruckSmoothly] for each segment.  The loop self-terminates when
+  /// the widget is disposed or a newer animation generation is started.
+  Future<void> _runSmoothRouteAnimation(int generation) async {
+    for (int i = 0; i < _routePoints.length - 1; i++) {
+      if (!mounted || _animGeneration != generation) return;
+      _truckIndex = i;
+      await _moveTruckSmoothly(_routePoints[i], _routePoints[i + 1], generation);
+    }
+    // Snap to the final point once all segments are complete.
+    if (mounted && _animGeneration == generation) {
+      _truckIndex = _routePoints.length - 1;
+    }
+  }
+
+  /// Smoothly interpolates the truck from [from] to [to] over ~500 ms using
+  /// 10 steps of 50 ms each.
+  ///
+  /// On each step the truck [_truckPosition] and [_truckBearing] are updated
+  /// via [setState] and the camera is animated to follow — replacing the old
+  /// single-frame jump with a continuous GPS-style glide.
+  ///
+  /// Equivalent to `moveTruckSmoothly(from, to)` from the smooth-movement
+  /// implementation guide.  The [generation] parameter allows early exit when
+  /// a new route animation has been started.
+  Future<void> _moveTruckSmoothly(
+      LatLng from, LatLng to, int generation) async {
+    final bearing = _bearingBetween(from, to);
+    for (double t = 0.0; t <= 1.0 + 1e-9; t += 0.1) {
+      if (!mounted || _animGeneration != generation) return;
+      await Future.delayed(const Duration(milliseconds: 50));
+      if (!mounted || _animGeneration != generation) return;
+      final pos = _interpolate(from, to, t.clamp(0.0, 1.0));
+      setState(() {
+        _truckPosition = pos;
+        _truckBearing = bearing;
+      });
+      // Keep the camera centred on the truck in navigation mode.
+      if (_mapReady && _navigationMode) {
+        _mapController.move(pos, _mapController.camera.zoom);
       }
-      _advanceTruckTo(nextIndex);
-    });
+    }
+  }
+
+  /// Linearly interpolates between two [LatLng] points.
+  ///
+  /// [t] is the interpolation factor in the range [0, 1]: 0 returns [start],
+  /// 1 returns [end], intermediate values give proportional positions along
+  /// the segment.
+  ///
+  /// Equivalent to `interpolate(start, end, t)` from the smooth-movement
+  /// implementation guide.
+  LatLng _interpolate(LatLng start, LatLng end, double t) {
+    return LatLng(
+      start.latitude + (end.latitude - start.latitude) * t,
+      start.longitude + (end.longitude - start.longitude) * t,
+    );
   }
 
   /// Moves the truck marker to the route point at [index], updates the

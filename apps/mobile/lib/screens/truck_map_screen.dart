@@ -203,13 +203,83 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 6371000 * 2 * math.atan2(math.sqrt(ax), math.sqrt(1 - ax));
   }
 
+  // ── Restricted-zone dataset for truck routing ─────────────────────────────
+  //
+  // Each entry represents a physical restriction a truck must avoid (low
+  // bridge, weight-limited road, etc.).  The proximity check radius is
+  // defined in [_isTruckSafe].  The `limit_value` field stores the
+  // applicable restriction (height in feet for bridges, tons for weight
+  // limits) and is used for display / future enforcement logic.
+  static const _restrictedZones = [
+    {'lat': 40.123, 'lng': -120.456, 'type': 'low_bridge', 'limit_value': 12.6},
+    {'lat': 41.234, 'lng': -121.567, 'type': 'low_bridge', 'limit_value': 13.5},
+    {'lat': 39.876, 'lng': -119.234, 'type': 'weight_limit', 'limit_value': 40.0},
+  ];
+
   // ── Mapbox Directions API integration ─────────────────────────────────────
 
+  /// Decodes a Mapbox polyline6-encoded geometry string into a list of
+  /// [LatLng] coordinates.
+  ///
+  /// polyline6 uses a precision factor of 1×10⁶ (vs 1×10⁵ for polyline5),
+  /// giving sub-metre accuracy.  The algorithm is identical to the standard
+  /// Mapbox/Google polyline algorithm aside from the division factor.
+  List<LatLng> _decodePolyline6(String encoded) {
+    final List<LatLng> points = [];
+    int index = 0;
+    int lat = 0;
+    int lng = 0;
+
+    while (index < encoded.length) {
+      int result = 0;
+      int shift = 0;
+      int b;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlat = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      lat += dlat;
+
+      result = 0;
+      shift = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlng = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      lng += dlng;
+
+      points.add(LatLng(lat / 1e6, lng / 1e6));
+    }
+    return points;
+  }
+
+  /// Returns `true` when none of the [routePoints] pass within 100 m of a
+  /// restricted zone in [_restrictedZones].
+  bool _isTruckSafe(List<LatLng> routePoints) {
+    const double radiusMeters = 100.0;
+    for (final zone in _restrictedZones) {
+      final zonePt =
+          LatLng(zone['lat']! as double, zone['lng']! as double);
+      for (final pt in routePoints) {
+        if (_distanceBetween(pt, zonePt) <= radiusMeters) return false;
+      }
+    }
+    return true;
+  }
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
-  /// relevant state fields, including the GeoJSON coordinates used to draw the
-  /// route on the map.
-  Future<void> fetchRoute() async {
-    print("fetchRoute started");
+  /// relevant state fields, including the decoded polyline6 coordinates used
+  /// to draw the route on the map.
+  ///
+  /// When [alternative] is `true` the second route returned by Mapbox is used
+  /// instead of the primary one, allowing the caller to avoid a route that
+  /// fails the [_isTruckSafe] check.
+  Future<void> fetchRoute({bool alternative = false}) async {
+    print("fetchRoute started (alternative: $alternative)");
 
     // Clear the old route line before fetching a new one.
     setState(() {
@@ -223,22 +293,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
           "-122.6765,45.5231;-119.8138,39.5296"
           "?overview=full"
-          "&geometries=geojson"
+          "&geometries=polyline6"
           "&steps=true"
+          "&alternatives=true"
+          "&exclude=toll,motorway,ferry"
           "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
       print("MAPBOX RESPONSE: ${res.body}");
 
       final data = jsonDecode(res.body);
-      final route = data["routes"][0];
+      final routes = data["routes"] as List;
+      // Use the alternative route (index 1) when requested and available,
+      // otherwise fall back to the primary route (index 0).
+      final routeIndex =
+          (alternative && routes.length > 1) ? 1 : 0;
+      final route = routes[routeIndex] as Map<String, dynamic>;
 
-      // Use GeoJSON coordinates directly — no polyline decoding required.
-      final coordinates =
-          (route["geometry"]["coordinates"] as List).cast<List<dynamic>>();
-      final newPoints = coordinates
-          .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
-          .toList();
+      // Decode polyline6 geometry into LatLng points.
+      final newPoints = _decodePolyline6(route["geometry"] as String);
+
+      // Check whether the decoded route avoids all restricted zones.
+      // If it does not, automatically re-fetch using the alternative route.
+      // When already on the alternative, we accept the route regardless —
+      // no further candidates are available to try.
+      if (!_isTruckSafe(newPoints) && !alternative) {
+        print("Route is not truck-safe – fetching alternative route");
+        await fetchRoute(alternative: true);
+        return;
+      }
 
       // Extract the first step instruction from the directions response.
       final firstInstruction = _extractFirstInstruction(route);
@@ -355,7 +438,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : fetchRoute,
+            onPressed: _isLoading ? null : () => fetchRoute(),
           ),
         ],
       ),

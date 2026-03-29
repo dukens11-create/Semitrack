@@ -149,9 +149,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
-    _animTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      // Yield to GPS-driven updates when real position fixes are available.
-      if (_gpsActive) return;
+    _animTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (_routePoints.isEmpty) return;
       final nextIndex = _truckIndex + 1;
       if (nextIndex >= _routePoints.length) {
@@ -473,9 +471,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final live = route['live'] as Map<String, dynamic>?;
     final warnings =
         (route['truckWarnings'] as List?)?.cast<String>() ?? const <String>[];
-    final steps =
-        (route['turnByTurn'] as List?)?.cast<Map<String, dynamic>>() ??
-            const <Map<String, dynamic>>[];
+    final steps = route['turnByTurn'] as List?;
 
     final etaText = _formatEta(etaMinutes);
 
@@ -585,12 +581,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
 
         // ── Turn-by-Turn ─────────────────────────────────────────────────
-        if (steps.isNotEmpty)
-          Card(
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
+        Card(
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Builder(builder: (context) {
+              final Map<String, dynamic>? step0 =
+                  steps != null && steps.isNotEmpty
+                      ? (steps[0] is Map<String, dynamic>
+                          ? steps[0] as Map<String, dynamic>
+                          : null)
+                      : null;
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
@@ -599,40 +601,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 8),
-                  for (final step in steps)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          CircleAvatar(
-                            radius: 12,
-                            child: Text(
-                              '${step['step']}',
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(step['instruction'] as String? ?? 'Follow mapped route'),
-                                Text(
-                                  '${step['distanceMiles']} mi',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Colors.grey),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  Text(
+                    step0 != null
+                        ? step0['instruction'] as String? ?? 'Continue'
+                        : 'Loading...',
+                  ),
+                  Text(
+                    step0 != null
+                        ? '${step0['distance'] ?? '--'} mi'
+                        : '--',
+                    style:
+                        const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
                 ],
-              ),
-            ),
+              );
+            }),
           ),
+        ),
       ],
     );
   }

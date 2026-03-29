@@ -141,14 +141,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route animation ───────────────────────────────────────────────────────
 
   /// Starts a periodic timer that advances the truck marker one step along the
-  /// route every 500 ms, simulating movement when GPS alone is insufficient.
+  /// route every 200 ms, balancing smooth GPS-style movement against battery
+  /// and CPU usage on mobile devices.
   void _startRouteAnimation() {
     _animTimer?.cancel();
     _truckIndex = 0;
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
-    _animTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _animTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       // Yield to GPS-driven updates when real position fixes are available.
       if (_gpsActive) return;
       if (_routePoints.isEmpty) return;

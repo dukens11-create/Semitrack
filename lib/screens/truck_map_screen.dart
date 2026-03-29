@@ -141,14 +141,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route animation ───────────────────────────────────────────────────────
 
   /// Starts a periodic timer that advances the truck marker one step along the
-  /// route every 500 ms, simulating movement when GPS alone is insufficient.
+  /// route every 200 ms, balancing smooth GPS-style movement against battery
+  /// and CPU usage on mobile devices.
   void _startRouteAnimation() {
     _animTimer?.cancel();
     _truckIndex = 0;
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
-    _animTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _animTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       // Yield to GPS-driven updates when real position fixes are available.
       if (_gpsActive) return;
       if (_routePoints.isEmpty) return;
@@ -241,12 +242,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           .map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()))
           .toList();
 
+      // Extract the first step instruction from the directions response.
+      final firstInstruction = _extractFirstInstruction(route);
+
       setState(() {
         _routeData = {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": [
-            {"instruction": "Follow mapped route"}
+            {"instruction": firstInstruction}
           ]
         };
         _routePoints = newPoints;
@@ -261,6 +265,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Extracts the instruction text from the first maneuver step of [route].
+  ///
+  /// Returns the instruction string from `legs[0].steps[0].maneuver.instruction`,
+  /// or `'Follow mapped route'` when the field is absent.
+  String _extractFirstInstruction(Map<String, dynamic> route) {
+    final legs = route['legs'] as List?;
+    if (legs == null || legs.isEmpty) return 'Follow mapped route';
+    final steps = legs[0]['steps'] as List?;
+    if (steps == null || steps.isEmpty) return 'Follow mapped route';
+    final maneuver = (steps[0] as Map<String, dynamic>)['maneuver']
+        as Map<String, dynamic>?;
+    return maneuver?['instruction'] as String? ?? 'Follow mapped route';
   }
 
   /// Fits the map camera to the first 10 route points at navigation zoom
@@ -599,7 +617,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('TEST MANEUVER'),
+                                Text(step['instruction'] as String? ?? 'Follow mapped route'),
                                 Text(
                                   '${step['distanceMiles']} mi',
                                   style: const TextStyle(

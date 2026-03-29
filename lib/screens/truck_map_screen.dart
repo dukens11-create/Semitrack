@@ -341,7 +341,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Advances to the next step when the driver comes within 30 m of the
+  /// Advances to the next step when the driver comes within 20 m of the
   /// upcoming maneuver point, then speaks the new instruction aloud.
   void _checkStepAdvancement(LatLng current) {
     if (_navSteps.isEmpty) return;
@@ -349,7 +349,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (nextIdx >= _navSteps.length) return;
     final nextStep = _navSteps[nextIdx];
     final dist = _distanceBetween(current, nextStep.location);
-    if (dist <= 30.0) {
+    // Advance when within 20 m of the next maneuver waypoint.
+    if (dist <= 20.0) {
       setState(() => _currentStepIndex = nextIdx);
       _speak(nextStep.instruction);
     }
@@ -791,7 +792,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final lng = loc != null && loc.length >= 2
           ? (loc[0] as num).toDouble()
           : _originLng;
-      return _NavStep(instruction, LatLng(lat, lng));
+      // 'modifier' encodes turn direction: 'left', 'right', 'straight', etc.
+      final modifier = maneuver?['modifier'] as String? ?? 'straight';
+      // Step distance in metres from the Mapbox response.
+      final distanceMeters = (step['distance'] as num?)?.toDouble() ?? 0.0;
+      return _NavStep(
+        instruction,
+        LatLng(lat, lng),
+        maneuver: modifier,
+        distanceMeters: distanceMeters,
+      );
     }).toList();
   }
 
@@ -888,6 +898,100 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return '${score.toStringAsFixed(0)} (High)';
   }
 
+  // ── Navigation banner helpers ─────────────────────────────────────────────
+
+  /// Returns the [IconData] matching the Mapbox maneuver [modifier] string.
+  ///
+  /// Covers the most common Mapbox modifier values:
+  ///   'left' / 'sharp left' / 'slight left'  → turn_left
+  ///   'right' / 'sharp right' / 'slight right' → turn_right
+  ///   'straight' / 'continue' (no modifier)   → straight
+  ///   all other values (uturn, etc.)           → navigation (default)
+  IconData _maneuverIcon(String modifier) {
+    switch (modifier.toLowerCase()) {
+      case 'left':
+      case 'sharp left':
+      case 'slight left':
+        return Icons.turn_left;
+      case 'right':
+      case 'sharp right':
+      case 'slight right':
+        return Icons.turn_right;
+      case 'straight':
+      case 'continue':
+        return Icons.straight;
+      default:
+        return Icons.navigation;
+    }
+  }
+
+  /// Sums the [distanceMeters] of all steps from [_currentStepIndex] onward
+  /// and returns a formatted string in km (≥ 1 km) or metres (< 1 km).
+  String _remainingDistanceKm() {
+    if (_navSteps.isEmpty) return '';
+    final totalMeters = _navSteps
+        .skip(_currentStepIndex)
+        .fold(0.0, (double sum, _NavStep s) => sum + s.distanceMeters);
+    if (totalMeters >= 1000.0) {
+      return '${(totalMeters / 1000.0).toStringAsFixed(1)} km';
+    }
+    return '${totalMeters.toStringAsFixed(0)} m';
+  }
+
+  /// Builds the turn-by-turn navigation banner that floats at the top of the
+  /// map.  Shows the current maneuver icon, the instruction text, and the
+  /// remaining route distance.
+  ///
+  /// The banner is only rendered while [_navSteps] is non-empty so it never
+  /// appears before a route has been loaded.
+  Widget _buildNavBanner() {
+    // Guard: clamp index so an out-of-sync state never throws a RangeError.
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+    return Container(
+      // Semi-transparent dark background so the banner is readable over any
+      // map tile colour without fully obscuring the road behind it.
+      color: Colors.black87,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: SafeArea(
+        bottom: false,
+        child: Row(
+          children: [
+            // Maneuver icon — left/right/straight/navigation based on modifier.
+            Icon(
+              _maneuverIcon(step.maneuver),
+              color: Colors.white,
+              size: 32,
+            ),
+            const SizedBox(width: 12),
+            // Instruction text takes all available horizontal space.
+            Expanded(
+              child: Text(
+                step.instruction,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Remaining distance, right-aligned for quick at-a-glance reading.
+            Text(
+              _remainingDistanceKm(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -978,6 +1082,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
+                // ── Navigation banner ─────────────────────────────────────
+                // Floats at the top of the map so the current maneuver
+                // instruction is always visible during active navigation,
+                // independent of the scrollable info panel below the map.
+                if (_navSteps.isNotEmpty)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: _buildNavBanner(),
+                  ),
               ],
             ),
           ),
@@ -1231,11 +1346,31 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 }
 
-/// A single turn-by-turn navigation step, holding the driver instruction text
-/// and the geographic location of the maneuver.
+/// A single turn-by-turn navigation step, holding the driver instruction text,
+/// the geographic location of the maneuver, the maneuver modifier (e.g.
+/// 'left', 'right', 'straight'), and the step distance in metres.
+///
+/// [maneuver] is the Mapbox `maneuver.modifier` value and drives the icon
+/// displayed in the navigation banner.  [distanceMeters] is summed across
+/// remaining steps to derive the remaining-distance label.
 class _NavStep {
-  const _NavStep(this.instruction, this.location);
+  const _NavStep(
+    this.instruction,
+    this.location, {
+    this.maneuver = 'straight',
+    this.distanceMeters = 0.0,
+  });
 
+  /// Human-readable turn instruction, e.g. "Turn left onto Main St".
   final String instruction;
+
+  /// Geographic position of the maneuver waypoint.
   final LatLng location;
+
+  /// Mapbox maneuver modifier: 'left', 'right', 'straight', 'slight left',
+  /// 'sharp right', etc.  Used to select the icon shown in the nav banner.
+  final String maneuver;
+
+  /// Length of this step in metres, as reported by the Mapbox Directions API.
+  final double distanceMeters;
 }

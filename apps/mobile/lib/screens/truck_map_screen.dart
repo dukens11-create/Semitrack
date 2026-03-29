@@ -109,6 +109,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // without losing surrounding road context.
   static const _navigationZoomLevel = 14.0;
 
+  // Camera-follow zoom level for GPS navigation mode.
+  // Zoom 16 keeps the truck close and road detail visible; mirrors the
+  // CameraPosition(zoom: 16) used in Google Maps navigation implementations.
+  static const _followCameraZoomLevel = 16.0;
+
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
       'pk.eyJ1Ijoic2VtaXRyYWNrLTExIiwiYSI6ImNtbmFoeHRoNjBqcjcycXE2ZWk5cGpzNGMifQ.09eo4qJKyLZq_3aUEXWiAA';
@@ -148,36 +153,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns a [Marker] for the truck at its current position and bearing.
   ///
-  /// **Icon** — portrait 64 × 192 px PNG (red cab at top, white trailer
-  /// below) rendered at 20 × 60 logical pixels so the semi-truck proportions
-  /// are preserved on screen.
+  /// **Icon** — top-down 64 × 64 px PNG (truck_top.png) rendered at 26 × 26
+  /// logical pixels.  This size keeps the marker compact at close zoom levels
+  /// (zoom 16+) so it does not obscure adjacent road lanes.  If the icon
+  /// looks too small on high-density displays, increase to 28 × 28.
   ///
   /// **Rotation** — the sprite faces UP (north = 0°), so bearing maps
   /// directly to fractional turns with no offset: `turns: _truckBearing / 360`.
   /// [AnimatedRotation] interpolates smoothly between bearing changes.
   ///
-  /// **Anchor** — `alignment: Alignment(0.0, 0.2)` (≡ `anchor: Offset(0.5, 0.6)`)
+  /// **Anchor** — `alignment: Alignment(0.0, 0.24)` (≡ `anchor: Offset(0.5, 0.62)`)
   /// shifts the anchor point slightly below centre so the cab sits on the road
-  /// coordinate rather than floating above it.
+  /// coordinate rather than floating above it.  Fine-tune with 0.60 or 0.65
+  /// if road alignment looks off on a specific device.
   Marker _buildTruckMarker() {
     return Marker(
       point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : _origin),
-      // Bounding box matches the portrait sprite: 24 wide × 72 tall (logical px).
-      width: 24,
-      height: 72,
-      // Anchor cab (top of sprite) to GPS point — shifts marker so the cab,
-      // not the trailer centre, sits on the road coordinate.
-      alignment: const Alignment(0.0, 0.2),
+      // Bounding box matches the rendered icon size: 26 × 26 logical px.
+      width: 26,
+      height: 26,
+      // Anchor slightly below centre (≡ Offset(0.5, 0.62)) so the cab nose
+      // sits on the GPS coordinate rather than the trailer centre.
+      alignment: const Alignment(0.0, 0.24),
       child: AnimatedRotation(
         // Sprite faces UP → bearing maps directly; no offset needed.
         turns: _truckBearing / 360.0,
         duration: const Duration(milliseconds: 300),
-        // Portrait top-down truck (truck_top.png: 64 × 192 px).
+        // Top-down truck sprite (assets/icons/truck_top.png, 64 × 64 px).
         child: Image.asset(
           'assets/icons/truck_top.png',
-          width: 20,
-          height: 60,
+          width: 26,
+          height: 26,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.local_shipping,
             size: 32,
@@ -215,6 +222,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Marker rebuild is implicit: build() calls _buildTruckMarker() which
       // reads the already-updated _truckPosition and _truckBearing fields.
     });
+  }
+
+  /// Animates the map camera to follow the truck in navigation mode.
+  ///
+  /// Equivalent to the Google Maps pattern:
+  /// ```dart
+  /// Future<void> followTruckCamera() async {
+  ///   await mapController.animateCamera(
+  ///     CameraUpdate.newCameraPosition(CameraPosition(
+  ///       target: currentTruckPosition,
+  ///       zoom: 16,
+  ///       bearing: currentBearing,
+  ///       tilt: 45,        // 3-D navigation feel (Google Maps only)
+  ///     )),
+  ///   );
+  /// }
+  /// ```
+  ///
+  /// In flutter_map, [MapController.moveAndRotate] combines the pan, zoom, and
+  /// heading rotation into a single call.  Camera tilt (45°) is a Google Maps
+  /// API feature and is not available in flutter_map; the heading rotation
+  /// achieves a similar GPS-navigation feel on a flat map.
+  ///
+  /// Call this after every truck position/bearing update while [_navigationMode]
+  /// is active.  Guards against calls before the map widget is ready with
+  /// [_mapReady].
+  void _followTruckCamera() {
+    if (!_mapReady || _truckPosition == null) return;
+    // Move to truck position at navigation zoom and rotate map so the truck's
+    // heading is always at the top of the screen (GPS navigation style).
+    _mapController.moveAndRotate(
+      _truckPosition!,
+      _followCameraZoomLevel,
+      _truckBearing,
+    );
   }
 
   // ── TTS initialisation ────────────────────────────────────────────────────
@@ -397,8 +439,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _truckBearing = bearing;
       });
       // Keep the camera centred on the truck in navigation mode.
-      if (_mapReady && _navigationMode) {
-        _mapController.move(pos, _mapController.camera.zoom);
+      if (_navigationMode) {
+        _followTruckCamera();
       }
     }
   }
@@ -439,8 +481,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _updateMarkers();
     // Only follow the truck with the camera while in navigation mode;
     // overview mode keeps the full-route view undisturbed.
-    if (_mapReady && _navigationMode) {
-      _mapController.move(next, _mapController.camera.zoom);
+    if (_navigationMode) {
+      _followTruckCamera();
     }
   }
 

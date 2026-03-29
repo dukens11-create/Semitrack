@@ -19,22 +19,25 @@ The Android build is currently configured with:
 
 | Component | Version | File |
 |---|---|---|
-| Kotlin Gradle Plugin | **2.1.0** | `android/build.gradle` (`ext.kotlin_version`) |
-| Android Gradle Plugin (AGP) | **8.2.0** | `android/build.gradle` (classpath) and `android/settings.gradle` (plugins DSL) |
+| Kotlin Gradle Plugin | **2.1.20** | `android/build.gradle` (`ext.kotlin_version`) |
+| Android Gradle Plugin (AGP) | **8.6.0** | `android/build.gradle` (classpath) and `android/settings.gradle` (plugins DSL) |
+| Gradle wrapper | **8.11.1** | `android/gradle/wrapper/gradle-wrapper.properties` |
 | flutter_tts | **^4.0.2** | `pubspec.yaml` |
 
-`flutter_tts` **4.0.2** is the last release known to work with Kotlin 2.x without requiring 2.2.x or later.
-`pubspec.yaml` is therefore pinned to `^4.0.2` until `kotlin-gradle-plugin` 2.2.x (or later) is available.
+### Compatibility constraints
 
-**Next steps — when `kotlin-gradle-plugin` 2.2.x (or later) is published:**
-1. Bump `ext.kotlin_version` in `android/build.gradle` to the desired 2.2.x version (e.g., `2.2.0`).
-2. Update the AGP version in both `android/build.gradle` and `android/settings.gradle` if a newer version is required.
-3. Upgrade `flutter_tts` in `pubspec.yaml` to the latest compatible version.
-4. Run the following commands to clean build artifacts and verify the app builds:
-   ```bash
-   flutter clean
-   flutter build apk
-   ```
+- AGP 8.6.0 requires **Gradle 8.7 or higher** (the wrapper is set to 8.11.1 — no change needed).
+- Flutter 3.x will emit a build warning and eventually drop support for AGP < 8.6.0; this upgrade resolves that warning.
+- `flutter_tts ^4.0.2` is compatible with Kotlin 2.1.x; no pubspec.yaml change is required.
+
+### After merging
+
+Run the following commands locally to clean build artifacts and verify the app builds successfully:
+
+```bash
+flutter clean
+flutter build apk
+```
 
 > **Reminder:** After merging any change to `android/build.gradle` or `pubspec.yaml`, always run
 > `flutter clean && flutter build apk` locally (or let CI confirm a green build) before releasing.

@@ -65,10 +65,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _isLoadingRoute = false;
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
+  // Pre-populated with mock/placeholder values so the Drive Intelligence card
+  // is never blank.  These are replaced by real API data once available.
   Map<String, dynamic> _intelligence = const {
-    'driveMinutesLeft': null,
-    'weather': null,
-    'riskScore': null,
+    'driveMinutesLeft': 470, // ~7 h 50 m mock ETA
+    'weather': 'Clear',      // placeholder weather condition
+    'riskScore': 92.0,       // 92 → "Low" risk bucket
   };
 
   // ── Map controller ─────────────────────────────────────────────────────────
@@ -82,6 +84,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
+
+  // Zoom level used when navigation starts so the driver sees street-level
+  // detail around the truck rather than a distant bird's-eye view.
+  static const _navigationZoomLevel = 13.5;
 
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
@@ -214,13 +220,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route animation ───────────────────────────────────────────────────────
 
   /// Starts a periodic timer that advances the truck marker one step along the
-  /// route every 200 ms, balancing smooth GPS-style movement against battery
+  /// route every 300 ms, balancing smooth GPS-style movement against battery
   /// and CPU usage on mobile devices.
+  ///
+  /// On navigation start the camera is zoomed to the truck's starting position
+  /// at zoom level 13.5 so the driver sees their immediate surroundings
+  /// rather than the full-route overview.
   void _startRouteAnimation() {
     _animTimer?.cancel();
     _truckIndex = 0;
     _truckPosition =
         _routePoints.isNotEmpty ? _routePoints.first : null;
+
+    // Zoom map to truck starting position at a close navigation zoom level.
+    if (_mapReady && _truckPosition != null) {
+      _mapController.move(_truckPosition!, _navigationZoomLevel);
+    }
 
     _animTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (_routePoints.isEmpty) return;
@@ -661,18 +676,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     MarkerLayer(
                       markers: [
                         // ── Truck marker (animated + rotated) ──────────────
+                        // Marker size is scaled to ~0.7 of the original 40 px
+                        // widget so it does not obscure the route polyline.
+                        // _truckBearing is computed via _bearingBetween (the
+                        // calculateBearing function) and applied as a rotation
+                        // so the icon visually points along the route.
                         Marker(
                           point: _truckPosition ??
                               (_routePoints.isNotEmpty
                                   ? _routePoints.first
                                   : _origin),
-                          width: 40,
-                          height: 40,
+                          width: 28,
+                          height: 28,
                           child: Transform.rotate(
                             angle: _truckBearing * math.pi / 180.0,
                             child: const Icon(
                               Icons.local_shipping,
-                              size: 34,
+                              size: 20,
                               color: Colors.blue,
                             ),
                           ),
@@ -863,7 +883,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                // Current active maneuver instruction.
+                // Current active maneuver instruction — displayed prominently
+                // so the driver can read it at a glance while driving.
                 Text(
                   _navSteps.isNotEmpty
                       ? _navSteps[_currentStepIndex].instruction
@@ -872,9 +893,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                                   as String? ??
                               'Continue'
                           : 'Loading...'),
-                  style: const TextStyle(fontSize: 15),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                // Upcoming step preview.
+                // Upcoming step — shown smaller and dimmed as a preview.
                 if (_navSteps.isNotEmpty &&
                     _currentStepIndex + 1 < _navSteps.length)
                   Padding(

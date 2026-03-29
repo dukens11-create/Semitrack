@@ -24,6 +24,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Semitrack needs your location to show the truck position on the route map.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Semitrack uses your location in the background to keep the truck marker updated while navigating.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>$(PRODUCT_NAME) would like to save photos to your photo gallery</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

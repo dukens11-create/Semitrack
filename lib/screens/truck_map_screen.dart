@@ -48,6 +48,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// rapid repeated API calls in areas with poor GPS accuracy.
   static const int _rerouteThrottleSeconds = 8;
 
+  // ── Trip statistics constants ─────────────────────────────────────────────
+  /// Metres per mile conversion factor, used to convert GPS distances to miles.
+  static const double _metersPerMile = 1609.34;
+
   // ── Speed monitoring constants ────────────────────────────────────────────
   /// Conversion factor: 1 m/s = 2.23694 mph.
   static const double _mpsToMph = 2.23694;
@@ -147,12 +151,51 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// frequency to at most one reroute every [_rerouteThrottleSeconds] seconds.
   DateTime? _lastRerouteTime;
 
+  // ── Trip statistics ────────────────────────────────────────────────────────
+  // Initialized by _startTripStats() when navigation begins and updated on
+  // every GPS fix via _updateTripStats().  All fields reset at trip start so
+  // the stats always reflect the current navigation session only.
+
+  /// Timestamp when the current trip was started.  Null until
+  /// [_startTripStats] is first called (i.e., before any route begins).
+  DateTime? _tripStartTime;
+
+  /// Timestamp of the last GPS fix where the truck was moving (speed ≥ 1 m/s).
+  DateTime? _lastMoveTime;
+
+  /// Cumulative stopped time accumulated when GPS speed is below 1 m/s.
+  /// Resets to [Duration.zero] each time [_startTripStats] is called.
+  Duration _stoppedDuration = Duration.zero;
+
+  /// Total miles driven since the trip was started, computed from successive
+  /// GPS point-to-point distances via [Geolocator.distanceBetween].
+  double _milesDriven = 0.0;
+
+  /// Latitude of the previous GPS fix, used to compute incremental distance.
+  /// Zero until the first GPS fix arrives after [_startTripStats] is called.
+  double _lastTripLat = 0.0;
+
+  /// Longitude of the previous GPS fix, used to compute incremental distance.
+  double _lastTripLng = 0.0;
+
+  /// Timestamp of the previous GPS fix, used to compute the actual elapsed
+  /// time between fixes for accurate stopped-time accumulation.
+  DateTime? _lastGpsTimestamp;
+
   /// Navigation status message shown in the UI during special events such as
   /// rerouting (e.g. "Rerouting...").  Null when no status is active.
   String? _navStatus;
 
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
+
+  // ── Truck Stop POI state ───────────────────────────────────────────────────
+  //
+  // _truckStops holds the filtered list of stops near the current route.
+  // _showTruckStops controls marker visibility — toggled by the POI FAB.
+  // Expand this section later to support real API data, weigh stations, etc.
+  List<TruckStop> _truckStops = const [];
+  bool _showTruckStops = true;
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -409,6 +452,285 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
+  // ── Truck Stop POI mock dataset ────────────────────────────────────────────
+  //
+  // Hard-coded stops covering the default Portland → Winnemucca route.
+  // Replace with a real API call or local database in a production build.
+  // Add more brands here: Petro, Flying J, rest areas, weigh stations, etc.
+  static final List<TruckStop> _mockTruckStops = [
+    TruckStop(
+      id: '1',
+      name: 'Pilot Travel Center',
+      brand: 'Pilot',
+      position: const LatLng(45.581, -122.571),
+      address: 'Portland, OR',
+      dieselPrice: 4.25,
+    ),
+    TruckStop(
+      id: '2',
+      name: "Love's Travel Stop",
+      brand: "Love's",
+      position: const LatLng(44.057, -123.092),
+      address: 'Eugene, OR',
+      dieselPrice: 4.19,
+    ),
+    TruckStop(
+      id: '3',
+      name: 'TA Travel Center',
+      brand: 'TA',
+      position: const LatLng(42.328, -122.875),
+      address: 'Medford, OR',
+      dieselPrice: 4.35,
+    ),
+    TruckStop(
+      id: '4',
+      name: 'Petro Stopping Center',
+      brand: 'Petro',
+      position: const LatLng(41.740, -122.637),
+      address: 'Yreka, CA',
+      dieselPrice: 4.45,
+    ),
+    TruckStop(
+      id: '5',
+      name: 'Flying J Travel Center',
+      brand: 'Flying J',
+      position: const LatLng(40.770, -122.388),
+      address: 'Redding, CA',
+      dieselPrice: 4.29,
+    ),
+    TruckStop(
+      id: '6',
+      name: 'Pilot Travel Center',
+      brand: 'Pilot',
+      position: const LatLng(39.724, -121.836),
+      address: 'Chico, CA',
+      dieselPrice: 4.32,
+    ),
+    TruckStop(
+      id: '7',
+      name: 'Rest Area – I-5 North',
+      brand: 'Rest Area',
+      position: const LatLng(43.210, -122.990),
+      address: 'I-5 Northbound, OR',
+    ),
+    TruckStop(
+      id: '8',
+      name: 'Rest Area – I-80 East',
+      brand: 'Rest Area',
+      position: const LatLng(40.210, -121.500),
+      address: 'I-80 Eastbound, CA',
+    ),
+  ];
+
+  // ── Truck Stop POI methods ─────────────────────────────────────────────────
+
+  /// Filters [allStops] to only those within [maxDistanceMeters] of any point
+  /// on [routePoints].  Call this after a new route loads to refresh the POI
+  /// overlay without showing every stop in the country.
+  ///
+  /// Uses [Geolocator.distanceBetween] for GPS-grade accuracy.
+  ///
+  /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
+  /// With the current mock dataset (≤ 10 stops) this is negligible.  When
+  /// switching to a real data source with thousands of entries, replace this
+  /// with a spatial index (e.g. R-tree or bounding-box pre-filter) to avoid
+  /// scanning every stop against every route point.
+  List<TruckStop> _filterStopsNearRoute(
+    List<TruckStop> allStops,
+    List<LatLng> routePoints, {
+    double maxDistanceMeters = 5000,
+  }) {
+    return allStops.where((stop) {
+      for (final routePoint in routePoints) {
+        final d = Geolocator.distanceBetween(
+          stop.position.latitude,
+          stop.position.longitude,
+          routePoint.latitude,
+          routePoint.longitude,
+        );
+        if (d <= maxDistanceMeters) return true;
+      }
+      return false;
+    }).toList();
+  }
+
+  /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
+  ///
+  /// Returns an empty list when [_showTruckStops] is false so markers disappear
+  /// immediately when the driver toggles the POI overlay off.
+  ///
+  /// Each marker uses a petrol-pump icon (or a rest-area chair icon) on a
+  /// coloured rounded background so it stands out from the route polyline.
+  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
+  List<Marker> _buildTruckStopMarkers() {
+    if (!_showTruckStops || _truckStops.isEmpty) return const [];
+
+    return _truckStops.map((stop) {
+      // Choose icon based on brand for quick visual differentiation.
+      final bool isRestArea = stop.brand == 'Rest Area';
+      final IconData iconData =
+          isRestArea ? Icons.airline_seat_recline_normal : Icons.local_gas_station;
+      // Azure-blue for fuel stops; teal for rest areas — both distinct from
+      // the red truck / destination markers.
+      final Color markerColor =
+          isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+
+      return Marker(
+        point: stop.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showTruckStopSheet(stop),
+          child: Container(
+            decoration: BoxDecoration(
+              color: markerColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(
+              iconData,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns the complete list of [Marker]s for the [MarkerLayer]:
+  /// truck position, destination pin, and all visible truck stop POIs.
+  ///
+  /// Centralises marker assembly so [build] stays clean and future POI types
+  /// (weigh stations, parking, etc.) can be merged here in one place.
+  List<Marker> _buildMarkers() {
+    return [
+      _buildTruckMarker(),
+      if (_isArrived) _buildDestinationMarker(),
+      ..._buildTruckStopMarkers(),
+    ];
+  }
+
+  /// Shows a modal bottom sheet with full details for [stop].
+  ///
+  /// Displays brand, name, diesel price (if known), address (if known), and a
+  /// close button.  Styled consistently with the arrival sheet.
+  void _showTruckStopSheet(TruckStop stop) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final bool isRestArea = stop.brand == 'Rest Area';
+        final Color headerColor =
+            isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header row: icon + name ──────────────────────────────────
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: headerColor,
+                    child: Icon(
+                      isRestArea
+                          ? Icons.airline_seat_recline_normal
+                          : Icons.local_gas_station,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          stop.brand,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: headerColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // ── Diesel price ─────────────────────────────────────────────
+              if (stop.dieselPrice != null) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.local_gas_station,
+                        size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Diesel: \$${stop.dieselPrice!.toStringAsFixed(2)}/gal',
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+              ],
+              // ── Address ──────────────────────────────────────────────────
+              if (stop.address != null) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.location_on,
+                        size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        stop.address!,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ],
+              // ── Close button ─────────────────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: headerColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   /// Animates the map camera to follow the truck in navigation mode.
   ///
   /// Equivalent to the Google Maps navigation camera pattern:
@@ -541,6 +863,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Off-route detection: reroute when >30 m from the route line ─────────
     _checkOffRoute(gpsPoint);
+
+    // ── Trip statistics: update mileage and stopped time from live GPS ───────
+    _updateTripStats(position);
 
     // ── Update truck position and heading from real GPS data ─────────────────
     // Snap to the nearest ahead-of-index route point for step/off-route logic.
@@ -930,6 +1255,122 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Trip statistics logic ──────────────────────────────────────────────────
+
+  /// Resets all trip-statistics fields to zero and stamps [_tripStartTime] to
+  /// the current wall-clock time.
+  ///
+  /// Call this once when route navigation begins (e.g. inside
+  /// [_startRouteAnimation]) so that every new navigation session starts with
+  /// clean counters regardless of prior trips.
+  void _startTripStats() {
+    setState(() {
+      _tripStartTime = DateTime.now();
+      _lastMoveTime = DateTime.now();
+      _stoppedDuration = Duration.zero;
+      _milesDriven = 0.0;
+      // Reset last-known position so the first GPS fix does not compute a
+      // bogus distance from (0, 0) to the real location.
+      _lastTripLat = 0.0;
+      _lastTripLng = 0.0;
+      // Reset GPS timestamp so the first fix delta starts fresh.
+      _lastGpsTimestamp = null;
+    });
+  }
+
+  /// Updates trip statistics from the latest [pos] GPS fix.
+  ///
+  /// On each call:
+  ///   1. Adds the metres-to-miles distance from the previous GPS fix to the
+  ///      current one to [_milesDriven] using [Geolocator.distanceBetween].
+  ///   2. Accumulates [_stoppedDuration] by the real time elapsed since the
+  ///      previous GPS fix when [pos.speed] is below 1 m/s (stopped / very
+  ///      slow), otherwise records [_lastMoveTime].  Using the actual time
+  ///      delta is more accurate than a fixed 1-second increment because GPS
+  ///      update frequency varies with speed and device settings.
+  ///   3. Stores [pos.latitude] / [pos.longitude] as the new previous fix for
+  ///      the next incremental distance calculation.
+  ///
+  /// No-ops if the trip has not been started ([_tripStartTime] is null).
+  void _updateTripStats(Position pos) {
+    if (_tripStartTime == null) return;
+
+    final now = DateTime.now();
+    final currentLat = pos.latitude;
+    final currentLng = pos.longitude;
+
+    // Only compute incremental distance once we have a valid previous fix.
+    // Both lat and lng must be non-zero to avoid a bogus distance from the
+    // initialization values of (0.0, 0.0).
+    if (_lastTripLat != 0.0 && _lastTripLng != 0.0) {
+      final meters = Geolocator.distanceBetween(
+        _lastTripLat,
+        _lastTripLng,
+        currentLat,
+        currentLng,
+      );
+      // Convert metres to miles and add to the running total.
+      _milesDriven += meters / _metersPerMile;
+    }
+
+    // Store the current position as the reference for the next GPS fix.
+    _lastTripLat = currentLat;
+    _lastTripLng = currentLng;
+
+    // Compute how long it has been since the previous GPS fix so that stopped
+    // time reflects real elapsed wall-clock seconds rather than a fixed 1-s
+    // estimate per update (GPS fires at varying intervals).
+    final fixDelta = _lastGpsTimestamp != null
+        ? now.difference(_lastGpsTimestamp!)
+        : Duration.zero;
+
+    // Accumulate stopped time when the truck is not moving.
+    if (pos.speed < 1.0 && fixDelta > Duration.zero) {
+      _stoppedDuration += fixDelta;
+    } else if (pos.speed >= 1.0) {
+      // Truck is moving — record this as the most recent movement time.
+      _lastMoveTime = now;
+    }
+
+    // Record when this GPS fix arrived for the next delta calculation.
+    _lastGpsTimestamp = now;
+
+    // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
+    if (mounted) setState(() {});
+  }
+
+  // ── Trip statistics computed display strings ───────────────────────────────
+
+  /// Returns the elapsed trip time as a formatted "Xh Ym" string, or '--'
+  /// when no trip has been started.
+  String get _tripElapsedText {
+    if (_tripStartTime == null) return '--';
+    final diff = DateTime.now().difference(_tripStartTime!);
+    final hours = diff.inHours;
+    final minutes = diff.inMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  /// Returns the cumulative stopped time as a formatted "Xh Ym" string.
+  String get _stoppedTimeText {
+    final hours = _stoppedDuration.inHours;
+    final minutes = _stoppedDuration.inMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  /// Returns the average speed in mph for this trip, or '--' when the trip
+  /// has not started or has not elapsed enough time for a meaningful value.
+  String get _avgSpeedText {
+    if (_tripStartTime == null) return '--';
+    final elapsedSeconds =
+        DateTime.now().difference(_tripStartTime!).inSeconds;
+    // Avoid division-by-zero and nonsensical values on very short elapsed times.
+    if (elapsedSeconds <= 0) return '--';
+    final elapsedHours = elapsedSeconds / 3600.0;
+    final avg = _milesDriven / elapsedHours;
+    return '${avg.toStringAsFixed(1)} mph';
+  }
+
   // ── Arrival detection ─────────────────────────────────────────────────────
 
   /// Checks whether [current] is within [_arrivalThresholdMeters] of the
@@ -972,7 +1413,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (mounted) _showArrivalSheet(context);
     });
   }
-
   /// Returns the index of the route point closest to [point], searching only
   /// from the current truck index onward to prevent backward snapping.
   int _nearestRouteIndex(LatLng point) {
@@ -1037,6 +1477,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Launch smooth async animation; pass the current generation so the
     // loop can self-cancel if _startRouteAnimation is called again.
+    // Initialize trip statistics so the stats panel shows live data from the
+    // moment navigation begins.
+    _startTripStats();
     _runSmoothRouteAnimation(_animGeneration);
   }
 
@@ -1389,6 +1832,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _speak(allSteps.first.instruction);
       }
 
+      // ── Filter nearby truck stop POIs ──────────────────────────────────────
+      // After the route is loaded, update the truck stop list to only show
+      // stops that are within 5 km of a route point.  setState is used so the
+      // MarkerLayer rebuilds immediately with the filtered markers.
+      final nearbyStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
+      setState(() {
+        _truckStops = nearbyStops;
+      });
+
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
     } catch (e) {
@@ -1711,6 +2163,98 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Collapse multiple spaces that may result from the replacements above.
     result = result.replaceAll(RegExp(r'\s+'), ' ');
     return result.trim();
+  }
+
+  // ── Trip Stats panel ──────────────────────────────────────────────────────
+
+  /// Builds the live Trip Stats overlay card.
+  ///
+  /// Shows four live-updating metrics in two rows:
+  ///   Top row:    Miles driven  |  Elapsed time
+  ///   Bottom row: Stopped time  |  Average speed
+  ///
+  /// The card is only rendered when [_tripStartTime] is non-null (i.e. after
+  /// navigation has begun), so it never appears on a blank map.  All values
+  /// update on every [setState] call triggered by [_updateTripStats].
+  Widget _buildTripStatsPanel() {
+    return Positioned(
+      // Position above the rerouting status indicator (bottom: 16) and any
+      // future bottom-bar UI.  Horizontal padding matches the nav banner.
+      left: 16,
+      right: 16,
+      bottom: 110,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Trip Stats',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            // ── Top row: miles driven + elapsed time ─────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _statItem('Miles', _milesDriven.toStringAsFixed(1)),
+                _statItem('Elapsed', _tripElapsedText),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // ── Bottom row: stopped time + average speed ──────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _statItem('Stopped', _stoppedTimeText),
+                _statItem('Avg Speed', _avgSpeedText),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single labelled stat item for the Trip Stats panel.
+  ///
+  /// [label] is rendered in a small grey caption style; [value] is rendered
+  /// bold below it — matching the visual hierarchy used in real trucking apps.
+  Widget _statItem(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
   }
 
   // ── Arrival bottom sheet ──────────────────────────────────────────────────
@@ -2298,17 +2842,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     MarkerLayer(
                       // _buildTruckMarker() + _buildDestinationMarker() are
-                      // the flutter_map equivalent of passing a Set<Marker> to
-                      // the GoogleMap widget; _updateMarkers() triggers setState
-                      // to rebuild this layer whenever position/bearing changes.
-                      //
-                      // The destination marker is shown only after arrival so
-                      // it does not clutter the map during active navigation —
-                      // the route polyline already indicates the destination.
-                      markers: [
-                        _buildTruckMarker(),
-                        if (_isArrived) _buildDestinationMarker(),
-                      ],
+                      // _buildMarkers() assembles the truck marker, the optional
+                      // destination pin, and all visible truck stop POI markers
+                      // into a single list.  Adding new POI types in the future
+                      // only requires updating _buildMarkers() in one place.
+                      markers: _buildMarkers(),
                     ),
                   ],
                 ),
@@ -2380,6 +2918,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Trip Stats panel ──────────────────────────────────────
+                // Overlays live trip metrics (miles, elapsed time, stopped
+                // time, average speed) at the bottom of the map.  Only shown
+                // once navigation has started (_tripStartTime != null) so the
+                // panel never appears on a blank or pre-route map view.
+                if (_tripStartTime != null) _buildTripStatsPanel(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Always visible during active navigation.  Positioned at the
                 // bottom-right corner of the map so it never obscures the
@@ -2391,15 +2935,44 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     child: _buildSpeedPanel(),
                   ),
                 // ── HOS break status card ─────────────────────────────────
-                // Positioned at the bottom-left during active navigation.
-                // Color progresses black → orange → red as the drive clock
-                // approaches and exceeds the FMCSA 8-hour break threshold.
+                // Positioned above the POI toggle FAB at the bottom-left
+                // during active navigation. Color progresses black → orange →
+                // red as the drive clock approaches and exceeds the FMCSA
+                // 8-hour break threshold.
                 if (_navigationMode)
                   Positioned(
-                    bottom: 24,
+                    bottom: 80,
                     left: 16,
                     child: _buildHosCard(),
                   ),
+                // ── POI toggle FAB ────────────────────────────────────────
+                // Floating action button to show/hide truck stop POI markers.
+                // Positioned at the bottom-left so it does not overlap the
+                // speed panel (bottom-right) or the rerouting indicator
+                // (bottom-centre).  Available at all times, not just during
+                // navigation, so drivers can inspect stops before departing.
+                Positioned(
+                  bottom: 24,
+                  left: 16,
+                  child: FloatingActionButton.small(
+                    heroTag: 'poi_toggle',
+                    tooltip: _showTruckStops
+                        ? 'Hide truck stops'
+                        : 'Show truck stops',
+                    backgroundColor: _showTruckStops
+                        ? Colors.blue.shade700
+                        : Colors.grey.shade700,
+                    onPressed: () {
+                      setState(() => _showTruckStops = !_showTruckStops);
+                    },
+                    child: Icon(
+                      _showTruckStops
+                          ? Icons.local_gas_station
+                          : Icons.local_gas_station_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2680,4 +3253,40 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+}
+
+/// A truck-friendly point of interest along the route.
+///
+/// Represents fuel stops (Pilot, Love's, TA, Petro, Flying J) and rest areas.
+/// [dieselPrice] and [address] are optional — not all data sources provide them.
+///
+/// Extend this model with additional fields (e.g. amenities, parking spots,
+/// scale availability) as the app evolves to support richer POI types.
+class TruckStop {
+  const TruckStop({
+    required this.id,
+    required this.name,
+    required this.brand,
+    required this.position,
+    this.address,
+    this.dieselPrice,
+  });
+
+  /// Unique identifier for this stop (used as the marker ID prefix).
+  final String id;
+
+  /// Display name of the truck stop, e.g. "Pilot Travel Center".
+  final String name;
+
+  /// Brand name, e.g. "Pilot", "Love's", "TA", "Petro", "Flying J", "Rest Area".
+  final String brand;
+
+  /// Geographic position of the stop on the map.
+  final LatLng position;
+
+  /// Street address or city/state summary, e.g. "Portland, OR".  Optional.
+  final String? address;
+
+  /// Current diesel price in USD per gallon.  Null when price is unavailable.
+  final double? dieselPrice;
 }

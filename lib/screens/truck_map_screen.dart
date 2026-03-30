@@ -175,6 +175,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Map POI state (weigh stations, police, ports of entry) ─────────────────
+  //
+  // _mapPois is the master list of weigh-station / police / port-of-entry POIs
+  // shown as coloured map markers.  _poiAlertShown tracks which POI ids have
+  // already triggered a proximity alert during this session so the same POI
+  // does not spam repeated dialogs.
+  final List<MapPoi> _mapPois = List<MapPoi>.from(_sampleMapPois);
+  final Set<String> _poiAlertShown = {};
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -505,16 +514,165 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }).toList();
   }
 
+  /// Builds map [Marker]s for all [MapPoi] entries in [_mapPois].
+  ///
+  /// Weigh stations are rendered in orange, police in deep-purple, and ports
+  /// of entry in indigo so drivers can instantly distinguish POI types at a
+  /// glance.  Tapping a marker shows a brief info sheet via [_showPoiAlert].
+  List<Marker> _buildPoiMarkers() {
+    return _mapPois.map((poi) {
+      final Color color;
+      final IconData icon;
+      switch (poi.type) {
+        case PoiType.weighStation:
+          color = Colors.orange.shade700;
+          icon = Icons.scale;
+          break;
+        case PoiType.police:
+          color = Colors.deepPurple.shade700;
+          icon = Icons.local_police;
+          break;
+        case PoiType.portOfEntry:
+          color = Colors.indigo.shade700;
+          icon = Icons.border_all;
+          break;
+      }
+      return Marker(
+        point: poi.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showPoiAlert(poi),
+          child: Container(
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Checks whether the driver is within 500 m of any [MapPoi] and triggers
+  /// [_showPoiAlert] for the first unshown POI that is in range.
+  ///
+  /// Each POI id is added to [_poiAlertShown] after the first alert so the
+  /// same POI does not produce repeated popups during the same session.
+  void _checkPoiAlerts(LatLng currentPosition) {
+    for (final poi in _mapPois) {
+      if (_poiAlertShown.contains(poi.id)) continue;
+      final double dist = Geolocator.distanceBetween(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        poi.position.latitude,
+        poi.position.longitude,
+      );
+      if (dist <= 500) {
+        _poiAlertShown.add(poi.id);
+        _showPoiAlert(poi);
+        break; // show one alert at a time to avoid dialog stacking
+      }
+    }
+  }
+
+  /// Shows an [AlertDialog] warning the driver that they are approaching [poi].
+  ///
+  /// The dialog displays the POI name, type label, and status so the driver
+  /// has actionable information (e.g. "Weigh Station – Open") before arrival.
+  void _showPoiAlert(MapPoi poi) {
+    if (!mounted) return;
+    final String typeLabel;
+    final IconData typeIcon;
+    final Color typeColor;
+    switch (poi.type) {
+      case PoiType.weighStation:
+        typeLabel = 'Weigh Station';
+        typeIcon = Icons.scale;
+        typeColor = Colors.orange.shade700;
+        break;
+      case PoiType.police:
+        typeLabel = 'Police / Inspection';
+        typeIcon = Icons.local_police;
+        typeColor = Colors.deepPurple.shade700;
+        break;
+      case PoiType.portOfEntry:
+        typeLabel = 'Port of Entry';
+        typeIcon = Icons.border_all;
+        typeColor = Colors.indigo.shade700;
+        break;
+    }
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(typeIcon, color: typeColor, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                typeLabel,
+                style: TextStyle(
+                  color: typeColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              poi.name,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Status: ${poi.status}',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Approaching in less than 500 m.',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Dismiss'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
-  /// truck position, destination pin, and all visible truck stop POIs.
+  /// truck position, destination pin, visible truck stop POIs, and map POIs
+  /// (weigh stations, police checkpoints, ports of entry).
   ///
   /// Centralises marker assembly so [build] stays clean and future POI types
-  /// (weigh stations, parking, etc.) can be merged here in one place.
+  /// can be merged here in one place.
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
       if (_isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      ..._buildPoiMarkers(),
     ];
   }
 
@@ -763,6 +921,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Off-route detection: reroute when >30 m from the route line ─────────
     _checkOffRoute(gpsPoint);
+
+    // ── POI proximity alerts: warn driver when within 500 m of a POI ─────────
+    _checkPoiAlerts(gpsPoint);
 
     // ── Trip statistics: update mileage and stopped time from live GPS ───────
     _updateTripStats(position);
@@ -2804,3 +2965,99 @@ class TruckStop {
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
 }
+
+// ── Map POI types, model, and sample data ─────────────────────────────────────
+
+/// Classifies the kind of truck-relevant point of interest shown on the map.
+enum PoiType {
+  /// Commercial vehicle weigh station or portable scale site.
+  weighStation,
+
+  /// Police checkpoint, enforcement stop, or roving inspection unit.
+  police,
+
+  /// International or inter-state port of entry inspection facility.
+  portOfEntry,
+}
+
+/// A map point of interest (POI) relevant to commercial truck drivers.
+///
+/// Used for weigh stations, police checkpoints, and ports of entry that are
+/// rendered as coloured markers on the map and trigger proximity alerts.
+class MapPoi {
+  const MapPoi({
+    required this.id,
+    required this.position,
+    required this.type,
+    required this.name,
+    required this.status,
+  });
+
+  /// Unique identifier — also used as the alert-deduplication key.
+  final String id;
+
+  /// Geographic coordinate of the POI.
+  final LatLng position;
+
+  /// Category of this POI (weigh station, police, or port of entry).
+  final PoiType type;
+
+  /// Human-readable name displayed in markers and alert dialogs.
+  final String name;
+
+  /// Operational status string, e.g. "Open", "Closed", "Bypass Required".
+  final String status;
+}
+
+/// Sample [MapPoi] data used when no live feed is available.
+///
+/// Covers key locations along the Portland OR → Winnemucca NV corridor so
+/// drivers see real-world-style alerts immediately after launch.  Replace or
+/// augment this list with live API data as the backend matures.
+const List<MapPoi> _sampleMapPois = [
+  // ── Weigh stations ──────────────────────────────────────────────────────
+  MapPoi(
+    id: 'ws_woodburn_or',
+    position: LatLng(45.155, -122.856),
+    type: PoiType.weighStation,
+    name: 'Woodburn Weigh Station',
+    status: 'Open',
+  ),
+  MapPoi(
+    id: 'ws_siskiyou_or',
+    position: LatLng(42.065, -122.547),
+    type: PoiType.weighStation,
+    name: 'Siskiyou Summit Weigh Station',
+    status: 'Open',
+  ),
+  MapPoi(
+    id: 'ws_lovelock_nv',
+    position: LatLng(40.179, -118.473),
+    type: PoiType.weighStation,
+    name: 'Lovelock Weigh Station',
+    status: 'Open',
+  ),
+  // ── Police / enforcement ─────────────────────────────────────────────────
+  MapPoi(
+    id: 'police_grants_pass_or',
+    position: LatLng(42.441, -123.329),
+    type: PoiType.police,
+    name: 'Grants Pass Enforcement Zone',
+    status: 'Active',
+  ),
+  MapPoi(
+    id: 'police_winnemucca_nv',
+    position: LatLng(40.973, -117.735),
+    type: PoiType.police,
+    name: 'Winnemucca Truck Inspection',
+    status: 'Active',
+  ),
+  // ── Port of entry ────────────────────────────────────────────────────────
+  MapPoi(
+    id: 'poe_oregon_california',
+    position: LatLng(41.998, -122.512),
+    type: PoiType.portOfEntry,
+    name: 'Oregon / California Port of Entry',
+    status: 'Open',
+  ),
+];

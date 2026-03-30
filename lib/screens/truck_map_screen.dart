@@ -867,6 +867,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Fuel warning: check after each GPS fix ────────────────────────────
+    _checkFuelWarning();
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -2699,6 +2702,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // once navigation has started (_tripStartTime != null) so the
                 // panel never appears on a blank or pre-route map view.
                 if (_tripStartTime != null) _buildTripStatsPanel(),
+                // ── Fuel card ─────────────────────────────────────────────
+                // Shows estimated range, gallons remaining, and fuel %.
+                // Turns red and becomes tappable when range is below 150 mi.
+                // Only shown once navigation is underway.
+                if (_tripStartTime != null) _buildFuelCard(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Always visible during active navigation.  Positioned at the
                 // bottom-right corner of the map so it never obscures the

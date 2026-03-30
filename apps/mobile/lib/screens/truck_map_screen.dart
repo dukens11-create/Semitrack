@@ -26,7 +26,13 @@ class TruckMapScreen extends StatefulWidget {
 class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Navigation banner constants ────────────────────────────────────────────
   /// Distance threshold below which the banner shows "Now" instead of metres.
-  static const double _imminentManeuverThresholdMeters = 50.0;
+  static const double _imminentManeuverThresholdMeters = 30.0;
+
+  /// Distance threshold below which the banner turns orange (urgent alert).
+  static const double _urgentColorThresholdMeters = 50.0;
+
+  /// Distance threshold below which the banner turns yellow (medium alert).
+  static const double _mediumColorThresholdMeters = 150.0;
 
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
@@ -908,27 +914,31 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the [IconData] matching the Mapbox maneuver [modifier] string.
   ///
   /// Covers the full set of Mapbox modifier and type values:
-  ///   'left' / 'sharp left' / 'slight left' / 'turn-left'  → turn_left
-  ///   'right' / 'sharp right' / 'slight right' / 'turn-right' → turn_right
-  ///   'uturn' / 'u-turn'                                    → u_turn_left
-  ///   'straight' / 'continue'                               → straight
-  ///   'merge'                                               → straight
-  ///   'roundabout' / 'rotary'                               → roundabout_left
-  ///   'arrive' / 'destination'                              → flag (destination)
-  ///   'depart' / 'head'                                     → near_me (start)
-  ///   all other values                                       → navigation (default)
+  ///   'left' / 'slight left' / 'turn-left'  → turn_left
+  ///   'sharp left'                           → turn_sharp_left
+  ///   'right' / 'slight right' / 'turn-right' → turn_right
+  ///   'sharp right'                          → turn_sharp_right
+  ///   'uturn' / 'u-turn'                     → u_turn_left
+  ///   'straight' / 'continue'                → straight
+  ///   'merge'                                → straight
+  ///   'roundabout' / 'rotary'                → roundabout_left
+  ///   'arrive' / 'destination'               → flag (destination)
+  ///   'depart' / 'head'                      → near_me (start)
+  ///   all other values                        → navigation (default)
   IconData _maneuverIcon(String modifier) {
     switch (modifier.toLowerCase()) {
       case 'left':
-      case 'sharp left':
       case 'slight left':
       case 'turn-left':
         return Icons.turn_left;
+      case 'sharp left':
+        return Icons.turn_sharp_left;
       case 'right':
-      case 'sharp right':
       case 'slight right':
       case 'turn-right':
         return Icons.turn_right;
+      case 'sharp right':
+        return Icons.turn_sharp_right;
       case 'uturn':
       case 'u-turn':
         return Icons.u_turn_left;
@@ -953,14 +963,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Formats [meters] as a human-readable distance string.
   ///
-  /// Returns "Now" when the maneuver is imminent (<50 m), metres for distances
-  /// below 1 km (e.g. "350 m"), and kilometres with one decimal place for
-  /// longer distances (e.g. "2.4 km").  Matches modern GPS app conventions.
+  /// Uses the same priority logic as real GPS apps:
+  ///   < 30 m  → "Now"   (imminent — act immediately)
+  ///   < 200 m → exact metres, e.g. "85 m"
+  ///   < 1000 m → rounded to the nearest 10 m, e.g. "400 m"
+  ///   ≥ 1000 m → kilometres with one decimal place, e.g. "9.5 km"
   String _formatDistance(double meters) {
     // Imminent maneuver — tell the driver to act right away.
     if (meters < _imminentManeuverThresholdMeters) return 'Now';
-    if (meters < 1000.0) return '${meters.toInt()} m';
+    // Close range: show exact metres for precision.
+    if (meters < 200.0) return '${meters.toInt()} m';
+    // Medium range: round to nearest 10 m to avoid jitter.
+    if (meters < 1000.0) return '${(meters / 10).round() * 10} m';
     return '${(meters / 1000.0).toStringAsFixed(1)} km';
+  }
+
+  /// Returns the banner background [Color] based on proximity to the next
+  /// maneuver, providing real-time urgency feedback like a real GPS app:
+  ///   < 50 m   → orange  (very close — urgent)
+  ///   < 150 m  → yellow  (medium — alert)
+  ///   otherwise → near-black semi-transparent (default)
+  Color _getBannerColor(double meters) {
+    if (meters < _urgentColorThresholdMeters) return Colors.orange;
+    if (meters < _mediumColorThresholdMeters) return Colors.yellow.shade700;
+    return Colors.black.withOpacity(0.85);
   }
 
   /// Returns the distance in metres from the truck's current position to the
@@ -1059,13 +1085,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// The banner is only rendered while [_navSteps] is non-empty so it never
   /// appears before a route has been loaded.
+  ///
+  /// Arrival mode: when the driver has reached the last step, the banner turns
+  /// green and shows "You have arrived" instead of a maneuver instruction.
   Widget _buildNavBanner() {
     // Guard: clamp index so an out-of-sync state never throws a RangeError.
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
 
+    // Arrival is detected when the driver is on the very last navigation step
+    // AND is within the imminent threshold of the destination.  Checking both
+    // conditions prevents premature "arrived" messages at the start of the
+    // last step when the destination may still be hundreds of metres away.
+    final bool isArrived = safeIndex >= _navSteps.length - 1 &&
+        distanceToNext < _imminentManeuverThresholdMeters;
+
+    // Distance to the next maneuver — drives urgency color and distance label.
+    final double distanceToNext = _distanceToNextStep();
+
+    // Banner background color: green on arrival, urgency-based otherwise.
+    final Color bannerColor =
+        isArrived ? Colors.green.shade600 : _getBannerColor(distanceToNext);
+
     // Next step for driver preview (shown in a smaller, dimmed font below).
-    final hasNextStep = safeIndex + 1 < _navSteps.length;
+    final hasNextStep = !isArrived && safeIndex + 1 < _navSteps.length;
     final nextStep = hasNextStep ? _navSteps[safeIndex + 1] : null;
 
     return SafeArea(
@@ -1084,8 +1127,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                // Dark semi-transparent fill on top of the blur layer.
-                color: Colors.black.withOpacity(0.85),
+                // Dynamic fill: green on arrival, urgency-based otherwise.
+                color: bannerColor,
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
@@ -1099,9 +1142,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   // ── Turn icon (left side) ───────────────────────────────────
-                  // White icon on dark background mirrors the Google Maps design.
+                  // White icon on dark/coloured background mirrors GPS design.
                   Icon(
-                    _maneuverIcon(step.maneuver),
+                    isArrived ? Icons.flag : _maneuverIcon(step.maneuver),
                     color: Colors.white,
                     size: 34,
                   ),
@@ -1114,7 +1157,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       children: [
                         // Current step — bold and prominent for at-a-glance reading.
                         Text(
-                          _formatInstruction(step.instruction),
+                          isArrived
+                              ? 'You have arrived'
+                              : _formatInstruction(step.instruction),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 17,
@@ -1144,15 +1189,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   const SizedBox(width: 12),
                   // ── Distance to next turn (right side) ──────────────────────
                   // Shows distance to the *next* maneuver only, never total route.
-                  // Bold white so it reads instantly at highway speed.
-                  Text(
-                    _formatDistance(_distanceToNextStep()),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
+                  // Hidden on arrival since there is no next maneuver.
+                  if (!isArrived)
+                    Text(
+                      _formatDistance(distanceToNext),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),

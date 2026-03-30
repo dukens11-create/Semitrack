@@ -142,7 +142,13 @@ class _HosClockCardState extends State<_HosClockCard> {
   void initState() {
     super.initState();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _driveSecondsUsed++);
+      if (mounted) {
+        if (_driveSecondsUsed < _driveLimit) {
+          setState(() => _driveSecondsUsed++);
+        } else {
+          _timer.cancel();
+        }
+      }
     });
   }
 

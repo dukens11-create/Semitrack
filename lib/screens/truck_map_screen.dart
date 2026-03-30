@@ -61,6 +61,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
 
+  // ── Route restriction constants ────────────────────────────────────────────
+  /// Radius in metres around each restricted zone within which a route point
+  /// is considered to violate the restriction.  Used by
+  /// [_updateRouteViolationWarnings] and [_isTruckSafe].
+  static const double _restrictionProximityThresholdMeters = 100.0;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -266,6 +272,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Useful when the driver needs to review the route without the map moving.
   bool _navigationPaused = false;
 
+  // ── Selected destination state ─────────────────────────────────────────────
+  // Null until the user picks a destination via search or long-press.
+  // When set, fetchRoute() and arrival-detection use this position instead of
+  // the hardcoded default origin/destination constants.
+  LatLng? _selectedDestination;
+  String? _selectedDestinationName;
+
+  // ── Search bar state ───────────────────────────────────────────────────────
+  // _searchController drives the inline search TextField at the top of the map.
+  // _searchResults holds the current geocoding suggestions from Mapbox.
+  // _isSearching is true while the HTTP request is in flight (shows spinner).
+  // _isBuildingRoute is true while fetchRoute() is building a route from the
+  // selected destination so the Start Route button can show a loading state.
+  // _searchDebounce throttles geocoding calls to one per 400 ms so typing
+  // a destination does not flood the Mapbox API with a request per keystroke.
+  final TextEditingController _searchController = TextEditingController();
+  List<PlaceSuggestion> _searchResults = const [];
+  bool _isSearching = false;
+  bool _isBuildingRoute = false;
+  Timer? _searchDebounce;
+
+  // ── Route restriction violations ───────────────────────────────────────────
+  // Populated by _updateRouteViolationWarnings() after a route loads.
+  // Each entry is a human-readable warning shown in the route info panel.
+  List<String> _routeViolations = const [];
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -308,6 +340,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
+    _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
   }
 
@@ -372,23 +406,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns the fixed destination [Marker] (red pin at [_destination]).
+  /// Returns the fixed destination [Marker] at the selected (or default)
+  /// destination position.
   Marker _buildDestinationMarker() {
-    return const Marker(
-      point: _destination,
+    final pos = _selectedDestination ?? _destination;
+    return Marker(
+      point: pos,
       width: 40,
       height: 40,
-      child: Icon(Icons.location_on, size: 34, color: Colors.red),
-    );
-  }
-
-  /// Returns a [Marker] for the user-pinned destination at [_selectedDestination].
-  Marker _buildSelectedDestinationMarker() {
-    return Marker(
-      point: _selectedDestination!,
-      width: 44,
-      height: 44,
-      child: const Icon(Icons.location_pin, size: 38, color: Colors.deepOrange),
+      child: const Icon(Icons.location_on, size: 34, color: Colors.red),
     );
   }
 
@@ -712,17 +738,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
-  /// truck position, destination pin, visible truck stop POIs, map POIs
-  /// (weigh stations, police checkpoints, ports of entry), and truck
-  /// restriction markers (low bridges, weight/length limits, etc.).
+  /// truck position, destination pin (when selected or arrived), visible truck
+  /// stop POIs, map POIs (weigh stations, police checkpoints, ports of entry),
+  /// and truck restriction markers (low bridges, weight/length limits, etc.).
   ///
   /// Centralises marker assembly so [build] stays clean and future POI types
   /// can be merged here in one place.
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
-      if (_isArrived) _buildDestinationMarker(),
-      if (_selectedDestination != null) _buildSelectedDestinationMarker(),
+      if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
@@ -1234,7 +1259,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkArrival(LatLng current) {
     // Guard: only trigger once per trip.
     if (_isArrived) return;
-    final dist = _distanceBetween(current, _destination);
+    final dest = _selectedDestination ?? _destination;
+    final dist = _distanceBetween(current, dest);
     if (dist <= _arrivalThresholdMeters) {
       _triggerArrival();
     }
@@ -1566,15 +1592,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return [points.first, points.last];
   }
 
-  /// Returns `true` when none of the [routePoints] pass within 100 m of a
-  /// restricted zone in [_restrictedZones].
+  /// Returns `true` when none of the [routePoints] pass within
+  /// [_restrictionProximityThresholdMeters] of a restricted zone in
+  /// [_restrictedZones].
   bool _isTruckSafe(List<LatLng> routePoints) {
-    const double radiusMeters = 100.0;
     for (final zone in _restrictedZones) {
       final zonePt =
           LatLng(zone['lat']! as double, zone['lng']! as double);
       for (final pt in routePoints) {
-        if (_distanceBetween(pt, zonePt) <= radiusMeters) return false;
+        if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters) return false;
       }
     }
     return true;
@@ -2059,70 +2085,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Fetches a route from the truck's current position to [_selectedDestination]
-  /// and starts the navigation session.
-  ///
-  /// Sets [_isBuildingRoute] while the request is in flight so the UI can show
-  /// a loading indicator.  Resets it on completion or error.
-  Future<void> _startRouteToSelectedDestination() async {
-    if (_selectedDestination == null) return;
-    setState(() => _isBuildingRoute = true);
-
-    try {
-      final from = _truckPosition ?? _origin;
-      final dest = _selectedDestination!;
-      final url =
-          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
-          "?overview=full"
-          "&geometries=polyline6"
-          "&steps=true"
-          "&alternatives=true"
-          "&exclude=ferry"
-          "&access_token=$_mapboxToken";
-
-      final res = await http.get(Uri.parse(url));
-      if (res.statusCode != 200) {
-        throw Exception('Mapbox API error ${res.statusCode}');
-      }
-      final data = jsonDecode(res.body);
-      final routes = data["routes"] as List;
-      if (routes.isEmpty) return;
-      final route = routes[0] as Map<String, dynamic>;
-
-      final decoded = _decodePolyline6(route["geometry"] as String);
-      final newPoints = _simplifyRoute(decoded);
-      final allSteps = _extractAllSteps(route);
-      final turnByTurnList =
-          allSteps.map((s) => {'instruction': s.instruction}).toList();
-
-      setState(() {
-        _navSteps = allSteps;
-        _currentStepIndex = 0;
-        _routeData = {
-          "distanceMiles": (route["distance"] / 1609.34).round(),
-          "etaMinutes": (route["duration"] / 60).round(),
-          "turnByTurn": turnByTurnList,
-        };
-        _routePoints = newPoints.toSet().toList();
-        _isArrived = false;
-        _navigationActive = true;
-        _error = null;
-      });
-
-      // Center the map on the truck after the route loads.
-      if (_mapReady && _truckPosition != null) {
-        _mapController.move(_truckPosition!, _navigationZoomLevel);
-      }
-
-      _startRouteAnimation();
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _isBuildingRoute = false);
-    }
-  }
-
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
@@ -2156,9 +2118,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+      // Use the user-selected destination when available; fall back to the
+      // hard-coded default (Winnemucca, NV) for the legacy demo route.
+      final dest = _selectedDestination ?? _destination;
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "${from.longitude},${from.latitude};$_destLng,$_destLat"
+          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
@@ -2248,6 +2213,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
+
+      // After the route is loaded, update the route violation warnings panel
+      // so the driver sees any low-bridge or weight-limit conflicts in the info
+      // panel (in addition to the TruckRestriction violation sheet above).
+      _updateRouteViolationWarnings();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -2257,6 +2227,481 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Always release the loading guard so future fetchRoute() calls succeed.
       _isLoadingRoute = false;
     }
+  }
+
+  // ── Destination selection ─────────────────────────────────────────────────
+
+  /// Starts navigation to [_selectedDestination].
+  ///
+  /// Resets arrival state, clears prior violations, then fetches a fresh
+  /// route from the current position (or default origin) to the selected
+  /// destination.  Should only be called once [_selectedDestination] has been
+  /// set by either [_showDestinationSearch] or [_onMapLongPress].
+  Future<void> _startRouteToSelectedDestination() async {
+    if (_selectedDestination == null) return;
+    // Reset navigation state for a fresh trip.
+    setState(() {
+      _isArrived = false;
+      _navigationActive = false;
+      _routeViolations = const [];
+    });
+    await fetchRoute();
+  }
+
+  /// Updates [_routeViolations] with human-readable warning strings by checking
+  /// [_routePoints] against [_restrictedZones].
+  ///
+  /// Called automatically by [fetchRoute] after a route is loaded so that
+  /// restriction checks always run against an existing route geometry (never
+  /// before a route exists, per spec).
+  void _updateRouteViolationWarnings() {
+    if (_routePoints.isEmpty) return;
+    final violations = <String>[];
+    for (final zone in _restrictedZones) {
+      final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
+      bool hit = false;
+      for (final pt in _routePoints) {
+        if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) {
+        final type = zone['type'] as String;
+        final limit = zone['limit_value'] as double;
+        if (type == 'low_bridge') {
+          violations.add(
+              'Low bridge (${limit.toStringAsFixed(1)} ft clearance) near route');
+        } else if (type == 'weight_limit') {
+          violations.add(
+              'Weight limit (${limit.toStringAsFixed(0)} tons) near route');
+        } else {
+          violations.add('Truck restriction ($type) near route');
+        }
+      }
+    }
+    setState(() {
+      _routeViolations = violations;
+    });
+  }
+
+  /// Shows a modal bottom sheet with a Mapbox geocoding search field.
+  ///
+  /// The driver types a destination query; results are fetched from the
+  /// Mapbox Geocoding v5 API and displayed as tappable list tiles.  On
+  /// selection, [_selectedDestination] and [_selectedDestinationName] are
+  /// updated and [_startRouteToSelectedDestination] is called.
+  Future<void> _showDestinationSearch() async {
+    final controller = TextEditingController();
+    List<Map<String, dynamic>> results = [];
+    // Track the destination before the sheet opened so we can detect changes.
+    final prevDestination = _selectedDestination;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+                left: 16,
+                right: 16,
+                top: 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ── Search field ─────────────────────────────────────────
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      hintText: 'Search destination...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.send),
+                        onPressed: () async {
+                          final q = controller.text.trim();
+                          if (q.isEmpty) return;
+                          final r = await _geocodeAddress(q);
+                          setModalState(() => results = r);
+                        },
+                      ),
+                      border: const OutlineInputBorder(),
+                    ),
+                    onSubmitted: (q) async {
+                      if (q.trim().isEmpty) return;
+                      final r = await _geocodeAddress(q.trim());
+                      setModalState(() => results = r);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  // ── Geocoding results ────────────────────────────────────
+                  if (results.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 260),
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: results
+                            .map(
+                              (r) => ListTile(
+                                leading: const Icon(Icons.place),
+                                title: Text(r['name'] as String),
+                                subtitle: Text(r['place'] as String? ?? ''),
+                                onTap: () {
+                                  setState(() {
+                                    _selectedDestination =
+                                        r['position'] as LatLng;
+                                    _selectedDestinationName =
+                                        r['name'] as String;
+                                  });
+                                  Navigator.of(ctx).pop();
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  if (results.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'Type a destination and press Search or ↵',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    // Start routing only when a *new* destination was chosen in this session.
+    if (_selectedDestination != null &&
+        _selectedDestination != prevDestination) {
+      await _startRouteToSelectedDestination();
+    }
+  }
+
+  /// Queries the Mapbox Geocoding v5 API for [query] and returns up to 5
+  /// results as maps with keys 'name', 'place', and 'position' (LatLng).
+  Future<List<Map<String, dynamic>>> _geocodeAddress(String query) async {
+    try {
+      final encoded = Uri.encodeComponent(query);
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/$encoded.json'
+          '?types=address,place,poi'
+          '&limit=5'
+          '&access_token=$_mapboxToken';
+      final res = await http.get(Uri.parse(url));
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features = (data['features'] as List?) ?? const [];
+      return features.map<Map<String, dynamic>>((dynamic f) {
+        final props = f as Map<String, dynamic>;
+        final coords = (props['geometry'] as Map<String, dynamic>)['coordinates']
+            as List;
+        final name = props['text'] as String? ?? '';
+        final place = props['place_name'] as String? ?? '';
+        return {
+          'name': name,
+          'place': place,
+          'position': LatLng(
+            (coords[1] as num).toDouble(),
+            (coords[0] as num).toDouble(),
+          ),
+        };
+      }).toList();
+    } catch (e) {
+      // Log the error so developers can diagnose API or network failures.
+      // The empty list return lets the search sheet show "no results" gracefully.
+      print('Geocoding error for "$query": $e');
+      return [];
+    }
+  }
+
+  /// Handles a long-press on the map to immediately set a destination and
+  /// start routing to the tapped coordinate.
+  ///
+  /// The destination name is set to the coordinate string so the driver has
+  /// immediate visual feedback while a geocoding lookup could be added later.
+  void _onMapLongPress(LatLng point) {
+    setState(() {
+      _selectedDestination = point;
+      _selectedDestinationName =
+          '${point.latitude.toStringAsFixed(4)}, '
+          '${point.longitude.toStringAsFixed(4)}';
+    });
+    _startRouteToSelectedDestination();
+  }
+
+  // ── Inline search bar logic ───────────────────────────────────────────────
+
+  /// Queries the Mapbox Geocoding v5 API for [query] and updates
+  /// [_searchResults] with up to 5 [PlaceSuggestion] objects.
+  ///
+  /// Sets [_isSearching] while the request is in flight so the search bar can
+  /// show a loading indicator.  Clears results and stops the spinner on any
+  /// error, letting the UI degrade gracefully without a hard crash.
+  ///
+  /// Calls from [TextField.onChanged] are debounced (400 ms) so that a new
+  /// HTTP request is only sent once the user pauses typing, avoiding excessive
+  /// API calls on every keystroke.
+  Future<void> _searchPlaces(String query) async {
+    _searchDebounce?.cancel();
+    final q = query.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _searchResults = const [];
+        _isSearching = false;
+      });
+      return;
+    }
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _executeSearch(q),
+    );
+  }
+
+  /// Immediately fires a geocoding request for [q] without any debounce delay.
+  ///
+  /// Called directly from [TextField.onSubmitted] so results appear as soon as
+  /// the user presses the keyboard "done"/"search" button.
+  Future<void> _executeSearch(String q) async {
+    if (!mounted || q.isEmpty) return;
+    setState(() => _isSearching = true);
+    try {
+      final encoded = Uri.encodeComponent(q);
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/$encoded.json'
+          '?types=address,place,poi'
+          '&limit=5'
+          '&access_token=$_mapboxToken';
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        // Log non-200 responses (e.g. 401 bad token, 429 rate limit) to aid
+        // debugging without surfacing raw HTTP details to the end user.
+        print('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
+        if (mounted) setState(() => _isSearching = false);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features = (data['features'] as List?) ?? const [];
+      final suggestions = <PlaceSuggestion>[];
+      for (final dynamic f in features) {
+        try {
+          final props = f as Map<String, dynamic>;
+          final geometry = props['geometry'] as Map<String, dynamic>?;
+          final coords = geometry?['coordinates'] as List?;
+          if (coords == null || coords.length < 2) continue;
+          suggestions.add(PlaceSuggestion(
+            name: props['text'] as String? ?? '',
+            placeName: props['place_name'] as String? ?? '',
+            position: LatLng(
+              (coords[1] as num).toDouble(),
+              (coords[0] as num).toDouble(),
+            ),
+          ));
+        } catch (_) {
+          // Skip malformed features rather than aborting the whole batch.
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _searchResults = suggestions;
+          _isSearching = false;
+        });
+      }
+    } catch (e) {
+      // Log the error so developers can diagnose network or parsing failures.
+      print('Geocoding error for "$q": $e');
+      if (mounted) {
+        setState(() {
+          _searchResults = const [];
+          _isSearching = false;
+        });
+      }
+    }
+  }
+
+  /// Called when the driver taps a [PlaceSuggestion] in the search results.
+  ///
+  /// Pans the camera to the chosen location, sets it as the selected
+  /// destination, and clears the search bar and results list so the map is
+  /// unobstructed.  Route building is left to the explicit "Start Route"
+  /// button so the driver can review the destination pin before committing.
+  void _selectDestinationFromSearch(PlaceSuggestion suggestion) {
+    setState(() {
+      _selectedDestination = suggestion.position;
+      _selectedDestinationName = suggestion.name.isNotEmpty
+          ? suggestion.name
+          : suggestion.placeName;
+      _searchResults = const [];
+      _isSearching = false;
+    });
+    _searchController.clear();
+    if (_mapReady) {
+      _mapController.move(suggestion.position, 13.0);
+    }
+  }
+
+  /// Builds the inline search bar that floats at the top of the map.
+  ///
+  /// Displays a [TextField] with a search icon prefix, a [CircularProgressIndicator]
+  /// while geocoding is in flight, and a clear button once text has been entered.
+  /// The suffix icon uses a [ValueListenableBuilder] so it updates immediately
+  /// on every keystroke without waiting for a setState call.
+  Widget _buildSearchBar() {
+    return Positioned(
+      top: 8,
+      left: 12,
+      right: 12,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(12),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _searchController,
+          builder: (_, value, __) {
+            return TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search destination...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _isSearching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : value.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchResults = const []);
+                            },
+                          )
+                        : null,
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onChanged: _searchPlaces,
+              onSubmitted: (q) {
+                // Cancel any pending debounce and execute the search immediately.
+                _searchDebounce?.cancel();
+                _executeSearch(q.trim());
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+  /// Builds the search results overlay below the search bar.
+  ///
+  /// Each result is a [ListTile] showing the place name and full address.
+  /// Tapping a tile calls [_selectDestinationFromSearch] to set the
+  /// destination and dismiss the list.
+  Widget _buildSearchResults() {
+    return Positioned(
+      top: 68,
+      left: 12,
+      right: 12,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: _searchResults.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final s = _searchResults[i];
+                return ListTile(
+                  leading: const Icon(Icons.place, color: Colors.deepOrange),
+                  title: Text(
+                    s.name.isNotEmpty ? s.name : s.placeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: s.placeName.isNotEmpty && s.name != s.placeName
+                      ? Text(
+                          s.placeName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : null,
+                  onTap: () => _selectDestinationFromSearch(s),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds the "Start Route" button shown when a destination has been selected
+  /// but no route has been built yet.
+  ///
+  /// Tapping calls [_startRouteToSelectedDestination].  While [_isBuildingRoute]
+  /// is true the button shows a spinner so the driver knows the request is
+  /// in flight.
+  Widget _buildStartRouteButton() {
+    return Positioned(
+      bottom: 120,
+      left: 16,
+      right: 16,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.deepOrange,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 6,
+        ),
+        icon: _isBuildingRoute
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.directions),
+        label: Text(
+          _isBuildingRoute ? 'Building route…' : 'Start Route',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        onPressed: _isBuildingRoute
+            ? null
+            : () async {
+                setState(() => _isBuildingRoute = true);
+                await _startRouteToSelectedDestination();
+                if (mounted) setState(() => _isBuildingRoute = false);
+              },
+      ),
+    );
   }
 
   /// Extracts all turn-by-turn navigation steps from [route].
@@ -3038,8 +3483,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Semitrack NEW'),
+        // Show destination name in the title when one is selected.
+        title: _selectedDestinationName != null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Semitrack NEW',
+                      style: TextStyle(fontSize: 14, color: Colors.white70)),
+                  Text(
+                    _selectedDestinationName!,
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              )
+            : const Text('Semitrack NEW'),
         actions: [
+          // ── Destination search button ──────────────────────────────────
+          // Opens the geocoding search sheet so the driver can type a
+          // destination address or place name before starting navigation.
+          IconButton(
+            tooltip: 'Search destination',
+            icon: const Icon(Icons.search),
+            onPressed: _showDestinationSearch,
+          ),
           // Pause / resume navigation tracking.
           // When paused, GPS updates and camera follow are suspended so the
           // driver can review the route without the map moving.
@@ -3100,12 +3569,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       _mapReady = true;
                       fetchRoute();
                     },
-                    // Long-press on the map to pin a destination.
-                    onLongPress: (TapPosition tapPosition, LatLng point) {
-                      setState(() {
-                        _selectedDestination = point;
-                        _selectedDestinationName = 'Pinned Destination';
-                      });
+                    // Long-press on map sets the tapped coordinate as the new
+                    // destination and immediately starts routing.
+                    onLongPress: (tapPosition, point) {
+                      _onMapLongPress(point);
                     },
                     // Disable camera follow when the user manually interacts
                     // with the map (drag / pinch / scroll) so they can freely
@@ -3165,13 +3632,63 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Inline search bar ─────────────────────────────────────
+                // Hidden during active turn-by-turn navigation so it does not
+                // overlap the navigation banner.  Visible at all other times
+                // so the driver can search a destination without opening a
+                // modal sheet.
+                if (_navSteps.isEmpty) _buildSearchBar(),
+                // ── Search results overlay ────────────────────────────────
+                if (_navSteps.isEmpty && _searchResults.isNotEmpty)
+                  _buildSearchResults(),
+                // ── Destination hint banner ───────────────────────────────
+                // Shown when no destination is selected and no route is loaded,
+                // prompting the driver to pick a destination to start navigation.
+                if (_selectedDestination == null && _routePoints.isEmpty && !_isLoading)
+                  Positioned(
+                    bottom: 80,
+                    left: 16,
+                    right: 16,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.touch_app, color: Colors.white70, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Long-press map or use search bar to set destination',
+                              style: TextStyle(
+                                  color: Colors.white, fontSize: 13),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                // ── Start Route button ─────────────────────────────────────
+                // Shown when a destination has been selected (via search or
+                // long-press) but no route has been built yet.  Gives the
+                // driver an explicit confirmation step before routing begins.
+                if (_selectedDestination != null &&
+                    _routePoints.isEmpty &&
+                    !_isLoading)
+                  _buildStartRouteButton(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
                 // 800 m of a restriction it violates, providing a prominent
                 // in-route warning with type icon and limit details.
                 if (_restrictionAhead != null)
                   Positioned(
-                    top: _navSteps.isNotEmpty ? 90 : 8,
+                    top: _navSteps.isNotEmpty ? 90 : 68,
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
@@ -3275,71 +3792,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                 ),
-                // ── Destination picker buttons ────────────────────────────
-                // Visible only when the user has pinned a destination via
-                // long-press.  "Start Route" builds a route to the pin and
-                // launches navigation; "Clear" resets all destination state.
-                if (_selectedDestination != null)
-                  Positioned(
-                    bottom: 80,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ElevatedButton.icon(
-                            icon: _isBuildingRoute
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.navigation),
-                            label: Text(_isBuildingRoute
-                                ? 'Building…'
-                                : 'Start Route'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue.shade700,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 20, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                            ),
-                            onPressed: _isBuildingRoute
-                                ? null
-                                : _startRouteToSelectedDestination,
-                          ),
-                          const SizedBox(width: 12),
-                          ElevatedButton.icon(
-                            icon: const Icon(Icons.clear),
-                            label: const Text('Clear'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.grey.shade700,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                _selectedDestination = null;
-                                _selectedDestinationName = null;
-                                _isBuildingRoute = false;
-                              });
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -3508,6 +3960,55 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                               size: 18, color: Colors.orange),
                           const SizedBox(width: 8),
                           Expanded(child: Text(w)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+        // ── Route Restriction Violations ─────────────────────────────
+        // Populated by _updateRouteViolationWarnings() after the route loads.
+        // Shows low-bridge / weight-limit warnings encountered on the route.
+        if (_routeViolations.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.red.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.report_problem, color: Colors.red, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Route Restrictions',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Colors.red),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  for (final v in _routeViolations)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.error_outline,
+                              size: 16, color: Colors.red),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              v,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -3829,3 +4330,28 @@ const List<TruckRestriction> _sampleRestrictions = [
     description: 'Transportation of hazardous materials restricted through this zone.',
   ),
 ];
+
+
+// ── Destination search model ──────────────────────────────────────────────────
+
+/// A single place suggestion returned by the Mapbox Geocoding v5 API.
+///
+/// [name] is the short feature name (e.g. "Denver"), [placeName] is the full
+/// formatted address, and [position] is the geographic coordinate used to place
+/// a destination marker and pan the camera.
+class PlaceSuggestion {
+  const PlaceSuggestion({
+    required this.name,
+    required this.placeName,
+    required this.position,
+  });
+
+  /// Short feature name, e.g. "Denver" or "Pilot Travel Center".
+  final String name;
+
+  /// Full Mapbox place_name string, e.g. "Denver, Colorado, United States".
+  final String placeName;
+
+  /// Geographic coordinate of the place.
+  final LatLng position;
+}

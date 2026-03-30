@@ -11,8 +11,10 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../features/documents/documents_screen.dart';
-import '../models/trip_stop.dart';
 import '../models/stop_appointment.dart';
+import '../models/trip.dart';
+import '../models/trip_stop.dart';
+import '../services/trip_storage.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -3452,12 +3454,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Cancel GPS subscription — all tracking ceases after arrival.
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
+    // Persist the completed trip to local storage.
+    _saveCompletedTrip();
     // Speak the arrival announcement (interrupts any in-progress TTS).
     _speak('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _showArrivalSheet(context);
     });
+  }
+
+  /// Saves the just-completed trip to [TripStorage] using data from
+  /// [_routeData] (distance / ETA from the Mapbox response) and
+  /// [_tripStartTime] (wall-clock duration).  Silently no-ops if the
+  /// required state is unavailable (e.g. no route was loaded).
+  Future<void> _saveCompletedTrip() async {
+    final tripDistanceMiles =
+        (_routeData?['distanceMiles'] as num?)?.toDouble() ?? _milesDriven;
+    final start = _tripStartTime;
+    final duration =
+        start != null ? DateTime.now().difference(start) : Duration.zero;
+
+    final trip = Trip(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      destinationName: 'Winnemucca, NV',
+      distanceMiles: tripDistanceMiles,
+      duration: duration,
+      completedAt: DateTime.now(),
+    );
+    await TripStorage.saveTrip(trip);
   }
   /// Returns the index of the route point closest to [point], searching only
   /// from the current truck index onward to prevent backward snapping.

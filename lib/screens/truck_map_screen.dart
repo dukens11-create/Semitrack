@@ -1210,6 +1210,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Weigh station proximity check ────────────────────────────────────────
+    // Runs after every GPS fix so the alert card and voice warning stay
+    // current as the truck moves along the route.
+    _checkWeighStationAlert();
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -2770,6 +2775,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Weigh station proximity alert card ────────────────────
+                // Shown when the truck is within 1 mile of a weigh station
+                // or port of entry.  Colour reflects open/closed/bypass
+                // status.  Tapping the card opens the full details sheet.
+                _buildWeighStationAlertCard(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -3185,4 +3195,70 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+}
+
+/// The category of a route point of interest.
+///
+/// Used to select the correct marker icon and to decide which alert logic
+/// applies (e.g. only [weighStation] and [portOfEntry] trigger the proximity
+/// warning banner and voice alert).
+enum PoiType {
+  /// A commercial vehicle weigh station.
+  weighStation,
+
+  /// A state/international port of entry inspection facility.
+  portOfEntry,
+
+  /// A roadside rest area.
+  restArea,
+
+  /// A commercial truck parking facility.
+  parking,
+}
+
+/// A trucking-relevant point of interest along the planned route.
+///
+/// Extends the basic [TruckStop] concept with weigh-station–specific fields:
+/// [status] (open / closed / bypass available), [bypassAvailable], and [note].
+/// All optional fields default to `null` when data is unavailable.
+class RoutePoi {
+  const RoutePoi({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.position,
+    this.subtitle,
+    this.availableSpots,
+    this.status,
+    this.bypassAvailable,
+    this.note,
+  });
+
+  /// Unique identifier used as the map marker ID.
+  final String id;
+
+  /// Display name shown in the alert card and details sheet.
+  final String name;
+
+  /// Category of this POI — determines icon, colour, and alert behaviour.
+  final PoiType type;
+
+  /// Geographic position on the map.
+  final LatLng position;
+
+  /// Optional short subtitle (e.g. facility type or operator name).
+  final String? subtitle;
+
+  /// Available parking or staging spots, if known.
+  final int? availableSpots;
+
+  /// Current operational status: `'Open'`, `'Closed'`, `'Bypass Available'`,
+  /// or `null` / any other value for unknown.
+  final String? status;
+
+  /// Whether a transponder bypass is available at this facility.
+  final bool? bypassAvailable;
+
+  /// Driver-facing note, e.g. `'Check transponder before bypassing'`.
+  final String? note;
 }

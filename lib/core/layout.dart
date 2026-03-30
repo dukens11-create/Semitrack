@@ -8,9 +8,8 @@ class AppLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = const [
-      ('Dashboard', '/dashboard', Icons.dashboard),
       ('Navigation', '/navigation', Icons.map),
-      ('Trips', '/trips', Icons.route),
+      ('Trips', '/trip-planner', Icons.route),
       ('POI', '/poi', Icons.place),
       ('Parking', '/parking', Icons.local_parking),
       ('Fuel', '/fuel', Icons.local_gas_station),

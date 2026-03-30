@@ -217,6 +217,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Useful when the driver needs to review the route without the map moving.
   bool _navigationPaused = false;
 
+  // ── Route options state ────────────────────────────────────────────────────
+  //
+  // These fields control the route-request parameters sent to the Mapbox
+  // Directions API and are exposed to the driver via the Route Options sheet.
+  //
+  //   _routeMode      – 'fastest' | 'fuel' | 'truck_safe'
+  //   _avoidTolls     – add 'toll' to the exclude list when true
+  //   _avoidFerries   – add 'ferry' to the exclude list when true
+  //   _preferTruckSafe – gate the post-processing safety check when true
+  String _routeMode = 'fastest';
+  bool _avoidTolls = false;
+  bool _avoidFerries = true;
+  bool _preferTruckSafe = true;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;

@@ -271,6 +271,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   LatLng? _selectedDestination;
   String? _selectedDestinationName;
 
+  // ── Search bar state ───────────────────────────────────────────────────────
+  // _searchController drives the inline search TextField at the top of the map.
+  // _searchResults holds the current geocoding suggestions from Mapbox.
+  // _isSearching is true while the HTTP request is in flight (shows spinner).
+  // _isBuildingRoute is true while fetchRoute() is building a route from the
+  // selected destination so the Start Route button can show a loading state.
+  // _searchDebounce throttles geocoding calls to one per 400 ms so typing
+  // a destination does not flood the Mapbox API with a request per keystroke.
+  final TextEditingController _searchController = TextEditingController();
+  List<PlaceSuggestion> _searchResults = const [];
+  bool _isSearching = false;
+  bool _isBuildingRoute = false;
+  Timer? _searchDebounce;
+
   // ── Route restriction violations ───────────────────────────────────────────
   // Populated by _updateRouteViolationWarnings() after a route loads.
   // Each entry is a human-readable warning shown in the route info panel.
@@ -318,6 +332,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
+    _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
   }
 
@@ -2417,6 +2433,269 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _startRouteToSelectedDestination();
   }
 
+  // ── Inline search bar logic ───────────────────────────────────────────────
+
+  /// Queries the Mapbox Geocoding v5 API for [query] and updates
+  /// [_searchResults] with up to 5 [PlaceSuggestion] objects.
+  ///
+  /// Sets [_isSearching] while the request is in flight so the search bar can
+  /// show a loading indicator.  Clears results and stops the spinner on any
+  /// error, letting the UI degrade gracefully without a hard crash.
+  ///
+  /// Calls from [TextField.onChanged] are debounced (400 ms) so that a new
+  /// HTTP request is only sent once the user pauses typing, avoiding excessive
+  /// API calls on every keystroke.
+  Future<void> _searchPlaces(String query) async {
+    _searchDebounce?.cancel();
+    final q = query.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _searchResults = const [];
+        _isSearching = false;
+      });
+      return;
+    }
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _executeSearch(q),
+    );
+  }
+
+  /// Immediately fires a geocoding request for [q] without any debounce delay.
+  ///
+  /// Called directly from [TextField.onSubmitted] so results appear as soon as
+  /// the user presses the keyboard "done"/"search" button.
+  Future<void> _executeSearch(String q) async {
+    if (!mounted || q.isEmpty) return;
+    setState(() => _isSearching = true);
+    try {
+      final encoded = Uri.encodeComponent(q);
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/$encoded.json'
+          '?types=address,place,poi'
+          '&limit=5'
+          '&access_token=$_mapboxToken';
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        // Log non-200 responses (e.g. 401 bad token, 429 rate limit) to aid
+        // debugging without surfacing raw HTTP details to the end user.
+        print('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
+        if (mounted) setState(() => _isSearching = false);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features = (data['features'] as List?) ?? const [];
+      final suggestions = <PlaceSuggestion>[];
+      for (final dynamic f in features) {
+        try {
+          final props = f as Map<String, dynamic>;
+          final geometry = props['geometry'] as Map<String, dynamic>?;
+          final coords = geometry?['coordinates'] as List?;
+          if (coords == null || coords.length < 2) continue;
+          suggestions.add(PlaceSuggestion(
+            name: props['text'] as String? ?? '',
+            placeName: props['place_name'] as String? ?? '',
+            position: LatLng(
+              (coords[1] as num).toDouble(),
+              (coords[0] as num).toDouble(),
+            ),
+          ));
+        } catch (_) {
+          // Skip malformed features rather than aborting the whole batch.
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _searchResults = suggestions;
+          _isSearching = false;
+        });
+      }
+    } catch (e) {
+      // Log the error so developers can diagnose network or parsing failures.
+      print('Geocoding error for "$q": $e');
+      if (mounted) {
+        setState(() {
+          _searchResults = const [];
+          _isSearching = false;
+        });
+      }
+    }
+  }
+
+  /// Called when the driver taps a [PlaceSuggestion] in the search results.
+  ///
+  /// Pans the camera to the chosen location, sets it as the selected
+  /// destination, and clears the search bar and results list so the map is
+  /// unobstructed.  Route building is left to the explicit "Start Route"
+  /// button so the driver can review the destination pin before committing.
+  void _selectDestinationFromSearch(PlaceSuggestion suggestion) {
+    setState(() {
+      _selectedDestination = suggestion.position;
+      _selectedDestinationName = suggestion.name.isNotEmpty
+          ? suggestion.name
+          : suggestion.placeName;
+      _searchResults = const [];
+      _isSearching = false;
+    });
+    _searchController.clear();
+    if (_mapReady) {
+      _mapController.move(suggestion.position, 13.0);
+    }
+  }
+
+  /// Builds the inline search bar that floats at the top of the map.
+  ///
+  /// Displays a [TextField] with a search icon prefix, a [CircularProgressIndicator]
+  /// while geocoding is in flight, and a clear button once text has been entered.
+  /// The suffix icon uses a [ValueListenableBuilder] so it updates immediately
+  /// on every keystroke without waiting for a setState call.
+  Widget _buildSearchBar() {
+    return Positioned(
+      top: 8,
+      left: 12,
+      right: 12,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(12),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _searchController,
+          builder: (_, value, __) {
+            return TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search destination...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _isSearching
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : value.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _searchResults = const []);
+                            },
+                          )
+                        : null,
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onChanged: _searchPlaces,
+              onSubmitted: (q) {
+                // Cancel any pending debounce and execute the search immediately.
+                _searchDebounce?.cancel();
+                _executeSearch(q.trim());
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+  /// Builds the search results overlay below the search bar.
+  ///
+  /// Each result is a [ListTile] showing the place name and full address.
+  /// Tapping a tile calls [_selectDestinationFromSearch] to set the
+  /// destination and dismiss the list.
+  Widget _buildSearchResults() {
+    return Positioned(
+      top: 68,
+      left: 12,
+      right: 12,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: _searchResults.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final s = _searchResults[i];
+                return ListTile(
+                  leading: const Icon(Icons.place, color: Colors.deepOrange),
+                  title: Text(
+                    s.name.isNotEmpty ? s.name : s.placeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: s.placeName.isNotEmpty && s.name != s.placeName
+                      ? Text(
+                          s.placeName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : null,
+                  onTap: () => _selectDestinationFromSearch(s),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds the "Start Route" button shown when a destination has been selected
+  /// but no route has been built yet.
+  ///
+  /// Tapping calls [_startRouteToSelectedDestination].  While [_isBuildingRoute]
+  /// is true the button shows a spinner so the driver knows the request is
+  /// in flight.
+  Widget _buildStartRouteButton() {
+    return Positioned(
+      bottom: 120,
+      left: 16,
+      right: 16,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.deepOrange,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 6,
+        ),
+        icon: _isBuildingRoute
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.directions),
+        label: Text(
+          _isBuildingRoute ? 'Building route…' : 'Start Route',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        onPressed: _isBuildingRoute
+            ? null
+            : () async {
+                setState(() => _isBuildingRoute = true);
+                await _startRouteToSelectedDestination();
+                if (mounted) setState(() => _isBuildingRoute = false);
+              },
+      ),
+    );
+  }
+
   /// Extracts all turn-by-turn navigation steps from [route].
   ///
   /// Each [_NavStep] carries the maneuver instruction and its geographic
@@ -3345,6 +3624,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Inline search bar ─────────────────────────────────────
+                // Hidden during active turn-by-turn navigation so it does not
+                // overlap the navigation banner.  Visible at all other times
+                // so the driver can search a destination without opening a
+                // modal sheet.
+                if (_navSteps.isEmpty) _buildSearchBar(),
+                // ── Search results overlay ────────────────────────────────
+                if (_navSteps.isEmpty && _searchResults.isNotEmpty)
+                  _buildSearchResults(),
                 // ── Destination hint banner ───────────────────────────────
                 // Shown when no destination is selected and no route is loaded,
                 // prompting the driver to pick a destination to start navigation.
@@ -3368,7 +3656,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Long-press map or tap 🔍 to set destination',
+                              'Long-press map or use search bar to set destination',
                               style: TextStyle(
                                   color: Colors.white, fontSize: 13),
                               textAlign: TextAlign.center,
@@ -3378,13 +3666,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Start Route button ─────────────────────────────────────
+                // Shown when a destination has been selected (via search or
+                // long-press) but no route has been built yet.  Gives the
+                // driver an explicit confirmation step before routing begins.
+                if (_selectedDestination != null &&
+                    _routePoints.isEmpty &&
+                    !_isLoading)
+                  _buildStartRouteButton(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
                 // 800 m of a restriction it violates, providing a prominent
                 // in-route warning with type icon and limit details.
                 if (_restrictionAhead != null)
                   Positioned(
-                    top: _navSteps.isNotEmpty ? 90 : 8,
+                    top: _navSteps.isNotEmpty ? 90 : 68,
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
@@ -3486,21 +3782,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           : Icons.local_gas_station_outlined,
                       color: Colors.white,
                     ),
-                  ),
-                ),
-                // ── Search destination FAB ─────────────────────────────────
-                // Secondary FAB positioned above the POI toggle, providing
-                // another tap target for destination search without requiring
-                // the driver to reach the AppBar.
-                Positioned(
-                  bottom: 72,
-                  left: 16,
-                  child: FloatingActionButton.small(
-                    heroTag: 'destination_search',
-                    tooltip: 'Search destination',
-                    backgroundColor: Colors.deepOrange.shade700,
-                    onPressed: _showDestinationSearch,
-                    child: const Icon(Icons.search, color: Colors.white),
                   ),
                 ),
               ],
@@ -4041,3 +4322,28 @@ const List<TruckRestriction> _sampleRestrictions = [
     description: 'Transportation of hazardous materials restricted through this zone.',
   ),
 ];
+
+
+// ── Destination search model ──────────────────────────────────────────────────
+
+/// A single place suggestion returned by the Mapbox Geocoding v5 API.
+///
+/// [name] is the short feature name (e.g. "Denver"), [placeName] is the full
+/// formatted address, and [position] is the geographic coordinate used to place
+/// a destination marker and pan the camera.
+class PlaceSuggestion {
+  const PlaceSuggestion({
+    required this.name,
+    required this.placeName,
+    required this.position,
+  });
+
+  /// Short feature name, e.g. "Denver" or "Pilot Travel Center".
+  final String name;
+
+  /// Full Mapbox place_name string, e.g. "Denver, Colorado, United States".
+  final String placeName;
+
+  /// Geographic coordinate of the place.
+  final LatLng position;
+}

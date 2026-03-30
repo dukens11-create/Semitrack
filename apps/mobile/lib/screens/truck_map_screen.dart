@@ -10,6 +10,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../services/settings_controller.dart';
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -17,7 +19,12 @@ import 'package:latlong2/latlong.dart';
 /// displays dynamic ETA / distance / maneuver information together with the
 /// Phase 5 intelligence overlay (driveMinutesLeft, weather, riskScore).
 class TruckMapScreen extends StatefulWidget {
-  const TruckMapScreen({super.key});
+  const TruckMapScreen({super.key, this.settingsController});
+
+  /// Shared settings controller injected from [AppShell]. When provided,
+  /// route filtering, truck-safe checks, fuel range, and TTS are driven by
+  /// the user's saved profile settings.
+  final SettingsController? settingsController;
 
   @override
   State<TruckMapScreen> createState() => _TruckMapScreenState();
@@ -695,7 +702,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Speaks [text] via the TTS engine, interrupting any current utterance.
+  ///
+  /// Skips speech when voice navigation is disabled in user settings.
   Future<void> _speak(String text) async {
+    final voiceEnabled =
+        widget.settingsController?.settings.voiceNavigation ?? true;
+    if (!voiceEnabled) return;
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -1350,10 +1362,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns `true` when none of the [routePoints] pass within 100 m of a
-  /// restricted zone in [_restrictedZones].
+  /// restricted zone that applies to this truck's dimensions.
+  ///
+  /// When [preferTruckSafe] is disabled the check always passes so the driver
+  /// can override it. Zone types: `low_bridge` (height ft) and `weight_limit`
+  /// (tons).
   bool _isTruckSafe(List<LatLng> routePoints) {
+    final settings = widget.settingsController?.settings;
+    if (settings != null && !settings.preferTruckSafe) return true;
+
     const double radiusMeters = 100.0;
+    final double truckHeightFt = settings?.truckHeightFt ?? 13.6;
+    final double truckWeightTons =
+        (settings?.truckWeightLb ?? 80000) / 2000.0;
+
     for (final zone in _restrictedZones) {
+      final zoneType = zone['type'] as String;
+      final limitValue = zone['limit_value'] as double;
+      final bool violated;
+      if (zoneType == 'low_bridge') {
+        violated = truckHeightFt > limitValue;
+      } else if (zoneType == 'weight_limit') {
+        violated = truckWeightTons > limitValue;
+      } else {
+        violated = false;
+      }
+      if (!violated) continue;
       final zonePt =
           LatLng(zone['lat']! as double, zone['lng']! as double);
       for (final pt in routePoints) {
@@ -1396,6 +1430,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+
+      // Build exclude list from user route preferences.
+      final settings = widget.settingsController?.settings;
+      final excludeItems = <String>[];
+      if (settings?.avoidFerries ?? true) excludeItems.add('ferry');
+      if (settings?.avoidTolls ?? false) excludeItems.add('toll');
+      final excludeParam = excludeItems.isNotEmpty
+          ? '&exclude=${excludeItems.join(',')}'
+          : '';
+
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
           "${from.longitude},${from.latitude};$_destLng,$_destLat"
@@ -1403,7 +1447,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "&geometries=polyline6"
           "&steps=true"
           "&alternatives=true"
-          "&exclude=ferry"
+          "$excludeParam"
           "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
@@ -2630,6 +2674,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ),
 
+        // ── Fuel Range Estimator ─────────────────────────────────────────
+        _buildFuelRangeCard(distanceMiles),
+
         // ── Truck Warnings ───────────────────────────────────────────────
         if (warnings.isNotEmpty)
           Card(
@@ -2735,6 +2782,67 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
           Expanded(child: Text(value)),
         ],
+      ),
+    );
+  }
+
+  /// Builds a card showing the fuel range derived from [fuelTankGallons] ×
+  /// [avgMpg] from the user's profile settings.
+  Widget _buildFuelRangeCard(dynamic distanceMiles) {
+    final settings = widget.settingsController?.settings;
+    final tank = settings?.fuelTankGallons ?? 150.0;
+    final mpg = settings?.avgMpg ?? 6.8;
+    final rangeMiles = tank * mpg;
+    final tripMiles = (distanceMiles as num?)?.toDouble();
+    final sufficient = tripMiles != null ? rangeMiles >= tripMiles : null;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Fuel Range Estimator',
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            _labelValue('Tank size', '${tank.toStringAsFixed(0)} gal'),
+            _labelValue('Avg MPG', mpg.toStringAsFixed(1)),
+            _labelValue(
+                'Full-tank range', '${rangeMiles.toStringAsFixed(0)} mi'),
+            if (sufficient != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      sufficient
+                          ? Icons.check_circle_outline
+                          : Icons.warning_amber,
+                      size: 18,
+                      color: sufficient ? Colors.green : Colors.orange,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        sufficient
+                            ? 'Range covers the full trip'
+                            : 'Fuel stop required — '
+                                '${rangeMiles.toStringAsFixed(0)} mi range '
+                                '< ${tripMiles!.toStringAsFixed(0)} mi trip',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: sufficient ? Colors.green : Colors.orange,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

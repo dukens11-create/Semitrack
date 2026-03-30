@@ -1,29 +1,48 @@
 import 'package:flutter/material.dart';
+import '../models/app_settings.dart';
+import '../services/settings_controller.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({super.key, required this.settingsController});
+
+  final SettingsController settingsController;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  final TextEditingController _truckHeightController =
-      TextEditingController(text: '13.6');
-  final TextEditingController _truckWeightController =
-      TextEditingController(text: '80000');
-  final TextEditingController _truckLengthController =
-      TextEditingController(text: '72');
-  final TextEditingController _fuelTankController =
-      TextEditingController(text: '150');
-  final TextEditingController _mpgController =
-      TextEditingController(text: '6.8');
+  late final TextEditingController _truckHeightController;
+  late final TextEditingController _truckWeightController;
+  late final TextEditingController _truckLengthController;
+  late final TextEditingController _fuelTankController;
+  late final TextEditingController _mpgController;
 
-  bool _avoidTolls = false;
-  bool _avoidFerries = true;
-  bool _preferTruckSafe = true;
-  bool _darkMode = false;
-  bool _voiceNavigation = true;
+  late bool _avoidTolls;
+  late bool _avoidFerries;
+  late bool _preferTruckSafe;
+  late bool _darkMode;
+  late bool _voiceNavigation;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.settingsController.settings;
+    _truckHeightController =
+        TextEditingController(text: s.truckHeightFt.toString());
+    _truckWeightController =
+        TextEditingController(text: s.truckWeightLb.toString());
+    _truckLengthController =
+        TextEditingController(text: s.truckLengthFt.toString());
+    _fuelTankController =
+        TextEditingController(text: s.fuelTankGallons.toString());
+    _mpgController = TextEditingController(text: s.avgMpg.toString());
+    _avoidTolls = s.avoidTolls;
+    _avoidFerries = s.avoidFerries;
+    _preferTruckSafe = s.preferTruckSafe;
+    _darkMode = s.darkMode;
+    _voiceNavigation = s.voiceNavigation;
+  }
 
   @override
   void dispose() {
@@ -36,6 +55,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _saveProfile() {
+    final cur = widget.settingsController.settings;
+    final newSettings = AppSettings(
+      truckHeightFt:
+          double.tryParse(_truckHeightController.text) ?? cur.truckHeightFt,
+      truckWeightLb:
+          double.tryParse(_truckWeightController.text) ?? cur.truckWeightLb,
+      truckLengthFt:
+          double.tryParse(_truckLengthController.text) ?? cur.truckLengthFt,
+      fuelTankGallons:
+          double.tryParse(_fuelTankController.text) ?? cur.fuelTankGallons,
+      avgMpg: double.tryParse(_mpgController.text) ?? cur.avgMpg,
+      avoidTolls: _avoidTolls,
+      avoidFerries: _avoidFerries,
+      preferTruckSafe: _preferTruckSafe,
+      voiceNavigation: _voiceNavigation,
+      darkMode: _darkMode,
+    );
+    widget.settingsController.update(newSettings);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Profile settings saved')),
     );

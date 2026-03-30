@@ -175,6 +175,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Multi-stop trip planner state ─────────────────────────────────────────
+  //
+  // _tripStops is the ordered list of intermediate waypoints the driver added
+  // (between origin and final destination).  Empty = single-destination mode
+  // (the existing behaviour is fully preserved).
+  //
+  // _currentLegIndex tracks which leg is being navigated (0-based):
+  //   0 = origin → first stop (or → destination when no stops)
+  //   1 = first stop → second stop
+  //   …
+  //
+  // _legData stores per-leg metadata extracted from the Mapbox response:
+  //   {distanceMiles: double, etaMinutes: int}
+  List<TripStop> _tripStops = [];
+  int _currentLegIndex = 0;
+  List<Map<String, dynamic>> _legData = [];
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -422,6 +439,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ),
   ];
 
+  // ── Mock cities for the trip planner "Add Stop" picker ───────────────────
+  //
+  // Covers the default Portland → Winnemucca corridor.  Replace with a live
+  // geocoding search (e.g. Mapbox Geocoding API) in a production build.
+  static final List<TripStop> _mockTripStopOptions = [
+    TripStop(id: 'opt_eugene',     name: 'Eugene, OR',       position: const LatLng(44.052, -123.087)),
+    TripStop(id: 'opt_medford',    name: 'Medford, OR',      position: const LatLng(42.326, -122.876)),
+    TripStop(id: 'opt_redding',    name: 'Redding, CA',      position: const LatLng(40.587, -122.392)),
+    TripStop(id: 'opt_sacramento', name: 'Sacramento, CA',   position: const LatLng(38.576, -121.487)),
+    TripStop(id: 'opt_reno',       name: 'Reno, NV',         position: const LatLng(39.529, -119.814)),
+  ];
+
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
 
   /// Filters [allStops] to only those within [maxDistanceMeters] of any point
@@ -506,19 +535,615 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
-  /// truck position, destination pin, and all visible truck stop POIs.
+  /// truck position, destination pin, visible truck stop POIs, and all
+  /// trip-planner stop markers.
   ///
   /// Centralises marker assembly so [build] stays clean and future POI types
   /// (weigh stations, parking, etc.) can be merged here in one place.
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
-      if (_isArrived) _buildDestinationMarker(),
+      // Show the destination pin when arrived (trip complete) or when there
+      // are no intermediate stops (single-destination mode).
+      if (_isArrived || _tripStops.isEmpty) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      ..._buildTripStopMarkers(),
     ];
   }
 
-  /// Shows a modal bottom sheet with full details for [stop].
+  // ── Multi-stop trip planner helpers ───────────────────────────────────────
+
+  /// Ordered list of all leg end-points:
+  ///   [stop1, stop2, …, destination]
+  ///
+  /// Used by [_checkLegProgress] and the trip-summary card to iterate legs.
+  List<LatLng> get _legDestinations => [
+    ..._tripStops.map((s) => s.position),
+    _destination,
+  ];
+
+  /// Display name of the stop at the end of the current leg.
+  String get _currentLegDestinationName {
+    if (_currentLegIndex < _tripStops.length) {
+      return _tripStops[_currentLegIndex].name;
+    }
+    return 'Destination';
+  }
+
+  /// Sum of all per-leg distances in miles.
+  double get _totalTripMiles => _legData.fold(
+        0.0,
+        (sum, leg) => sum + ((leg['distanceMiles'] as num?)?.toDouble() ?? 0.0),
+      );
+
+  /// Sum of all per-leg durations in minutes.
+  int get _totalTripEtaMinutes => _legData.fold(
+        0,
+        (sum, leg) => sum + ((leg['etaMinutes'] as num?)?.toInt() ?? 0),
+      );
+
+  /// Builds numbered circle [Marker]s for every trip stop in [_tripStops].
+  ///
+  /// The stop currently being navigated (index == [_currentLegIndex]) is
+  /// highlighted in deep-orange; all other stops use green so the driver can
+  /// immediately see which stop is next.  Tapping a marker opens
+  /// [_showStopInfoSheet].
+  List<Marker> _buildTripStopMarkers() {
+    if (_tripStops.isEmpty) return const [];
+    return _tripStops.asMap().entries.map((entry) {
+      final i = entry.key;
+      final stop = entry.value;
+      final bool isCurrent = i == _currentLegIndex;
+      return Marker(
+        point: stop.position,
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showStopInfoSheet(stop, i),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isCurrent ? Colors.deepOrange : Colors.green.shade700,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(
+                '${i + 1}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Adds a new [TripStop] at [position], naming it "Stop N" automatically.
+  ///
+  /// Called when the driver long-presses on the map.  A [SnackBar] confirms
+  /// the addition and provides a one-tap Undo action.
+  void _addStopAtPosition(LatLng position) {
+    final id = 'pin_${DateTime.now().millisecondsSinceEpoch}';
+    final name = 'Stop ${_tripStops.length + 1}';
+    setState(() => _tripStops.add(TripStop(id: id, name: name, position: position)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Added: $name — open Trip Planner to start'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => setState(() {
+            _tripStops.removeWhere((s) => s.id == id);
+          }),
+        ),
+      ),
+    );
+  }
+
+  /// Checks whether the truck has arrived at the end of the current leg.
+  ///
+  /// For an intermediate stop ([_currentLegIndex] < last leg): advances the
+  /// leg counter and announces the arrival via TTS.
+  /// For the final destination (last leg): calls [_triggerArrival] to end
+  /// the trip.
+  ///
+  /// This is called on every GPS fix (via [_checkArrival]) and on every
+  /// smooth-animation step (via [_moveTruckSmoothly]) when multi-stop mode is
+  /// active.
+  void _checkLegProgress(LatLng current) {
+    if (_isArrived) return;
+    final destinations = _legDestinations;
+    if (_currentLegIndex >= destinations.length) return;
+
+    final target = destinations[_currentLegIndex];
+    final dist = _distanceBetween(current, target);
+    if (dist > _arrivalThresholdMeters) return;
+
+    if (_currentLegIndex < destinations.length - 1) {
+      // Arrived at an intermediate stop — advance to the next leg.
+      final arrivedName = _currentLegDestinationName;
+      setState(() => _currentLegIndex++);
+      _speak('Arrived at $arrivedName. Starting next leg.');
+    } else {
+      // Arrived at the final destination — end the trip.
+      _triggerArrival();
+    }
+  }
+
+  /// Opens a modal bottom sheet that lets the driver:
+  ///   • See all planned stops in sequence (origin → stops → destination)
+  ///   • Reorder stops by drag-and-drop
+  ///   • Remove individual stops
+  ///   • Add new stops from a curated pick list
+  ///   • Start the multi-stop trip (calls [fetchRoute])
+  void _showTripPlannerSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return DraggableScrollableSheet(
+              initialChildSize: 0.55,
+              minChildSize: 0.35,
+              maxChildSize: 0.88,
+              expand: false,
+              builder: (_, scrollController) {
+                return Column(
+                  children: [
+                    // ── Drag handle + title ──────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade400,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Plan Trip',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Long-press the map to pin stops',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    // ── Stop list ──────────────────────────────────────
+                    Expanded(
+                      child: ListView(
+                        controller: scrollController,
+                        children: [
+                          // Origin row (non-draggable)
+                          ListTile(
+                            leading: const CircleAvatar(
+                              backgroundColor: Colors.blue,
+                              radius: 14,
+                              child: Icon(Icons.my_location, color: Colors.white, size: 16),
+                            ),
+                            title: const Text('Current Location',
+                                style: TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: const Text('Starting point'),
+                          ),
+                          // Reorderable intermediate stops
+                          if (_tripStops.isNotEmpty)
+                            ReorderableListView(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              onReorder: (oldIdx, newIdx) {
+                                setState(() {
+                                  if (newIdx > oldIdx) newIdx--;
+                                  final s = _tripStops.removeAt(oldIdx);
+                                  _tripStops.insert(newIdx, s);
+                                });
+                                setSheetState(() {});
+                              },
+                              children: [
+                                for (int i = 0; i < _tripStops.length; i++)
+                                  ListTile(
+                                    key: ValueKey(_tripStops[i].id),
+                                    leading: CircleAvatar(
+                                      backgroundColor: Colors.green.shade700,
+                                      radius: 14,
+                                      child: Text(
+                                        '${i + 1}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    title: Text(_tripStops[i].name),
+                                    subtitle: Text(
+                                      '${_tripStops[i].position.latitude.toStringAsFixed(3)}, '
+                                      '${_tripStops[i].position.longitude.toStringAsFixed(3)}',
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline,
+                                              color: Colors.red, size: 20),
+                                          onPressed: () {
+                                            setState(() => _tripStops.removeAt(i));
+                                            setSheetState(() {});
+                                          },
+                                          tooltip: 'Remove stop',
+                                        ),
+                                        const Icon(Icons.drag_handle,
+                                            color: Colors.grey),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          // Destination row (non-draggable)
+                          ListTile(
+                            leading: const CircleAvatar(
+                              backgroundColor: Colors.red,
+                              radius: 14,
+                              child: Icon(Icons.flag, color: Colors.white, size: 16),
+                            ),
+                            title: const Text('Winnemucca, NV',
+                                style: TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: const Text('Final destination'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    // ── Action buttons ─────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.add_location_alt),
+                            label: const Text('Add Stop'),
+                            onPressed: () => _showAddStopDialog(ctx, setSheetState),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.navigation),
+                            label: Text(
+                              _tripStops.isEmpty
+                                  ? 'Start Navigation'
+                                  : 'Start ${_tripStops.length + 1}-Leg Trip',
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              setState(() {
+                                _currentLegIndex = 0;
+                                _isArrived = false;
+                              });
+                              fetchRoute();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Shows a dialog listing [_mockTripStopOptions] so the driver can pick a
+  /// city to add as an intermediate stop.  The [setSheetState] callback
+  /// refreshes the planner sheet after the selection is made.
+  void _showAddStopDialog(BuildContext ctx, StateSetter setSheetState) {
+    showDialog<void>(
+      context: ctx,
+      builder: (dCtx) {
+        return AlertDialog(
+          title: const Text('Add Stop'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Choose a city along your route:'),
+              const SizedBox(height: 8),
+              for (final opt in _mockTripStopOptions)
+                ListTile(
+                  leading: Icon(Icons.place, color: Colors.green.shade700),
+                  title: Text(opt.name),
+                  dense: true,
+                  onTap: () {
+                    // Create a new instance with a unique id so duplicates
+                    // in the list each have their own key.
+                    final newStop = TripStop(
+                      id: '${opt.id}_${DateTime.now().millisecondsSinceEpoch}',
+                      name: opt.name,
+                      position: opt.position,
+                    );
+                    setState(() => _tripStops.add(newStop));
+                    setSheetState(() {});
+                    Navigator.of(dCtx).pop();
+                  },
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Shows a detail sheet when the driver taps a trip-stop marker on the map.
+  ///
+  /// Displays the stop name, number, and per-leg ETA / distance (when known).
+  /// Provides a "Remove Stop" button so the driver can drop the stop from the
+  /// trip without opening the full planner sheet.
+  void _showStopInfoSheet(TripStop stop, int index) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final bool isCurrent = _currentLegIndex == index;
+        final Map<String, dynamic>? ld =
+            index < _legData.length ? _legData[index] : null;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor:
+                        isCurrent ? Colors.deepOrange : Colors.green.shade700,
+                    child: Text(
+                      '${index + 1}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (isCurrent)
+                          Text(
+                            'Current leg destination',
+                            style: TextStyle(
+                              color: Colors.deepOrange.shade700,
+                              fontSize: 13,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (ld != null) ...[
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    const Icon(Icons.timer, size: 16, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Leg ETA: ${_formatEta((ld['etaMinutes'] as num?)?.toInt())}',
+                    ),
+                    const SizedBox(width: 16),
+                    const Icon(Icons.straighten, size: 16, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${((ld['distanceMiles'] as num?)?.toStringAsFixed(1)) ?? '--'} mi',
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  label: const Text(
+                    'Remove Stop',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    setState(() => _tripStops.removeAt(index));
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Builds the leg progress banner that floats above the nav banner.
+  ///
+  /// Shows "Leg X/Y → <stop name>" plus the per-leg ETA so the driver always
+  /// knows their position in the multi-stop trip at a glance.
+  ///
+  /// Returns an empty [SizedBox] when there are no intermediate stops or the
+  /// trip has ended, so the build tree is never altered in single-dest mode.
+  Widget _buildLegBanner() {
+    if (_tripStops.isEmpty || _isArrived) return const SizedBox.shrink();
+    final int legNum = _currentLegIndex + 1;
+    final int totalLegs = _legDestinations.length;
+    final String destName = _currentLegDestinationName;
+    final Map<String, dynamic>? ld = _currentLegIndex < _legData.length
+        ? _legData[_currentLegIndex]
+        : null;
+    final String etaText = ld != null
+        ? _formatEta((ld['etaMinutes'] as num?)?.toInt())
+        : '—';
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.deepOrange.shade700,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.route, color: Colors.white, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Leg $legNum/$totalLegs  →  $destName',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            etaText,
+            style: const TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds a single row in the trip-summary card for [legIndex].
+  ///
+  /// The currently-active leg is highlighted in deep-orange; completed or
+  /// upcoming legs are shown in the default text colour.
+  Widget _tripLegRow(int legIndex) {
+    final bool isCurrent = legIndex == _currentLegIndex;
+    final Map<String, dynamic> ld = _legData[legIndex];
+    // fromName: the stop that starts this leg (origin or a previous stop).
+    final String fromName =
+        legIndex == 0 ? 'Origin' : _tripStops[legIndex - 1].name;
+    // toName: the stop at the end of this leg.
+    final String toName = legIndex < _tripStops.length
+        ? _tripStops[legIndex].name
+        : 'Destination';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          // Active-leg indicator bar
+          Container(
+            width: 4,
+            height: 36,
+            decoration: BoxDecoration(
+              color:
+                  isCurrent ? Colors.deepOrange : Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Leg ${legIndex + 1}: $fromName → $toName',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight:
+                        isCurrent ? FontWeight.bold : FontWeight.normal,
+                    color: isCurrent
+                        ? Colors.deepOrange.shade700
+                        : Colors.black87,
+                  ),
+                ),
+                Text(
+                  '${((ld['distanceMiles'] as num?)?.toStringAsFixed(0)) ?? '--'} mi  ·  '
+                  '${_formatEta((ld['etaMinutes'] as num?)?.toInt())}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isCurrent)
+            const Icon(Icons.navigation, size: 16, color: Colors.deepOrange),
+        ],
+      ),
+    );
+  }
+
   ///
   /// Displays brand, name, diesel price (if known), address (if known), and a
   /// close button.  Styled consistently with the arrival sheet.
@@ -1017,6 +1642,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkArrival(LatLng current) {
     // Guard: only trigger once per trip.
     if (_isArrived) return;
+    // In multi-stop mode delegate to the leg-aware progress checker so that
+    // intermediate stops are advanced before the final arrival is triggered.
+    if (_tripStops.isNotEmpty) {
+      _checkLegProgress(current);
+      return;
+    }
+    // Single-destination mode: check proximity to the fixed destination.
     final dist = _distanceBetween(current, _destination);
     if (dist <= _arrivalThresholdMeters) {
       _triggerArrival();
@@ -1166,6 +1798,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _truckPosition = pos;
         _truckBearing = bearing;
       });
+      // In multi-stop mode, check whether the truck just reached an
+      // intermediate stop or the final destination during simulation.
+      // _checkLegProgress either advances _currentLegIndex (intermediate
+      // stop) or calls _triggerArrival (final), both of which are safe to
+      // call during animation — the latter increments _animGeneration,
+      // causing the loop to self-cancel on the next iteration.
+      if (_tripStops.isNotEmpty) {
+        _checkLegProgress(pos);
+      }
       // Keep the camera centred on the truck in navigation mode.
       if (_navigationMode) {
         _followTruckCamera();
@@ -1369,7 +2010,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
-  /// origin.  The destination always remains [_destination].
+  /// origin.  The final destination is always [_destination]; when
+  /// [_tripStops] is non-empty, each stop is included as an intermediate
+  /// waypoint in the Mapbox URL so the route covers the full multi-leg trip.
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
@@ -1396,9 +2039,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+
+      // ── Build multi-stop waypoints string ─────────────────────────────────
+      // When stops are planned, build a Mapbox URL with all remaining stops as
+      // intermediate waypoints.  For a reroute from a live GPS fix, only include
+      // stops that have not been reached yet (_currentLegIndex and beyond).
+      final remainingStops = fromPosition != null && _tripStops.isNotEmpty
+          ? _tripStops.sublist(_currentLegIndex.clamp(0, _tripStops.length))
+          : _tripStops;
+      final waypointsStr = remainingStops.isEmpty
+          ? ''
+          : ';${remainingStops.map((s) => '${s.position.longitude},${s.position.latitude}').join(';')}';
+
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "${from.longitude},${from.latitude};$_destLng,$_destLat"
+          "${from.longitude},${from.latitude}$waypointsStr;$_destLng,$_destLat"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
@@ -1442,6 +2097,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           .map((s) => {'instruction': s.instruction})
           .toList();
 
+      // ── Extract per-leg data for multi-stop trip summary ──────────────────
+      // The Mapbox response includes a legs[] array with one entry per segment
+      // (origin→stop1, stop1→stop2, …, stopN→destination).  We store the
+      // distance and duration of each leg so the trip summary card and leg
+      // banner can show accurate per-leg ETAs.
+      final legsRaw = route['legs'] as List?;
+      final newLegData = legsRaw != null
+          ? legsRaw.map<Map<String, dynamic>>((dynamic leg) {
+              final l = leg as Map<String, dynamic>;
+              return {
+                'distanceMiles':
+                    ((l['distance'] as num?)?.toDouble() ?? 0.0) / 1609.34,
+                'etaMinutes':
+                    (((l['duration'] as num?)?.toDouble() ?? 0.0) / 60)
+                        .round(),
+              };
+            }).toList()
+          : <Map<String, dynamic>>[];
+
       setState(() {
         _navSteps = allSteps;
         _currentStepIndex = 0;
@@ -1450,6 +2124,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": turnByTurnList,
         };
+        // Store per-leg metadata for the trip summary card and leg banner.
+        _legData = newLegData;
+        // Reset the leg index to 0 on a full new route fetch (not a reroute
+        // from a live GPS fix).  Reroutes preserve _currentLegIndex so the
+        // driver continues from the correct leg after a brief off-route detour.
+        if (fromPosition == null) _currentLegIndex = 0;
         // Clean replacement – never use addAll() here, which would layer new
         // points on top of previous route points and cause spaghetti lines.
         _routePoints = newPoints;
@@ -2330,6 +3010,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       _mapReady = true;
                       fetchRoute();
                     },
+                    // Long-press the map (outside active navigation) to drop a
+                    // trip-planner stop at the tapped position.
+                    onLongPress: (tapPosition, latLng) {
+                      if (!_navigationActive) {
+                        _addStopAtPosition(latLng);
+                      }
+                    },
                     // Disable camera follow when the user manually interacts
                     // with the map (drag / pinch / scroll) so they can freely
                     // explore without forced camera snaps back to the truck.
@@ -2377,17 +3064,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
-                // ── Navigation banner ─────────────────────────────────────
-                // Floats at the top of the map so the current maneuver
-                // instruction is always visible during active navigation,
-                // independent of the scrollable info panel below the map.
-                if (_navSteps.isNotEmpty)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: _buildNavBanner(),
+                // ── Navigation + leg banners ──────────────────────────────
+                // Both banners are stacked vertically at the top of the map.
+                // The nav banner shows the upcoming turn maneuver; the leg
+                // banner (multi-stop only) shows which leg is active and its
+                // ETA so the driver always knows their position in the trip.
+                // _buildNavBanner() carries its own SafeArea so the outer
+                // Positioned does not add a second one.
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: Column(
+                    children: [
+                      if (_navSteps.isNotEmpty) _buildNavBanner(),
+                      _buildLegBanner(),
+                    ],
                   ),
+                ),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -2484,6 +3178,55 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           ? Icons.local_gas_station
                           : Icons.local_gas_station_outlined,
                       color: Colors.white,
+                    ),
+                  ),
+                ),
+                // ── Plan Trip FAB ─────────────────────────────────────────
+                // Opens the multi-stop trip planner bottom sheet.  A badge
+                // on the icon shows the number of planned stops so the driver
+                // can see at a glance whether stops are queued.  The button
+                // is shown at all times so drivers can plan before departing.
+                Positioned(
+                  bottom: 72,
+                  left: 16,
+                  child: FloatingActionButton.small(
+                    heroTag: 'plan_trip',
+                    tooltip: _tripStops.isEmpty
+                        ? 'Plan multi-stop trip'
+                        : 'Trip planner (${_tripStops.length} stop${_tripStops.length == 1 ? '' : 's'})',
+                    backgroundColor: _tripStops.isNotEmpty
+                        ? Colors.green.shade700
+                        : Colors.blueGrey.shade700,
+                    onPressed: _showTripPlannerSheet,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      clipBehavior: Clip.none,
+                      children: [
+                        const Icon(Icons.route, color: Colors.white),
+                        if (_tripStops.isNotEmpty)
+                          Positioned(
+                            right: -4,
+                            top: -4,
+                            child: Container(
+                              width: 16,
+                              height: 16,
+                              decoration: const BoxDecoration(
+                                color: Colors.orange,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  '${_tripStops.length}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -2600,6 +3343,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ),
         ),
+
+        // ── Multi-stop Trip Summary ───────────────────────────────────────
+        // Shown only when a multi-stop trip is active and per-leg data has
+        // been populated by fetchRoute.  Displays each leg's distance and ETA
+        // plus a total row so the driver can see the full trip scope at once.
+        if (_tripStops.isNotEmpty && _legData.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Trip Summary',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${_legDestinations.length} leg${_legDestinations.length == 1 ? '' : 's'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  // Per-leg rows
+                  for (int i = 0; i < _legData.length; i++) ...[
+                    _tripLegRow(i),
+                    if (i < _legData.length - 1)
+                      const Divider(height: 8, indent: 14),
+                  ],
+                  const Divider(height: 16),
+                  // Total row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Total',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '${_totalTripMiles.toStringAsFixed(0)} mi  ·  ${_formatEta(_totalTripEtaMinutes)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
 
         // ── Phase 5: Drive Intelligence ──────────────────────────────────
         // "Time Left" here is intentionally distinct from "Trip ETA" above:
@@ -2803,4 +3610,33 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+}
+
+/// An intermediate waypoint in a multi-stop trip plan.
+///
+/// Instances live in [_TruckMapScreenState._tripStops] and are created either
+/// by the "Add Stop" picker in the planner sheet (from [_mockTripStopOptions])
+/// or by long-pressing on the map ([_addStopAtPosition]).
+///
+/// Each stop gets a numbered green circle marker on the map and appears as a
+/// drag-and-drop row in the trip-planner bottom sheet.
+///
+/// Extend this class with fields such as `appointmentTime`, `contactName`, or
+/// `notes` as the dispatch workflow grows.
+class TripStop {
+  const TripStop({
+    required this.id,
+    required this.name,
+    required this.position,
+  });
+
+  /// Unique identifier used as the marker key and for equality checks.
+  final String id;
+
+  /// Human-readable display name shown in the planner sheet, leg banner, and
+  /// stop marker info sheet.
+  final String name;
+
+  /// Geographic coordinate of the stop, used as a Mapbox waypoint.
+  final LatLng position;
 }

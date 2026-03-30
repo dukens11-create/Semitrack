@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/layout.dart';
+import 'screens/driver_dashboard_screen.dart';
 import 'features/navigation/navigation_screen.dart';
 import 'features/trip_planner/trip_planner_screen.dart';
 import 'features/poi/poi_screen.dart';
@@ -25,11 +26,12 @@ class SemitrackApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final router = GoRouter(
-      initialLocation: '/navigation',
+      initialLocation: '/dashboard',
       routes: [
         ShellRoute(
           builder: (context, state, child) => AppLayout(child: child),
           routes: [
+            GoRoute(path: '/dashboard', builder: (_, __) => const DriverDashboardScreen()),
             GoRoute(path: '/navigation', builder: (_, __) => const NavigationScreen()),
             GoRoute(path: '/trips', builder: (_, __) => const TripsScreen()),
             GoRoute(path: '/trip-planner', builder: (_, __) => const TripPlannerScreen()),

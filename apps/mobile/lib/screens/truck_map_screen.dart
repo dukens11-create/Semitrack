@@ -42,6 +42,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// rapid repeated API calls in areas with poor GPS accuracy.
   static const int _rerouteThrottleSeconds = 8;
 
+  // ── Speed monitoring constants ────────────────────────────────────────────
+  /// Conversion factor: 1 m/s = 2.23694 mph.
+  static const double _mpsToMph = 2.23694;
+
+  /// Minimum seconds between "Slow down" TTS announcements when the driver
+  /// is continuously exceeding the speed limit.  Prevents constant repetition.
+  static const int _slowDownThrottleSeconds = 30;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -105,6 +113,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
+
+  // ── Speed monitoring state ─────────────────────────────────────────────────
+  /// Current truck speed in metres per second, sourced from the GPS stream.
+  /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
+  double _currentSpeedMps = -1.0;
+
+  /// Estimated speed limit in mph for the current road segment.
+  /// Updated on every GPS position event using [_estimateSpeedLimit].
+  double _speedLimitMph = 65.0;
+
+  /// Timestamp of the last "Slow down" TTS announcement.  Used to throttle
+  /// repeated announcements so the driver is not nagged every few seconds.
+  DateTime? _lastSlowDownAnnouncementTime;
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   // Pre-populated with mock/placeholder values so the Drive Intelligence card
@@ -395,12 +416,40 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     _truckIndex = nearest;
+
+    // ── Speed update: read GPS speed and compute new speed limit estimate ────
+    // pos.speed is in m/s; negative values mean the speed is unavailable.
+    final double newSpeedMps =
+        position.speed >= 0 ? position.speed : _currentSpeedMps;
+    final double newSpeedLimit = _estimateSpeedLimit();
+
     setState(() {
       // Use the raw GPS fix so the marker reflects actual device location.
       _truckPosition = gpsPoint;
       // Use real device heading for accurate marker rotation.
       _truckBearing = trueBearing;
+      // Persist updated speed and speed-limit for the PositionPanel overlay.
+      _currentSpeedMps = newSpeedMps;
+      _speedLimitMph = newSpeedLimit;
     });
+
+    // ── Over-speed announcement (throttled) ──────────────────────────────────
+    // Only announce during active navigation and when speed data is available.
+    if (_navigationMode && newSpeedMps >= 0) {
+      final double speedMph = newSpeedMps * _mpsToMph;
+      if (speedMph > newSpeedLimit) {
+        final now = DateTime.now();
+        // Throttle: announce at most once every [_slowDownThrottleSeconds] s.
+        if (_lastSlowDownAnnouncementTime == null ||
+            now
+                    .difference(_lastSlowDownAnnouncementTime!)
+                    .inSeconds >=
+                _slowDownThrottleSeconds) {
+          _lastSlowDownAnnouncementTime = now;
+          _speak('Slow down');
+        }
+      }
+    }
 
     // Keep the camera centred on the truck while in navigation mode.
     if (_navigationMode) {
@@ -481,6 +530,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
     return nearest;
+  }
+
+  /// Estimates the speed limit in mph for the current road segment.
+  ///
+  /// Uses simple heuristics based on the truck's progress along the route to
+  /// approximate city vs. highway segments.  In a production implementation
+  /// this would query a road-network speed-limit dataset.
+  ///
+  ///   progress < 5 % or > 95 %  → 35 mph  (city/suburban near start or end)
+  ///   everything else            → 65 mph  (highway mid-route)
+  double _estimateSpeedLimit() {
+    if (_routePoints.isEmpty) return 65.0;
+    final double progress = _truckIndex / _routePoints.length;
+    // Near the route's start/end we assume a city segment with a lower limit.
+    if (progress < 0.05 || progress > 0.95) return 35.0;
+    return 65.0;
   }
 
   // ── Route animation ───────────────────────────────────────────────────────
@@ -1320,6 +1385,101 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  /// Builds the live speed / speed-limit overlay panel (PositionPanel).
+  ///
+  /// Always visible while [_navigationMode] is active, positioned at the
+  /// bottom-right corner of the map.  The panel displays:
+  ///   • Current speed in mph (computed from GPS m/s via [_mpsToMph]).
+  ///   • Estimated speed limit badge (from [_estimateSpeedLimit] mock logic).
+  ///   • Red text + red border when the driver exceeds the speed limit.
+  ///
+  /// "0" is shown when speed data is not yet available (e.g. cold GPS start).
+  Widget _buildSpeedPanel() {
+    // Convert m/s → mph; clamp to 0 when speed is unavailable.
+    final double speedMph =
+        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    // Overspeed flag: only active when we have a valid speed reading.
+    final bool overLimit =
+        _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(10),
+        // Highlight the panel border in red when the driver is over the limit.
+        border: overLimit
+            ? Border.all(color: Colors.red, width: 2)
+            : Border.all(color: Colors.transparent, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.35),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Current speed ─────────────────────────────────────────────────
+          // Red text when over the limit; white otherwise.
+          Text(
+            speedMph.toStringAsFixed(0),
+            style: TextStyle(
+              color: overLimit ? Colors.red : Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              height: 1.0,
+            ),
+          ),
+          const Text(
+            'mph',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 6),
+          // ── Speed-limit badge ─────────────────────────────────────────────
+          // Styled like a US road speed-limit sign: white background, black
+          // text, "LIMIT" caption above the numeric value.
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'LIMIT',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                Text(
+                  _speedLimitMph.toStringAsFixed(0),
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1451,6 +1611,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         ),
                       ),
                     ),
+                  ),
+                // ── Speed / speed-limit panel (PositionPanel) ─────────────
+                // Always visible during active navigation.  Positioned at the
+                // bottom-right corner of the map so it never obscures the
+                // navigation banner or the rerouting indicator.
+                if (_navigationMode)
+                  Positioned(
+                    bottom: 24,
+                    right: 16,
+                    child: _buildSpeedPanel(),
                   ),
               ],
             ),

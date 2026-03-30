@@ -107,6 +107,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // When false the camera shows the full-route overview.
   bool _navigationMode = false;
 
+  // ── Camera follow state ────────────────────────────────────────────────────
+  // When true the camera continuously follows the truck (GPS navigation mode).
+  // Set to false automatically when the user manually pans/zooms the map so
+  // they can freely explore without forced camera snaps.  Tapping the recenter
+  // FAB resets this to true and immediately re-centres the camera.
+  bool _followTruck = true;
+
+  // ── Navigation pause state ─────────────────────────────────────────────────
+  // When true, live GPS tracking and camera follow updates are suspended.
+  // Useful when the driver needs to review the route without the map moving.
+  bool _navigationPaused = false;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -270,11 +282,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// more road *ahead* of the truck is visible on screen — identical to the
   /// Google Maps real-navigation feel described in the feature spec.
   ///
+  /// Guards: skips the animation when [_followTruck] is false (user is freely
+  /// exploring the map) or when the driver has arrived at the destination.
+  ///
   /// Call this after every truck position/bearing update while [_navigationMode]
   /// is active.  Guards against calls before the map widget is ready with
   /// [_mapReady].
   void _followTruckCamera() {
     if (!_mapReady || _truckPosition == null) return;
+    // Skip camera follow if user is freely exploring or trip is complete.
+    if (!_followTruck || _hasArrived()) return;
     // Shift the camera target slightly ahead of the truck (−_cameraLeadLatitude°)
     // so the road in front is always visible, matching Google Maps navigation.
     final cameraTarget = LatLng(
@@ -336,6 +353,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// location, rotates the marker to the true GPS heading, and checks for
   /// step advancement and off-route conditions.
   ///
+  /// Skips all updates when [_navigationPaused] is true so the driver can
+  /// review the route without the map or marker moving.
+  ///
   /// **Position** — [_truckPosition] is set directly to the GPS fix for
   /// accurate real-world placement (matches `currentTruckPosition = gpsPoint`
   /// in the Google Maps pattern).  The nearest route index is still tracked so
@@ -348,6 +368,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the route geometry when not available.
   void _onGpsPosition(Position position) {
     if (_routePoints.isEmpty) return;
+    // Pause guard: skip all tracking updates while navigation is paused.
+    if (_navigationPaused) return;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
 
@@ -1275,6 +1297,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       appBar: AppBar(
         title: const Text('Semitrack NEW'),
         actions: [
+          // Pause / resume navigation tracking.
+          // When paused, GPS updates and camera follow are suspended so the
+          // driver can review the route without the map moving.
+          IconButton(
+            tooltip: _navigationPaused ? 'Resume navigation' : 'Pause navigation',
+            icon: Icon(
+              _navigationPaused ? Icons.play_arrow : Icons.pause,
+            ),
+            onPressed: () => setState(() => _navigationPaused = !_navigationPaused),
+          ),
           // Toggle between navigation mode (close zoom, follows truck) and
           // overview mode (full-route view so the driver can see the whole trip).
           IconButton(
@@ -1317,6 +1349,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     onMapReady: () {
                       _mapReady = true;
                       fetchRoute();
+                    },
+                    // Disable camera follow when the user manually interacts
+                    // with the map (drag / pinch / scroll) so they can freely
+                    // explore without forced camera snaps back to the truck.
+                    onMapEvent: (MapEvent event) {
+                      if (event is MapEventMoveStart &&
+                          event.source != MapEventSource.mapController &&
+                          _followTruck) {
+                        setState(() => _followTruck = false);
+                      }
                     },
                   ),
                   children: [
@@ -1368,6 +1410,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Recenter FAB ──────────────────────────────────────────
+                // Always visible in the bottom-right corner.
+                // Icon and tooltip change based on follow state:
+                //   navigation  = camera is actively following the truck
+                //   my_location = user has panned away; tap to re-centre
+                // Tapping re-enables camera follow and immediately snaps the
+                // camera back to the live truck position/bearing.
+                Positioned(
+                  bottom: 16,
+                  right: 16,
+                  child: FloatingActionButton.small(
+                    tooltip: _followTruck ? 'Following truck' : 'Recenter on truck',
+                    onPressed: () {
+                      // Re-enable follow and snap camera to truck immediately.
+                      setState(() => _followTruck = true);
+                      _followTruckCamera();
+                    },
+                    child: Icon(
+                      _followTruck ? Icons.navigation : Icons.my_location,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),

@@ -1,49 +1,60 @@
 import 'package:flutter/material.dart';
+import '../services/navigation_state_controller.dart';
 
 class DriverDashboardScreen extends StatelessWidget {
-  const DriverDashboardScreen({super.key});
+  final NavigationStateController navigationStateController;
+  final VoidCallback onOpenMapTab;
+
+  const DriverDashboardScreen({
+    super.key,
+    required this.navigationStateController,
+    required this.onOpenMapTab,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        title: const Text('Semitrax'),
-        centerTitle: false,
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 8),
-              _buildCurrentTripCard(
-                destination: 'Sacramento, CA',
-                eta: '5h 42m',
-                milesLeft: '312 mi',
-                onResume: () {},
-              ),
-              _buildStatusRow(
-                hosText: '6h 14m',
-                fuelText: '68%',
-                rangeText: '734 mi',
-              ),
-              _buildQuickActions(
-                onNewTrip: () {},
-                onSavedTrips: () {},
-                onDocuments: () {},
-                onFavorites: () {},
-              ),
-              _buildRecentTripsCard(const [
-                'Portland → Sacramento',
-                'Reno → Fresno',
-                'Seattle → Eugene',
-              ]),
-            ],
+    return AnimatedBuilder(
+      animation: navigationStateController,
+      builder: (context, _) {
+        final nav = navigationStateController;
+        return Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          appBar: AppBar(
+            title: const Text('Semitrax'),
+            centerTitle: false,
           ),
-        ),
-      ),
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 8),
+                  _buildCurrentTripCard(
+                    destination: nav.currentDestinationName,
+                    eta: nav.etaText,
+                    milesLeft: nav.milesLeftText,
+                    navigationActive: nav.navigationActive,
+                    onResume: nav.navigationActive ? onOpenMapTab : () {},
+                  ),
+                  _buildStatusRow(
+                    hosText: nav.hosText,
+                    fuelText: nav.fuelPercentText,
+                    rangeText: nav.fuelRangeText,
+                  ),
+                  _buildQuickActions(
+                    onNewTrip: onOpenMapTab,
+                    onSavedTrips: () {},
+                    onDocuments: () {},
+                    onFavorites: () {},
+                  ),
+                  _buildRecentTripsCard(nav.recentTrips),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -85,6 +96,7 @@ class DriverDashboardScreen extends StatelessWidget {
     required String destination,
     required String eta,
     required String milesLeft,
+    required bool navigationActive,
     required VoidCallback onResume,
   }) {
     return _dashboardCard(
@@ -106,8 +118,9 @@ class DriverDashboardScreen extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: onResume,
-              child: const Text('Resume Navigation'),
+              onPressed: navigationActive ? onResume : null,
+              child: Text(
+                  navigationActive ? 'Resume Navigation' : 'No Active Trip'),
             ),
           ),
         ],
@@ -205,16 +218,24 @@ class DriverDashboardScreen extends StatelessWidget {
   Widget _buildRecentTripsCard(List<String> trips) {
     return _dashboardCard(
       title: 'Recent Trips',
-      child: Column(
-        children: trips.map((trip) {
-          return ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.history),
-            title: Text(trip),
-            trailing: const Icon(Icons.chevron_right),
-          );
-        }).toList(),
-      ),
+      child: trips.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No recent trips yet.',
+                style: TextStyle(color: Colors.grey),
+              ),
+            )
+          : Column(
+              children: trips.map((trip) {
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.history),
+                  title: Text(trip),
+                  trailing: const Icon(Icons.chevron_right),
+                );
+              }).toList(),
+            ),
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/navigation_state_controller.dart';
 import 'driver_dashboard_screen.dart';
 import 'truck_map_screen.dart';
 import 'trips_screen.dart';
@@ -6,7 +7,9 @@ import 'documents_screen.dart';
 import 'profile_screen.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  final NavigationStateController navigationStateController;
+
+  const AppShell({super.key, required this.navigationStateController});
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -15,12 +18,19 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    DriverDashboardScreen(),
-    TruckMapScreen(),
-    TripsScreen(),
-    DocumentsScreen(),
-    ProfileScreen(),
+  late final List<Widget> _screens = [
+    // late final (not const) because widgets receive the navigationStateController
+    // instance, which is not a compile-time constant.
+    DriverDashboardScreen(
+      navigationStateController: widget.navigationStateController,
+      onOpenMapTab: () => setState(() => _currentIndex = 1),
+    ),
+    TruckMapScreen(
+      navigationStateController: widget.navigationStateController,
+    ),
+    const TripsScreen(),
+    const DocumentsScreen(),
+    const ProfileScreen(),
   ];
 
   @override

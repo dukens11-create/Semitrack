@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
 import 'screens/app_shell.dart';
+import 'services/navigation_state_controller.dart';
 
 void main() {
-  runApp(const SemitraxApp());
+  final navigationStateController = NavigationStateController();
+  runApp(SemitraxApp(navigationStateController: navigationStateController));
 }
 
 class SemitraxApp extends StatelessWidget {
-  const SemitraxApp({super.key});
+  final NavigationStateController navigationStateController;
+
+  const SemitraxApp({super.key, required this.navigationStateController});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Semitrax',
-      home: AppShell(),
+      home: AppShell(navigationStateController: navigationStateController),
     );
   }
 }

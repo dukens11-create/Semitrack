@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import '../services/navigation_state_controller.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -17,13 +18,18 @@ import 'package:latlong2/latlong.dart';
 /// displays dynamic ETA / distance / maneuver information together with the
 /// Phase 5 intelligence overlay (driveMinutesLeft, weather, riskScore).
 class TruckMapScreen extends StatefulWidget {
-  const TruckMapScreen({super.key});
+  final NavigationStateController? navigationStateController;
+
+  const TruckMapScreen({super.key, this.navigationStateController});
 
   @override
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
 
 class _TruckMapScreenState extends State<TruckMapScreen> {
+  // ── Shortcut to the optional shared-state controller ─────────────────────
+  NavigationStateController? get _navState => widget.navigationStateController;
+
   // ── Navigation banner constants ────────────────────────────────────────────
   /// Distance threshold below which the banner shows "Now" instead of metres.
   static const double _imminentManeuverThresholdMeters = 30.0;
@@ -59,6 +65,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Minimum seconds between "Slow down" TTS announcements when the driver
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
+
+  // ── Fuel model constants ──────────────────────────────────────────────────
+  /// Full fuel-tank capacity in gallons.
+  static const double _tankGallons = 150.0;
+
+  /// Average miles-per-gallon used to compute remaining range.
+  static const double _mpg = 6.8;
+
+  /// Maximum number of recent trips retained in [_recentTrips].
+  static const int _maxRecentTrips = 5;
 
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
@@ -149,6 +165,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// GPS point-to-point distances via [Geolocator.distanceBetween].
   double _milesDriven = 0.0;
 
+  // ── Fuel state ────────────────────────────────────────────────────────────
+  /// Current fuel level as a percentage (0–100).  Starts at 85 % and
+  /// decreases based on miles driven and [_mpg].
+  double _fuelPercent = 85.0;
+
+  /// Computed fuel range in miles based on current fuel level and [_mpg].
+  double get _fuelRangeMiles => (_tankGallons * _fuelPercent / 100.0) * _mpg;
+
+  /// Fuel-percent display string, e.g. "85%".
+  String get _fuelPercentText => '${_fuelPercent.toStringAsFixed(0)}%';
+
+  /// Fuel-range display string, e.g. "867 mi".
+  String get _fuelRangeText => '${_fuelRangeMiles.toStringAsFixed(0)} mi';
+
+  // ── Recent trips list (persisted across navigation sessions) ─────────────
+  List<String> _recentTrips = const [];
+
   /// Latitude of the previous GPS fix, used to compute incremental distance.
   /// Zero until the first GPS fix arrives after [_startTripStats] is called.
   double _lastTripLat = 0.0;
@@ -225,6 +258,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
+
+  /// Human-readable names for the default route endpoints.
+  static const String _originName = 'Portland, OR';
+  static const String _destinationName = 'Winnemucca, NV';
 
   // Navigation-mode zoom level (12.5–15) — close enough for street detail
   // without losing surrounding road context.
@@ -945,7 +982,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         currentLng,
       );
       // Convert metres to miles and add to the running total.
-      _milesDriven += meters / _metersPerMile;
+      final milesIncrement = meters / _metersPerMile;
+      _milesDriven += milesIncrement;
+
+      // Consume fuel proportionally: gallons = miles / mpg, clamped to [0,100].
+      final gallonsUsed = milesIncrement / _mpg;
+      _fuelPercent =
+          (_fuelPercent - (gallonsUsed / _tankGallons * 100.0)).clamp(0.0, 100.0);
     }
 
     // Store the current position as the reference for the next GPS fix.
@@ -972,6 +1015,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
     if (mounted) setState(() {});
+
+    // Push updated stats to the dashboard controller.
+    _syncDashboardState();
   }
 
   // ── Trip statistics computed display strings ───────────────────────────────
@@ -984,6 +1030,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hours = diff.inHours;
     final minutes = diff.inMinutes % 60;
     return '${hours}h ${minutes}m';
+  }
+
+  /// Returns the remaining route distance as a formatted string, e.g. "312 mi".
+  ///
+  /// Derived by subtracting [_milesDriven] from the total route distance stored
+  /// in [_routeData].  Returns '--' before a route has been loaded.
+  String get _remainingMilesText {
+    if (_routeData == null) return '--';
+    final totalMiles =
+        (_routeData!['distanceMiles'] as num?)?.toDouble() ?? 0.0;
+    final remaining = (totalMiles - _milesDriven).clamp(0.0, totalMiles);
+    return '${remaining.toStringAsFixed(0)} mi';
+  }
+
+  /// Returns the ETA for the current route as a formatted "Xh Ym" string.
+  ///
+  /// Uses the raw Mapbox route duration; returns '--' before a route loads.
+  String get _tripEtaText {
+    if (_routeData == null) return '--';
+    final etaMinutes = (_routeData!['etaMinutes'] as num?)?.toInt();
+    return _formatEta(etaMinutes);
   }
 
   /// Returns the cumulative stopped time as a formatted "Xh Ym" string.
@@ -1004,6 +1071,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final elapsedHours = elapsedSeconds / 3600.0;
     final avg = _milesDriven / elapsedHours;
     return '${avg.toStringAsFixed(1)} mph';
+  }
+
+  // ── Dashboard state sync ──────────────────────────────────────────────────
+
+  /// Pushes the current navigation state to [NavigationStateController] so
+  /// that [DriverDashboardScreen] reflects live data.
+  ///
+  /// Safe to call frequently (e.g. on every GPS tick) — the controller batches
+  /// all fields into a single [notifyListeners] call.
+  void _syncDashboardState() {
+    _navState?.updateTripOverview(
+      navigationActive: _navigationActive,
+      arrived: _isArrived,
+      currentDestinationName: _destinationName,
+      etaText: _tripEtaText,
+      milesLeftText: _remainingMilesText,
+      hosText: _tripElapsedText,
+      fuelPercentText: _fuelPercentText,
+      fuelRangeText: _fuelRangeText,
+      currentPosition: _truckPosition,
+      destinationPosition: _destination,
+    );
+  }
+
+  /// Pushes the current [_recentTrips] list to [NavigationStateController].
+  void _syncRecentTripsToDashboard() {
+    _navState?.setRecentTrips(_recentTrips);
   }
 
   // ── Arrival detection ─────────────────────────────────────────────────────
@@ -1041,6 +1135,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Cancel GPS subscription — all tracking ceases after arrival.
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
+    // Record the completed trip in the recent-trips list.
+    _recentTrips = [
+      '$_originName → $_destinationName',
+      ..._recentTrips.take(_maxRecentTrips - 1),
+    ];
+    _syncRecentTripsToDashboard();
+    // Sync final arrived state to the dashboard.
+    _syncDashboardState();
     // Speak the arrival announcement (interrupts any in-progress TTS).
     _speak('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.
@@ -1115,6 +1217,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Initialize trip statistics so the stats panel shows live data from the
     // moment navigation begins.
     _startTripStats();
+    _syncDashboardState(); // announce navigation-active to dashboard
     _runSmoothRouteAnimation(_animGeneration);
   }
 
@@ -1132,6 +1235,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (!mounted || _animGeneration != generation) return;
       _truckIndex = i;
       await _moveTruckSmoothly(_routePoints[i], _routePoints[i + 1], generation);
+      // Sync dashboard every ~100 segments to avoid excessive notifyListeners
+      // calls while still keeping HOS and position reasonably up to date.
+      if (i % 100 == 0) _syncDashboardState();
     }
     // Snap to the final point once all segments are complete.
     if (mounted && _animGeneration == generation) {
@@ -1478,6 +1584,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
+      // Sync the newly loaded route data to the dashboard.
+      _syncDashboardState();
     } catch (e) {
       setState(() {
         _error = e.toString();

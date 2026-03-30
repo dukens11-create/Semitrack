@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:semitrack_mobile/models/truck_restriction.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -63,7 +64,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route restriction constants ────────────────────────────────────────────
   /// Radius in metres around each restricted zone within which a route point
   /// is considered to violate the restriction.  Used by
-  /// [_evaluateRouteRestrictions] and [_isTruckSafe].
+  /// [_updateRouteViolationWarnings] and [_isTruckSafe].
   static const double _restrictionProximityThresholdMeters = 100.0;
 
   // ── Loading / error ────────────────────────────────────────────────────────
@@ -190,6 +191,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final List<MapPoi> _mapPois = List<MapPoi>.from(_sampleMapPois);
   final Set<String> _poiAlertShown = {};
 
+  // ── Truck profile (height / weight / length / hazmat) ─────────────────────
+  //
+  // These defaults represent a standard 5-axle semi.  In a production build
+  // these values would be loaded from the driver's saved truck profile.
+  // They are used by _violatesRestriction() to compare against posted limits.
+
+  /// Vehicle height in feet (standard semi: 13.6 ft).
+  double _truckHeightFt = 13.6;
+
+  /// Gross vehicle weight in short tons (80,000 lbs = 40 tons for a standard
+  /// fully-loaded five-axle semi at the federal legal limit).
+  double _truckWeightTons = 40.0;
+
+  /// Overall vehicle length in feet (standard 53-ft trailer + tractor = ~70 ft).
+  double _truckLengthFt = 70.0;
+
+  /// True when the truck is carrying hazardous materials (HAZMAT placard).
+  bool _hasHazmat = false;
+
+  // ── Truck restriction state ────────────────────────────────────────────────
+  //
+  // _restrictions is the list of point-based truck restrictions shown as map
+  // markers and used for route-violation checks.  _restrictionAlertShown
+  // deduplicates proximity alerts so the same restriction does not re-alert
+  // during a session.  _restrictionAhead holds the nearest upcoming violation
+  // so the in-route alert card can display its details.
+  final List<TruckRestriction> _restrictions =
+      List<TruckRestriction>.from(_sampleRestrictions);
+  final Set<String> _restrictionAlertShown = {};
+  TruckRestriction? _restrictionAhead;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -240,7 +272,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   String? _selectedDestinationName;
 
   // ── Route restriction violations ───────────────────────────────────────────
-  // Populated by _evaluateRouteRestrictions() after a route loads.
+  // Populated by _updateRouteViolationWarnings() after a route loads.
   // Each entry is a human-readable warning shown in the route info panel.
   List<String> _routeViolations = const [];
 
@@ -683,8 +715,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
   /// truck position, destination pin (when selected or arrived), visible truck
-  /// stop POIs, and map POIs (weigh stations, police checkpoints, ports of
-  /// entry).
+  /// stop POIs, map POIs (weigh stations, police checkpoints, ports of entry),
+  /// and truck restriction markers (low bridges, weight/length limits, etc.).
   ///
   /// Centralises marker assembly so [build] stays clean and future POI types
   /// can be merged here in one place.
@@ -694,6 +726,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
       ..._buildPoiMarkers(),
+      ..._buildRestrictionMarkers(),
     ];
   }
 
@@ -945,6 +978,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── POI proximity alerts: warn driver when within 500 m of a POI ─────────
     _checkPoiAlerts(gpsPoint);
+
+    // ── Restriction proximity alerts: warn about upcoming violations ──────────
+    _checkRestrictionAheadAlert(gpsPoint);
 
     // ── Trip statistics: update mileage and stopped time from live GPS ───────
     _updateTripStats(position);
@@ -1546,6 +1582,485 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
+  // ── Truck restriction logic ────────────────────────────────────────────────
+
+  /// Returns `true` when the truck's current profile would violate [r].
+  ///
+  /// Comparison rules per [RestrictionType]:
+  ///   • [RestrictionType.lowBridge]        — truck height > bridge clearance
+  ///   • [RestrictionType.weightLimit]      — truck weight > posted limit
+  ///   • [RestrictionType.lengthLimit]      — truck length > posted limit
+  ///   • [RestrictionType.noTruckRoad]      — always a violation for CMVs
+  ///   • [RestrictionType.hazmatRestriction] — violation only when [_hasHazmat]
+  bool _violatesRestriction(TruckRestriction r) {
+    switch (r.type) {
+      case RestrictionType.lowBridge:
+        return r.limitValue != null && _truckHeightFt > r.limitValue!;
+      case RestrictionType.weightLimit:
+        return r.limitValue != null && _truckWeightTons > r.limitValue!;
+      case RestrictionType.lengthLimit:
+        return r.limitValue != null && _truckLengthFt > r.limitValue!;
+      case RestrictionType.noTruckRoad:
+        // Commercial motor vehicles are always prohibited on no-truck roads.
+        return true;
+      case RestrictionType.hazmatRestriction:
+        return _hasHazmat;
+    }
+  }
+
+  /// Returns the subset of [_restrictions] that are both:
+  ///   1. Violated by the current truck profile (per [_violatesRestriction]).
+  ///   2. Within [proximityMeters] of any point on [routePoints].
+  ///
+  /// Used after route loading to decide whether to warn or block the route.
+  List<TruckRestriction> _evaluateRouteRestrictions(
+    List<LatLng> routePoints, {
+    double proximityMeters = 300.0,
+  }) {
+    final violations = <TruckRestriction>[];
+    for (final r in _restrictions) {
+      if (!_violatesRestriction(r)) continue;
+      for (final pt in routePoints) {
+        if (_distanceBetween(pt, r.position) <= proximityMeters) {
+          violations.add(r);
+          break; // already confirmed within range — skip remaining route pts
+        }
+      }
+    }
+    return violations;
+  }
+
+  /// Shows a modal bottom sheet listing all [violations] on the current route.
+  ///
+  /// Each violation is displayed with its restriction type icon, name, limit
+  /// value (if applicable), and description.  A "Continue Anyway" button
+  /// allows the driver to acknowledge and proceed; "Get Safe Route" triggers
+  /// a re-fetch requesting an alternative route.
+  void _showRestrictionViolationsSheet(List<TruckRestriction> violations) {
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55,
+          minChildSize: 0.35,
+          maxChildSize: 0.85,
+          builder: (_, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Sheet handle ────────────────────────────────────────
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  // ── Header ───────────────────────────────────────────────
+                  Row(
+                    children: [
+                      const Icon(Icons.warning_amber,
+                          color: Colors.red, size: 28),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Route Restriction Warning',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${violations.length} violation${violations.length == 1 ? '' : 's'} detected on this route.',
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 14),
+                  // ── Violations list ──────────────────────────────────────
+                  Flexible(
+                    child: ListView.separated(
+                      controller: scrollController,
+                      shrinkWrap: true,
+                      itemCount: violations.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final v = violations[i];
+                        return _buildViolationTile(v);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // ── Action buttons ───────────────────────────────────────
+                  Row(
+                    children: [
+                      // "Get Safe Route" fetches an alternative route.
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.alt_route),
+                          label: const Text('Get Safe Route'),
+                          style: OutlinedButton.styleFrom(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 12),
+                            side: const BorderSide(color: Colors.blue),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            fetchRoute(alternative: true);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // "Continue Anyway" dismisses the sheet.
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.arrow_forward),
+                          label: const Text('Continue Anyway'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Builds a single list tile for a [TruckRestriction] violation entry
+  /// inside the restriction violations bottom sheet.
+  Widget _buildViolationTile(TruckRestriction v) {
+    final style = _restrictionStyle(v.type);
+    final String limitText = _formatLimitText(v.limitValue, v.limitUnit,
+        prefix: ' — limit: ');
+
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(vertical: 4),
+      leading: CircleAvatar(
+        backgroundColor: style.color.withOpacity(0.15),
+        child: Icon(style.icon, color: style.color, size: 22),
+      ),
+      title: Text(
+        v.name,
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+      ),
+      subtitle: Text(
+        '${style.label}$limitText\n${v.description}',
+        style: const TextStyle(fontSize: 12, height: 1.4),
+      ),
+      isThreeLine: true,
+    );
+  }
+
+  /// Returns the visual style (icon, colour, label) for a [RestrictionType].
+  ///
+  /// Centralises the type-to-style mapping so [_buildViolationTile],
+  /// [_buildRestrictionMarkers], and [_buildRestrictionAlertCard] all use
+  /// identical styling without duplication.
+  ({IconData icon, Color color, String label}) _restrictionStyle(
+      RestrictionType type) {
+    switch (type) {
+      case RestrictionType.lowBridge:
+        return (
+          icon: Icons.height,
+          color: Colors.orange.shade800,
+          label: 'Low Bridge',
+        );
+      case RestrictionType.weightLimit:
+        return (
+          icon: Icons.monitor_weight,
+          color: Colors.red.shade700,
+          label: 'Weight Limit',
+        );
+      case RestrictionType.lengthLimit:
+        return (
+          icon: Icons.straighten,
+          color: Colors.deepOrange.shade700,
+          label: 'Length Limit',
+        );
+      case RestrictionType.noTruckRoad:
+        return (
+          icon: Icons.no_crash,
+          color: Colors.red.shade900,
+          label: 'No Trucks',
+        );
+      case RestrictionType.hazmatRestriction:
+        return (
+          icon: Icons.local_fire_department,
+          color: Colors.purple.shade800,
+          label: 'Hazmat Zone',
+        );
+    }
+  }
+
+  /// Formats a restriction limit as a display string, or returns an empty
+  /// string when [limitValue] or [limitUnit] is null.
+  ///
+  /// [prefix] is prepended when the result is non-empty (default: empty).
+  /// [decimals] controls the number of decimal places (default: 1).
+  String _formatLimitText(
+    double? limitValue,
+    String? limitUnit, {
+    String prefix = '',
+    int decimals = 1,
+  }) {
+    if (limitValue == null || limitUnit == null) return '';
+    return '$prefix${limitValue.toStringAsFixed(decimals)} $limitUnit';
+  }
+
+  /// Builds map [Marker]s for all [_restrictions], colour-coded by type.
+  ///
+  /// Restriction markers use a red-tinted palette with distinctive icons so
+  /// drivers can tell them apart from truck stops (blue) and POIs (orange /
+  /// purple / indigo) at a glance.  Tapping a marker shows a brief info card.
+  List<Marker> _buildRestrictionMarkers() {
+    return _restrictions.map((r) {
+      final style = _restrictionStyle(r.type);
+
+      return Marker(
+        point: r.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showRestrictionInfoDialog(r),
+          child: Container(
+            decoration: BoxDecoration(
+              color: style.color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(style.icon, color: Colors.white, size: 20),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Shows an [AlertDialog] with details about a tapped restriction [r].
+  void _showRestrictionInfoDialog(TruckRestriction r) {
+    if (!mounted) return;
+    final bool violates = _violatesRestriction(r);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          r.name,
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(r.description,
+                style: const TextStyle(fontSize: 14)),
+            if (r.limitValue != null && r.limitUnit != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Limit:${_formatLimitText(r.limitValue, r.limitUnit, prefix: ' ')}',
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(
+                  violates
+                      ? Icons.warning_amber
+                      : Icons.check_circle_outline,
+                  color: violates ? Colors.red : Colors.green,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  violates
+                      ? 'Your truck exceeds this restriction'
+                      : 'Your truck meets this restriction',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: violates ? Colors.red : Colors.green,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Checks whether the truck is within 800 m of any restriction that it
+  /// violates and updates [_restrictionAhead].
+  ///
+  /// The first unshown violated restriction within range triggers a TTS alert
+  /// and sets [_restrictionAhead] so [_buildRestrictionAlertCard] can render
+  /// a prominent in-route warning banner.  Each restriction id is added to
+  /// [_restrictionAlertShown] after the first alert to prevent repeated
+  /// announcements for the same point.
+  void _checkRestrictionAheadAlert(LatLng currentPosition) {
+    const double alertRadiusMeters = 800.0;
+    for (final r in _restrictions) {
+      if (!_violatesRestriction(r)) continue;
+      final double dist = _distanceBetween(currentPosition, r.position);
+      if (dist <= alertRadiusMeters) {
+        if (!_restrictionAlertShown.contains(r.id)) {
+          _restrictionAlertShown.add(r.id);
+          final String ttsMsg = _restrictionTtsMessage(r);
+          _speak(ttsMsg);
+        }
+        if (mounted && _restrictionAhead?.id != r.id) {
+          setState(() => _restrictionAhead = r);
+        }
+        return; // show one alert at a time
+      }
+    }
+    // No restriction within range — clear the alert card.
+    if (mounted && _restrictionAhead != null) {
+      setState(() => _restrictionAhead = null);
+    }
+  }
+
+  /// Generates a concise TTS alert message for [r] based on its type and
+  /// the driver's truck profile.
+  String _restrictionTtsMessage(TruckRestriction r) {
+    switch (r.type) {
+      case RestrictionType.lowBridge:
+        return 'Warning: low bridge ahead. '
+            'Clearance ${r.limitValue?.toStringAsFixed(1) ?? "unknown"} feet. '
+            'Your truck is ${_truckHeightFt.toStringAsFixed(1)} feet tall.';
+      case RestrictionType.weightLimit:
+        return 'Warning: weight-restricted road ahead. '
+            'Limit ${r.limitValue?.toStringAsFixed(0) ?? "unknown"} tons.';
+      case RestrictionType.lengthLimit:
+        return 'Warning: length-restricted road ahead. '
+            'Maximum ${r.limitValue?.toStringAsFixed(0) ?? "unknown"} feet.';
+      case RestrictionType.noTruckRoad:
+        return 'Warning: trucks are prohibited on the upcoming road. '
+            'Please use an alternate route.';
+      case RestrictionType.hazmatRestriction:
+        return 'Warning: hazardous materials are restricted in this corridor.';
+    }
+  }
+
+  /// Builds the in-route restriction alert card shown at the top of the map
+  /// when [_restrictionAhead] is non-null.
+  ///
+  /// The card is colour-coded by restriction type and shows the restriction
+  /// name, type label, and limit value so the driver has full context at a
+  /// glance.  A dismiss button clears [_restrictionAhead] so the card hides.
+  Widget _buildRestrictionAlertCard() {
+    final r = _restrictionAhead!;
+    final style = _restrictionStyle(r.type);
+    final String limitText =
+        _formatLimitText(r.limitValue, r.limitUnit, prefix: ' — ');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: style.color,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(style.icon, color: Colors.white, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    r.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      height: 1.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    '${style.label}$limitText · Approaching',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _restrictionAhead = null),
+              child: const Icon(Icons.close, color: Colors.white70, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
@@ -1662,13 +2177,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _truckStops = nearbyStops;
       });
 
+      // ── Evaluate truck restrictions along the new route ────────────────────
+      // Warn the driver if any restriction violates the current truck profile.
+      // Show the violation sheet after the current frame so the map is stable.
+      final violations = _evaluateRouteRestrictions(newPoints);
+      if (violations.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showRestrictionViolationsSheet(violations);
+        });
+      }
+
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
 
-      // After the route is loaded, evaluate truck restriction violations so
-      // the driver is informed of any low-bridge or weight-limit conflicts.
-      // Called here (after route exists) rather than before, per spec.
-      _evaluateRouteRestrictions();
+      // After the route is loaded, update the route violation warnings panel
+      // so the driver sees any low-bridge or weight-limit conflicts in the info
+      // panel (in addition to the TruckRestriction violation sheet above).
+      _updateRouteViolationWarnings();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -1699,13 +2224,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     await fetchRoute();
   }
 
-  /// Evaluates the loaded route against [_restrictedZones] and populates
-  /// [_routeViolations] with human-readable warning strings.
+  /// Updates [_routeViolations] with human-readable warning strings by checking
+  /// [_routePoints] against [_restrictedZones].
   ///
   /// Called automatically by [fetchRoute] after a route is loaded so that
   /// restriction checks always run against an existing route geometry (never
   /// before a route exists, per spec).
-  void _evaluateRouteRestrictions() {
+  void _updateRouteViolationWarnings() {
     if (_routePoints.isEmpty) return;
     final violations = <String>[];
     for (final zone in _restrictedZones) {
@@ -2853,6 +3378,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Restriction ahead alert card ──────────────────────────
+                // Shown just below the nav banner when the truck is within
+                // 800 m of a restriction it violates, providing a prominent
+                // in-route warning with type icon and limit details.
+                if (_restrictionAhead != null)
+                  Positioned(
+                    top: _navSteps.isNotEmpty ? 90 : 8,
+                    left: 0,
+                    right: 0,
+                    child: _buildRestrictionAlertCard(),
+                  ),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -3144,7 +3680,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
 
         // ── Route Restriction Violations ─────────────────────────────
-        // Populated by _evaluateRouteRestrictions() after the route loads.
+        // Populated by _updateRouteViolationWarnings() after the route loads.
         // Shows low-bridge / weight-limit warnings encountered on the route.
         if (_routeViolations.isNotEmpty)
           Card(
@@ -3427,5 +3963,81 @@ const List<MapPoi> _sampleMapPois = [
     type: PoiType.portOfEntry,
     name: 'Oregon / California Port of Entry',
     status: 'Open',
+  ),
+];
+
+// ── Sample truck restriction data ─────────────────────────────────────────────
+
+/// Sample [TruckRestriction] objects covering key restrictions along the
+/// Portland OR → Winnemucca NV corridor.
+///
+/// Each entry is positioned at or near a real-world restriction type so that
+/// drivers see meaningful warnings immediately after launch.  Coordinates are
+/// placed at major highway points on the I-5 / I-80 corridor.  Replace or
+/// augment this list with a live API feed as the backend matures.
+const List<TruckRestriction> _sampleRestrictions = [
+  // ── Low bridges ───────────────────────────────────────────────────────────
+  TruckRestriction(
+    id: 'bridge_portland_burnside',
+    position: LatLng(45.523, -122.676),
+    type: RestrictionType.lowBridge,
+    name: 'Burnside Bridge – Portland',
+    description: 'Historic bridge with reduced vertical clearance on approach roads.',
+    limitValue: 12.8,
+    limitUnit: 'ft',
+  ),
+  TruckRestriction(
+    id: 'bridge_medford_or',
+    position: LatLng(42.327, -122.874),
+    type: RestrictionType.lowBridge,
+    name: 'Medford Underpass',
+    description: 'Railroad overpass on downtown connector route.',
+    limitValue: 13.2,
+    limitUnit: 'ft',
+  ),
+  // ── Weight limits ─────────────────────────────────────────────────────────
+  TruckRestriction(
+    id: 'weight_ashland_or',
+    position: LatLng(42.195, -122.699),
+    type: RestrictionType.weightLimit,
+    name: 'Ashland Weight-Restricted Road',
+    description: 'Local road with posted weight limit due to bridge condition.',
+    limitValue: 36.0,
+    limitUnit: 'tons',
+  ),
+  TruckRestriction(
+    id: 'weight_winnemucca_nv',
+    position: LatLng(40.973, -117.740),
+    type: RestrictionType.weightLimit,
+    name: 'Winnemucca Access Road',
+    description: 'Seasonal weight limit in effect — reduced load bearing.',
+    limitValue: 38.0,
+    limitUnit: 'tons',
+  ),
+  // ── Length limits ─────────────────────────────────────────────────────────
+  TruckRestriction(
+    id: 'length_yreka_ca',
+    position: LatLng(41.740, -122.636),
+    type: RestrictionType.lengthLimit,
+    name: 'Yreka Downtown Length Restriction',
+    description: 'No vehicles over 65 ft on city centre streets.',
+    limitValue: 65.0,
+    limitUnit: 'ft',
+  ),
+  // ── No-truck roads ────────────────────────────────────────────────────────
+  TruckRestriction(
+    id: 'notruck_redding_ca',
+    position: LatLng(40.587, -122.391),
+    type: RestrictionType.noTruckRoad,
+    name: 'Redding Residential No-Truck Zone',
+    description: 'Residential street — commercial trucks prohibited by ordinance.',
+  ),
+  // ── Hazmat restrictions ───────────────────────────────────────────────────
+  TruckRestriction(
+    id: 'hazmat_grants_pass_or',
+    position: LatLng(42.440, -123.330),
+    type: RestrictionType.hazmatRestriction,
+    name: 'Grants Pass Hazmat Corridor',
+    description: 'Transportation of hazardous materials restricted through this zone.',
   ),
 ];

@@ -10,6 +10,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import 'package:semitrack_mobile/features/documents/documents_screen.dart';
+import '../models/trip_stop.dart';
+import '../models/stop_appointment.dart';
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -197,6 +201,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Active trip identifier (used by the documents panel) ──────────────────
+  //
+  // Set to the load/trip ID string when a route begins so the documents FAB
+  // can pass it to TripDocumentsScreen for pre-filtered display.
+  // Currently populated from the route response; can be wired to a real
+  // trip-management backend in future iterations.
+  String _activeTripId = '';
+  // ── Weigh station / port-of-entry POI state ───────────────────────────────
+  //
+  // _routePois holds all weigh station and port-of-entry POIs for the route.
+  // _showWeighStations controls marker visibility.
+  // _upcomingWeighStation is set to the nearest station within 1 mile
+  // (1 609 m).  _weighAlertSpoken ensures the TTS warning fires only once per
+  // approach so the driver is not repeatedly interrupted.
+  List<RoutePoi> _routePois = _mockRoutePois;
+  bool _showWeighStations = true;
+  RoutePoi? _upcomingWeighStation;
+  bool _weighAlertSpoken = false;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -288,6 +311,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     },
   ];
 
+  // ── Fuel planning state ───────────────────────────────────────────────────
+  //
+  // Tank size and average MPG are configured once at initialisation and remain
+  // constant for the session.  _fuelPercent is updated by _updateFuelFromTrip()
+  // as miles are accumulated via GPS.  _fuelWarningShown prevents the low-fuel
+  // TTS + modal from firing more than once per low-fuel event — it resets to
+  // false whenever the estimated range climbs back above 150 miles.
+
+  /// Total diesel tank capacity in US gallons.  Default 150 gal is typical
+  /// for a Class-8 semi-truck with dual 75-gallon saddle tanks.
+  double _fuelTankGallons = 150.0;
+
+  /// Current fuel level as a percentage of the full tank (0–100).
+  /// Starts at 72 % (a realistic mid-trip state) and decreases as miles
+  /// accumulate via [_updateFuelFromTrip].
+  double _fuelPercent = 72.0;
+
+  /// Fleet-average diesel fuel economy in miles per gallon.
+  /// 6.8 MPG is a real-world average for a loaded Class-8 truck.
+  double _avgMpg = 6.8;
+
+  /// True after the low-fuel TTS + modal has been shown for the current
+  /// below-150-mile event.  Prevents repeated announcements on every GPS fix.
+  bool _fuelWarningShown = false;
+
+  // ── Fuel planning computed getters ────────────────────────────────────────
+
+  /// Gallons remaining in the tank, derived from [_fuelPercent].
+  double get _gallonsLeft => _fuelTankGallons * (_fuelPercent / 100.0);
+
+  /// Estimated driving range in miles given current fuel level and average MPG.
+  double get _estimatedRangeMiles => _gallonsLeft * _avgMpg;
+
+  /// Human-readable range string, e.g. "689 mi".
+  String get _fuelRangeText => '${_estimatedRangeMiles.toStringAsFixed(0)} mi';
+
+  /// Human-readable gallons-remaining string, e.g. "108.0 gal".
+  String get _fuelLeftText => '${_gallonsLeft.toStringAsFixed(1)} gal';
+
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   // Pre-populated with mock/placeholder values so the Drive Intelligence card
   // is never blank.  These are replaced by real API data once available.
@@ -296,6 +358,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'weather': 'Clear',      // placeholder weather condition
     'riskScore': 92.0,       // 92 → "Low" risk bucket
   };
+
+  // ── Shipper / receiver appointment state ──────────────────────────────────
+  //
+  // _tripStops holds the ordered list of dispatch stops for the current load.
+  // _appointments maps stopId → StopAppointment with time window, facility,
+  // reference, and notes.  Both are seeded with demo data so the overlay is
+  // never blank; a real integration would populate them from a dispatcher API.
+  List<TripStop> _tripStops = [];
+  Map<String, StopAppointment> _appointments = {};
+
+  /// Whether the appointment warning overlay is currently dismissed by the
+  /// driver.  Resets to false when a new appointment is saved or a stop's
+  /// status changes.
+  bool _appointmentWarningDismissed = false;
 
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
@@ -317,6 +393,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Useful when the driver needs to review the route without the map moving.
   bool _navigationPaused = false;
 
+  // ── Route options state ────────────────────────────────────────────────────
+  //
+  // These fields control the route-request parameters sent to the Mapbox
+  // Directions API and are exposed to the driver via the Route Options sheet.
+  //
+  //   _routeMode      – 'fastest' | 'fuel' | 'truck_safe'
+  //   _avoidTolls     – add 'toll' to the exclude list when true
+  //   _avoidFerries   – add 'ferry' to the exclude list when true
+  //   _preferTruckSafe – gate the post-processing safety check when true
+  String _routeMode = 'fastest';
+  bool _avoidTolls = false;
+  bool _avoidFerries = true;
+  bool _preferTruckSafe = true;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -325,6 +415,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
+
+  // ── Searchable destination picker ────────────────────────────────────────
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  List<Map<String, dynamic>> _searchSuggestions = const [];
+  LatLng? _customDestination;
 
   // Navigation-mode zoom level (12.5–15) — close enough for street detail
   // without losing surrounding road context.
@@ -351,6 +447,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    _seedDemoAppointments();
+    // Rebuild whenever search text changes so the clear-icon suffix appears
+    // and disappears correctly.
+    _searchController.addListener(() => setState(() {}));
   }
 
   @override
@@ -359,6 +459,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -423,13 +525,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns the fixed destination [Marker] (red pin at [_destination]).
+  /// Returns the destination [Marker] (red pin).  Uses [_customDestination]
+  /// when set, otherwise falls back to the default [_destination].
   Marker _buildDestinationMarker() {
-    return const Marker(
-      point: _destination,
+    final point = _customDestination ?? _destination;
+    return Marker(
+      point: point,
       width: 40,
       height: 40,
-      child: Icon(Icons.location_on, size: 34, color: Colors.red),
+      child: const Icon(Icons.location_on, size: 34, color: Colors.red),
     );
   }
 
@@ -519,6 +623,65 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
+    ),
+  ];
+
+  // ── Weigh station / port-of-entry mock dataset ────────────────────────────
+  //
+  // Hard-coded weigh stations and ports of entry covering the default
+  // Portland → Winnemucca route.  Replace with a real API or local DB in
+  // production.  Each entry carries a status string so the alert banner and
+  // details sheet can display "Open", "Closed", "Bypass", or "Status unknown".
+  static const List<RoutePoi> _mockRoutePois = [
+    RoutePoi(
+      id: 'ws1',
+      name: 'Baldock Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(45.267, -122.771),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws2',
+      name: 'Grants Pass Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(42.434, -123.338),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws3',
+      name: 'Oregon–California Port of Entry',
+      type: PoiType.portOfEntry,
+      position: LatLng(42.004, -122.834),
+      subtitle: 'Commercial vehicles',
+      status: 'Open',
+      bypassAvailable: true,
+      note: 'Check transponder before bypassing',
+    ),
+    RoutePoi(
+      id: 'ws4',
+      name: 'Ashland Inspection Site',
+      type: PoiType.weighStation,
+      position: LatLng(42.192, -122.709),
+      subtitle: 'I-5 Northbound',
+      status: 'Closed',
+    ),
+    RoutePoi(
+      id: 'ws5',
+      name: 'Lassen Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(40.483, -121.508),
+      subtitle: 'I-5 Southbound',
+      status: 'Bypass',
+    ),
+    RoutePoi(
+      id: 'ws6',
+      name: 'Truckee Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(39.328, -120.183),
+      subtitle: 'I-80 Eastbound',
+      status: 'Open',
     ),
   ];
 
@@ -613,12 +776,642 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
-      if (_isArrived) _buildDestinationMarker(),
+      if (_isArrived || _customDestination != null) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      ..._buildStopMarkers(),
+      ..._buildWeighStationMarkers(),
     ];
   }
 
-  /// Shows a modal bottom sheet with full details for [stop].
+  // ── Shipper / receiver appointment helpers ────────────────────────────────
+
+  /// Seeds demo trip stops + appointments so the overlay is visible on first
+  /// launch.  Replace with a dispatcher API call in production.
+  void _seedDemoAppointments() {
+    _tripStops = [
+      TripStop(
+        id: 'stop_1',
+        name: 'Portland Freight Hub',
+        position: const LatLng(45.5231, -122.6765),
+        type: StopType.pickup,
+      ),
+      TripStop(
+        id: 'stop_2',
+        name: 'Boise, ID (Waypoint)',
+        position: const LatLng(43.6150, -116.2023),
+        type: StopType.waypoint,
+      ),
+      TripStop(
+        id: 'stop_3',
+        name: 'Reno Distribution Center',
+        position: const LatLng(39.5296, -119.8138),
+        type: StopType.delivery,
+      ),
+    ];
+    _appointments = {
+      'stop_1': StopAppointment(
+        stopId: 'stop_1',
+        type: 'pickup',
+        appointmentTime: DateTime.now().add(const Duration(hours: 1)),
+        earliestArrival: DateTime.now().add(const Duration(minutes: 45)),
+        latestArrival: DateTime.now().add(const Duration(hours: 2)),
+        facilityName: 'Portland Freight Hub',
+        referenceNumber: 'BOL-20240101',
+        note: 'Dock 4 - call 503-555-0120',
+      ),
+      'stop_3': StopAppointment(
+        stopId: 'stop_3',
+        type: 'delivery',
+        appointmentTime: DateTime.now().add(const Duration(hours: 13)),
+        earliestArrival:
+            DateTime.now().add(const Duration(hours: 12, minutes: 30)),
+        latestArrival: DateTime.now().add(const Duration(hours: 14)),
+        facilityName: 'Reno Distribution Center',
+        referenceNumber: 'PO-88421',
+        note: 'Gate B - check in at security',
+      ),
+    };
+  }
+
+  /// Simple per-stop ETA estimator: 60 mph average speed from the current
+  /// truck position along the ordered stop list.
+  static const double _etaAvgSpeedMph = 60.0;
+  static const double _metersPerMileAppt = 1609.34;
+
+  DateTime _stopEta(int stopIndex) {
+    if (_tripStops.isEmpty || stopIndex >= _tripStops.length) {
+      return DateTime.now();
+    }
+    final origin =
+        _truckPosition ?? _tripStops.first.position;
+    double totalMeters = 0;
+    var from = origin;
+    for (int i = 0; i <= stopIndex; i++) {
+      totalMeters += Geolocator.distanceBetween(
+        from.latitude,
+        from.longitude,
+        _tripStops[i].position.latitude,
+        _tripStops[i].position.longitude,
+      );
+      from = _tripStops[i].position;
+    }
+    final miles = totalMeters / _metersPerMileAppt;
+    final minutes = (miles / _etaAvgSpeedMph * 60).round();
+    return DateTime.now().add(Duration(minutes: minutes));
+  }
+
+  /// Returns true when any appointment window will be missed.
+  bool get _hasLateAppointment {
+    for (int i = 0; i < _tripStops.length; i++) {
+      final appt = _appointments[_tripStops[i].id];
+      if (appt != null && appt.isLate(_stopEta(i))) return true;
+    }
+    return false;
+  }
+
+  /// Returns true when any appointment is at risk (within 30 min of cutoff).
+  bool get _hasAtRiskAppointment {
+    if (_hasLateAppointment) return false;
+    for (int i = 0; i < _tripStops.length; i++) {
+      final appt = _appointments[_tripStops[i].id];
+      if (appt != null && appt.isAtRisk(_stopEta(i))) return true;
+    }
+    return false;
+  }
+
+  /// Builds stop markers (numbered pins) for each [TripStop] on the map.
+  List<Marker> _buildStopMarkers() {
+    if (_tripStops.isEmpty) return const [];
+    return List.generate(_tripStops.length, (i) {
+      final stop = _tripStops[i];
+      Color markerColor;
+      switch (stop.type) {
+        case StopType.pickup:
+          markerColor = Colors.blue.shade700;
+          break;
+        case StopType.delivery:
+          markerColor = Colors.green.shade700;
+          break;
+        case StopType.waypoint:
+          markerColor = Colors.grey.shade600;
+          break;
+      }
+      return Marker(
+        point: stop.position,
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showStopAppointmentSheet(i),
+          child: Container(
+            decoration: BoxDecoration(
+              color: markerColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              '${i + 1}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  /// Shows a read-only detail + edit sheet for the appointment at [stopIndex].
+  void _showStopAppointmentSheet(int stopIndex) {
+    if (stopIndex >= _tripStops.length) return;
+    final stop = _tripStops[stopIndex];
+    final appt = _appointments[stop.id];
+    final eta = _stopEta(stopIndex);
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header ─────────────────────────────────────────────
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: _stopBadgeColor(stop.type),
+                    child: Text(
+                      '${stopIndex + 1}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          stop.type.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _stopBadgeColor(stop.type),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // ── Edit button ──────────────────────────────────
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    tooltip: 'Edit appointment',
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showEditAppointmentSheet(stopIndex);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              if (appt == null) ...[
+                const Text(
+                  'No appointment set for this stop.',
+                  style: TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add Appointment'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showEditAppointmentSheet(stopIndex);
+                    },
+                  ),
+                ),
+              ] else ...[
+                // ── ETA vs window ────────────────────────────────────
+                _apptDetailRow(Icons.schedule, 'ETA',
+                    _formatApptDateTime(eta)),
+                if (appt.appointmentTime != null)
+                  _apptDetailRow(Icons.calendar_today, 'Appointment',
+                      _formatApptDateTime(appt.appointmentTime!)),
+                if (appt.earliestArrival != null ||
+                    appt.latestArrival != null)
+                  _apptDetailRow(
+                    Icons.access_time,
+                    'Window',
+                    '${appt.earliestArrival != null ? _formatApptDateTime(appt.earliestArrival!) : "-"}'
+                        '  ->  '
+                        '${appt.latestArrival != null ? _formatApptDateTime(appt.latestArrival!) : "-"}',
+                  ),
+                // ── Lateness warning ─────────────────────────────────
+                if (appt.isLate(eta))
+                  _statusChip(
+                      'LATE - will miss appointment window', Colors.red),
+                if (!appt.isLate(eta) && appt.isAtRisk(eta))
+                  _statusChip('AT RISK - less than 30 min margin',
+                      Colors.orange),
+                if (!appt.isLate(eta) && !appt.isAtRisk(eta))
+                  _statusChip('On Time', Colors.green),
+                const SizedBox(height: 8),
+                // ── Facility / reference / note ──────────────────────
+                if (appt.facilityName != null)
+                  _apptDetailRow(Icons.business, 'Facility',
+                      appt.facilityName!),
+                if (appt.referenceNumber != null)
+                  _apptDetailRow(Icons.tag, 'Reference',
+                      appt.referenceNumber!),
+                if (appt.note != null && appt.note!.isNotEmpty)
+                  _apptDetailRow(
+                      Icons.notes, 'Notes', appt.note!),
+              ],
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Color _stopBadgeColor(StopType type) {
+    switch (type) {
+      case StopType.pickup:
+        return Colors.blue.shade700;
+      case StopType.delivery:
+        return Colors.green.shade700;
+      case StopType.waypoint:
+        return Colors.grey.shade600;
+    }
+  }
+
+  Widget _apptDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: Colors.grey),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 90,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(String text, Color color) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 13),
+      ),
+    );
+  }
+
+  String _formatApptDateTime(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '${dt.month}/${dt.day}  $h:$m';
+  }
+
+  /// Opens an editable bottom sheet to set / update an appointment.
+  void _showEditAppointmentSheet(int stopIndex) {
+    if (stopIndex >= _tripStops.length) return;
+    final stop = _tripStops[stopIndex];
+    final appt = _appointments[stop.id];
+
+    final facilityCtrl =
+        TextEditingController(text: appt?.facilityName ?? '');
+    final refCtrl =
+        TextEditingController(text: appt?.referenceNumber ?? '');
+    final noteCtrl = TextEditingController(text: appt?.note ?? '');
+    String apptType = appt?.type ?? stop.type.name;
+    DateTime? apptTime = appt?.appointmentTime;
+    DateTime? earliest = appt?.earliestArrival;
+    DateTime? latest = appt?.latestArrival;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            Widget timeTile(
+              String label,
+              DateTime? value,
+              void Function(DateTime) onPicked,
+            ) {
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(label,
+                    style:
+                        const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(
+                  value != null
+                      ? _formatApptDateTime(value)
+                      : 'Not set',
+                  style: TextStyle(
+                    color:
+                        value != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+                trailing: const Icon(Icons.access_time),
+                onTap: () async {
+                  final date = await showDatePicker(
+                    context: ctx,
+                    initialDate: value ?? DateTime.now(),
+                    firstDate: DateTime.now()
+                        .subtract(const Duration(days: 1)),
+                    lastDate: DateTime.now()
+                        .add(const Duration(days: 365)),
+                  );
+                  if (date == null || !ctx.mounted) return;
+                  final time = await showTimePicker(
+                    context: ctx,
+                    initialTime: value != null
+                        ? TimeOfDay.fromDateTime(value)
+                        : TimeOfDay.now(),
+                  );
+                  if (time == null) return;
+                  onPicked(DateTime(date.year, date.month, date.day,
+                      time.hour, time.minute));
+                },
+              );
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Edit Appointment – ${stop.name}',
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    DropdownButtonFormField<String>(
+                      value: apptType,
+                      decoration:
+                          const InputDecoration(labelText: 'Type'),
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'pickup', child: Text('Pickup')),
+                        DropdownMenuItem(
+                            value: 'delivery',
+                            child: Text('Delivery')),
+                        DropdownMenuItem(
+                            value: 'waypoint',
+                            child: Text('Waypoint')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          setSheetState(() => apptType = v);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: facilityCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Facility name',
+                          prefixIcon: Icon(Icons.business)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: refCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Reference / BOL / PO #',
+                          prefixIcon: Icon(Icons.tag)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteCtrl,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Notes (dock #, phone, gate code)',
+                        prefixIcon: Icon(Icons.notes),
+                      ),
+                    ),
+                    const Divider(),
+                    timeTile('Appointment time', apptTime, (v) {
+                      setSheetState(() => apptTime = v);
+                    }),
+                    timeTile('Earliest arrival', earliest, (v) {
+                      setSheetState(() => earliest = v);
+                    }),
+                    timeTile('Latest arrival (cutoff)', latest, (v) {
+                      setSheetState(() => latest = v);
+                    }),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        if (_appointments.containsKey(stop.id))
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.delete_outline,
+                                  color: Colors.red),
+                              label: const Text('Clear',
+                                  style:
+                                      TextStyle(color: Colors.red)),
+                              onPressed: () {
+                                setState(() {
+                                  _appointments.remove(stop.id);
+                                  _appointmentWarningDismissed = false;
+                                });
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                          ),
+                        if (_appointments.containsKey(stop.id))
+                          const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save'),
+                            onPressed: () {
+                              setState(() {
+                                _appointments[stop.id] =
+                                    StopAppointment(
+                                  stopId: stop.id,
+                                  type: apptType,
+                                  appointmentTime: apptTime,
+                                  earliestArrival: earliest,
+                                  latestArrival: latest,
+                                  facilityName:
+                                      facilityCtrl.text
+                                              .trim()
+                                              .isEmpty
+                                          ? null
+                                          : facilityCtrl.text.trim(),
+                                  referenceNumber:
+                                      refCtrl.text.trim().isEmpty
+                                          ? null
+                                          : refCtrl.text.trim(),
+                                  note:
+                                      noteCtrl.text.trim().isEmpty
+                                          ? null
+                                          : noteCtrl.text.trim(),
+                                );
+                                _appointmentWarningDismissed = false;
+                              });
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Builds the appointment warning card shown on the map when any stop is
+  /// late or at risk.  Dismissed by the driver via a close button.
+  Widget _buildAppointmentWarningCard() {
+    if (_appointmentWarningDismissed ||
+        _tripStops.isEmpty ||
+        (!_hasLateAppointment && !_hasAtRiskAppointment)) {
+      return const SizedBox.shrink();
+    }
+
+    final isLate = _hasLateAppointment;
+    final color = isLate ? Colors.red.shade700 : Colors.orange.shade700;
+    final icon = isLate ? Icons.alarm_off : Icons.alarm;
+    final message = isLate
+        ? 'Stop appointment window will be missed!'
+        : 'One or more stops are at risk of late arrival.';
+
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 70,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    message,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () {
+                      if (_tripStops.isNotEmpty) {
+                        _showStopAppointmentSheet(0);
+                      }
+                    },
+                    child: const Text(
+                      'Tap to view stop details',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white70),
+              onPressed: () => setState(
+                  () => _appointmentWarningDismissed = true),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   ///
   /// Displays brand, name, diesel price (if known), address (if known), and a
   /// close button.  Styled consistently with the arrival sheet.
@@ -728,6 +1521,394 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// Opens the trip documents panel in a modal bottom sheet.
+  ///
+  /// Uses a [DraggableScrollableSheet] so the driver can expand the panel
+  /// to full-screen height when reviewing multiple documents, or collapse it
+  /// back to a peek height while keeping the map partially visible.
+  ///
+  /// [_activeTripId] is passed to [TripDocumentsScreen] so the list is
+  /// pre-filtered to the current trip's documents.
+  void _openDocumentsSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      // Rounded top corners to match the existing bottom sheets in the app.
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        // DraggableScrollableSheet allows expanding/collapsing with a swipe.
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55, // ~55 % of screen height on open
+          minChildSize: 0.35,     // minimum peek height
+          maxChildSize: 0.92,     // near full-screen at maximum expansion
+          builder: (_, scrollController) {
+            return ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+              child: TripDocumentsScreen(
+                activeTripId: _activeTripId,
+              ),
+            );
+          },
+  // ── Weigh station / port-of-entry methods ─────────────────────────────────
+
+  /// Maps a weigh station status string to a colour for the status badge.
+  ///
+  /// - `'open'`     → red   (driver must stop — urgent)
+  /// - `'closed'`   → green (safe to pass)
+  /// - `'bypass'`   → blue  (transponder bypass may be used)
+  /// - anything else → grey  (unknown status)
+  Color _weighStatusColor(String? status) {
+    switch ((status ?? '').toLowerCase()) {
+      case 'open':
+        return Colors.red;
+      case 'closed':
+        return Colors.green;
+      case 'bypass':
+      case 'bypass available':
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  /// Maps a weigh station status to an alert banner background colour.
+  ///
+  /// Uses stronger shades so the banner is clearly visible over the map.
+  Color _weighAlertColor(RoutePoi poi) {
+    switch ((poi.status ?? '').toLowerCase()) {
+      case 'open':
+        return Colors.red.shade700;
+      case 'closed':
+        return Colors.green.shade700;
+      case 'bypass':
+      case 'bypass available':
+        return Colors.blue.shade700;
+      default:
+        return Colors.orange.shade700;
+    }
+  }
+
+  /// Formats a distance in metres to a human-readable string.
+  ///
+  /// Values below 1 000 m are shown as "NNN m"; values from 1 km upward are
+  /// shown as "N.N km".  Matches the brevity expected in a navigation overlay.
+  String _formatRoadDistance(double meters) {
+    if (meters < 1000) {
+      return '${meters.toInt()} m';
+    }
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  /// Returns the nearest [RoutePoi] of type [PoiType.weighStation] or
+  /// [PoiType.portOfEntry] from [_routePois] to the truck's current GPS
+  /// position.  Returns null when [_truckPosition] is unavailable or
+  /// [_routePois] is empty.
+  RoutePoi? _findNearestWeighStation() {
+    if (_truckPosition == null) return null;
+    RoutePoi? nearest;
+    double nearestDistance = double.infinity;
+
+    for (final poi in _routePois) {
+      if (poi.type != PoiType.weighStation &&
+          poi.type != PoiType.portOfEntry) {
+        continue;
+      }
+      final meters = Geolocator.distanceBetween(
+        _truckPosition!.latitude,
+        _truckPosition!.longitude,
+        poi.position.latitude,
+        poi.position.longitude,
+      );
+      if (meters < nearestDistance) {
+        nearestDistance = meters;
+        nearest = poi;
+      }
+    }
+    return nearest;
+  }
+
+  /// Checks whether the truck is within 1 mile (1 609 m) of a weigh station
+  /// or port of entry and updates [_upcomingWeighStation] accordingly.
+  ///
+  /// When the truck enters the 1-mile radius the alert banner is shown and a
+  /// one-time TTS warning ("Weigh station ahead") is spoken.  When the truck
+  /// leaves the radius (or no position is available) the banner is hidden and
+  /// [_weighAlertSpoken] is reset so the warning fires again on the next
+  /// approach.
+  ///
+  /// Call this from the GPS position listener so it runs on every fix.
+  Future<void> _checkWeighStationAlert() async {
+    if (_truckPosition == null) return;
+
+    final poi = _findNearestWeighStation();
+
+    if (poi == null) {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+      return;
+    }
+
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    // ~1 mile alert radius
+    if (meters <= 1609.0) {
+      if (!_weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = poi;
+          _weighAlertSpoken = true;
+        });
+        await _speak('Weigh station ahead');
+      } else {
+        setState(() {
+          _upcomingWeighStation = poi;
+        });
+      }
+    } else {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+    }
+  }
+
+  /// Shows a modal bottom sheet with full details for the given [RoutePoi].
+  ///
+  /// Displays: station name, distance from truck, colour-coded status badge,
+  /// bypass availability, driver notes, and a button to centre the map on the
+  /// station.
+  void _showWeighStationSheet(RoutePoi poi) {
+    final double meters = _truckPosition != null
+        ? Geolocator.distanceBetween(
+            _truckPosition!.latitude,
+            _truckPosition!.longitude,
+            poi.position.latitude,
+            poi.position.longitude,
+          )
+        : 0.0;
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Station name ───────────────────────────────────────────────
+              Text(
+                poi.name,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              // ── Status badge + distance ────────────────────────────────────
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _weighStatusColor(poi.status),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      poi.status ?? 'Unknown',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  if (_truckPosition != null)
+                    Text(_formatRoadDistance(meters)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              // ── Bypass availability ────────────────────────────────────────
+              if (poi.bypassAvailable != null)
+                Text(
+                  poi.bypassAvailable!
+                      ? 'Bypass: Available'
+                      : 'Bypass: Not available',
+                  style: const TextStyle(fontSize: 16),
+                ),
+              // ── Driver note ────────────────────────────────────────────────
+              if (poi.note != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  poi.note!,
+                  style: const TextStyle(
+                      fontSize: 15, color: Colors.black87),
+                ),
+              ],
+              const SizedBox(height: 20),
+              // ── Center-on-station button ───────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _mapController.move(poi.position, 16);
+                  },
+                  icon: const Icon(Icons.center_focus_strong),
+                  label: const Text('Center on Station'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Builds the list of [Marker]s for each visible weigh station / port of
+  /// entry POI in [_routePois].
+  ///
+  /// Returns an empty list when [_showWeighStations] is false.
+  List<Marker> _buildWeighStationMarkers() {
+    if (!_showWeighStations) return const [];
+
+    return _routePois
+        .where((poi) =>
+            poi.type == PoiType.weighStation ||
+            poi.type == PoiType.portOfEntry)
+        .map((poi) {
+      return Marker(
+        point: poi.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showWeighStationSheet(poi),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _weighStatusColor(poi.status),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.scale,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns a colour-coded alert banner positioned near the top of the map
+  /// stack when [_upcomingWeighStation] is set (truck within 1 mile of a weigh
+  /// station or port of entry).  Returns [SizedBox.shrink] when no alert is
+  /// active so the widget tree stays stable.  Tapping the banner opens the
+  /// full details sheet via [_showWeighStationSheet].
+  Widget _buildWeighStationAlertCard() {
+    if (_upcomingWeighStation == null || _truckPosition == null) {
+      return const SizedBox.shrink();
+    }
+
+    final poi = _upcomingWeighStation!;
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 140,
+      child: GestureDetector(
+        onTap: () => _showWeighStationSheet(poi),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _weighAlertColor(poi),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.white,
+                size: 28,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      poi.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      poi.status ?? poi.subtitle ?? 'Status unknown',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                _formatRoadDistance(meters),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -932,6 +2113,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Fuel warning: check after each GPS fix ────────────────────────────
+    _checkFuelWarning();
+
+    // ── Weigh station / port of entry proximity check ────────────────────────
+    // Run after position state is updated so _truckPosition is current.
+    _checkWeighStationAlert();
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -1337,6 +2525,217 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
     if (mounted) setState(() {});
+
+    // Update simulated fuel level from the latest mileage total.
+    _updateFuelFromTrip();
+  }
+
+  // ── Fuel planning logic ───────────────────────────────────────────────────
+
+  /// Updates [_fuelPercent] from the cumulative miles driven so far.
+  ///
+  /// Simulates diesel consumption by dividing [_milesDriven] by [_avgMpg]
+  /// to get gallons used, converting that to a percentage of the full tank,
+  /// and clamping the result to [0, 100].
+  ///
+  /// Call this after [_updateTripStats] so [_milesDriven] is already fresh.
+  void _updateFuelFromTrip() {
+    if (_milesDriven <= 0) return;
+    final gallonsUsed = _milesDriven / _avgMpg;
+    final percentLeft =
+        100.0 - ((gallonsUsed / _fuelTankGallons) * 100.0);
+    setState(() {
+      _fuelPercent = percentLeft.clamp(0.0, 100.0);
+    });
+  }
+
+  /// Returns up to three nearest truck stops from the current position,
+  /// sorted closest-first.  Only fuel stops (non-rest-area brands) are
+  /// included so the driver sees actionable diesel options.
+  ///
+  /// Falls back to returning all visible stops when [_truckPosition] is null
+  /// (before the first GPS fix), sorted by their original list order.
+  List<TruckStop> _getRecommendedFuelStops() {
+    final fuelStops = _truckStops
+        .where((s) => s.brand != 'Rest Area')
+        .toList();
+
+    if (_truckPosition != null) {
+      fuelStops.sort((a, b) {
+        final da = Geolocator.distanceBetween(
+          _truckPosition!.latitude,
+          _truckPosition!.longitude,
+          a.position.latitude,
+          a.position.longitude,
+        );
+        final db = Geolocator.distanceBetween(
+          _truckPosition!.latitude,
+          _truckPosition!.longitude,
+          b.position.latitude,
+          b.position.longitude,
+        );
+        return da.compareTo(db);
+      });
+    }
+
+    return fuelStops.take(3).toList();
+  }
+
+  /// Shows a modal bottom sheet listing the three nearest recommended fuel
+  /// stops.  Tapping a stop dismisses the sheet and opens the full stop
+  /// detail sheet via [_showTruckStopSheet].
+  void _showFuelRecommendations() {
+    if (!mounted) return;
+    final stops = _getRecommendedFuelStops();
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.local_gas_station,
+                      color: Colors.blue, size: 28),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Recommended Fuel Stops',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (stops.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No fuel stops found near the current route.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              else
+                for (final stop in stops)
+                  ListTile(
+                    leading: const Icon(Icons.local_gas_station,
+                        color: Colors.blue),
+                    title: Text(stop.name),
+                    subtitle: Text(
+                      stop.dieselPrice != null
+                          ? '\$${stop.dieselPrice!.toStringAsFixed(2)}/gal · ${stop.address ?? stop.brand}'
+                          : stop.address ?? stop.brand,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showTruckStopSheet(stop);
+                    },
+                  ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Checks the current estimated range and, when it drops below 150 miles,
+  /// fires a TTS announcement and opens the fuel-stop recommendation sheet —
+  /// but only once per low-fuel event.  The warning resets automatically
+  /// when the range recovers above the threshold.
+  Future<void> _checkFuelWarning() async {
+    if (_estimatedRangeMiles > 150) {
+      // Range is safe — reset the warning so it fires again if fuel drops later.
+      if (_fuelWarningShown) setState(() => _fuelWarningShown = false);
+      return;
+    }
+    // Already warned for this low-fuel event — do not repeat.
+    if (_fuelWarningShown) return;
+    setState(() => _fuelWarningShown = true);
+
+    await _speak('Fuel stop recommended. Less than 150 miles remaining.');
+    if (mounted) {
+      _showFuelRecommendations();
+    }
+  }
+
+  // ── Fuel planning UI ──────────────────────────────────────────────────────
+
+  /// Builds the floating fuel status card that overlays the map.
+  ///
+  /// Layout: gas-station icon | range + gallons remaining | fuel percentage
+  ///
+  /// The card turns red when the estimated range drops below 150 miles,
+  /// matching the urgency colour convention used in the navigation banner.
+  /// Tapping the card when fuel is low opens [_showFuelRecommendations].
+  Widget _buildFuelCard() {
+    final bool lowFuel = _estimatedRangeMiles < 150;
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 250,
+      child: GestureDetector(
+        onTap: lowFuel ? _showFuelRecommendations : null,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: lowFuel ? Colors.red : Colors.black87,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.local_gas_station, color: Colors.white),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lowFuel ? 'Fuel Stop Needed' : 'Fuel Range',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Range: $_fuelRangeText · Left: $_fuelLeftText',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '${_fuelPercent.toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── Trip statistics computed display strings ───────────────────────────────
@@ -1382,7 +2781,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkArrival(LatLng current) {
     // Guard: only trigger once per trip.
     if (_isArrived) return;
-    final dist = _distanceBetween(current, _destination);
+    final dest = _customDestination ?? _destination;
+    final dist = _distanceBetween(current, dest);
     if (dist <= _arrivalThresholdMeters) {
       _triggerArrival();
     }
@@ -1728,13 +3128,203 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
+  // ── Searchable destination methods ──────────────────────────────────────
+
+  /// Queries the Mapbox Geocoding API with [query] and updates
+  /// [_searchSuggestions] with the returned place features.
+  Future<void> _searchDestinations(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => _searchSuggestions = const []);
+      return;
+    }
+    final url =
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
+        '?access_token=$_mapboxToken'
+        '&types=place,address,poi'
+        '&country=US'
+        '&limit=5';
+    try {
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        setState(() => _searchSuggestions = const []);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features =
+          (data['features'] as List).cast<Map<String, dynamic>>();
+      setState(() => _searchSuggestions = features);
+    } catch (_) {
+      setState(() => _searchSuggestions = const []);
+    }
+  }
+
+  /// Sets [_customDestination] from a geocoding [feature] map and starts
+  /// routing to that location.
+  void _selectDestination(Map<String, dynamic> feature) {
+    final coords =
+        (feature['geometry']['coordinates'] as List).cast<num>();
+    final dest = LatLng(coords[1].toDouble(), coords[0].toDouble());
+    final name = feature['place_name'] as String? ?? 'Destination';
+    setState(() {
+      _customDestination = dest;
+      _searchController.text = name;
+      _searchSuggestions = const [];
+      _isArrived = false;
+      _navigationActive = false;
+    });
+    _searchFocusNode.unfocus();
+    fetchRoute();
+  }
+
+  /// Called when the user long-presses on the map; shows a confirmation sheet
+  /// to set the pressed location as the destination.
+  void _onMapLongPress(TapPosition tapPos, LatLng point) {
+    _showDestinationConfirmSheet(point);
+  }
+
+  /// Displays a bottom sheet asking the user to confirm a map-tapped point as
+  /// their destination.  On confirmation, sets [_customDestination] and
+  /// triggers [fetchRoute].
+  void _showDestinationConfirmSheet(LatLng point) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Set Destination Here?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${point.latitude.toStringAsFixed(5)}, '
+              '${point.longitude.toStringAsFixed(5)}',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _customDestination = point;
+                        _searchController.text =
+                            '${point.latitude.toStringAsFixed(5)}, '
+                            '${point.longitude.toStringAsFixed(5)}';
+                        _searchSuggestions = const [];
+                        _isArrived = false;
+                        _navigationActive = false;
+                      });
+                      fetchRoute();
+                    },
+                    child: const Text('Navigate Here'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Search bar UI builders ───────────────────────────────────────────────
+
+  /// Returns the destination search bar with an optional suggestions list
+  /// shown directly below it.
+  Widget _buildSearchBarArea() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            decoration: InputDecoration(
+              hintText: 'Search destination…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchSuggestions = const [];
+                          _customDestination = null;
+                        });
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+            ),
+            onChanged: _searchDestinations,
+            textInputAction: TextInputAction.search,
+          ),
+          if (_searchSuggestions.isNotEmpty) _buildSuggestionList(),
+        ],
+      ),
+    );
+  }
+
+  /// Returns a scrollable list of geocoding suggestions beneath the search
+  /// field.
+  Widget _buildSuggestionList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey),
+        borderRadius:
+            const BorderRadius.vertical(bottom: Radius.circular(12)),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: _searchSuggestions.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (_, i) {
+          final feature = _searchSuggestions[i];
+          final name = feature['place_name'] as String? ?? '';
+          return ListTile(
+            dense: true,
+            leading: const Icon(Icons.location_on_outlined, size: 20),
+            title:
+                Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
+            onTap: () => _selectDestination(feature),
+          );
+        },
+      ),
+    );
+  }
+
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
-  /// origin.  The destination always remains [_destination].
+  /// origin.  The destination is [_customDestination] when set, or the default
+  /// [_destination] otherwise.
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
@@ -1761,14 +3351,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+      final profile = _buildRouteProfile();
+      final excludeStr = _buildExcludeString();
+      final dest = _customDestination ?? _destination;
       final url =
-          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "${from.longitude},${from.latitude};$_destLng,$_destLat"
+          "https://api.mapbox.com/directions/v5/$profile/"
+          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
           "&alternatives=true"
-          "&exclude=ferry"
+          "${excludeStr.isNotEmpty ? '&exclude=$excludeStr' : ''}"
           "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
@@ -1788,10 +3381,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final newPoints = _simplifyRoute(decoded);
 
       // Check whether the decoded route avoids all restricted zones.
-      // If it does not, automatically re-fetch using the alternative route.
+      // Only run the safety check when _preferTruckSafe is enabled; drivers
+      // who have disabled the truck-safe preference receive whichever route
+      // the API returns without the automatic fallback to the alternative.
       // When already on the alternative, we accept the route regardless —
       // no further candidates are available to try.
-      if (!_isTruckSafe(newPoints) && !alternative) {
+      if (_preferTruckSafe && !_isTruckSafe(newPoints) && !alternative) {
         print("Route is not truck-safe – fetching alternative route");
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
@@ -1814,6 +3409,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": turnByTurnList,
+          // Snapshot the active mode so _buildRouteInfo() always shows the
+          // settings that were used to generate the currently displayed route.
+          "routeMode": _routeMode,
+          "avoidTolls": _avoidTolls,
+          "avoidFerries": _avoidFerries,
         };
         // Clean replacement – never use addAll() here, which would layer new
         // points on top of previous route points and cause spaghetti lines.
@@ -1890,6 +3490,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         LatLng(lat, lng),
         maneuver: modifier,
         distanceMeters: distanceMeters,
+        // Sample lane hint for demonstration; replace with real lane data
+        // from a lane-aware API (e.g. Mapbox guidance) when available.
+        laneHint: _sampleLaneHint(modifier),
       );
     }).toList();
   }
@@ -1942,6 +3545,238 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
     return score.clamp(0.0, 100.0);
+  }
+
+  // ── Route options helpers ──────────────────────────────────────────────────
+
+  /// Returns a short user-facing label for the active route mode.
+  String _routeModeLabel() {
+    switch (_routeMode) {
+      case 'fuel':
+        return 'Fuel Efficient';
+      case 'truck_safe':
+        return 'Truck Safe';
+      case 'fastest':
+      default:
+        return 'Fastest';
+    }
+  }
+
+  /// Builds the Mapbox Directions `profile` path segment from [_routeMode].
+  ///
+  /// 'fastest' and 'truck_safe' both use driving-traffic so live congestion
+  /// data is included; 'fuel' uses the plain driving profile which typically
+  /// produces a steady-speed route that avoids stop-and-go traffic.
+  String _buildRouteProfile() {
+    switch (_routeMode) {
+      case 'fuel':
+        return 'mapbox/driving';
+      case 'fastest':
+      case 'truck_safe':
+      default:
+        return 'mapbox/driving-traffic';
+    }
+  }
+
+  /// Builds the `exclude` query-string value from the current avoidance flags.
+  ///
+  /// Returns an empty string when nothing is excluded so the caller can
+  /// conditionally append the `&exclude=…` segment to avoid a malformed URL.
+  String _buildExcludeString() {
+    final items = <String>[];
+    if (_avoidTolls) items.add('toll');
+    if (_avoidFerries) items.add('ferry');
+    return items.join(',');
+  }
+
+  // ── Route options UI ───────────────────────────────────────────────────────
+
+  /// Floating action button that opens the Route Options bottom sheet.
+  Widget _buildRouteOptionsButton() {
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: FloatingActionButton.small(
+        heroTag: 'route_options',
+        tooltip: 'Route options',
+        onPressed: _isArrived ? null : _showRouteOptionsSheet,
+        backgroundColor: _isArrived ? Colors.grey : Colors.white,
+        foregroundColor: _isArrived ? Colors.white : Colors.blue.shade700,
+        child: const Icon(Icons.tune),
+      ),
+    );
+  }
+
+  /// Shows a modal bottom sheet that lets the driver choose a route mode and
+  /// toggle avoidance preferences, then re-fetches the route when confirmed.
+  void _showRouteOptionsSheet() {
+    // Local copies so the driver can cancel without mutating state.
+    String tempMode = _routeMode;
+    bool tempTolls = _avoidTolls;
+    bool tempFerries = _avoidFerries;
+    bool tempTruckSafe = _preferTruckSafe;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Header ─────────────────────────────────────────────
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Route Options',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ── Route mode ─────────────────────────────────────────
+                  const Text(
+                    'Route Mode',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 'fastest',
+                        label: Text('Fastest'),
+                        icon: Icon(Icons.speed,
+                            semanticLabel: 'Fastest route'),
+                      ),
+                      ButtonSegment(
+                        value: 'fuel',
+                        label: Text('Fuel'),
+                        icon: Icon(Icons.local_gas_station,
+                            semanticLabel: 'Fuel-efficient route'),
+                      ),
+                      ButtonSegment(
+                        value: 'truck_safe',
+                        label: Text('Truck Safe'),
+                        icon: Icon(Icons.local_shipping,
+                            semanticLabel: 'Truck-safe route'),
+                      ),
+                    ],
+                    selected: {tempMode},
+                    onSelectionChanged: (s) =>
+                        setSheetState(() => tempMode = s.first),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Avoidance toggles ──────────────────────────────────
+                  const Text(
+                    'Avoid',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Tolls'),
+                    value: tempTolls,
+                    onChanged: (v) => setSheetState(() => tempTolls = v),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Ferries'),
+                    value: tempFerries,
+                    onChanged: (v) => setSheetState(() => tempFerries = v),
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // ── Truck safety post-processing ───────────────────────
+                  const Text(
+                    'Safety',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Auto-select safe alternative routes'),
+                    subtitle: const Text(
+                      'Avoids routes through restricted zones',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    value: tempTruckSafe,
+                    onChanged: (v) => setSheetState(() => tempTruckSafe = v),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // ── Apply button ───────────────────────────────────────
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Apply & Reroute'),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _applyRouteOptionsAndRefresh(
+                          mode: tempMode,
+                          avoidTolls: tempTolls,
+                          avoidFerries: tempFerries,
+                          preferTruckSafe: tempTruckSafe,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Persists the chosen route options to state and re-fetches the route.
+  ///
+  /// When a live GPS position is available the re-fetch starts from the
+  /// truck's current location; otherwise it falls back to the default origin.
+  void _applyRouteOptionsAndRefresh({
+    required String mode,
+    required bool avoidTolls,
+    required bool avoidFerries,
+    required bool preferTruckSafe,
+  }) {
+    setState(() {
+      _routeMode = mode;
+      _avoidTolls = avoidTolls;
+      _avoidFerries = avoidFerries;
+      _preferTruckSafe = preferTruckSafe;
+    });
+    // Re-fetch from the truck's current position when GPS is active so the
+    // new route starts from where the driver actually is.
+    fetchRoute(fromPosition: _truckPosition);
   }
 
   // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -2065,6 +3900,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (meters < _urgentColorThresholdMeters) return Colors.red;
     if (meters < _mediumColorThresholdMeters) return Colors.orange;
     return Colors.black87;
+  }
+
+  /// Returns a chip background [Color] for the lane-hint label.
+  ///
+  /// Directional keywords drive the colour so drivers instantly associate
+  /// colour with action:
+  ///   contains 'left'     → blue
+  ///   contains 'right'    → green
+  ///   contains 'straight' → orange
+  ///   anything else       → white24 (neutral)
+  Color _laneHintColor(String? laneHint) {
+    if (laneHint == null || laneHint.isEmpty) return Colors.white24;
+    final text = laneHint.toLowerCase();
+    if (text.contains('left')) return Colors.blue;
+    if (text.contains('right')) return Colors.green;
+    if (text.contains('straight')) return Colors.orange;
+    return Colors.white24;
+  }
+
+  /// Returns a sample lane guidance hint for [modifier] used as mock data
+  /// until a lane-aware API source is integrated.
+  ///
+  /// Only turn-type maneuvers receive a hint; straight/continue steps return
+  /// null so the chip is hidden for simple forward movement.
+  String? _sampleLaneHint(String modifier) {
+    switch (modifier.toLowerCase()) {
+      case 'left':
+      case 'slight left':
+        return 'Keep left';
+      case 'sharp left':
+        return 'Use left 2 lanes';
+      case 'right':
+      case 'slight right':
+        return 'Use right lane';
+      case 'sharp right':
+        return 'Use right 2 lanes';
+      case 'merge':
+        return 'Stay straight';
+      default:
+        return null;
+    }
   }
 
   /// Returns true when the driver has reached the final navigation step and
@@ -2505,6 +4381,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ],
+                        // Lane guidance chip — shown when a lane hint is
+                        // available for the current step (e.g. 'Keep left',
+                        // 'Use right 2 lanes').  Hidden on arrival.
+                        if (!isArrived &&
+                            step.laneHint != null &&
+                            step.laneHint!.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _laneHintColor(step.laneHint),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              step.laneHint!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2788,6 +4690,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
       body: Column(
         children: [
+          // ── Destination search bar ────────────────────────────────────
+          _buildSearchBarArea(),
+
           // ── Mapbox map widget (flutter_map) ──────────────────────────────
           Expanded(
             flex: 2,
@@ -2810,11 +4715,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     // explore without forced camera snaps back to the truck.
                     onMapEvent: (MapEvent event) {
                       if (event is MapEventMoveStart &&
-                          event.source != MapEventSource.mapController &&
-                          _followTruck) {
-                        setState(() => _followTruck = false);
+                          event.source != MapEventSource.mapController) {
+                        if (_searchFocusNode.hasFocus) {
+                          _searchFocusNode.unfocus();
+                        }
+                        if (_followTruck) {
+                          setState(() => _followTruck = false);
+                        }
                       }
                     },
+                    onLongPress: _onMapLongPress,
                   ),
                   children: [
                     TileLayer(
@@ -2863,6 +4773,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Route Options FAB ──────────────────────────────────────
+                // Top-right corner of the map; opens the options bottom sheet
+                // so the driver can change route mode and avoidance settings.
+                _buildRouteOptionsButton(),
+                // ── Weigh station proximity alert card ────────────────────
+                // Shown when the truck is within 1 mile of a weigh station
+                // or port of entry.  Banner colour reflects open/closed/bypass
+                // status; tapping it opens the full details sheet.
+                _buildWeighStationAlertCard(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -2924,6 +4843,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // once navigation has started (_tripStartTime != null) so the
                 // panel never appears on a blank or pre-route map view.
                 if (_tripStartTime != null) _buildTripStatsPanel(),
+                // ── Appointment warning card ──────────────────────────────
+                // Warns the driver when any stop's ETA exceeds the appointment
+                // window or is within 30 min of the cutoff.  Dismissible.
+                _buildAppointmentWarningCard(),
+                // ── Fuel card ─────────────────────────────────────────────
+                // Shows estimated range, gallons remaining, and fuel %.
+                // Turns red and becomes tappable when range is below 150 mi.
+                // Only shown once navigation is underway.
+                if (_tripStartTime != null) _buildFuelCard(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Always visible during active navigation.  Positioned at the
                 // bottom-right corner of the map so it never obscures the
@@ -2973,6 +4901,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                 ),
+                // ── Documents FAB ─────────────────────────────────────────
+                // Quick-access button for the trip documents panel.
+                // Positioned just above the POI toggle FAB on the left so it
+                // is always reachable during active navigation.  Opens the
+                // TripDocumentsScreen in a DraggableScrollableSheet so the
+                // driver can review / add paperwork without leaving the map.
+                Positioned(
+                  bottom: 80,
+                  left: 16,
+                  child: FloatingActionButton.small(
+                    heroTag: 'docs_fab',
+                    tooltip: 'Trip documents',
+                    backgroundColor: Colors.indigo.shade600,
+                    onPressed: _openDocumentsSheet,
+                    child: const Icon(Icons.description, color: Colors.white),
+                  ),
+                ),
               ],
             ),
           ),
@@ -3005,6 +4950,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final fuelGallons = route['fuelGallonsEstimate'];
     // Raw mode key (e.g. 'fastest') is converted to a friendly label below.
     final routeMode = route['routeMode'] as String? ?? 'fastest';
+    final routeAvoidTolls = route['avoidTolls'] as bool? ?? false;
+    final routeAvoidFerries = route['avoidFerries'] as bool? ?? false;
     final provider = route['provider'] as String? ?? '';
     final live = route['live'] as Map<String, dynamic>?;
     final warnings =
@@ -3081,6 +5028,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 if (live != null) ...[
                   _labelValue('Traffic', '${live['traffic']}'),
                   _labelValue('Incidents', '${live['incidents']}'),
+                ],
+                // ── Avoidance badges ───────────────────────────────────
+                if (routeAvoidTolls || routeAvoidFerries) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      if (routeAvoidTolls)
+                        const Chip(
+                          label: Text('No Tolls'),
+                          avatar: Icon(Icons.money_off, size: 16,
+                              semanticLabel: 'Avoiding tolls'),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                      if (routeAvoidFerries)
+                        const Chip(
+                          label: Text('No Ferries'),
+                          avatar: Icon(Icons.directions_boat_outlined,
+                              size: 16,
+                              semanticLabel: 'Avoiding ferries'),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                    ],
+                  ),
                 ],
               ],
             ),
@@ -3204,7 +5177,124 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ),
         ),
+
+        // ── Dispatch Stops / Appointments ────────────────────────────────
+        if (_tripStops.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Dispatch Stops',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  for (int i = 0; i < _tripStops.length; i++) ...[
+                    _buildStopRow(i),
+                    if (i < _tripStops.length - 1)
+                      const Divider(height: 8),
+                  ],
+                ],
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// Builds a compact summary row for a dispatch stop in the route-info panel.
+  Widget _buildStopRow(int index) {
+    final stop = _tripStops[index];
+    final appt = _appointments[stop.id];
+    final eta = _stopEta(index);
+
+    Color statusColor = Colors.grey.shade400;
+    String statusText = 'No Appt';
+    if (appt != null) {
+      if (appt.isLate(eta)) {
+        statusColor = Colors.red;
+        statusText = 'LATE';
+      } else if (appt.isAtRisk(eta)) {
+        statusColor = Colors.orange;
+        statusText = 'At Risk';
+      } else {
+        statusColor = Colors.green;
+        statusText = 'On Time';
+      }
+    }
+
+    return InkWell(
+      onTap: () => _showStopAppointmentSheet(index),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 13,
+              backgroundColor: _stopBadgeColor(stop.type),
+              child: Text(
+                '${index + 1}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(stop.name,
+                      style:
+                          const TextStyle(fontWeight: FontWeight.w600)),
+                  if (appt?.facilityName != null)
+                    Text(appt!.facilityName!,
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.grey)),
+                  if (appt?.latestArrival != null)
+                    Text(
+                      'Cutoff: ${_formatApptDateTime(appt!.latestArrival!)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: statusColor == Colors.red
+                            ? Colors.red
+                            : Colors.black87,
+                      ),
+                    ),
+                  if (appt?.note != null && appt!.note!.isNotEmpty)
+                    Text(
+                      appt.note!,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.grey),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: statusColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                statusText,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3239,6 +5329,7 @@ class _NavStep {
     this.location, {
     this.maneuver = 'straight',
     this.distanceMeters = 0.0,
+    this.laneHint,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -3253,6 +5344,12 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+
+  /// Optional lane guidance hint shown below the instruction in the maneuver
+  /// card, e.g. 'Keep left', 'Use right 2 lanes'.  Currently populated with
+  /// sample data for common maneuver types; ready for real lane-data
+  /// integration (e.g. Mapbox guidance API) in the future.
+  final String? laneHint;
 }
 
 /// A truck-friendly point of interest along the route.
@@ -3289,4 +5386,71 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+}
+
+// ── Weigh station / port of entry POI model ───────────────────────────────
+
+/// Classifies a route POI for marker colour and alert-logic selection.
+enum PoiType {
+  /// Fuel/rest stop — truck stop chain (Pilot, Love's, TA, etc.).
+  truckStop,
+
+  /// State or federal weigh station where commercial vehicles are weighed.
+  weighStation,
+
+  /// Rest area alongside the highway.
+  restArea,
+
+  /// Truck/commercial parking lot.
+  parking,
+
+  /// International or state border crossing for commercial vehicles.
+  portOfEntry,
+}
+
+/// A trucking-relevant point of interest along the planned route.
+///
+/// Displayed as a map marker and shown in the [_buildWeighStationAlertCard]
+/// banner when the truck approaches within 1 mile.  Tapping the banner or
+/// marker opens [_showWeighStationSheet] for full details.
+class RoutePoi {
+  const RoutePoi({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.position,
+    this.subtitle,
+    this.availableSpots,
+    this.status,
+    this.bypassAvailable,
+    this.note,
+  });
+
+  /// Unique identifier used as the map marker ID.
+  final String id;
+
+  /// Display name shown in the alert card and details sheet.
+  final String name;
+
+  /// POI category — drives marker colour and alert-logic filtering.
+  final PoiType type;
+
+  /// Geographic position of the POI.
+  final LatLng position;
+
+  /// Short secondary label, e.g. "I-5 Southbound".  Optional.
+  final String? subtitle;
+
+  /// Available parking or staging spots, if known.
+  final int? availableSpots;
+
+  /// Current operational status: "Open", "Closed", "Bypass", or null when
+  /// unknown.  Shown in the alert banner and details sheet.
+  final String? status;
+
+  /// Whether a transponder bypass is available at this facility.
+  final bool? bypassAvailable;
+
+  /// Driver-facing note, e.g. "Check transponder before bypassing".
+  final String? note;
 }

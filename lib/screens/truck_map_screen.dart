@@ -175,6 +175,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Weigh station / port of entry alert state ─────────────────────────────
+  //
+  // _upcomingWeighStation is set to the nearest weigh station or port of entry
+  // within 1 mile (1 609 m) of the truck's current GPS position.  It is null
+  // when no such POI is nearby.  _weighAlertSpoken ensures the TTS warning
+  // fires only once per approach so the driver is not repeatedly interrupted.
+  RoutePoi? _upcomingWeighStation;
+  bool _weighAlertSpoken = false;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -240,6 +249,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
 
+  // ── Searchable destination picker ────────────────────────────────────────
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  List<Map<String, dynamic>> _searchSuggestions = const [];
+  LatLng? _customDestination;
+
   // Navigation-mode zoom level (12.5–15) — close enough for street detail
   // without losing surrounding road context.
   static const _navigationZoomLevel = 14.0;
@@ -265,6 +280,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    // Rebuild whenever search text changes so the clear-icon suffix appears
+    // and disappears correctly.
+    _searchController.addListener(() => setState(() {}));
   }
 
   @override
@@ -273,6 +291,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -337,13 +357,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns the fixed destination [Marker] (red pin at [_destination]).
+  /// Returns the destination [Marker] (red pin).  Uses [_customDestination]
+  /// when set, otherwise falls back to the default [_destination].
   Marker _buildDestinationMarker() {
-    return const Marker(
-      point: _destination,
+    final point = _customDestination ?? _destination;
+    return Marker(
+      point: point,
       width: 40,
       height: 40,
-      child: Icon(Icons.location_on, size: 34, color: Colors.red),
+      child: const Icon(Icons.location_on, size: 34, color: Colors.red),
     );
   }
 
@@ -433,6 +455,63 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
+    ),
+  ];
+
+  // ── Weigh station / port of entry mock dataset ────────────────────────────
+  //
+  // Hard-coded weigh stations and ports of entry covering the default
+  // Portland → Winnemucca route.  Replace with a real API or local DB in
+  // production.  Each entry carries a status string so the alert banner can
+  // display "Open", "Closed", "Bypass", or "Status unknown" to the driver.
+  static const List<RoutePoi> _mockWeighStations = [
+    RoutePoi(
+      id: 'ws1',
+      name: 'Baldock Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(45.267, -122.771),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws2',
+      name: 'Grants Pass Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(42.434, -123.338),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws3',
+      name: 'Oregon–California Port of Entry',
+      type: PoiType.portOfEntry,
+      position: LatLng(42.004, -122.834),
+      subtitle: 'Commercial vehicles',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws4',
+      name: 'Ashland Inspection Site',
+      type: PoiType.weighStation,
+      position: LatLng(42.192, -122.709),
+      subtitle: 'I-5 Northbound',
+      status: 'Closed',
+    ),
+    RoutePoi(
+      id: 'ws5',
+      name: 'Lassen Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(40.483, -121.508),
+      subtitle: 'I-5 Southbound',
+      status: 'Bypass',
+    ),
+    RoutePoi(
+      id: 'ws6',
+      name: 'Truckee Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(39.328, -120.183),
+      subtitle: 'I-80 Eastbound',
+      status: 'Open',
     ),
   ];
 
@@ -527,7 +606,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
-      if (_isArrived) _buildDestinationMarker(),
+      if (_isArrived || _customDestination != null) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
     ];
   }
@@ -642,6 +721,182 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ── Weigh station / port of entry alert logic ────────────────────────────
+
+  /// Returns the nearest [RoutePoi] of type [PoiType.weighStation] or
+  /// [PoiType.portOfEntry] to the truck's current GPS position, regardless of
+  /// distance.  Returns null when [_truckPosition] is unavailable or
+  /// [_mockWeighStations] is empty.
+  RoutePoi? _findNearestWeighStation() {
+    if (_truckPosition == null) return null;
+    RoutePoi? nearest;
+    double nearestDistance = double.infinity;
+
+    for (final poi in _mockWeighStations) {
+      if (poi.type != PoiType.weighStation &&
+          poi.type != PoiType.portOfEntry) {
+        continue;
+      }
+      final meters = Geolocator.distanceBetween(
+        _truckPosition!.latitude,
+        _truckPosition!.longitude,
+        poi.position.latitude,
+        poi.position.longitude,
+      );
+      if (meters < nearestDistance) {
+        nearestDistance = meters;
+        nearest = poi;
+      }
+    }
+    return nearest;
+  }
+
+  /// Checks whether the truck is within 1 mile (1 609 m) of a weigh station
+  /// or port of entry and updates [_upcomingWeighStation] accordingly.
+  ///
+  /// When the truck enters the 1-mile radius the alert banner is shown and a
+  /// one-time TTS warning ("Weigh station ahead") is spoken.  When the truck
+  /// leaves the radius (or no position is available) the banner is hidden and
+  /// [_weighAlertSpoken] is reset so the warning fires again on the next
+  /// approach.
+  ///
+  /// Call this from the GPS position listener so it runs on every fix.
+  Future<void> _checkWeighStationAlert() async {
+    if (_truckPosition == null) return;
+
+    final poi = _findNearestWeighStation();
+
+    if (poi == null) {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+      return;
+    }
+
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    // ~1 mile alert radius
+    if (meters <= 1609.0) {
+      if (!_weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = poi;
+          _weighAlertSpoken = true;
+        });
+        await _speak('Weigh station ahead');
+      } else {
+        setState(() {
+          _upcomingWeighStation = poi;
+        });
+      }
+    } else {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+    }
+  }
+
+  /// Formats a distance in metres to a human-readable string.
+  ///
+  /// Values below 1 000 m are shown as "NNN m"; values from 1 km upward are
+  /// shown as "N.N km".  Matches the brevity expected in a navigation overlay.
+  String _formatRoadDistance(double meters) {
+    if (meters < 1000) {
+      return '${meters.toInt()} m';
+    }
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  // ── Weigh station alert banner widget ─────────────────────────────────────
+
+  /// Returns an orange alert banner positioned near the top of the map stack
+  /// when [_upcomingWeighStation] is set (truck within 1 mile of a weigh
+  /// station or port of entry).  Returns [SizedBox.shrink] when no alert is
+  /// active so the widget tree stays stable.
+  Widget _buildWeighStationAlertCard() {
+    if (_upcomingWeighStation == null || _truckPosition == null) {
+      return const SizedBox.shrink();
+    }
+
+    final poi = _upcomingWeighStation!;
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 140,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade700,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.white,
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    poi.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    poi.status ?? poi.subtitle ?? 'Status unknown',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              _formatRoadDistance(meters),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -842,6 +1097,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Weigh station / port of entry proximity check ────────────────────────
+    // Run after position state is updated so _truckPosition is current.
+    _checkWeighStationAlert();
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -1031,7 +1290,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkArrival(LatLng current) {
     // Guard: only trigger once per trip.
     if (_isArrived) return;
-    final dist = _distanceBetween(current, _destination);
+    final dest = _customDestination ?? _destination;
+    final dist = _distanceBetween(current, dest);
     if (dist <= _arrivalThresholdMeters) {
       _triggerArrival();
     }
@@ -1377,13 +1637,203 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
+  // ── Searchable destination methods ──────────────────────────────────────
+
+  /// Queries the Mapbox Geocoding API with [query] and updates
+  /// [_searchSuggestions] with the returned place features.
+  Future<void> _searchDestinations(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => _searchSuggestions = const []);
+      return;
+    }
+    final url =
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
+        '?access_token=$_mapboxToken'
+        '&types=place,address,poi'
+        '&country=US'
+        '&limit=5';
+    try {
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        setState(() => _searchSuggestions = const []);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features =
+          (data['features'] as List).cast<Map<String, dynamic>>();
+      setState(() => _searchSuggestions = features);
+    } catch (_) {
+      setState(() => _searchSuggestions = const []);
+    }
+  }
+
+  /// Sets [_customDestination] from a geocoding [feature] map and starts
+  /// routing to that location.
+  void _selectDestination(Map<String, dynamic> feature) {
+    final coords =
+        (feature['geometry']['coordinates'] as List).cast<num>();
+    final dest = LatLng(coords[1].toDouble(), coords[0].toDouble());
+    final name = feature['place_name'] as String? ?? 'Destination';
+    setState(() {
+      _customDestination = dest;
+      _searchController.text = name;
+      _searchSuggestions = const [];
+      _isArrived = false;
+      _navigationActive = false;
+    });
+    _searchFocusNode.unfocus();
+    fetchRoute();
+  }
+
+  /// Called when the user long-presses on the map; shows a confirmation sheet
+  /// to set the pressed location as the destination.
+  void _onMapLongPress(TapPosition tapPos, LatLng point) {
+    _showDestinationConfirmSheet(point);
+  }
+
+  /// Displays a bottom sheet asking the user to confirm a map-tapped point as
+  /// their destination.  On confirmation, sets [_customDestination] and
+  /// triggers [fetchRoute].
+  void _showDestinationConfirmSheet(LatLng point) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Set Destination Here?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${point.latitude.toStringAsFixed(5)}, '
+              '${point.longitude.toStringAsFixed(5)}',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _customDestination = point;
+                        _searchController.text =
+                            '${point.latitude.toStringAsFixed(5)}, '
+                            '${point.longitude.toStringAsFixed(5)}';
+                        _searchSuggestions = const [];
+                        _isArrived = false;
+                        _navigationActive = false;
+                      });
+                      fetchRoute();
+                    },
+                    child: const Text('Navigate Here'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Search bar UI builders ───────────────────────────────────────────────
+
+  /// Returns the destination search bar with an optional suggestions list
+  /// shown directly below it.
+  Widget _buildSearchBarArea() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            decoration: InputDecoration(
+              hintText: 'Search destination…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchSuggestions = const [];
+                          _customDestination = null;
+                        });
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+            ),
+            onChanged: _searchDestinations,
+            textInputAction: TextInputAction.search,
+          ),
+          if (_searchSuggestions.isNotEmpty) _buildSuggestionList(),
+        ],
+      ),
+    );
+  }
+
+  /// Returns a scrollable list of geocoding suggestions beneath the search
+  /// field.
+  Widget _buildSuggestionList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey),
+        borderRadius:
+            const BorderRadius.vertical(bottom: Radius.circular(12)),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: _searchSuggestions.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (_, i) {
+          final feature = _searchSuggestions[i];
+          final name = feature['place_name'] as String? ?? '';
+          return ListTile(
+            dense: true,
+            leading: const Icon(Icons.location_on_outlined, size: 20),
+            title:
+                Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
+            onTap: () => _selectDestination(feature),
+          );
+        },
+      ),
+    );
+  }
+
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
-  /// origin.  The destination always remains [_destination].
+  /// origin.  The destination is [_customDestination] when set, or the default
+  /// [_destination] otherwise.
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
@@ -1412,9 +1862,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final from = fromPosition ?? _origin;
       final profile = _buildRouteProfile();
       final excludeStr = _buildExcludeString();
+      final dest = _customDestination ?? _destination;
       final url =
           "https://api.mapbox.com/directions/v5/$profile/"
-          "${from.longitude},${from.latitude};$_destLng,$_destLat"
+          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
@@ -1548,6 +1999,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         LatLng(lat, lng),
         maneuver: modifier,
         distanceMeters: distanceMeters,
+        // Sample lane hint for demonstration; replace with real lane data
+        // from a lane-aware API (e.g. Mapbox guidance) when available.
+        laneHint: _sampleLaneHint(modifier),
       );
     }).toList();
   }
@@ -1952,6 +2406,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (meters < _urgentColorThresholdMeters) return Colors.red;
     if (meters < _mediumColorThresholdMeters) return Colors.orange;
     return Colors.black87;
+  }
+
+  /// Returns a chip background [Color] for the lane-hint label.
+  ///
+  /// Directional keywords drive the colour so drivers instantly associate
+  /// colour with action:
+  ///   contains 'left'     → blue
+  ///   contains 'right'    → green
+  ///   contains 'straight' → orange
+  ///   anything else       → white24 (neutral)
+  Color _laneHintColor(String? laneHint) {
+    if (laneHint == null || laneHint.isEmpty) return Colors.white24;
+    final text = laneHint.toLowerCase();
+    if (text.contains('left')) return Colors.blue;
+    if (text.contains('right')) return Colors.green;
+    if (text.contains('straight')) return Colors.orange;
+    return Colors.white24;
+  }
+
+  /// Returns a sample lane guidance hint for [modifier] used as mock data
+  /// until a lane-aware API source is integrated.
+  ///
+  /// Only turn-type maneuvers receive a hint; straight/continue steps return
+  /// null so the chip is hidden for simple forward movement.
+  String? _sampleLaneHint(String modifier) {
+    switch (modifier.toLowerCase()) {
+      case 'left':
+      case 'slight left':
+        return 'Keep left';
+      case 'sharp left':
+        return 'Use left 2 lanes';
+      case 'right':
+      case 'slight right':
+        return 'Use right lane';
+      case 'sharp right':
+        return 'Use right 2 lanes';
+      case 'merge':
+        return 'Stay straight';
+      default:
+        return null;
+    }
   }
 
   /// Returns true when the driver has reached the final navigation step and
@@ -2392,6 +2887,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ],
+                        // Lane guidance chip — shown when a lane hint is
+                        // available for the current step (e.g. 'Keep left',
+                        // 'Use right 2 lanes').  Hidden on arrival.
+                        if (!isArrived &&
+                            step.laneHint != null &&
+                            step.laneHint!.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _laneHintColor(step.laneHint),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              step.laneHint!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2565,6 +3086,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
       body: Column(
         children: [
+          // ── Destination search bar ────────────────────────────────────
+          _buildSearchBarArea(),
+
           // ── Mapbox map widget (flutter_map) ──────────────────────────────
           Expanded(
             flex: 2,
@@ -2587,11 +3111,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     // explore without forced camera snaps back to the truck.
                     onMapEvent: (MapEvent event) {
                       if (event is MapEventMoveStart &&
-                          event.source != MapEventSource.mapController &&
-                          _followTruck) {
-                        setState(() => _followTruck = false);
+                          event.source != MapEventSource.mapController) {
+                        if (_searchFocusNode.hasFocus) {
+                          _searchFocusNode.unfocus();
+                        }
+                        if (_followTruck) {
+                          setState(() => _followTruck = false);
+                        }
                       }
                     },
+                    onLongPress: _onMapLongPress,
                   ),
                   children: [
                     TileLayer(
@@ -2644,6 +3173,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Top-right corner of the map; opens the options bottom sheet
                 // so the driver can change route mode and avoidance settings.
                 _buildRouteOptionsButton(),
+                // ── Weigh station / port of entry alert banner ────────────
+                // Shown below the navigation banner when the truck approaches
+                // a weigh station or port of entry within 1 mile.  Displays
+                // station name, status, and distance in an orange card.
+                _buildWeighStationAlertCard(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -3035,6 +3569,7 @@ class _NavStep {
     this.location, {
     this.maneuver = 'straight',
     this.distanceMeters = 0.0,
+    this.laneHint,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -3049,6 +3584,12 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+
+  /// Optional lane guidance hint shown below the instruction in the maneuver
+  /// card, e.g. 'Keep left', 'Use right 2 lanes'.  Currently populated with
+  /// sample data for common maneuver types; ready for real lane-data
+  /// integration (e.g. Mapbox guidance API) in the future.
+  final String? laneHint;
 }
 
 /// A truck-friendly point of interest along the route.
@@ -3085,4 +3626,58 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+}
+
+// ── Weigh station / port of entry POI model ───────────────────────────────
+
+/// Classifies a route POI for marker colour and alert-logic selection.
+enum PoiType {
+  /// Fuel/rest stop — truck stop chain (Pilot, Love's, TA, etc.).
+  truckStop,
+
+  /// State or federal weigh station where commercial vehicles are weighed.
+  weighStation,
+
+  /// Rest area alongside the highway.
+  restArea,
+
+  /// Truck/commercial parking lot.
+  parking,
+
+  /// International or state border crossing for commercial vehicles.
+  portOfEntry,
+}
+
+/// A weigh station, port of entry, or similar driver-relevant point of interest.
+///
+/// Displayed as a map marker and shown in the [_buildWeighStationAlertCard]
+/// banner when the truck approaches within 1 mile.
+class RoutePoi {
+  const RoutePoi({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.position,
+    this.subtitle,
+    this.status,
+  });
+
+  /// Unique identifier for this POI (used as a marker key).
+  final String id;
+
+  /// Display name shown in the alert banner, e.g. "Baldock Weigh Station".
+  final String name;
+
+  /// POI category — drives marker colour and alert-logic filtering.
+  final PoiType type;
+
+  /// Geographic position of the POI.
+  final LatLng position;
+
+  /// Short secondary label, e.g. "I-5 Southbound".  Optional.
+  final String? subtitle;
+
+  /// Current operational status: "Open", "Closed", "Bypass", or null when
+  /// unknown.  Shown in the alert banner below the station name.
+  final String? status;
 }

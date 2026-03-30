@@ -40,6 +40,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the truck physically stops at the dock, matching professional GPS apps.
   static const double _arrivalThresholdMeters = 30.0;
 
+  // ── Off-route detection constants ─────────────────────────────────────────
+  /// Distance in metres beyond which the truck is considered off-route.
+  static const double _offRouteThresholdMeters = 40.0;
+
+  /// Minimum seconds that must elapse between automatic reroutes to prevent
+  /// rapid repeated API calls in areas with poor GPS accuracy.
+  static const int _rerouteThrottleSeconds = 8;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -104,6 +112,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
+
+  /// Timestamp of the last automatic reroute, used to throttle rerouting
+  /// frequency to at most one reroute every [_rerouteThrottleSeconds] seconds.
+  DateTime? _lastRerouteTime;
+
+  /// Navigation status message shown in the UI during special events such as
+  /// rerouting (e.g. "Rerouting...").  Null when no status is active.
+  String? _navStatus;
 
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
@@ -352,8 +368,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ).listen(_onGpsPosition);
   }
 
-  /// Handles a new GPS position by snapping the truck to the nearest route
-  /// point that is at or ahead of its current index.
+  /// Handles a new GPS position: updates the truck marker to the real device
+  /// location, rotates the marker to the true GPS heading, and checks for
+  /// step advancement and off-route conditions.
+  ///
+  /// **Position** — [_truckPosition] is set directly to the GPS fix for
+  /// accurate real-world placement (matches `currentTruckPosition = gpsPoint`
+  /// in the Google Maps pattern).  The nearest route index is still tracked so
+  /// step-advancement and off-route logic remain correct.
+  ///
+  /// **Bearing** — `position.heading` returns the true device compass heading
+  /// in degrees (0–360) when the device is moving; Geolocator returns −1 when
+  /// the heading is unavailable (stationary, cold start, or no sensor).  We
+  /// use the true heading when ≥ 0, falling back to the bearing derived from
+  /// the route geometry when not available.
   void _onGpsPosition(Position position) {
     // Ignore all GPS updates once the driver has arrived — the trip is done.
     if (_routePoints.isEmpty || _isArrived) return;
@@ -371,10 +399,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Off-route detection: reroute when >30 m from the route line ─────────
     _checkOffRoute(gpsPoint);
 
-    // ── Snap truck marker to nearest route point ─────────────────────────────
+    // ── Update truck position and heading from real GPS data ─────────────────
+    // Snap to the nearest ahead-of-index route point for step/off-route logic.
     final nearest = _nearestRouteIndex(gpsPoint);
-    if (nearest != _truckIndex) {
-      _advanceTruckTo(nearest);
+
+    // Prefer the true device heading from GPS (heading ≥ 0 = valid fix).
+    // Fall back to route-computed bearing when heading is unavailable (−1).
+    final double trueBearing;
+    if (position.heading >= 0) {
+      // Real device compass heading — use directly for marker rotation.
+      trueBearing = position.heading;
+    } else if (nearest != _truckIndex) {
+      // No GPS heading but route index changed: compute from route geometry.
+      trueBearing = _bearingBetween(
+        _routePoints[_truckIndex.clamp(0, _routePoints.length - 1)],
+        _routePoints[nearest.clamp(0, _routePoints.length - 1)],
+      );
+    } else {
+      // No GPS heading and no index change: keep current bearing.
+      trueBearing = _truckBearing;
+    }
+
+    _truckIndex = nearest;
+    setState(() {
+      // Use the raw GPS fix so the marker reflects actual device location.
+      _truckPosition = gpsPoint;
+      // Use real device heading for accurate marker rotation.
+      _truckBearing = trueBearing;
+    });
+
+    // Keep the camera centred on the truck while in navigation mode.
+    if (_navigationMode) {
+      _followTruckCamera();
     }
   }
 
@@ -393,20 +449,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Detects whether [current] has strayed more than 30 m from the nearest
-  /// point on the route polyline.  When off-route, triggers a full reroute.
+  /// Detects whether [current] has strayed more than [_offRouteThresholdMeters]
+  /// from the nearest point on the route polyline.  When off-route, triggers a
+  /// full reroute from the current live GPS position to the original destination.
+  ///
+  /// Uses [Geolocator.distanceBetween] for GPS-grade distance measurement and
+  /// throttles reroutes to at most one every [_rerouteThrottleSeconds] seconds
+  /// to prevent rapid repeated API calls in areas with poor GPS accuracy.
   void _checkOffRoute(LatLng current) {
     if (_routePoints.length < 2 || _isRerouting) return;
+
+    // Throttle: skip if a reroute was triggered within the last 8 seconds.
+    if (_lastRerouteTime != null &&
+        DateTime.now().difference(_lastRerouteTime!).inSeconds <
+            _rerouteThrottleSeconds) {
+      return;
+    }
+
+    // Compute minimum distance from current position to any route point using
+    // Geolocator.distanceBetween for accurate GPS-grade measurement.
     double minDist = double.infinity;
-    // Check cross-track distance against each route segment.
-    for (int i = 0; i < _routePoints.length - 1; i++) {
-      final d = _crossTrackDistance(current, _routePoints[i], _routePoints[i + 1]);
+    for (final pt in _routePoints) {
+      final d = Geolocator.distanceBetween(
+        current.latitude,
+        current.longitude,
+        pt.latitude,
+        pt.longitude,
+      );
       if (d < minDist) minDist = d;
     }
-    if (minDist > 30.0) {
+
+    if (minDist > _offRouteThresholdMeters) {
       _isRerouting = true;
-      _speak('Recalculating route');
-      fetchRoute().then((_) => _isRerouting = false);
+      _lastRerouteTime = DateTime.now();
+      // Show rerouting status indicator and announce the change via TTS.
+      setState(() => _navStatus = 'Rerouting...');
+      _speak('Rerouting');
+      // Re-fetch the route from the current live position to the original
+      // destination, then clear the rerouting lock and status indicator.
+      fetchRoute(fromPosition: current).then((_) {
+        _isRerouting = false;
+        if (mounted) setState(() => _navStatus = null);
+      });
     }
   }
 
@@ -753,10 +837,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
   ///
+  /// When [fromPosition] is provided (e.g. during off-route rerouting), the
+  /// route is requested from that live GPS position instead of the default
+  /// origin.  The destination always remains [_destination].
+  ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
   /// fails the [_isTruckSafe] check.
-  Future<void> fetchRoute({bool alternative = false}) async {
+  Future<void> fetchRoute({bool alternative = false, LatLng? fromPosition}) async {
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
     if (_isLoadingRoute) {
@@ -775,9 +863,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
 
     try {
+      // Use the live GPS position for rerouting when provided; otherwise fall
+      // back to the fixed default origin (Portland, OR → Winnemucca, NV).
+      final from = fromPosition ?? _origin;
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "-122.6765,45.5231;-119.8138,39.5296"
+          "${from.longitude},${from.latitude};$_destLng,$_destLat"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
@@ -810,7 +901,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
         _isLoadingRoute = false;
-        await fetchRoute(alternative: true);
+        await fetchRoute(alternative: true, fromPosition: fromPosition);
         return;
       }
 
@@ -1556,6 +1647,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     left: 0,
                     right: 0,
                     child: _buildNavBanner(),
+                  ),
+                // ── Rerouting status indicator ────────────────────────────
+                // Shown in the centre of the map while a new route is being
+                // fetched from the driver's live position to the destination.
+                if (_navStatus != null)
+                  Positioned(
+                    bottom: 16,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.92),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 8,
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          _navStatus!,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
               ],
             ),

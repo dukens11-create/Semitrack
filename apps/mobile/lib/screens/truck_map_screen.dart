@@ -200,6 +200,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// repeated announcements so the driver is not nagged every few seconds.
   DateTime? _lastSlowDownAnnouncementTime;
 
+  // ── Fuel planning state ───────────────────────────────────────────────────
+  //
+  // Tank size and average MPG are configured once at initialisation and remain
+  // constant for the session.  _fuelPercent is updated by _updateFuelFromTrip()
+  // as miles are accumulated via GPS.  _fuelWarningShown prevents the low-fuel
+  // TTS + modal from firing more than once per low-fuel event — it resets to
+  // false whenever the estimated range climbs back above 150 miles.
+
+  /// Total diesel tank capacity in US gallons.  Default 150 gal is typical
+  /// for a Class-8 semi-truck with dual 75-gallon saddle tanks.
+  double _fuelTankGallons = 150.0;
+
+  /// Current fuel level as a percentage of the full tank (0–100).
+  /// Starts at 72 % (a realistic mid-trip state) and decreases as miles
+  /// accumulate via [_updateFuelFromTrip].
+  double _fuelPercent = 72.0;
+
+  /// Fleet-average diesel fuel economy in miles per gallon.
+  /// 6.8 MPG is a real-world average for a loaded Class-8 truck.
+  double _avgMpg = 6.8;
+
+  /// True after the low-fuel TTS + modal has been shown for the current
+  /// below-150-mile event.  Prevents repeated announcements on every GPS fix.
+  bool _fuelWarningShown = false;
+
+  // ── Fuel planning computed getters ────────────────────────────────────────
+
+  /// Gallons remaining in the tank, derived from [_fuelPercent].
+  double get _gallonsLeft => _fuelTankGallons * (_fuelPercent / 100.0);
+
+  /// Estimated driving range in miles given current fuel level and average MPG.
+  double get _estimatedRangeMiles => _gallonsLeft * _avgMpg;
+
+  /// Human-readable range string, e.g. "689 mi".
+  String get _fuelRangeText => '${_estimatedRangeMiles.toStringAsFixed(0)} mi';
+
+  /// Human-readable gallons-remaining string, e.g. "108.0 gal".
+  String get _fuelLeftText => '${_gallonsLeft.toStringAsFixed(1)} gal';
+
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   // Pre-populated with mock/placeholder values so the Drive Intelligence card
   // is never blank.  These are replaced by real API data once available.
@@ -1285,14 +1324,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Fuel warning: check after each GPS fix ────────────────────────────
+    _checkFuelWarning();
+
     // ── Weigh station / port of entry proximity check ────────────────────────
     // Run after position state is updated so _truckPosition is current.
-
-    // ── Weigh station proximity check ────────────────────────────────────────
-    // Runs after every GPS fix so the alert card and voice warning stay
-    // current as the truck moves along the route.
     _checkWeighStationAlert();
   }
+
+  /// Advances to the next step when the driver comes within 20 m of the
+  /// upcoming maneuver point, then speaks the new instruction aloud.
+  void _checkStepAdvancement(LatLng current) {
     if (_navSteps.isEmpty) return;
     final nextIdx = _currentStepIndex + 1;
     if (nextIdx >= _navSteps.length) return;
@@ -1432,6 +1475,217 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
     if (mounted) setState(() {});
+
+    // Update simulated fuel level from the latest mileage total.
+    _updateFuelFromTrip();
+  }
+
+  // ── Fuel planning logic ───────────────────────────────────────────────────
+
+  /// Updates [_fuelPercent] from the cumulative miles driven so far.
+  ///
+  /// Simulates diesel consumption by dividing [_milesDriven] by [_avgMpg]
+  /// to get gallons used, converting that to a percentage of the full tank,
+  /// and clamping the result to [0, 100].
+  ///
+  /// Call this after [_updateTripStats] so [_milesDriven] is already fresh.
+  void _updateFuelFromTrip() {
+    if (_milesDriven <= 0) return;
+    final gallonsUsed = _milesDriven / _avgMpg;
+    final percentLeft =
+        100.0 - ((gallonsUsed / _fuelTankGallons) * 100.0);
+    setState(() {
+      _fuelPercent = percentLeft.clamp(0.0, 100.0);
+    });
+  }
+
+  /// Returns up to three nearest truck stops from the current position,
+  /// sorted closest-first.  Only fuel stops (non-rest-area brands) are
+  /// included so the driver sees actionable diesel options.
+  ///
+  /// Falls back to returning all visible stops when [_truckPosition] is null
+  /// (before the first GPS fix), sorted by their original list order.
+  List<TruckStop> _getRecommendedFuelStops() {
+    final fuelStops = _truckStops
+        .where((s) => s.brand != 'Rest Area')
+        .toList();
+
+    if (_truckPosition != null) {
+      fuelStops.sort((a, b) {
+        final da = Geolocator.distanceBetween(
+          _truckPosition!.latitude,
+          _truckPosition!.longitude,
+          a.position.latitude,
+          a.position.longitude,
+        );
+        final db = Geolocator.distanceBetween(
+          _truckPosition!.latitude,
+          _truckPosition!.longitude,
+          b.position.latitude,
+          b.position.longitude,
+        );
+        return da.compareTo(db);
+      });
+    }
+
+    return fuelStops.take(3).toList();
+  }
+
+  /// Shows a modal bottom sheet listing the three nearest recommended fuel
+  /// stops.  Tapping a stop dismisses the sheet and opens the full stop
+  /// detail sheet via [_showTruckStopSheet].
+  void _showFuelRecommendations() {
+    if (!mounted) return;
+    final stops = _getRecommendedFuelStops();
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.local_gas_station,
+                      color: Colors.blue, size: 28),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Recommended Fuel Stops',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (stops.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No fuel stops found near the current route.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
+              else
+                for (final stop in stops)
+                  ListTile(
+                    leading: const Icon(Icons.local_gas_station,
+                        color: Colors.blue),
+                    title: Text(stop.name),
+                    subtitle: Text(
+                      stop.dieselPrice != null
+                          ? '\$${stop.dieselPrice!.toStringAsFixed(2)}/gal · ${stop.address ?? stop.brand}'
+                          : stop.address ?? stop.brand,
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showTruckStopSheet(stop);
+                    },
+                  ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Checks the current estimated range and, when it drops below 150 miles,
+  /// fires a TTS announcement and opens the fuel-stop recommendation sheet —
+  /// but only once per low-fuel event.  The warning resets automatically
+  /// when the range recovers above the threshold.
+  Future<void> _checkFuelWarning() async {
+    if (_estimatedRangeMiles > 150) {
+      // Range is safe — reset the warning so it fires again if fuel drops later.
+      if (_fuelWarningShown) setState(() => _fuelWarningShown = false);
+      return;
+    }
+    // Already warned for this low-fuel event — do not repeat.
+    if (_fuelWarningShown) return;
+    setState(() => _fuelWarningShown = true);
+
+    await _speak('Fuel stop recommended. Less than 150 miles remaining.');
+    if (mounted) {
+      _showFuelRecommendations();
+    }
+  }
+
+  // ── Fuel planning UI ──────────────────────────────────────────────────────
+
+  /// Builds the floating fuel status card that overlays the map.
+  ///
+  /// Layout: gas-station icon | range + gallons remaining | fuel percentage
+  ///
+  /// The card turns red when the estimated range drops below 150 miles,
+  /// matching the urgency colour convention used in the navigation banner.
+  /// Tapping the card when fuel is low opens [_showFuelRecommendations].
+  Widget _buildFuelCard() {
+    final bool lowFuel = _estimatedRangeMiles < 150;
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 250,
+      child: GestureDetector(
+        onTap: lowFuel ? _showFuelRecommendations : null,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: lowFuel ? Colors.red : Colors.black87,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.local_gas_station, color: Colors.white),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lowFuel ? 'Fuel Stop Needed' : 'Fuel Range',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Range: $_fuelRangeText · Left: $_fuelLeftText',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '${_fuelPercent.toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── Trip statistics computed display strings ───────────────────────────────
@@ -3429,6 +3683,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // once navigation has started (_tripStartTime != null) so the
                 // panel never appears on a blank or pre-route map view.
                 if (_tripStartTime != null) _buildTripStatsPanel(),
+                // ── Fuel card ─────────────────────────────────────────────
+                // Shows estimated range, gallons remaining, and fuel %.
+                // Turns red and becomes tappable when range is below 150 mi.
+                // Only shown once navigation is underway.
+                if (_tripStartTime != null) _buildFuelCard(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Always visible during active navigation.  Positioned at the
                 // bottom-right corner of the map so it never obscures the
@@ -3499,6 +3758,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final fuelGallons = route['fuelGallonsEstimate'];
     // Raw mode key (e.g. 'fastest') is converted to a friendly label below.
     final routeMode = route['routeMode'] as String? ?? 'fastest';
+    final routeAvoidTolls = route['avoidTolls'] as bool? ?? false;
+    final routeAvoidFerries = route['avoidFerries'] as bool? ?? false;
     final provider = route['provider'] as String? ?? '';
     final live = route['live'] as Map<String, dynamic>?;
     final warnings =
@@ -3575,6 +3836,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 if (live != null) ...[
                   _labelValue('Traffic', '${live['traffic']}'),
                   _labelValue('Incidents', '${live['incidents']}'),
+                ],
+                // ── Avoidance badges ───────────────────────────────────
+                if (routeAvoidTolls || routeAvoidFerries) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      if (routeAvoidTolls)
+                        const Chip(
+                          label: Text('No Tolls'),
+                          avatar: Icon(Icons.money_off, size: 16,
+                              semanticLabel: 'Avoiding tolls'),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                      if (routeAvoidFerries)
+                        const Chip(
+                          label: Text('No Ferries'),
+                          avatar: Icon(Icons.directions_boat_outlined,
+                              size: 16,
+                              semanticLabel: 'Avoiding ferries'),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                        ),
+                    ],
+                  ),
                 ],
               ],
             ),

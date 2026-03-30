@@ -1525,6 +1525,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         LatLng(lat, lng),
         maneuver: modifier,
         distanceMeters: distanceMeters,
+        // Sample lane hint for demonstration; replace with real lane data
+        // from a lane-aware API (e.g. Mapbox guidance) when available.
+        laneHint: _sampleLaneHint(modifier),
       );
     }).toList();
   }
@@ -1700,6 +1703,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (meters < _urgentColorThresholdMeters) return Colors.red;
     if (meters < _mediumColorThresholdMeters) return Colors.orange;
     return Colors.black87;
+  }
+
+  /// Returns a chip background [Color] for the lane-hint label.
+  ///
+  /// Directional keywords drive the colour so drivers instantly associate
+  /// colour with action:
+  ///   contains 'left'     → blue
+  ///   contains 'right'    → green
+  ///   contains 'straight' → orange
+  ///   anything else       → white24 (neutral)
+  Color _laneHintColor(String? laneHint) {
+    if (laneHint == null || laneHint.isEmpty) return Colors.white24;
+    final text = laneHint.toLowerCase();
+    if (text.contains('left')) return Colors.blue;
+    if (text.contains('right')) return Colors.green;
+    if (text.contains('straight')) return Colors.orange;
+    return Colors.white24;
+  }
+
+  /// Returns a sample lane guidance hint for [modifier] used as mock data
+  /// until a lane-aware API source is integrated.
+  ///
+  /// Only turn-type maneuvers receive a hint; straight/continue steps return
+  /// null so the chip is hidden for simple forward movement.
+  String? _sampleLaneHint(String modifier) {
+    switch (modifier.toLowerCase()) {
+      case 'left':
+      case 'slight left':
+        return 'Keep left';
+      case 'sharp left':
+        return 'Use left 2 lanes';
+      case 'right':
+      case 'slight right':
+        return 'Use right lane';
+      case 'sharp right':
+        return 'Use right 2 lanes';
+      case 'merge':
+        return 'Stay straight';
+      default:
+        return null;
+    }
   }
 
   /// Returns true when the driver has reached the final navigation step and
@@ -2138,6 +2182,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        // Lane guidance chip — shown when a lane hint is
+                        // available for the current step (e.g. 'Keep left',
+                        // 'Use right 2 lanes').  Hidden on arrival.
+                        if (!isArrived &&
+                            step.laneHint != null &&
+                            step.laneHint!.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _laneHintColor(step.laneHint),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              step.laneHint!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ],
                       ],
@@ -2753,6 +2823,7 @@ class _NavStep {
     this.location, {
     this.maneuver = 'straight',
     this.distanceMeters = 0.0,
+    this.laneHint,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -2767,6 +2838,12 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+
+  /// Optional lane guidance hint shown below the instruction in the maneuver
+  /// card, e.g. 'Keep left', 'Use right 2 lanes'.  Currently populated with
+  /// sample data for common maneuver types; ready for real lane-data
+  /// integration (e.g. Mapbox guidance API) in the future.
+  final String? laneHint;
 }
 
 /// A truck-friendly point of interest along the route.

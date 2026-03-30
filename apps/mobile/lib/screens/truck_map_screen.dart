@@ -34,6 +34,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Distance threshold below which the banner turns yellow (medium alert).
   static const double _mediumColorThresholdMeters = 150.0;
 
+  // ── Arrival detection threshold ───────────────────────────────────────────
+  /// Radius in metres within which the driver is considered to have arrived at
+  /// the destination.  30 m provides a comfortable buffer that triggers before
+  /// the truck physically stops at the dock, matching professional GPS apps.
+  static const double _arrivalThresholdMeters = 30.0;
+
   // ── Off-route detection constants ─────────────────────────────────────────
   /// Distance in metres beyond which the truck is considered off-route.
   static const double _offRouteThresholdMeters = 40.0;
@@ -45,6 +51,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Trip statistics constants ─────────────────────────────────────────────
   /// Metres per mile conversion factor, used to convert GPS distances to miles.
   static const double _metersPerMile = 1609.34;
+
+  // ── Speed monitoring constants ────────────────────────────────────────────
+  /// Conversion factor: 1 m/s = 2.23694 mph.
+  static const double _mpsToMph = 2.23694;
+
+  /// Minimum seconds between "Slow down" TTS announcements when the driver
+  /// is continuously exceeding the speed limit.  Prevents constant repetition.
+  static const int _slowDownThrottleSeconds = 30;
 
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
@@ -96,6 +110,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Flutter TTS engine for voice guidance ────────────────────────────────
   final FlutterTts _tts = FlutterTts();
 
+  // ── Arrival state ─────────────────────────────────────────────────────────
+  //
+  // _isArrived becomes true once the driver has reached the destination.
+  // All navigation actions (camera-follow, step advancement, off-route checks,
+  // new GPS callbacks) are gated on this flag to prevent post-arrival updates.
+  //
+  // _navigationActive is true from the moment route playback/GPS tracking
+  // starts until the driver arrives.  It is used to guard _followTruckCamera
+  // and to disable the nav-mode toggle button after the trip ends.
+  bool _isArrived = false;
+  bool _navigationActive = false;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -141,6 +167,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  // ── Speed monitoring state ─────────────────────────────────────────────────
+  /// Current truck speed in metres per second, sourced from the GPS stream.
+  /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
+  double _currentSpeedMps = -1.0;
+
+  /// Estimated speed limit in mph for the current road segment.
+  /// Updated on every GPS position event using [_estimateSpeedLimit].
+  double _speedLimitMph = 65.0;
+
+  /// Timestamp of the last "Slow down" TTS announcement.  Used to throttle
+  /// repeated announcements so the driver is not nagged every few seconds.
+  DateTime? _lastSlowDownAnnouncementTime;
+
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   // Pre-populated with mock/placeholder values so the Drive Intelligence card
   // is never blank.  These are replaced by real API data once available.
@@ -157,6 +196,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // When true the camera stays close to the truck (navigation zoom 12.5–15).
   // When false the camera shows the full-route overview.
   bool _navigationMode = false;
+
+  // ── Camera follow state ────────────────────────────────────────────────────
+  // When true the camera continuously follows the truck (GPS navigation mode).
+  // Set to false automatically when the user manually pans/zooms the map so
+  // they can freely explore without forced camera snaps.  Tapping the recenter
+  // FAB resets this to true and immediately re-centres the camera.
+  bool _followTruck = true;
+
+  // ── Navigation pause state ─────────────────────────────────────────────────
+  // When true, live GPS tracking and camera follow updates are suspended.
+  // Useful when the driver needs to review the route without the map moving.
+  bool _navigationPaused = false;
 
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
@@ -321,11 +372,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// more road *ahead* of the truck is visible on screen — identical to the
   /// Google Maps real-navigation feel described in the feature spec.
   ///
+  /// Guards: skips the animation when [_followTruck] is false (user is freely
+  /// exploring the map) or when the driver has arrived at the destination.
+  ///
   /// Call this after every truck position/bearing update while [_navigationMode]
   /// is active.  Guards against calls before the map widget is ready with
   /// [_mapReady].
   void _followTruckCamera() {
-    if (!_mapReady || _truckPosition == null) return;
+    // Do not move the camera after arrival — the trip is complete and the
+    // driver is viewing the arrival sheet or the overview.
+    if (!_mapReady || _truckPosition == null || _isArrived) return;
+    // Skip camera follow if user is freely exploring the map.
+    if (!_followTruck) return;
     // Shift the camera target slightly ahead of the truck (−_cameraLeadLatitude°)
     // so the road in front is always visible, matching Google Maps navigation.
     final cameraTarget = LatLng(
@@ -387,6 +445,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// location, rotates the marker to the true GPS heading, and checks for
   /// step advancement and off-route conditions.
   ///
+  /// Skips all updates when [_navigationPaused] is true so the driver can
+  /// review the route without the map or marker moving.
+  ///
   /// **Position** — [_truckPosition] is set directly to the GPS fix for
   /// accurate real-world placement (matches `currentTruckPosition = gpsPoint`
   /// in the Google Maps pattern).  The nearest route index is still tracked so
@@ -398,9 +459,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// use the true heading when ≥ 0, falling back to the bearing derived from
   /// the route geometry when not available.
   void _onGpsPosition(Position position) {
-    if (_routePoints.isEmpty) return;
+    // Ignore all GPS updates once the driver has arrived — the trip is done.
+    if (_routePoints.isEmpty || _isArrived) return;
+    // Pause guard: skip all tracking updates while navigation is paused.
+    if (_navigationPaused) return;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
+
+    // ── Arrival detection: check proximity to destination first ─────────────
+    // Always evaluated before step/off-route logic so arrival wins immediately.
+    _checkArrival(gpsPoint);
+    if (_isArrived) return; // arrival was just triggered — stop all processing
 
     // ── Step advancement: speak instruction when nearing next maneuver ──────
     _checkStepAdvancement(gpsPoint);
@@ -433,12 +502,40 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     _truckIndex = nearest;
+
+    // ── Speed update: read GPS speed and compute new speed limit estimate ────
+    // pos.speed is in m/s; negative values mean the speed is unavailable.
+    final double newSpeedMps =
+        position.speed >= 0 ? position.speed : _currentSpeedMps;
+    final double newSpeedLimit = _estimateSpeedLimit();
+
     setState(() {
       // Use the raw GPS fix so the marker reflects actual device location.
       _truckPosition = gpsPoint;
       // Use real device heading for accurate marker rotation.
       _truckBearing = trueBearing;
+      // Persist updated speed and speed-limit for the PositionPanel overlay.
+      _currentSpeedMps = newSpeedMps;
+      _speedLimitMph = newSpeedLimit;
     });
+
+    // ── Over-speed announcement (throttled) ──────────────────────────────────
+    // Only announce during active navigation and when speed data is available.
+    if (_navigationMode && newSpeedMps >= 0) {
+      final double speedMph = newSpeedMps * _mpsToMph;
+      if (speedMph > newSpeedLimit) {
+        final now = DateTime.now();
+        // Throttle: announce at most once every [_slowDownThrottleSeconds] s.
+        if (_lastSlowDownAnnouncementTime == null ||
+            now
+                    .difference(_lastSlowDownAnnouncementTime!)
+                    .inSeconds >=
+                _slowDownThrottleSeconds) {
+          _lastSlowDownAnnouncementTime = now;
+          _speak('Slow down');
+        }
+      }
+    }
 
     // Keep the camera centred on the truck while in navigation mode.
     if (_navigationMode) {
@@ -622,6 +719,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return '${avg.toStringAsFixed(1)} mph';
   }
 
+  // ── Arrival detection ─────────────────────────────────────────────────────
+
+  /// Checks whether [current] is within [_arrivalThresholdMeters] of the
+  /// destination.  When within range, triggers the full arrival flow once.
+  ///
+  /// This is called on every GPS position update (see [_onGpsPosition]) and
+  /// from [_runSmoothRouteAnimation] when the truck reaches the final point,
+  /// so that arrival is detected in both real-GPS mode and simulation mode.
+  void _checkArrival(LatLng current) {
+    // Guard: only trigger once per trip.
+    if (_isArrived) return;
+    final dist = _distanceBetween(current, _destination);
+    if (dist <= _arrivalThresholdMeters) {
+      _triggerArrival();
+    }
+  }
+
+  /// Executes the full arrival flow:
+  ///   1. Sets [_isArrived] = true and [_navigationActive] = false so all
+  ///      navigation actions (camera-follow, step checks) are disabled.
+  ///   2. Cancels the GPS position subscription — no further tracking needed.
+  ///   3. Announces "You have arrived at your destination" via TTS.
+  ///   4. Schedules [_showArrivalSheet] for the next frame so the build tree
+  ///      is stable before the bottom sheet is pushed.
+  void _triggerArrival() {
+    if (!mounted) return;
+    setState(() {
+      _isArrived = true;
+      _navigationActive = false;
+      // Invalidate any in-flight smooth animation loop.
+      _animGeneration++;
+    });
+    // Cancel GPS subscription — all tracking ceases after arrival.
+    _gpsSubscription?.cancel();
+    _gpsSubscription = null;
+    // Speak the arrival announcement (interrupts any in-progress TTS).
+    _speak('You have arrived at your destination');
+    // Show the trip-complete sheet after the current frame is fully drawn.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showArrivalSheet(context);
+    });
+  }
   /// Returns the index of the route point closest to [point], searching only
   /// from the current truck index onward to prevent backward snapping.
   int _nearestRouteIndex(LatLng point) {
@@ -635,6 +774,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
     return nearest;
+  }
+
+  /// Estimates the speed limit in mph for the current road segment.
+  ///
+  /// Uses simple heuristics based on the truck's progress along the route to
+  /// approximate city vs. highway segments.  In a production implementation
+  /// this would query a road-network speed-limit dataset.
+  ///
+  ///   progress < 5 % or > 95 %  → 35 mph  (city/suburban near start or end)
+  ///   everything else            → 65 mph  (highway mid-route)
+  double _estimateSpeedLimit() {
+    if (_routePoints.isEmpty) return 65.0;
+    final double progress = _truckIndex / _routePoints.length;
+    // Near the route's start/end we assume a city segment with a lower limit.
+    if (progress < 0.05 || progress > 0.95) return 35.0;
+    return 65.0;
   }
 
   // ── Route animation ───────────────────────────────────────────────────────
@@ -658,7 +813,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _routePoints.isNotEmpty ? _routePoints.first : null;
 
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
-    setState(() => _navigationMode = true);
+    // _navigationActive is set true here so _followTruckCamera and step checks
+    // are enabled for the duration of the trip.
+    setState(() {
+      _navigationMode = true;
+      _navigationActive = true;
+    });
     if (_mapReady && _truckPosition != null) {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
     }
@@ -676,6 +836,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Iterates each consecutive pair of route points and awaits
   /// [_moveTruckSmoothly] for each segment.  The loop self-terminates when
   /// the widget is disposed or a newer animation generation is started.
+  ///
+  /// When the final segment completes, [_checkArrival] is called with the
+  /// last route point so that arrival is detected in simulation mode (i.e.
+  /// when no real GPS fixes are available).
   Future<void> _runSmoothRouteAnimation(int generation) async {
     for (int i = 0; i < _routePoints.length - 1; i++) {
       if (!mounted || _animGeneration != generation) return;
@@ -685,6 +849,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Snap to the final point once all segments are complete.
     if (mounted && _animGeneration == generation) {
       _truckIndex = _routePoints.length - 1;
+      // Check arrival from the last route point so simulation mode also
+      // triggers the arrival flow when the animation finishes at the destination.
+      if (_routePoints.isNotEmpty) {
+        _checkArrival(_routePoints.last);
+      }
     }
   }
 
@@ -1427,6 +1596,138 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Arrival bottom sheet ──────────────────────────────────────────────────
+
+  /// Shows a persistent, non-dismissible bottom sheet with the trip-complete
+  /// summary once the driver has reached the destination.
+  ///
+  /// The sheet displays:
+  ///   • A green checkmark hero icon
+  ///   • "Trip Complete" heading and destination message
+  ///   • Total distance (miles) and trip duration side-by-side
+  ///   • A "Done" button that dismisses the sheet and switches the map to the
+  ///     full-route overview
+  ///
+  /// The sheet is shown by [_triggerArrival] via [WidgetsBinding.addPostFrameCallback]
+  /// so that it is always pushed after the current build frame completes.
+  void _showArrivalSheet(BuildContext context) {
+    final distanceMiles = _routeData?['distanceMiles'];
+    final etaMinutes = (_routeData?['etaMinutes'] as num?)?.toInt();
+
+    showModalBottomSheet<void>(
+      context: context,
+      // Non-dismissible: the driver must tap Done to acknowledge arrival.
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Arrival hero icon ──────────────────────────────────────
+              const Icon(Icons.check_circle, color: Colors.green, size: 64),
+              const SizedBox(height: 12),
+              // ── Heading ────────────────────────────────────────────────
+              const Text(
+                'Trip Complete',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'You have arrived at your destination',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              // ── Trip stats row ─────────────────────────────────────────
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _arrivalStat(
+                    Icons.straighten,
+                    '${distanceMiles ?? "--"} mi',
+                    'Distance',
+                  ),
+                  _arrivalStat(
+                    Icons.timer,
+                    _formatEta(etaMinutes), // total trip duration (h m)
+                    'Trip Time',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              // ── Done button ────────────────────────────────────────────
+              // Tapping Done closes the sheet and switches to overview mode
+              // so the driver can see the completed route on the full map.
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    // Return to overview mode so the driver sees the full route.
+                    if (mounted) {
+                      setState(() => _navigationMode = false);
+                      if (_routePoints.isNotEmpty && _mapReady) {
+                        _fitCameraToRoute(_routePoints);
+                      }
+                    }
+                  },
+                  child: const Text(
+                    'Done',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Builds a compact stat tile for the arrival bottom sheet.
+  ///
+  /// Each tile shows an [icon], a primary [value] label (e.g. "423 mi"), and
+  /// a secondary [label] description (e.g. "Distance") below it.
+  Widget _arrivalStat(IconData icon, String value, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: Colors.green, size: 28),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
   /// Builds the premium turn-by-turn navigation banner that floats at the top
   /// of the map, styled like a modern GPS app (Google Maps / Apple Maps).
   ///
@@ -1439,17 +1740,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The banner is only rendered while [_navSteps] is non-empty so it never
   /// appears before a route has been loaded.
   ///
-  /// Arrival mode: when the driver has reached the last step, the banner turns
-  /// green and shows "You have arrived" instead of a maneuver instruction.
+  /// Arrival mode: when [_isArrived] is true, the banner turns green and shows
+  /// a checkmark with "You have arrived" instead of a maneuver instruction.
   Widget _buildNavBanner() {
     // Guard: clamp index so an out-of-sync state never throws a RangeError.
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
 
     // ── Declare all computed values before any UI reference ────────────────
-    // isArrived uses _hasArrived() so distanceToNext can be declared right
-    // after without any forward-reference issue.
-    final bool isArrived = _hasArrived();
+    // Use the stateful _isArrived flag (set by _triggerArrival) rather than
+    // recomputing from _hasArrived() so the banner is stable after the GPS
+    // subscription has been cancelled.
+    final bool isArrived = _isArrived;
 
     // distanceToNext MUST be declared before isImminent and bannerColor so
     // that Dart's forward-reference rule is never violated.
@@ -1500,8 +1802,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 children: [
                   // ── Turn icon (left side) ───────────────────────────────────
                   // White icon on dark/coloured background mirrors GPS design.
+                  // On arrival show a filled check circle; during navigation
+                  // show the maneuver direction icon (turn, straight, etc.).
                   Icon(
-                    isArrived ? Icons.flag : _maneuverIcon(step.maneuver),
+                    isArrived ? Icons.check_circle : _maneuverIcon(step.maneuver),
                     color: Colors.white,
                     size: 34,
                   ),
@@ -1569,33 +1873,145 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  /// Builds the live speed / speed-limit overlay panel (PositionPanel).
+  ///
+  /// Always visible while [_navigationMode] is active, positioned at the
+  /// bottom-right corner of the map.  The panel displays:
+  ///   • Current speed in mph (computed from GPS m/s via [_mpsToMph]).
+  ///   • Estimated speed limit badge (from [_estimateSpeedLimit] mock logic).
+  ///   • Red text + red border when the driver exceeds the speed limit.
+  ///
+  /// "0" is shown when speed data is not yet available (e.g. cold GPS start).
+  Widget _buildSpeedPanel() {
+    // Convert m/s → mph; clamp to 0 when speed is unavailable.
+    final double speedMph =
+        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    // Overspeed flag: only active when we have a valid speed reading.
+    final bool overLimit =
+        _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(10),
+        // Highlight the panel border in red when the driver is over the limit.
+        border: overLimit
+            ? Border.all(color: Colors.red, width: 2)
+            : Border.all(color: Colors.transparent, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.35),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Current speed ─────────────────────────────────────────────────
+          // Red text when over the limit; white otherwise.
+          Text(
+            speedMph.toStringAsFixed(0),
+            style: TextStyle(
+              color: overLimit ? Colors.red : Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              height: 1.0,
+            ),
+          ),
+          const Text(
+            'mph',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 6),
+          // ── Speed-limit badge ─────────────────────────────────────────────
+          // Styled like a US road speed-limit sign: white background, black
+          // text, "LIMIT" caption above the numeric value.
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'LIMIT',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                Text(
+                  _speedLimitMph.toStringAsFixed(0),
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Semitrack NEW'),
         actions: [
+          // Pause / resume navigation tracking.
+          // When paused, GPS updates and camera follow are suspended so the
+          // driver can review the route without the map moving.
+          IconButton(
+            tooltip: _navigationPaused ? 'Resume navigation' : 'Pause navigation',
+            icon: Icon(
+              _navigationPaused ? Icons.play_arrow : Icons.pause,
+            ),
+            onPressed: () => setState(() => _navigationPaused = !_navigationPaused),
+          ),
           // Toggle between navigation mode (close zoom, follows truck) and
           // overview mode (full-route view so the driver can see the whole trip).
+          // Disabled after arrival — no further navigation mode switching needed.
           IconButton(
             tooltip: _navigationMode ? 'Show full route' : 'Navigation mode',
             icon: Icon(
               _navigationMode ? Icons.map_outlined : Icons.navigation,
+              color: _isArrived ? Colors.grey : null,
             ),
-            onPressed: () {
-              setState(() => _navigationMode = !_navigationMode);
-              if (_navigationMode && _truckPosition != null && _mapReady) {
-                // Switch to navigation mode: zoom close to truck.
-                _mapController.move(_truckPosition!, _navigationZoomLevel);
-              } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
-                // Switch to overview mode: fit the full route.
-                _fitCameraToRoute(_routePoints);
-              }
-            },
+            // Disable the toggle after arrival so the driver cannot re-enter
+            // navigation mode (which would restart camera-follow with no GPS).
+            onPressed: _isArrived
+                ? null
+                : () {
+                    setState(() => _navigationMode = !_navigationMode);
+                    if (_navigationMode && _truckPosition != null && _mapReady) {
+                      // Switch to navigation mode: zoom close to truck.
+                      _mapController.move(_truckPosition!, _navigationZoomLevel);
+                    } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
+                      // Switch to overview mode: fit the full route.
+                      _fitCameraToRoute(_routePoints);
+                    }
+                  },
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _isLoading ? null : () => fetchRoute(),
+            // Disable refresh while loading or after arrival (trip is done).
+            onPressed: (_isLoading || _isArrived) ? null : () => fetchRoute(),
           ),
         ],
       ),
@@ -1617,6 +2033,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     onMapReady: () {
                       _mapReady = true;
                       fetchRoute();
+                    },
+                    // Disable camera follow when the user manually interacts
+                    // with the map (drag / pinch / scroll) so they can freely
+                    // explore without forced camera snaps back to the truck.
+                    onMapEvent: (MapEvent event) {
+                      if (event is MapEventMoveStart &&
+                          event.source != MapEventSource.mapController &&
+                          _followTruck) {
+                        setState(() => _followTruck = false);
+                      }
                     },
                   ),
                   children: [
@@ -1648,9 +2074,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       // the flutter_map equivalent of passing a Set<Marker> to
                       // the GoogleMap widget; _updateMarkers() triggers setState
                       // to rebuild this layer whenever position/bearing changes.
+                      //
+                      // The destination marker is shown only after arrival so
+                      // it does not clutter the map during active navigation —
+                      // the route polyline already indicates the destination.
                       markers: [
                         _buildTruckMarker(),
-                        _buildDestinationMarker(),
+                        if (_isArrived) _buildDestinationMarker(),
                       ],
                     ),
                   ],
@@ -1668,6 +2098,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Recenter FAB ──────────────────────────────────────────
+                // Always visible in the bottom-right corner.
+                // Icon and tooltip change based on follow state:
+                //   navigation  = camera is actively following the truck
+                //   my_location = user has panned away; tap to re-centre
+                // Tapping re-enables camera follow and immediately snaps the
+                // camera back to the live truck position/bearing.
+                Positioned(
+                  bottom: 16,
+                  right: 16,
+                  child: FloatingActionButton.small(
+                    tooltip: _followTruck ? 'Following truck' : 'Recenter on truck',
+                    onPressed: () {
+                      // Re-enable follow and snap camera to truck immediately.
+                      setState(() => _followTruck = true);
+                      _followTruckCamera();
+                    },
+                    child: Icon(
+                      _followTruck ? Icons.navigation : Icons.my_location,
+                    ),
+                  ),
+                ),
                 // ── Rerouting status indicator ────────────────────────────
                 // Shown in the centre of the map while a new route is being
                 // fetched from the driver's live position to the destination.
@@ -1707,6 +2159,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // once navigation has started (_tripStartTime != null) so the
                 // panel never appears on a blank or pre-route map view.
                 if (_tripStartTime != null) _buildTripStatsPanel(),
+                // ── Speed / speed-limit panel (PositionPanel) ─────────────
+                // Always visible during active navigation.  Positioned at the
+                // bottom-right corner of the map so it never obscures the
+                // navigation banner or the rerouting indicator.
+                if (_navigationMode)
+                  Positioned(
+                    bottom: 24,
+                    right: 16,
+                    child: _buildSpeedPanel(),
+                  ),
               ],
             ),
           ),

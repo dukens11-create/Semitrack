@@ -10,7 +10,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
-import 'package:semitrack_mobile/features/documents/documents_screen.dart';
+import '../models/route_poi.dart';
+import '../features/documents/documents_screen.dart';
 import '../models/trip_stop.dart';
 import '../models/stop_appointment.dart';
 
@@ -193,32 +194,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
-  // ── Truck Stop POI state ───────────────────────────────────────────────────
+  // ── POI state ─────────────────────────────────────────────────────────────
   //
-  // _truckStops holds the filtered list of stops near the current route.
-  // _showTruckStops controls marker visibility — toggled by the POI FAB.
-  // Expand this section later to support real API data, weigh stations, etc.
-  List<TruckStop> _truckStops = const [];
-  bool _showTruckStops = true;
-
-  // ── Active trip identifier (used by the documents panel) ──────────────────
-  //
-  // Set to the load/trip ID string when a route begins so the documents FAB
-  // can pass it to TripDocumentsScreen for pre-filtered display.
-  // Currently populated from the route response; can be wired to a real
-  // trip-management backend in future iterations.
-  String _activeTripId = '';
-  // ── Weigh station / port-of-entry POI state ───────────────────────────────
-  //
-  // _routePois holds all weigh station and port-of-entry POIs for the route.
-  // _showWeighStations controls marker visibility.
-  // _upcomingWeighStation is set to the nearest station within 1 mile
-  // (1 609 m).  _weighAlertSpoken ensures the TTS warning fires only once per
-  // approach so the driver is not repeatedly interrupted.
-  List<RoutePoi> _routePois = _mockRoutePois;
+  // _pois holds POIs filtered to within 5 km of the current route.  Populated
+  // by _refreshPois() whenever _routePoints changes.
+  // _showPoi* flags are toggled by the filter chip bar above the map.
+  List<RoutePoi> _pois = const [];
   bool _showWeighStations = true;
-  RoutePoi? _upcomingWeighStation;
-  bool _weighAlertSpoken = false;
+  bool _showRestAreas = true;
+  bool _showTruckParking = true;
+  bool _showTruckStops = true;
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -556,218 +541,147 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
-  // ── Truck Stop POI mock dataset ────────────────────────────────────────────
-  //
-  // Hard-coded stops covering the default Portland → Winnemucca route.
-  // Replace with a real API call or local database in a production build.
-  // Add more brands here: Petro, Flying J, rest areas, weigh stations, etc.
-  static final List<TruckStop> _mockTruckStops = [
-    TruckStop(
-      id: '1',
-      name: 'Pilot Travel Center',
-      brand: 'Pilot',
-      position: const LatLng(45.581, -122.571),
-      address: 'Portland, OR',
-      dieselPrice: 4.25,
-    ),
-    TruckStop(
-      id: '2',
-      name: "Love's Travel Stop",
-      brand: "Love's",
-      position: const LatLng(44.057, -123.092),
-      address: 'Eugene, OR',
-      dieselPrice: 4.19,
-    ),
-    TruckStop(
-      id: '3',
-      name: 'TA Travel Center',
-      brand: 'TA',
-      position: const LatLng(42.328, -122.875),
-      address: 'Medford, OR',
-      dieselPrice: 4.35,
-    ),
-    TruckStop(
-      id: '4',
-      name: 'Petro Stopping Center',
-      brand: 'Petro',
-      position: const LatLng(41.740, -122.637),
-      address: 'Yreka, CA',
-      dieselPrice: 4.45,
-    ),
-    TruckStop(
-      id: '5',
-      name: 'Flying J Travel Center',
-      brand: 'Flying J',
-      position: const LatLng(40.770, -122.388),
-      address: 'Redding, CA',
-      dieselPrice: 4.29,
-    ),
-    TruckStop(
-      id: '6',
-      name: 'Pilot Travel Center',
-      brand: 'Pilot',
-      position: const LatLng(39.724, -121.836),
-      address: 'Chico, CA',
-      dieselPrice: 4.32,
-    ),
-    TruckStop(
-      id: '7',
-      name: 'Rest Area – I-5 North',
-      brand: 'Rest Area',
-      position: const LatLng(43.210, -122.990),
-      address: 'I-5 Northbound, OR',
-    ),
-    TruckStop(
-      id: '8',
-      name: 'Rest Area – I-80 East',
-      brand: 'Rest Area',
-      position: const LatLng(40.210, -121.500),
-      address: 'I-80 Eastbound, CA',
-    ),
-  ];
+  // ── POI helpers ───────────────────────────────────────────────────────────
 
-  // ── Weigh station / port-of-entry mock dataset ────────────────────────────
-  //
-  // Hard-coded weigh stations and ports of entry covering the default
-  // Portland → Winnemucca route.  Replace with a real API or local DB in
-  // production.  Each entry carries a status string so the alert banner and
-  // details sheet can display "Open", "Closed", "Bypass", or "Status unknown".
-  static const List<RoutePoi> _mockRoutePois = [
-    RoutePoi(
-      id: 'ws1',
-      name: 'Baldock Weigh Station',
-      type: PoiType.weighStation,
-      position: LatLng(45.267, -122.771),
-      subtitle: 'I-5 Southbound',
-      status: 'Open',
-    ),
-    RoutePoi(
-      id: 'ws2',
-      name: 'Grants Pass Weigh Station',
-      type: PoiType.weighStation,
-      position: LatLng(42.434, -123.338),
-      subtitle: 'I-5 Southbound',
-      status: 'Open',
-    ),
-    RoutePoi(
-      id: 'ws3',
-      name: 'Oregon–California Port of Entry',
-      type: PoiType.portOfEntry,
-      position: LatLng(42.004, -122.834),
-      subtitle: 'Commercial vehicles',
-      status: 'Open',
-      bypassAvailable: true,
-      note: 'Check transponder before bypassing',
-    ),
-    RoutePoi(
-      id: 'ws4',
-      name: 'Ashland Inspection Site',
-      type: PoiType.weighStation,
-      position: LatLng(42.192, -122.709),
-      subtitle: 'I-5 Northbound',
-      status: 'Closed',
-    ),
-    RoutePoi(
-      id: 'ws5',
-      name: 'Lassen Weigh Station',
-      type: PoiType.weighStation,
-      position: LatLng(40.483, -121.508),
-      subtitle: 'I-5 Southbound',
-      status: 'Bypass',
-    ),
-    RoutePoi(
-      id: 'ws6',
-      name: 'Truckee Weigh Station',
-      type: PoiType.weighStation,
-      position: LatLng(39.328, -120.183),
-      subtitle: 'I-80 Eastbound',
-      status: 'Open',
-    ),
-  ];
+  /// Maximum distance (metres) from any route point for a POI to be shown.
+  static const double _poiMaxDistanceMeters = 5000;
 
-  // ── Truck Stop POI methods ─────────────────────────────────────────────────
-
-  /// Filters [allStops] to only those within [maxDistanceMeters] of any point
-  /// on [routePoints].  Call this after a new route loads to refresh the POI
-  /// overlay without showing every stop in the country.
+  /// Filters [mockRoutePois] to only those within [_poiMaxDistanceMeters] of
+  /// at least one point in [_routePoints], then updates [_pois] and triggers
+  /// a rebuild.
   ///
-  /// Uses [Geolocator.distanceBetween] for GPS-grade accuracy.
+  /// Called whenever a new route is loaded (or re-routed) so that displayed
+  /// POIs always match the current route geometry.
   ///
-  /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
-  /// With the current mock dataset (≤ 10 stops) this is negligible.  When
-  /// switching to a real data source with thousands of entries, replace this
-  /// with a spatial index (e.g. R-tree or bounding-box pre-filter) to avoid
-  /// scanning every stop against every route point.
-  List<TruckStop> _filterStopsNearRoute(
-    List<TruckStop> allStops,
-    List<LatLng> routePoints, {
-    double maxDistanceMeters = 5000,
-  }) {
-    return allStops.where((stop) {
-      for (final routePoint in routePoints) {
+  /// Performance: a coarse lat/lng bounding-box check eliminates most POIs
+  /// before the full Geolocator distance call, keeping the nested loop fast
+  /// even for routes with thousands of points.
+  void _refreshPois() {
+    if (!mounted) return;
+    // When the route is unknown fall back to all POIs so the map still shows
+    // something during initial load / demo mode.
+    if (_routePoints.isEmpty) {
+      setState(() => _pois = List.of(mockRoutePois));
+      return;
+    }
+
+    // Pre-compute route bounding box + padding for a cheap O(n) pre-filter.
+    // 5 km ≈ 0.045° latitude and ~0.065° longitude at mid-latitudes.
+    const double bboxPad = 0.065; // conservative padding in degrees
+    double minLat = _routePoints.first.latitude;
+    double maxLat = minLat;
+    double minLng = _routePoints.first.longitude;
+    double maxLng = minLng;
+    for (final pt in _routePoints) {
+      if (pt.latitude < minLat) minLat = pt.latitude;
+      if (pt.latitude > maxLat) maxLat = pt.latitude;
+      if (pt.longitude < minLng) minLng = pt.longitude;
+      if (pt.longitude > maxLng) maxLng = pt.longitude;
+    }
+    minLat -= bboxPad;
+    maxLat += bboxPad;
+    minLng -= bboxPad;
+    maxLng += bboxPad;
+
+    final nearby = mockRoutePois.where((poi) {
+      // Cheap bounding-box rejection — skips the inner loop for distant POIs.
+      final lat = poi.position.latitude;
+      final lng = poi.position.longitude;
+      if (lat < minLat || lat > maxLat || lng < minLng || lng > maxLng) {
+        return false;
+      }
+      // Exact distance check against each route point.
+      for (final routePoint in _routePoints) {
         final d = Geolocator.distanceBetween(
-          stop.position.latitude,
-          stop.position.longitude,
+          lat,
+          lng,
           routePoint.latitude,
           routePoint.longitude,
         );
-        if (d <= maxDistanceMeters) return true;
+        if (d <= _poiMaxDistanceMeters) return true;
       }
       return false;
     }).toList();
+    setState(() => _pois = nearby);
   }
 
-  /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
-  ///
-  /// Returns an empty list when [_showTruckStops] is false so markers disappear
-  /// immediately when the driver toggles the POI overlay off.
-  ///
-  /// Each marker uses a petrol-pump icon (or a rest-area chair icon) on a
-  /// coloured rounded background so it stands out from the route polyline.
-  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
-  List<Marker> _buildTruckStopMarkers() {
-    if (!_showTruckStops || _truckStops.isEmpty) return const [];
+  /// Returns the accent colour used for the marker and details sheet of a POI.
+  Color _poiColor(PoiType type) {
+    switch (type) {
+      case PoiType.weighStation:
+        return Colors.deepOrange; // orange – official / mandatory stop
+      case PoiType.restArea:
+        return Colors.teal; // teal – HOS rest requirement
+      case PoiType.truckParking:
+        return Colors.indigo; // indigo – overnight parking
+      case PoiType.truckStop:
+        return Colors.blue; // blue – full-service fuel / food
+    }
+  }
 
-    return _truckStops.map((stop) {
-      // Choose icon based on brand for quick visual differentiation.
-      final bool isRestArea = stop.brand == 'Rest Area';
-      final IconData iconData =
-          isRestArea ? Icons.airline_seat_recline_normal : Icons.local_gas_station;
-      // Azure-blue for fuel stops; teal for rest areas — both distinct from
-      // the red truck / destination markers.
-      final Color markerColor =
-          isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+  /// Returns the icon used inside each POI marker.
+  IconData _poiIcon(PoiType type) {
+    switch (type) {
+      case PoiType.weighStation:
+        return Icons.scale;
+      case PoiType.restArea:
+        return Icons.hotel;
+      case PoiType.truckParking:
+        return Icons.local_parking;
+      case PoiType.truckStop:
+        return Icons.local_gas_station;
+    }
+  }
 
+  /// Builds the list of [Marker]s for currently-visible, filter-enabled POIs.
+  ///
+  /// Merged into [MarkerLayer] alongside the truck and destination markers so
+  /// a single layer handles all map markers.
+  List<Marker> _buildPoiMarkers() {
+    return _pois.where((poi) {
+      // Apply per-type filter toggles.
+      switch (poi.type) {
+        case PoiType.weighStation:
+          return _showWeighStations;
+        case PoiType.restArea:
+          return _showRestAreas;
+        case PoiType.truckParking:
+          return _showTruckParking;
+        case PoiType.truckStop:
+          return _showTruckStops;
+      }
+    }).map((poi) {
+      final color = _poiColor(poi.type);
       return Marker(
-        point: stop.position,
+        point: poi.position,
         width: 36,
         height: 36,
-        alignment: Alignment.center,
         child: GestureDetector(
-          onTap: () => _showTruckStopSheet(stop),
+          onTap: () => _showPoiDetailsSheet(poi),
           child: Container(
             decoration: BoxDecoration(
-              color: markerColor,
+              color: color,
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 4,
+                  color: color.withOpacity(0.45),
+                  blurRadius: 6,
                   offset: const Offset(0, 2),
                 ),
               ],
             ),
-            child: Icon(
-              iconData,
-              color: Colors.white,
-              size: 20,
-            ),
+            child: Icon(_poiIcon(poi.type), color: Colors.white, size: 20),
           ),
         ),
       );
     }).toList();
   }
 
+  /// Shows a modal bottom sheet with details for the tapped [poi].
+  ///
+  /// Displays name, type, subtitle, and available spots with a close button.
+  void _showPoiDetailsSheet(RoutePoi poi) {
+    final color = _poiColor(poi.type);
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
   /// truck position, destination pin, and all visible truck stop POIs.
   ///
@@ -1422,97 +1336,93 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        final bool isRestArea = stop.brand == 'Rest Area';
-        final Color headerColor =
-            isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
         return Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Header row: icon + name ──────────────────────────────────
+              // ── Header row: coloured icon + name + close button ─────────
               Row(
                 children: [
-                  CircleAvatar(
-                    backgroundColor: headerColor,
-                    child: Icon(
-                      isRestArea
-                          ? Icons.airline_seat_recline_normal
-                          : Icons.local_gas_station,
-                      color: Colors.white,
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
                     ),
+                    child: Icon(_poiIcon(poi.type), color: color, size: 28),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          stop.name,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          stop.brand,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: headerColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      poi.name,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(ctx).pop(),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              // ── Diesel price ─────────────────────────────────────────────
-              if (stop.dieselPrice != null) ...[
+              const SizedBox(height: 12),
+              // ── Type badge ────────────────────────────────────────────
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  poi.type.fullLabel,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // ── Subtitle (address / status) ───────────────────────────
+              if (poi.subtitle != null) ...[
                 Row(
                   children: [
-                    const Icon(Icons.local_gas_station,
-                        size: 18, color: Colors.grey),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Diesel: \$${stop.dieselPrice!.toStringAsFixed(2)}/gal',
-                      style: const TextStyle(fontSize: 15),
+                    const Icon(Icons.info_outline,
+                        size: 16, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        poi.subtitle!,
+                        style: const TextStyle(fontSize: 14),
+                      ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
               ],
-              // ── Address ──────────────────────────────────────────────────
-              if (stop.address != null) ...[
+              // ── Available spots ───────────────────────────────────────
+              if (poi.availableSpots != null)
                 Row(
                   children: [
-                    const Icon(Icons.location_on,
-                        size: 18, color: Colors.grey),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        stop.address!,
-                        style: const TextStyle(fontSize: 15),
-                      ),
+                    const Icon(Icons.local_parking,
+                        size: 16, color: Colors.grey),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${poi.availableSpots} spot${poi.availableSpots == 1 ? '' : 's'} available',
+                      style: const TextStyle(fontSize: 14),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-              ],
-              // ── Close button ─────────────────────────────────────────────
+              const SizedBox(height: 16),
+              // ── Close button ──────────────────────────────────────────
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: headerColor,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
+                child: OutlinedButton(
                   onPressed: () => Navigator.of(ctx).pop(),
                   child: const Text('Close'),
                 ),
@@ -1524,6 +1434,64 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds the horizontal [FilterChip] bar that lets the driver toggle which
+  /// POI types are shown on the map.
+  ///
+  /// Placed as a [Positioned] overlay at the top of the map Stack so it
+  /// remains accessible in both navigation and overview modes.  When the
+  /// navigation banner is active the bar shifts down to avoid overlap.
+  Widget _buildPoiFilterBar() {
+    // Offset the filter bar below the navigation banner (≈56 px) so both
+    // can be visible simultaneously during active turn-by-turn guidance.
+    final double topOffset = _navSteps.isNotEmpty ? 64.0 : 8.0;
+    return Positioned(
+      top: topOffset,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _poiFilterChip(
+                  label: PoiType.weighStation.label,
+                  icon: Icons.scale,
+                  color: _poiColor(PoiType.weighStation),
+                  selected: _showWeighStations,
+                  onSelected: (v) =>
+                      setState(() => _showWeighStations = v),
+                ),
+                const SizedBox(width: 6),
+                _poiFilterChip(
+                  label: PoiType.restArea.label,
+                  icon: Icons.hotel,
+                  color: _poiColor(PoiType.restArea),
+                  selected: _showRestAreas,
+                  onSelected: (v) => setState(() => _showRestAreas = v),
+                ),
+                const SizedBox(width: 6),
+                _poiFilterChip(
+                  label: PoiType.truckParking.label,
+                  icon: Icons.local_parking,
+                  color: _poiColor(PoiType.truckParking),
+                  selected: _showTruckParking,
+                  onSelected: (v) =>
+                      setState(() => _showTruckParking = v),
+                ),
+                const SizedBox(width: 6),
+                _poiFilterChip(
+                  label: PoiType.truckStop.label,
+                  icon: Icons.local_gas_station,
+                  color: _poiColor(PoiType.truckStop),
+                  selected: _showTruckStops,
+                  onSelected: (v) =>
+                      setState(() => _showTruckStops = v),
+                ),
+              ],
+            ),
   /// Opens the trip documents panel in a modal bottom sheet.
   ///
   /// Uses a [DraggableScrollableSheet] so the driver can expand the panel
@@ -1909,6 +1877,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Builds a single styled [FilterChip] for the POI filter bar.
+  Widget _poiFilterChip({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required bool selected,
+    required ValueChanged<bool> onSelected,
+  }) {
+    return FilterChip(
+      avatar: Icon(icon, size: 14, color: selected ? Colors.white : color),
+      label: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          color: selected ? Colors.white : color,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      selected: selected,
+      onSelected: onSelected,
+      selectedColor: color,
+      checkmarkColor: Colors.white,
+      showCheckmark: false,
+      backgroundColor: Colors.white.withOpacity(0.9),
+      side: BorderSide(color: color, width: 1.2),
+      elevation: selected ? 3 : 1,
+      pressElevation: 4,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
     );
   }
 
@@ -3432,14 +3431,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _speak(allSteps.first.instruction);
       }
 
-      // ── Filter nearby truck stop POIs ──────────────────────────────────────
-      // After the route is loaded, update the truck stop list to only show
-      // stops that are within 5 km of a route point.  setState is used so the
-      // MarkerLayer rebuilds immediately with the filtered markers.
-      final nearbyStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
-      setState(() {
-        _truckStops = nearbyStops;
-      });
+      // Refresh the POI list now that we have up-to-date route geometry.
+      _refreshPois();
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
@@ -4773,6 +4766,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── POI filter bar ────────────────────────────────────────
+                // Horizontal chip row lets drivers toggle weigh stations,
+                // rest areas, truck parking, and truck stops independently.
+                // Rendered above the navigation banner area (offset downward
+                // when the nav banner is active to avoid overlap).
+                _buildPoiFilterBar(),
                 // ── Route Options FAB ──────────────────────────────────────
                 // Top-right corner of the map; opens the options bottom sheet
                 // so the driver can change route mode and avoidance settings.

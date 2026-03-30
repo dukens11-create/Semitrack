@@ -222,6 +222,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final Set<String> _restrictionAlertShown = {};
   TruckRestriction? _restrictionAhead;
 
+  // ── Smart restriction rerouting state ─────────────────────────────────────
+  // _isRestrictionRerouting is true while an automatic avoid-restriction
+  // reroute is in progress so the UI can show the rerouting banner.
+  // _restrictionRerouteAttempts counts how many avoid-point retries have been
+  // made in the current rerouting cycle; reset to 0 before each new cycle.
+  bool _isRestrictionRerouting = false;
+  int _restrictionRerouteAttempts = 0;
+  static const int _maxRestrictionReroutes = 3;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -1630,6 +1639,227 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return violations;
   }
 
+  /// Returns the first [TruckRestriction] on [routePoints] that the current
+  /// truck profile violates, or `null` when the route is restriction-free.
+  ///
+  /// Iterates route points in order and stops at the first violated restriction
+  /// within [proximityMeters], matching the driver's forward-progress order.
+  TruckRestriction? _firstRouteViolation(
+    List<LatLng> routePoints, {
+    double proximityMeters = 300.0,
+  }) {
+    for (final pt in routePoints) {
+      for (final r in _restrictions) {
+        if (!_violatesRestriction(r)) continue;
+        if (_distanceBetween(pt, r.position) <= proximityMeters) {
+          return r;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Builds an offset "avoid waypoint" approximately 200 m perpendicular to
+  /// the restriction [r] so that the routing API is nudged away from it.
+  ///
+  /// The offset alternates east/west per [attemptNumber] so successive retries
+  /// try different lateral directions before giving up.
+  LatLng _buildAvoidPoint(TruckRestriction r, {int attemptNumber = 0}) {
+    // ~200 m in degrees latitude (independent of longitude).
+    const double offsetDeg = 0.0018;
+    // Vary offset direction per attempt:
+    //   even attempts  → positive lat, alternating lng sign (NE / NW)
+    //   odd attempts   → negative lat, alternating lng sign (SE / SW)
+    final latOffset = (attemptNumber.isEven) ? offsetDeg : -offsetDeg;
+    final lngOffset = (attemptNumber % 3 == 0) ? offsetDeg : -offsetDeg;
+    return LatLng(
+      r.position.latitude + latOffset,
+      r.position.longitude + lngOffset,
+    );
+  }
+
+  /// Fetches a route from [origin] to [destination] via the Mapbox Directions
+  /// API.  When [viaPoint] is provided the coordinates are injected as a
+  /// shaping point between origin and destination, guiding the route away from
+  /// a restriction.
+  ///
+  /// Returns the decoded, simplified route polyline or an empty list on error.
+  Future<List<LatLng>> _fetchRouteFromApi(
+    LatLng origin,
+    LatLng destination, {
+    LatLng? viaPoint,
+  }) async {
+    try {
+      final StringBuffer coords = StringBuffer()
+        ..write('${origin.longitude},${origin.latitude}');
+      if (viaPoint != null) {
+        coords.write(';${viaPoint.longitude},${viaPoint.latitude}');
+      }
+      coords.write(';${destination.longitude},${destination.latitude}');
+
+      final url = 'https://api.mapbox.com/directions/v5/mapbox/driving-traffic/'
+          '${coords.toString()}'
+          '?overview=full'
+          '&geometries=polyline6'
+          '&steps=true'
+          '&alternatives=false'
+          '&exclude=ferry'
+          '&access_token=$_mapboxToken';
+
+      final res = await http.get(Uri.parse(url));
+      final data = jsonDecode(res.body);
+      final routes = data['routes'] as List?;
+      if (routes == null || routes.isEmpty) return const [];
+      final route = routes[0] as Map<String, dynamic>;
+      final decoded = _decodePolyline6(route['geometry'] as String);
+      return _simplifyRoute(decoded);
+    } catch (e) {
+      print('_fetchRouteFromApi error: $e');
+      return const [];
+    }
+  }
+
+  /// Attempts up to [_maxRestrictionReroutes] times to build a route that
+  /// avoids the first violated truck restriction on the current route.
+  ///
+  /// Each attempt computes a new avoid waypoint offset via [_buildAvoidPoint]
+  /// and requests a fresh route via [_fetchRouteFromApi].  If a clean route is
+  /// found it becomes the current route and the UI is updated.  If no safe
+  /// route is found after all attempts [_showNoSafeRouteDialog] is called.
+  Future<void> _smartRerouteAroundRestrictions() async {
+    if (_isRestrictionRerouting) return; // guard against re-entrant calls
+    setState(() {
+      _isRestrictionRerouting = true;
+      _restrictionRerouteAttempts = 0;
+    });
+
+    final origin = _truckPosition ?? _origin;
+    final dest = _selectedDestination ?? _destination;
+
+    List<LatLng> candidatePoints = _routePoints;
+
+    while (_restrictionRerouteAttempts < _maxRestrictionReroutes) {
+      final violation = _firstRouteViolation(candidatePoints);
+      if (violation == null) {
+        // Route is safe — apply it if it differs from what is already shown.
+        if (candidatePoints != _routePoints) {
+          setState(() {
+            _routePoints = candidatePoints.toSet().toList();
+          });
+        }
+        break;
+      }
+
+      setState(() => _restrictionRerouteAttempts++);
+      final avoidPt = _buildAvoidPoint(
+        violation,
+        attemptNumber: _restrictionRerouteAttempts - 1,
+      );
+
+      final newPoints = await _fetchRouteFromApi(origin, dest, viaPoint: avoidPt);
+      if (newPoints.isEmpty) {
+        // API call failed — stop retrying.
+        break;
+      }
+      candidatePoints = newPoints;
+    }
+
+    // Final check after all attempts.
+    final stillViolated = _firstRouteViolation(candidatePoints) != null;
+    if (stillViolated) {
+      // Apply the best candidate we found (even if imperfect) so the driver
+      // has a route, then warn them.
+      if (candidatePoints.isNotEmpty && candidatePoints != _routePoints) {
+        setState(() {
+          _routePoints = candidatePoints.toSet().toList();
+        });
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showNoSafeRouteDialog();
+      });
+    }
+
+    if (mounted) setState(() => _isRestrictionRerouting = false);
+  }
+
+  /// Shows an [AlertDialog] warning the driver that no restriction-free route
+  /// could be found after the maximum number of smart rerouting attempts.
+  void _showNoSafeRouteDialog() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+            SizedBox(width: 8),
+            Text('No Safe Route Found'),
+          ],
+        ),
+        content: const Text(
+          'Unable to find a route that avoids all truck restrictions for your '
+          'current vehicle profile after multiple attempts.\n\n'
+          'Proceed with caution and verify restrictions before driving.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Understood'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the rerouting-progress banner shown as a top overlay while
+  /// [_isRestrictionRerouting] is `true`.
+  ///
+  /// Displays the current attempt number out of [_maxRestrictionReroutes] so
+  /// the driver knows the app is actively working on a safer route.
+  Widget _buildRestrictionRerouteBanner() {
+    return Positioned(
+      top: 8,
+      left: 16,
+      right: 16,
+      child: Material(
+        elevation: 6,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.deepOrange.shade700,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Finding safe route… '
+                  '(attempt $_restrictionRerouteAttempts/$_maxRestrictionReroutes)',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Shows a modal bottom sheet listing all [violations] on the current route.
   ///
   /// Each violation is displayed with its restriction type icon, name, limit
@@ -2178,13 +2408,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       });
 
       // ── Evaluate truck restrictions along the new route ────────────────────
-      // Warn the driver if any restriction violates the current truck profile.
-      // Show the violation sheet after the current frame so the map is stable.
+      // Use smart rerouting to attempt to find a restriction-free route before
+      // falling back to the violations sheet.  After every route build
+      // (destination, off-route reroute, alternative, etc.) this triggers an
+      // automatic avoid-point retry cycle up to _maxRestrictionReroutes times.
       final violations = _evaluateRouteRestrictions(newPoints);
       if (violations.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showRestrictionViolationsSheet(violations);
-        });
+        // Attempt smart rerouting in the background; the banner widget reflects
+        // progress while _isRestrictionRerouting is true.
+        _smartRerouteAroundRestrictions();
       }
 
       _fitCameraToRoute(newPoints);
@@ -3389,6 +3621,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildRestrictionAlertCard(),
                   ),
+                // ── Smart restriction rerouting progress banner ───────────
+                // Shown as an overlay at the top of the map while an
+                // automatic avoid-restriction reroute is in progress.
+                if (_isRestrictionRerouting) _buildRestrictionRerouteBanner(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:

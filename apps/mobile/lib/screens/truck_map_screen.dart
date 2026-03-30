@@ -332,8 +332,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ).listen(_onGpsPosition);
   }
 
-  /// Handles a new GPS position by snapping the truck to the nearest route
-  /// point that is at or ahead of its current index.
+  /// Handles a new GPS position: updates the truck marker to the real device
+  /// location, rotates the marker to the true GPS heading, and checks for
+  /// step advancement and off-route conditions.
+  ///
+  /// **Position** — [_truckPosition] is set directly to the GPS fix for
+  /// accurate real-world placement (matches `currentTruckPosition = gpsPoint`
+  /// in the Google Maps pattern).  The nearest route index is still tracked so
+  /// step-advancement and off-route logic remain correct.
+  ///
+  /// **Bearing** — `position.heading` returns the true device compass heading
+  /// in degrees (0–360) when the device is moving; Geolocator returns −1 when
+  /// the heading is unavailable (stationary, cold start, or no sensor).  We
+  /// use the true heading when ≥ 0, falling back to the bearing derived from
+  /// the route geometry when not available.
   void _onGpsPosition(Position position) {
     if (_routePoints.isEmpty) return;
     _gpsActive = true;
@@ -345,10 +357,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Off-route detection: reroute when >30 m from the route line ─────────
     _checkOffRoute(gpsPoint);
 
-    // ── Snap truck marker to nearest route point ─────────────────────────────
+    // ── Update truck position and heading from real GPS data ─────────────────
+    // Snap to the nearest ahead-of-index route point for step/off-route logic.
     final nearest = _nearestRouteIndex(gpsPoint);
-    if (nearest != _truckIndex) {
-      _advanceTruckTo(nearest);
+
+    // Prefer the true device heading from GPS (heading ≥ 0 = valid fix).
+    // Fall back to route-computed bearing when heading is unavailable (−1).
+    final double trueBearing;
+    if (position.heading >= 0) {
+      // Real device compass heading — use directly for marker rotation.
+      trueBearing = position.heading;
+    } else if (nearest != _truckIndex) {
+      // No GPS heading but route index changed: compute from route geometry.
+      trueBearing = _bearingBetween(
+        _routePoints[_truckIndex.clamp(0, _routePoints.length - 1)],
+        _routePoints[nearest.clamp(0, _routePoints.length - 1)],
+      );
+    } else {
+      // No GPS heading and no index change: keep current bearing.
+      trueBearing = _truckBearing;
+    }
+
+    _truckIndex = nearest;
+    setState(() {
+      // Use the raw GPS fix so the marker reflects actual device location.
+      _truckPosition = gpsPoint;
+      // Use real device heading for accurate marker rotation.
+      _truckBearing = trueBearing;
+    });
+
+    // Keep the camera centred on the truck while in navigation mode.
+    if (_navigationMode) {
+      _followTruckCamera();
     }
   }
 

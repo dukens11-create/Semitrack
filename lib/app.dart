@@ -17,6 +17,7 @@ import 'features/fleet/fleet_screen.dart';
 import 'features/load_board/load_board_screen.dart';
 import 'features/documents/documents_screen.dart';
 import 'features/subscriptions/subscriptions_screen.dart';
+import 'screens/trips_screen.dart';
 
 class SemitrackApp extends StatelessWidget {
   const SemitrackApp({super.key});
@@ -30,6 +31,7 @@ class SemitrackApp extends StatelessWidget {
           builder: (context, state, child) => AppLayout(child: child),
           routes: [
             GoRoute(path: '/navigation', builder: (_, __) => const NavigationScreen()),
+            GoRoute(path: '/trips', builder: (_, __) => const TripsScreen()),
             GoRoute(path: '/trip-planner', builder: (_, __) => const TripPlannerScreen()),
             GoRoute(path: '/poi', builder: (_, __) => const PoiScreen()),
             GoRoute(path: '/parking', builder: (_, __) => const ParkingScreen()),

@@ -132,6 +132,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  // ── Truck Stop POI state ───────────────────────────────────────────────────
+  //
+  // _truckStops holds the filtered list of stops near the current route.
+  // _showTruckStops controls marker visibility — toggled by the POI FAB.
+  // Expand this section later to support real API data, weigh stations, etc.
+  List<TruckStop> _truckStops = const [];
+  bool _showTruckStops = true;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -307,6 +315,285 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Marker rebuild is implicit: build() calls _buildTruckMarker() which
       // reads the already-updated _truckPosition and _truckBearing fields.
     });
+  }
+
+  // ── Truck Stop POI mock dataset ────────────────────────────────────────────
+  //
+  // Hard-coded stops covering the default Portland → Winnemucca route.
+  // Replace with a real API call or local database in a production build.
+  // Add more brands here: Petro, Flying J, rest areas, weigh stations, etc.
+  static final List<TruckStop> _mockTruckStops = [
+    TruckStop(
+      id: '1',
+      name: 'Pilot Travel Center',
+      brand: 'Pilot',
+      position: const LatLng(45.581, -122.571),
+      address: 'Portland, OR',
+      dieselPrice: 4.25,
+    ),
+    TruckStop(
+      id: '2',
+      name: "Love's Travel Stop",
+      brand: "Love's",
+      position: const LatLng(44.057, -123.092),
+      address: 'Eugene, OR',
+      dieselPrice: 4.19,
+    ),
+    TruckStop(
+      id: '3',
+      name: 'TA Travel Center',
+      brand: 'TA',
+      position: const LatLng(42.328, -122.875),
+      address: 'Medford, OR',
+      dieselPrice: 4.35,
+    ),
+    TruckStop(
+      id: '4',
+      name: 'Petro Stopping Center',
+      brand: 'Petro',
+      position: const LatLng(41.740, -122.637),
+      address: 'Yreka, CA',
+      dieselPrice: 4.45,
+    ),
+    TruckStop(
+      id: '5',
+      name: 'Flying J Travel Center',
+      brand: 'Flying J',
+      position: const LatLng(40.770, -122.388),
+      address: 'Redding, CA',
+      dieselPrice: 4.29,
+    ),
+    TruckStop(
+      id: '6',
+      name: 'Pilot Travel Center',
+      brand: 'Pilot',
+      position: const LatLng(39.724, -121.836),
+      address: 'Chico, CA',
+      dieselPrice: 4.32,
+    ),
+    TruckStop(
+      id: '7',
+      name: 'Rest Area – I-5 North',
+      brand: 'Rest Area',
+      position: const LatLng(43.210, -122.990),
+      address: 'I-5 Northbound, OR',
+    ),
+    TruckStop(
+      id: '8',
+      name: 'Rest Area – I-80 East',
+      brand: 'Rest Area',
+      position: const LatLng(40.210, -121.500),
+      address: 'I-80 Eastbound, CA',
+    ),
+  ];
+
+  // ── Truck Stop POI methods ─────────────────────────────────────────────────
+
+  /// Filters [allStops] to only those within [maxDistanceMeters] of any point
+  /// on [routePoints].  Call this after a new route loads to refresh the POI
+  /// overlay without showing every stop in the country.
+  ///
+  /// Uses [Geolocator.distanceBetween] for GPS-grade accuracy.
+  ///
+  /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
+  /// With the current mock dataset (≤ 10 stops) this is negligible.  When
+  /// switching to a real data source with thousands of entries, replace this
+  /// with a spatial index (e.g. R-tree or bounding-box pre-filter) to avoid
+  /// scanning every stop against every route point.
+  List<TruckStop> _filterStopsNearRoute(
+    List<TruckStop> allStops,
+    List<LatLng> routePoints, {
+    double maxDistanceMeters = 5000,
+  }) {
+    return allStops.where((stop) {
+      for (final routePoint in routePoints) {
+        final d = Geolocator.distanceBetween(
+          stop.position.latitude,
+          stop.position.longitude,
+          routePoint.latitude,
+          routePoint.longitude,
+        );
+        if (d <= maxDistanceMeters) return true;
+      }
+      return false;
+    }).toList();
+  }
+
+  /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
+  ///
+  /// Returns an empty list when [_showTruckStops] is false so markers disappear
+  /// immediately when the driver toggles the POI overlay off.
+  ///
+  /// Each marker uses a petrol-pump icon (or a rest-area chair icon) on a
+  /// coloured rounded background so it stands out from the route polyline.
+  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
+  List<Marker> _buildTruckStopMarkers() {
+    if (!_showTruckStops || _truckStops.isEmpty) return const [];
+
+    return _truckStops.map((stop) {
+      // Choose icon based on brand for quick visual differentiation.
+      final bool isRestArea = stop.brand == 'Rest Area';
+      final IconData iconData =
+          isRestArea ? Icons.airline_seat_recline_normal : Icons.local_gas_station;
+      // Azure-blue for fuel stops; teal for rest areas — both distinct from
+      // the red truck / destination markers.
+      final Color markerColor =
+          isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+
+      return Marker(
+        point: stop.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showTruckStopSheet(stop),
+          child: Container(
+            decoration: BoxDecoration(
+              color: markerColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(
+              iconData,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns the complete list of [Marker]s for the [MarkerLayer]:
+  /// truck position, destination pin, and all visible truck stop POIs.
+  ///
+  /// Centralises marker assembly so [build] stays clean and future POI types
+  /// (weigh stations, parking, etc.) can be merged here in one place.
+  List<Marker> _buildMarkers() {
+    return [
+      _buildTruckMarker(),
+      if (_isArrived) _buildDestinationMarker(),
+      ..._buildTruckStopMarkers(),
+    ];
+  }
+
+  /// Shows a modal bottom sheet with full details for [stop].
+  ///
+  /// Displays brand, name, diesel price (if known), address (if known), and a
+  /// close button.  Styled consistently with the arrival sheet.
+  void _showTruckStopSheet(TruckStop stop) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final bool isRestArea = stop.brand == 'Rest Area';
+        final Color headerColor =
+            isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header row: icon + name ──────────────────────────────────
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: headerColor,
+                    child: Icon(
+                      isRestArea
+                          ? Icons.airline_seat_recline_normal
+                          : Icons.local_gas_station,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          stop.brand,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: headerColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // ── Diesel price ─────────────────────────────────────────────
+              if (stop.dieselPrice != null) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.local_gas_station,
+                        size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Diesel: \$${stop.dieselPrice!.toStringAsFixed(2)}/gal',
+                      style: const TextStyle(fontSize: 15),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+              ],
+              // ── Address ──────────────────────────────────────────────────
+              if (stop.address != null) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.location_on,
+                        size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        stop.address!,
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ],
+              // ── Close button ─────────────────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: headerColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   /// Animates the map camera to follow the truck in navigation mode.
@@ -1023,6 +1310,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (allSteps.isNotEmpty) {
         _speak(allSteps.first.instruction);
       }
+
+      // ── Filter nearby truck stop POIs ──────────────────────────────────────
+      // After the route is loaded, update the truck stop list to only show
+      // stops that are within 5 km of a route point.  setState is used so the
+      // MarkerLayer rebuilds immediately with the filtered markers.
+      final nearbyStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
+      setState(() {
+        _truckStops = nearbyStops;
+      });
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
@@ -1823,17 +2119,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     MarkerLayer(
                       // _buildTruckMarker() + _buildDestinationMarker() are
-                      // the flutter_map equivalent of passing a Set<Marker> to
-                      // the GoogleMap widget; _updateMarkers() triggers setState
-                      // to rebuild this layer whenever position/bearing changes.
-                      //
-                      // The destination marker is shown only after arrival so
-                      // it does not clutter the map during active navigation —
-                      // the route polyline already indicates the destination.
-                      markers: [
-                        _buildTruckMarker(),
-                        if (_isArrived) _buildDestinationMarker(),
-                      ],
+                      // _buildMarkers() assembles the truck marker, the optional
+                      // destination pin, and all visible truck stop POI markers
+                      // into a single list.  Adding new POI types in the future
+                      // only requires updating _buildMarkers() in one place.
+                      markers: _buildMarkers(),
                     ),
                   ],
                 ),
@@ -1915,6 +2205,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 16,
                     child: _buildSpeedPanel(),
                   ),
+                // ── POI toggle FAB ────────────────────────────────────────
+                // Floating action button to show/hide truck stop POI markers.
+                // Positioned at the bottom-left so it does not overlap the
+                // speed panel (bottom-right) or the rerouting indicator
+                // (bottom-centre).  Available at all times, not just during
+                // navigation, so drivers can inspect stops before departing.
+                Positioned(
+                  bottom: 24,
+                  left: 16,
+                  child: FloatingActionButton.small(
+                    heroTag: 'poi_toggle',
+                    tooltip: _showTruckStops
+                        ? 'Hide truck stops'
+                        : 'Show truck stops',
+                    backgroundColor: _showTruckStops
+                        ? Colors.blue.shade700
+                        : Colors.grey.shade700,
+                    onPressed: () {
+                      setState(() => _showTruckStops = !_showTruckStops);
+                    },
+                    child: Icon(
+                      _showTruckStops
+                          ? Icons.local_gas_station
+                          : Icons.local_gas_station_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2195,4 +2513,40 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+}
+
+/// A truck-friendly point of interest along the route.
+///
+/// Represents fuel stops (Pilot, Love's, TA, Petro, Flying J) and rest areas.
+/// [dieselPrice] and [address] are optional — not all data sources provide them.
+///
+/// Extend this model with additional fields (e.g. amenities, parking spots,
+/// scale availability) as the app evolves to support richer POI types.
+class TruckStop {
+  const TruckStop({
+    required this.id,
+    required this.name,
+    required this.brand,
+    required this.position,
+    this.address,
+    this.dieselPrice,
+  });
+
+  /// Unique identifier for this stop (used as the marker ID prefix).
+  final String id;
+
+  /// Display name of the truck stop, e.g. "Pilot Travel Center".
+  final String name;
+
+  /// Brand name, e.g. "Pilot", "Love's", "TA", "Petro", "Flying J", "Rest Area".
+  final String brand;
+
+  /// Geographic position of the stop on the map.
+  final LatLng position;
+
+  /// Street address or city/state summary, e.g. "Portland, OR".  Optional.
+  final String? address;
+
+  /// Current diesel price in USD per gallon.  Null when price is unavailable.
+  final double? dieselPrice;
 }

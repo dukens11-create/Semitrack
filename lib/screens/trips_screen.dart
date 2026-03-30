@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
 class SavedTrip {
   final String id;
@@ -73,54 +72,50 @@ class _TripsScreenState extends State<TripsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-          children: [
-            _buildPlannerCard(context),
-            const SizedBox(height: 20),
-            _buildSectionTitle('Saved Trips'),
-            const SizedBox(height: 8),
-            if (_savedTrips.isEmpty)
-              _buildEmptyCard('No saved trips yet')
-            else
-              ..._savedTrips.map(
-                (trip) => _buildTripCard(
-                  trip: trip,
-                  onOpen: () => _openTrip(trip),
-                  onDelete: () => _deleteSavedTrip(trip.id),
-                ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Trips')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Open trip planner')),
+          );
+        },
+        icon: const Icon(Icons.add_road),
+        label: const Text('New Trip'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildPlannerCard(context),
+          const SizedBox(height: 20),
+          _buildSectionTitle('Saved Trips'),
+          const SizedBox(height: 8),
+          if (_savedTrips.isEmpty)
+            _buildEmptyCard('No saved trips yet')
+          else
+            ..._savedTrips.map(
+              (trip) => _buildTripCard(
+                trip: trip,
+                onOpen: () => _openTrip(trip),
+                onDelete: () => _deleteSavedTrip(trip.id),
               ),
-            const SizedBox(height: 20),
-            _buildSectionTitle('Recent Trips'),
-            const SizedBox(height: 8),
-            if (_recentTrips.isEmpty)
-              _buildEmptyCard('No recent trips yet')
-            else
-              ..._recentTrips.map(
-                (trip) => _buildTripCard(
-                  trip: trip,
-                  onOpen: () => _openTrip(trip),
-                  onDelete: () => _deleteRecentTrip(trip.id),
-                ),
+            ),
+          const SizedBox(height: 20),
+          _buildSectionTitle('Recent Trips'),
+          const SizedBox(height: 8),
+          if (_recentTrips.isEmpty)
+            _buildEmptyCard('No recent trips yet')
+          else
+            ..._recentTrips.map(
+              (trip) => _buildTripCard(
+                trip: trip,
+                onOpen: () => _openTrip(trip),
+                onDelete: () => _deleteRecentTrip(trip.id),
               ),
-          ],
-        ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: FloatingActionButton.extended(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Open trip planner')),
-              );
-            },
-            icon: const Icon(Icons.add_road),
-            label: const Text('New Trip'),
-          ),
-        ),
-      ],
+            ),
+          const SizedBox(height: 80),
+        ],
+      ),
     );
   }
 
@@ -149,7 +144,11 @@ class _TripsScreenState extends State<TripsScreen> {
           ),
           const SizedBox(height: 14),
           ElevatedButton(
-            onPressed: () => context.go('/trip-planner'),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Open trip planner')),
+              );
+            },
             child: const Text('Open Planner'),
           ),
         ],

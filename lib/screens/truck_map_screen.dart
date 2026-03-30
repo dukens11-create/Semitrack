@@ -9,12 +9,12 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import '../services/navigation_state_controller.dart';
 
 import '../features/documents/documents_screen.dart';
 import '../models/stop_appointment.dart';
 import '../models/trip.dart';
 import '../models/trip_stop.dart';
+import '../services/settings_controller.dart';
 import '../services/trip_storage.dart';
 
 /// Full-featured truck navigation screen.
@@ -24,18 +24,18 @@ import '../services/trip_storage.dart';
 /// displays dynamic ETA / distance / maneuver information together with the
 /// Phase 5 intelligence overlay (driveMinutesLeft, weather, riskScore).
 class TruckMapScreen extends StatefulWidget {
-  final NavigationStateController? navigationStateController;
+  const TruckMapScreen({super.key, this.settingsController});
 
-  const TruckMapScreen({super.key, this.navigationStateController});
+  /// Shared settings controller injected from [AppShell]. When provided,
+  /// route filtering, truck-safe checks, fuel range, and TTS are driven by
+  /// the user's saved profile settings.
+  final SettingsController? settingsController;
 
   @override
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
 
 class _TruckMapScreenState extends State<TruckMapScreen> {
-  // ── Shortcut to the optional shared-state controller ─────────────────────
-  NavigationStateController? get _navState => widget.navigationStateController;
-
   // ── Navigation banner constants ────────────────────────────────────────────
   /// Distance threshold below which the banner shows "Now" instead of metres.
   static const double _imminentManeuverThresholdMeters = 30.0;
@@ -93,9 +93,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Maximum number of rest stop recommendations shown in the HOS stop sheet.
   static const int _hosMaxStopRecommendations = 3;
-
-  /// Maximum number of recent trips retained in [_recentTrips].
-  static const int _maxRecentTrips = 5;
 
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
@@ -185,9 +182,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Total miles driven since the trip was started, computed from successive
   /// GPS point-to-point distances via [Geolocator.distanceBetween].
   double _milesDriven = 0.0;
-
-  // ── Recent trips list (persisted across navigation sessions) ─────────────
-  List<String> _recentTrips = const [];
 
   /// Latitude of the previous GPS fix, used to compute incremental distance.
   /// Zero until the first GPS fix arrives after [_startTripStats] is called.
@@ -365,9 +359,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Human-readable gallons-remaining string, e.g. "108.0 gal".
   String get _fuelLeftText => '${_gallonsLeft.toStringAsFixed(1)} gal';
 
-  /// Fuel-level display string, e.g. "72%".
-  String get _fuelPercentText => '${_fuelPercent.toStringAsFixed(0)}%';
-
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
   // Pre-populated with mock/placeholder values so the Drive Intelligence card
   // is never blank.  These are replaced by real API data once available.
@@ -433,10 +424,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
-
-  /// Human-readable names for the default route endpoints.
-  static const String _originName = 'Portland, OR';
-  static const String _destinationName = 'Winnemucca, NV';
 
   // ── Searchable destination picker ────────────────────────────────────────
   final TextEditingController _searchController = TextEditingController();
@@ -2636,7 +2623,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Speaks [text] via the TTS engine, interrupting any current utterance.
+  ///
+  /// Skips speech when voice navigation is disabled in user settings.
   Future<void> _speak(String text) async {
+    final voiceEnabled =
+        widget.settingsController?.settings.voiceNavigation ?? true;
+    if (!voiceEnabled) return;
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -3158,8 +3150,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         currentLng,
       );
       // Convert metres to miles and add to the running total.
-      final milesIncrement = meters / _metersPerMile;
-      _milesDriven += milesIncrement;
+      _milesDriven += meters / _metersPerMile;
     }
 
     // Store the current position as the reference for the next GPS fix.
@@ -3189,8 +3180,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Update simulated fuel level from the latest mileage total.
     _updateFuelFromTrip();
-    // Push updated stats to the dashboard controller.
-    _syncDashboardState();
   }
 
   // ── Fuel planning logic ───────────────────────────────────────────────────
@@ -3413,27 +3402,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return '${hours}h ${minutes}m';
   }
 
-  /// Returns the remaining route distance as a formatted string, e.g. "312 mi".
-  ///
-  /// Derived by subtracting [_milesDriven] from the total route distance stored
-  /// in [_routeData].  Returns '--' before a route has been loaded.
-  String get _remainingMilesText {
-    if (_routeData == null) return '--';
-    final totalMiles =
-        (_routeData!['distanceMiles'] as num?)?.toDouble() ?? 0.0;
-    final remaining = (totalMiles - _milesDriven).clamp(0.0, totalMiles);
-    return '${remaining.toStringAsFixed(0)} mi';
-  }
-
-  /// Returns the ETA for the current route as a formatted "Xh Ym" string.
-  ///
-  /// Uses the raw Mapbox route duration; returns '--' before a route loads.
-  String get _tripEtaText {
-    if (_routeData == null) return '--';
-    final etaMinutes = (_routeData!['etaMinutes'] as num?)?.toInt();
-    return _formatEta(etaMinutes);
-  }
-
   /// Returns the cumulative stopped time as a formatted "Xh Ym" string.
   String get _stoppedTimeText {
     final hours = _stoppedDuration.inHours;
@@ -3452,33 +3420,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final elapsedHours = elapsedSeconds / 3600.0;
     final avg = _milesDriven / elapsedHours;
     return '${avg.toStringAsFixed(1)} mph';
-  }
-
-  // ── Dashboard state sync ──────────────────────────────────────────────────
-
-  /// Pushes the current navigation state to [NavigationStateController] so
-  /// that [DriverDashboardScreen] reflects live data.
-  ///
-  /// Safe to call frequently (e.g. on every GPS tick) — the controller batches
-  /// all fields into a single [notifyListeners] call.
-  void _syncDashboardState() {
-    _navState?.updateTripOverview(
-      navigationActive: _navigationActive,
-      arrived: _isArrived,
-      currentDestinationName: _destinationName,
-      etaText: _tripEtaText,
-      milesLeftText: _remainingMilesText,
-      hosText: _tripElapsedText,
-      fuelPercentText: _fuelPercentText,
-      fuelRangeText: _fuelRangeText,
-      currentPosition: _truckPosition,
-      destinationPosition: _destination,
-    );
-  }
-
-  /// Pushes the current [_recentTrips] list to [NavigationStateController].
-  void _syncRecentTripsToDashboard() {
-    _navState?.setRecentTrips(_recentTrips);
   }
 
   // ── Arrival detection ─────────────────────────────────────────────────────
@@ -3524,14 +3465,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Cancel GPS subscription — all tracking ceases after arrival.
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
-    // Record the completed trip in the recent-trips list.
-    _recentTrips = [
-      '$_originName → $_destinationName',
-      ..._recentTrips.take(_maxRecentTrips - 1),
-    ];
-    _syncRecentTripsToDashboard();
-    // Sync final arrived state to the dashboard.
-    _syncDashboardState();
     // Persist the completed trip to local storage.
     _saveCompletedTrip();
     // Speak the arrival announcement (interrupts any in-progress TTS).
@@ -3629,7 +3562,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Initialize trip statistics so the stats panel shows live data from the
     // moment navigation begins.
     _startTripStats();
-    _syncDashboardState(); // announce navigation-active to dashboard
     _runSmoothRouteAnimation(_animGeneration);
   }
 
@@ -3647,9 +3579,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (!mounted || _animGeneration != generation) return;
       _truckIndex = i;
       await _moveTruckSmoothly(_routePoints[i], _routePoints[i + 1], generation);
-      // Sync dashboard every ~100 segments to avoid excessive notifyListeners
-      // calls while still keeping HOS and position reasonably up to date.
-      if (i % 100 == 0) _syncDashboardState();
     }
     // Snap to the final point once all segments are complete.
     if (mounted && _animGeneration == generation) {
@@ -3877,10 +3806,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns `true` when none of the [routePoints] pass within 100 m of a
-  /// restricted zone in [_restrictedZones].
+  /// restricted zone that applies to this truck's dimensions.
+  ///
+  /// When [preferTruckSafe] is disabled the check always passes so the driver
+  /// can override it. Zone types: `low_bridge` (height ft) and `weight_limit`
+  /// (tons).
   bool _isTruckSafe(List<LatLng> routePoints) {
+    final settings = widget.settingsController?.settings;
+    if (settings != null && !settings.preferTruckSafe) return true;
+
     const double radiusMeters = 100.0;
+    final double truckHeightFt = settings?.truckHeightFt ?? 13.6;
+    final double truckWeightTons =
+        (settings?.truckWeightLb ?? 80000) / 2000.0;
+
     for (final zone in _restrictedZones) {
+      final zoneType = zone['type'] as String;
+      final limitValue = zone['limit_value'] as double;
+      final bool violated;
+      if (zoneType == 'low_bridge') {
+        violated = truckHeightFt > limitValue;
+      } else if (zoneType == 'weight_limit') {
+        violated = truckWeightTons > limitValue;
+      } else {
+        violated = false;
+      }
+      if (!violated) continue;
       final zonePt =
           LatLng(zone['lat']! as double, zone['lng']! as double);
       for (final pt in routePoints) {
@@ -4115,6 +4066,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+      // Sync route-preference flags from settingsController when provided so
+      // that profile changes are always reflected in the next route request.
+      if (widget.settingsController != null) {
+        final s = widget.settingsController!.settings;
+        _avoidTolls = s.avoidTolls;
+        _avoidFerries = s.avoidFerries;
+        _preferTruckSafe = s.preferTruckSafe;
+      }
+
       final profile = _buildRouteProfile();
       final excludeStr = _buildExcludeString();
       final dest = _customDestination ?? _destination;
@@ -4238,8 +4198,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       _fitCameraToRoute(newPoints);
       _startRouteAnimation();
-      // Sync the newly loaded route data to the dashboard.
-      _syncDashboardState();
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -6019,6 +5977,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ),
 
+        // ── Fuel Range Estimator ─────────────────────────────────────────
+        _buildFuelRangeCard(distanceMiles),
+
         // ── Truck Warnings ───────────────────────────────────────────────
         if (warnings.isNotEmpty)
           Card(
@@ -6241,6 +6202,67 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
           Expanded(child: Text(value)),
         ],
+      ),
+    );
+  }
+
+  /// Builds a card showing the fuel range derived from [fuelTankGallons] ×
+  /// [avgMpg] from the user's profile settings.
+  Widget _buildFuelRangeCard(dynamic distanceMiles) {
+    final settings = widget.settingsController?.settings;
+    final tank = settings?.fuelTankGallons ?? 150.0;
+    final mpg = settings?.avgMpg ?? 6.8;
+    final rangeMiles = tank * mpg;
+    final tripMiles = (distanceMiles as num?)?.toDouble();
+    final sufficient = tripMiles != null ? rangeMiles >= tripMiles : null;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Fuel Range Estimator',
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            _labelValue('Tank size', '${tank.toStringAsFixed(0)} gal'),
+            _labelValue('Avg MPG', mpg.toStringAsFixed(1)),
+            _labelValue(
+                'Full-tank range', '${rangeMiles.toStringAsFixed(0)} mi'),
+            if (sufficient != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      sufficient
+                          ? Icons.check_circle_outline
+                          : Icons.warning_amber,
+                      size: 18,
+                      color: sufficient ? Colors.green : Colors.orange,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        sufficient
+                            ? 'Range covers the full trip'
+                            : 'Fuel stop required — '
+                                '${rangeMiles.toStringAsFixed(0)} mi range '
+                                '< ${tripMiles!.toStringAsFixed(0)} mi trip',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: sufficient ? Colors.green : Colors.orange,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

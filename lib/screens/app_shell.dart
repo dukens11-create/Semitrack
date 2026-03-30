@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/navigation_state_controller.dart';
+import '../services/settings_controller.dart';
 import 'driver_dashboard_screen.dart';
 import 'truck_map_screen.dart';
 import 'trips_screen.dart';
@@ -7,9 +7,9 @@ import 'documents_screen.dart';
 import 'profile_screen.dart';
 
 class AppShell extends StatefulWidget {
-  final NavigationStateController navigationStateController;
+  const AppShell({super.key, required this.settingsController});
 
-  const AppShell({super.key, required this.navigationStateController});
+  final SettingsController settingsController;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -18,27 +18,21 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
 
-  late final List<Widget> _screens = [
-    // late final (not const) because widgets receive the navigationStateController
-    // instance, which is not a compile-time constant.
-    DriverDashboardScreen(
-      navigationStateController: widget.navigationStateController,
-      onOpenMapTab: () => setState(() => _currentIndex = 1),
-    ),
-    TruckMapScreen(
-      navigationStateController: widget.navigationStateController,
-    ),
-    const TripsScreen(),
-    const DocumentsScreen(),
-    const ProfileScreen(),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final sc = widget.settingsController;
+    final screens = <Widget>[
+      const DriverDashboardScreen(),
+      TruckMapScreen(settingsController: sc),
+      const TripsScreen(),
+      const DocumentsScreen(),
+      ProfileScreen(settingsController: sc),
+    ];
+
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: _screens,
+        children: screens,
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,

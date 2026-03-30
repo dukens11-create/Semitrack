@@ -226,6 +226,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Useful when the driver needs to review the route without the map moving.
   bool _navigationPaused = false;
 
+  // ── Route options state ────────────────────────────────────────────────────
+  //
+  // These fields control the route-request parameters sent to the Mapbox
+  // Directions API and are exposed to the driver via the Route Options sheet.
+  //
+  //   _routeMode      – 'fastest' | 'fuel' | 'truck_safe'
+  //   _avoidTolls     – add 'toll' to the exclude list when true
+  //   _avoidFerries   – add 'ferry' to the exclude list when true
+  //   _preferTruckSafe – gate the post-processing safety check when true
+  String _routeMode = 'fastest';
+  bool _avoidTolls = false;
+  bool _avoidFerries = true;
+  bool _preferTruckSafe = true;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -1846,15 +1860,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+      final profile = _buildRouteProfile();
+      final excludeStr = _buildExcludeString();
       final dest = _customDestination ?? _destination;
       final url =
-          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
+          "https://api.mapbox.com/directions/v5/$profile/"
           "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
           "&alternatives=true"
-          "&exclude=ferry"
+          "${excludeStr.isNotEmpty ? '&exclude=$excludeStr' : ''}"
           "&access_token=$_mapboxToken";
 
       final res = await http.get(Uri.parse(url));
@@ -1874,10 +1890,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final newPoints = _simplifyRoute(decoded);
 
       // Check whether the decoded route avoids all restricted zones.
-      // If it does not, automatically re-fetch using the alternative route.
+      // Only run the safety check when _preferTruckSafe is enabled; drivers
+      // who have disabled the truck-safe preference receive whichever route
+      // the API returns without the automatic fallback to the alternative.
       // When already on the alternative, we accept the route regardless —
       // no further candidates are available to try.
-      if (!_isTruckSafe(newPoints) && !alternative) {
+      if (_preferTruckSafe && !_isTruckSafe(newPoints) && !alternative) {
         print("Route is not truck-safe – fetching alternative route");
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
@@ -1900,6 +1918,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
           "turnByTurn": turnByTurnList,
+          // Snapshot the active mode so _buildRouteInfo() always shows the
+          // settings that were used to generate the currently displayed route.
+          "routeMode": _routeMode,
+          "avoidTolls": _avoidTolls,
+          "avoidFerries": _avoidFerries,
         };
         // Clean replacement – never use addAll() here, which would layer new
         // points on top of previous route points and cause spaghetti lines.
@@ -2031,6 +2054,238 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
     return score.clamp(0.0, 100.0);
+  }
+
+  // ── Route options helpers ──────────────────────────────────────────────────
+
+  /// Returns a short user-facing label for the active route mode.
+  String _routeModeLabel() {
+    switch (_routeMode) {
+      case 'fuel':
+        return 'Fuel Efficient';
+      case 'truck_safe':
+        return 'Truck Safe';
+      case 'fastest':
+      default:
+        return 'Fastest';
+    }
+  }
+
+  /// Builds the Mapbox Directions `profile` path segment from [_routeMode].
+  ///
+  /// 'fastest' and 'truck_safe' both use driving-traffic so live congestion
+  /// data is included; 'fuel' uses the plain driving profile which typically
+  /// produces a steady-speed route that avoids stop-and-go traffic.
+  String _buildRouteProfile() {
+    switch (_routeMode) {
+      case 'fuel':
+        return 'mapbox/driving';
+      case 'fastest':
+      case 'truck_safe':
+      default:
+        return 'mapbox/driving-traffic';
+    }
+  }
+
+  /// Builds the `exclude` query-string value from the current avoidance flags.
+  ///
+  /// Returns an empty string when nothing is excluded so the caller can
+  /// conditionally append the `&exclude=…` segment to avoid a malformed URL.
+  String _buildExcludeString() {
+    final items = <String>[];
+    if (_avoidTolls) items.add('toll');
+    if (_avoidFerries) items.add('ferry');
+    return items.join(',');
+  }
+
+  // ── Route options UI ───────────────────────────────────────────────────────
+
+  /// Floating action button that opens the Route Options bottom sheet.
+  Widget _buildRouteOptionsButton() {
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: FloatingActionButton.small(
+        heroTag: 'route_options',
+        tooltip: 'Route options',
+        onPressed: _isArrived ? null : _showRouteOptionsSheet,
+        backgroundColor: _isArrived ? Colors.grey : Colors.white,
+        foregroundColor: _isArrived ? Colors.white : Colors.blue.shade700,
+        child: const Icon(Icons.tune),
+      ),
+    );
+  }
+
+  /// Shows a modal bottom sheet that lets the driver choose a route mode and
+  /// toggle avoidance preferences, then re-fetches the route when confirmed.
+  void _showRouteOptionsSheet() {
+    // Local copies so the driver can cancel without mutating state.
+    String tempMode = _routeMode;
+    bool tempTolls = _avoidTolls;
+    bool tempFerries = _avoidFerries;
+    bool tempTruckSafe = _preferTruckSafe;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Header ─────────────────────────────────────────────
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Route Options',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ── Route mode ─────────────────────────────────────────
+                  const Text(
+                    'Route Mode',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 'fastest',
+                        label: Text('Fastest'),
+                        icon: Icon(Icons.speed,
+                            semanticLabel: 'Fastest route'),
+                      ),
+                      ButtonSegment(
+                        value: 'fuel',
+                        label: Text('Fuel'),
+                        icon: Icon(Icons.local_gas_station,
+                            semanticLabel: 'Fuel-efficient route'),
+                      ),
+                      ButtonSegment(
+                        value: 'truck_safe',
+                        label: Text('Truck Safe'),
+                        icon: Icon(Icons.local_shipping,
+                            semanticLabel: 'Truck-safe route'),
+                      ),
+                    ],
+                    selected: {tempMode},
+                    onSelectionChanged: (s) =>
+                        setSheetState(() => tempMode = s.first),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // ── Avoidance toggles ──────────────────────────────────
+                  const Text(
+                    'Avoid',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.zero,
+                    title: const Text('Tolls'),
+                    value: tempTolls,
+                    onChanged: (v) => setSheetState(() => tempTolls = v),
+                  ),
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.zero,
+                    title: const Text('Ferries'),
+                    value: tempFerries,
+                    onChanged: (v) => setSheetState(() => tempFerries = v),
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // ── Truck safety post-processing ───────────────────────
+                  const Text(
+                    'Safety',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.zero,
+                    title: const Text('Auto-select safe alternative routes'),
+                    subtitle: const Text(
+                      'Avoids routes through restricted zones',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    value: tempTruckSafe,
+                    onChanged: (v) => setSheetState(() => tempTruckSafe = v),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // ── Apply button ───────────────────────────────────────
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Apply & Reroute'),
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _applyRouteOptionsAndRefresh(
+                          mode: tempMode,
+                          avoidTolls: tempTolls,
+                          avoidFerries: tempFerries,
+                          preferTruckSafe: tempTruckSafe,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Persists the chosen route options to state and re-fetches the route.
+  ///
+  /// When a live GPS position is available the re-fetch starts from the
+  /// truck's current location; otherwise it falls back to the default origin.
+  void _applyRouteOptionsAndRefresh({
+    required String mode,
+    required bool avoidTolls,
+    required bool avoidFerries,
+    required bool preferTruckSafe,
+  }) {
+    setState(() {
+      _routeMode = mode;
+      _avoidTolls = avoidTolls;
+      _avoidFerries = avoidFerries;
+      _preferTruckSafe = preferTruckSafe;
+    });
+    // Re-fetch from the truck's current position when GPS is active so the
+    // new route starts from where the driver actually is.
+    fetchRoute(fromPosition: _truckPosition);
   }
 
   // ── Formatting helpers ─────────────────────────────────────────────────────

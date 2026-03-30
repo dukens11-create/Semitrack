@@ -9,7 +9,7 @@ class AppLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = const [
       ('Navigation', '/navigation', Icons.map),
-      ('Trips', '/trip-planner', Icons.route),
+      ('Trips', '/trips', Icons.route),
       ('POI', '/poi', Icons.place),
       ('Parking', '/parking', Icons.local_parking),
       ('Fuel', '/fuel', Icons.local_gas_station),

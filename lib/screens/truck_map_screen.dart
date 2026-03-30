@@ -235,6 +235,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
 
+  // ── Searchable destination picker ────────────────────────────────────────
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  List<Map<String, dynamic>> _searchSuggestions = const [];
+  LatLng? _customDestination;
+
   // Navigation-mode zoom level (12.5–15) — close enough for street detail
   // without losing surrounding road context.
   static const _navigationZoomLevel = 14.0;
@@ -260,6 +266,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    // Rebuild whenever search text changes so the clear-icon suffix appears
+    // and disappears correctly.
+    _searchController.addListener(() => setState(() {}));
   }
 
   @override
@@ -268,6 +277,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -332,13 +343,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns the fixed destination [Marker] (red pin at [_destination]).
+  /// Returns the destination [Marker] (red pin).  Uses [_customDestination]
+  /// when set, otherwise falls back to the default [_destination].
   Marker _buildDestinationMarker() {
-    return const Marker(
-      point: _destination,
+    final point = _customDestination ?? _destination;
+    return Marker(
+      point: point,
       width: 40,
       height: 40,
-      child: Icon(Icons.location_on, size: 34, color: Colors.red),
+      child: const Icon(Icons.location_on, size: 34, color: Colors.red),
     );
   }
 
@@ -579,7 +592,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<Marker> _buildMarkers() {
     return [
       _buildTruckMarker(),
-      if (_isArrived) _buildDestinationMarker(),
+      if (_isArrived || _customDestination != null) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
     ];
   }
@@ -1263,7 +1276,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkArrival(LatLng current) {
     // Guard: only trigger once per trip.
     if (_isArrived) return;
-    final dist = _distanceBetween(current, _destination);
+    final dest = _customDestination ?? _destination;
+    final dist = _distanceBetween(current, dest);
     if (dist <= _arrivalThresholdMeters) {
       _triggerArrival();
     }
@@ -1609,13 +1623,203 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
+  // ── Searchable destination methods ──────────────────────────────────────
+
+  /// Queries the Mapbox Geocoding API with [query] and updates
+  /// [_searchSuggestions] with the returned place features.
+  Future<void> _searchDestinations(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => _searchSuggestions = const []);
+      return;
+    }
+    final url =
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json'
+        '?access_token=$_mapboxToken'
+        '&types=place,address,poi'
+        '&country=US'
+        '&limit=5';
+    try {
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        setState(() => _searchSuggestions = const []);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features =
+          (data['features'] as List).cast<Map<String, dynamic>>();
+      setState(() => _searchSuggestions = features);
+    } catch (_) {
+      setState(() => _searchSuggestions = const []);
+    }
+  }
+
+  /// Sets [_customDestination] from a geocoding [feature] map and starts
+  /// routing to that location.
+  void _selectDestination(Map<String, dynamic> feature) {
+    final coords =
+        (feature['geometry']['coordinates'] as List).cast<num>();
+    final dest = LatLng(coords[1].toDouble(), coords[0].toDouble());
+    final name = feature['place_name'] as String? ?? 'Destination';
+    setState(() {
+      _customDestination = dest;
+      _searchController.text = name;
+      _searchSuggestions = const [];
+      _isArrived = false;
+      _navigationActive = false;
+    });
+    _searchFocusNode.unfocus();
+    fetchRoute();
+  }
+
+  /// Called when the user long-presses on the map; shows a confirmation sheet
+  /// to set the pressed location as the destination.
+  void _onMapLongPress(TapPosition tapPos, LatLng point) {
+    _showDestinationConfirmSheet(point);
+  }
+
+  /// Displays a bottom sheet asking the user to confirm a map-tapped point as
+  /// their destination.  On confirmation, sets [_customDestination] and
+  /// triggers [fetchRoute].
+  void _showDestinationConfirmSheet(LatLng point) {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Set Destination Here?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${point.latitude.toStringAsFixed(5)}, '
+              '${point.longitude.toStringAsFixed(5)}',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _customDestination = point;
+                        _searchController.text =
+                            '${point.latitude.toStringAsFixed(5)}, '
+                            '${point.longitude.toStringAsFixed(5)}';
+                        _searchSuggestions = const [];
+                        _isArrived = false;
+                        _navigationActive = false;
+                      });
+                      fetchRoute();
+                    },
+                    child: const Text('Navigate Here'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Search bar UI builders ───────────────────────────────────────────────
+
+  /// Returns the destination search bar with an optional suggestions list
+  /// shown directly below it.
+  Widget _buildSearchBarArea() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            decoration: InputDecoration(
+              hintText: 'Search destination…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchSuggestions = const [];
+                          _customDestination = null;
+                        });
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              contentPadding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+            ),
+            onChanged: _searchDestinations,
+            textInputAction: TextInputAction.search,
+          ),
+          if (_searchSuggestions.isNotEmpty) _buildSuggestionList(),
+        ],
+      ),
+    );
+  }
+
+  /// Returns a scrollable list of geocoding suggestions beneath the search
+  /// field.
+  Widget _buildSuggestionList() {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey),
+        borderRadius:
+            const BorderRadius.vertical(bottom: Radius.circular(12)),
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        itemCount: _searchSuggestions.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (_, i) {
+          final feature = _searchSuggestions[i];
+          final name = feature['place_name'] as String? ?? '';
+          return ListTile(
+            dense: true,
+            leading: const Icon(Icons.location_on_outlined, size: 20),
+            title:
+                Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
+            onTap: () => _selectDestination(feature),
+          );
+        },
+      ),
+    );
+  }
+
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
-  /// origin.  The destination always remains [_destination].
+  /// origin.  The destination is [_customDestination] when set, or the default
+  /// [_destination] otherwise.
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
@@ -1642,9 +1846,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Use the live GPS position for rerouting when provided; otherwise fall
       // back to the fixed default origin (Portland, OR → Winnemucca, NV).
       final from = fromPosition ?? _origin;
+      final dest = _customDestination ?? _destination;
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
-          "${from.longitude},${from.latitude};$_destLng,$_destLat"
+          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
           "?overview=full"
           "&geometries=polyline6"
           "&steps=true"
@@ -2629,6 +2834,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
       body: Column(
         children: [
+          // ── Destination search bar ────────────────────────────────────
+          _buildSearchBarArea(),
+
           // ── Mapbox map widget (flutter_map) ──────────────────────────────
           Expanded(
             flex: 2,
@@ -2651,11 +2859,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     // explore without forced camera snaps back to the truck.
                     onMapEvent: (MapEvent event) {
                       if (event is MapEventMoveStart &&
-                          event.source != MapEventSource.mapController &&
-                          _followTruck) {
-                        setState(() => _followTruck = false);
+                          event.source != MapEventSource.mapController) {
+                        if (_searchFocusNode.hasFocus) {
+                          _searchFocusNode.unfocus();
+                        }
+                        if (_followTruck) {
+                          setState(() => _followTruck = false);
+                        }
                       }
                     },
+                    onLongPress: _onMapLongPress,
                   ),
                   children: [
                     TileLayer(

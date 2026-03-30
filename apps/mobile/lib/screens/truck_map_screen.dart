@@ -1093,15 +1093,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
 
+    // Distance to the next maneuver — declared first because Dart requires a
+    // local variable to be declared before any reference to it in the same
+    // block (forward reference rule).  Placing this here ensures both the
+    // `isArrived` check below and the UI widgets further down can safely
+    // reference `distanceToNext` without a compile-time "used before
+    // declaration" error.
+    final double distanceToNext = _distanceToNextStep();
+
     // Arrival is detected when the driver is on the very last navigation step
     // AND is within the imminent threshold of the destination.  Checking both
     // conditions prevents premature "arrived" messages at the start of the
     // last step when the destination may still be hundreds of metres away.
     final bool isArrived = safeIndex >= _navSteps.length - 1 &&
         distanceToNext < _imminentManeuverThresholdMeters;
-
-    // Distance to the next maneuver — drives urgency color and distance label.
-    final double distanceToNext = _distanceToNextStep();
 
     // Banner background color: green on arrival, urgency-based otherwise.
     final Color bannerColor =

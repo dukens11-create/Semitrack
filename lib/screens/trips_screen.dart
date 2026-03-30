@@ -1,18 +1,7 @@
 import 'package:flutter/material.dart';
 
-class SavedTrip {
-  final String id;
-  final String title;
-  final String destinationName;
-  final String subtitle;
-
-  const SavedTrip({
-    required this.id,
-    required this.title,
-    required this.destinationName,
-    required this.subtitle,
-  });
-}
+import '../models/trip.dart';
+import '../services/trip_storage.dart';
 
 class TripsScreen extends StatefulWidget {
   const TripsScreen({super.key});
@@ -22,52 +11,49 @@ class TripsScreen extends StatefulWidget {
 }
 
 class _TripsScreenState extends State<TripsScreen> {
-  final List<SavedTrip> _savedTrips = [
-    const SavedTrip(
-      id: '1',
-      title: 'Portland to Sacramento',
-      destinationName: 'Sacramento, CA',
-      subtitle: '533 mi • Fastest Route',
-    ),
-    const SavedTrip(
-      id: '2',
-      title: 'Reno to Fresno',
-      destinationName: 'Fresno, CA',
-      subtitle: '267 mi • Truck Safe',
-    ),
-  ];
+  List<Trip> _trips = [];
+  bool _loading = true;
 
-  final List<SavedTrip> _recentTrips = [
-    const SavedTrip(
-      id: '3',
-      title: 'Seattle to Eugene',
-      destinationName: 'Eugene, OR',
-      subtitle: '283 mi • Recent',
-    ),
-    const SavedTrip(
-      id: '4',
-      title: 'Medford to Portland',
-      destinationName: 'Portland, OR',
-      subtitle: '273 mi • Recent',
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadTrips();
+  }
 
-  void _openTrip(SavedTrip trip) {
+  Future<void> _loadTrips() async {
+    final data = await TripStorage.loadTrips();
+    if (mounted) {
+      setState(() {
+        _trips = data;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _deleteTrip(String id) async {
+    setState(() => _trips.removeWhere((t) => t.id == id));
+    await TripStorage.deleteTrip(id);
+  }
+
+  void _openTrip(Trip trip) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Open trip: ${trip.title}')),
+      SnackBar(content: Text('Open trip: ${trip.destinationName}')),
     );
   }
 
-  void _deleteSavedTrip(String id) {
-    setState(() {
-      _savedTrips.removeWhere((trip) => trip.id == id);
-    });
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
   }
 
-  void _deleteRecentTrip(String id) {
-    setState(() {
-      _recentTrips.removeWhere((trip) => trip.id == id);
-    });
+  String _formatDate(DateTime dt) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
   }
 
   @override
@@ -83,39 +69,31 @@ class _TripsScreenState extends State<TripsScreen> {
         icon: const Icon(Icons.add_road),
         label: const Text('New Trip'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _buildPlannerCard(context),
-          const SizedBox(height: 20),
-          _buildSectionTitle('Saved Trips'),
-          const SizedBox(height: 8),
-          if (_savedTrips.isEmpty)
-            _buildEmptyCard('No saved trips yet')
-          else
-            ..._savedTrips.map(
-              (trip) => _buildTripCard(
-                trip: trip,
-                onOpen: () => _openTrip(trip),
-                onDelete: () => _deleteSavedTrip(trip.id),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadTrips,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _buildPlannerCard(context),
+                  const SizedBox(height: 20),
+                  _buildSectionTitle('Trip History'),
+                  const SizedBox(height: 8),
+                  if (_trips.isEmpty)
+                    _buildEmptyCard('No trips yet — complete a navigation to save one')
+                  else
+                    ..._trips.map(
+                      (trip) => _buildTripCard(
+                        trip: trip,
+                        onOpen: () => _openTrip(trip),
+                        onDelete: () => _deleteTrip(trip.id),
+                      ),
+                    ),
+                  const SizedBox(height: 80),
+                ],
               ),
             ),
-          const SizedBox(height: 20),
-          _buildSectionTitle('Recent Trips'),
-          const SizedBox(height: 8),
-          if (_recentTrips.isEmpty)
-            _buildEmptyCard('No recent trips yet')
-          else
-            ..._recentTrips.map(
-              (trip) => _buildTripCard(
-                trip: trip,
-                onOpen: () => _openTrip(trip),
-                onDelete: () => _deleteRecentTrip(trip.id),
-              ),
-            ),
-          const SizedBox(height: 80),
-        ],
-      ),
     );
   }
 
@@ -179,7 +157,7 @@ class _TripsScreenState extends State<TripsScreen> {
   }
 
   Widget _buildTripCard({
-    required SavedTrip trip,
+    required Trip trip,
     required VoidCallback onOpen,
     required VoidCallback onDelete,
   }) {
@@ -199,12 +177,16 @@ class _TripsScreenState extends State<TripsScreen> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         leading: const CircleAvatar(child: Icon(Icons.route)),
         title: Text(
-          trip.title,
+          trip.destinationName,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 4),
-          child: Text('${trip.destinationName}\n${trip.subtitle}'),
+          child: Text(
+            '${trip.distanceMiles.toStringAsFixed(0)} mi'
+            ' • ${_formatDuration(trip.duration)}'
+            '\n${_formatDate(trip.completedAt)}',
+          ),
         ),
         isThreeLine: true,
         trailing: PopupMenuButton<String>(

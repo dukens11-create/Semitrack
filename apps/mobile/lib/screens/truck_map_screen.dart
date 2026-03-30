@@ -168,6 +168,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  // ── Destination picker state ──────────────────────────────────────────────
+  //
+  // Set by long-pressing the map.  _startRouteToSelectedDestination() uses
+  // these fields to fetch a route to the pinned point and launch navigation.
+  LatLng? _selectedDestination;
+  String? _selectedDestinationName;
+  bool _isBuildingRoute = false;
+
   // ── Truck Stop POI state ───────────────────────────────────────────────────
   //
   // _truckStops holds the filtered list of stops near the current route.
@@ -371,6 +379,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       width: 40,
       height: 40,
       child: Icon(Icons.location_on, size: 34, color: Colors.red),
+    );
+  }
+
+  /// Returns a [Marker] for the user-pinned destination at [_selectedDestination].
+  Marker _buildSelectedDestinationMarker() {
+    return Marker(
+      point: _selectedDestination!,
+      width: 44,
+      height: 44,
+      child: const Icon(Icons.location_pin, size: 38, color: Colors.deepOrange),
     );
   }
 
@@ -704,6 +722,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return [
       _buildTruckMarker(),
       if (_isArrived) _buildDestinationMarker(),
+      if (_selectedDestination != null) _buildSelectedDestinationMarker(),
       ..._buildTruckStopMarkers(),
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
@@ -2040,6 +2059,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Fetches a route from the truck's current position to [_selectedDestination]
+  /// and starts the navigation session.
+  ///
+  /// Sets [_isBuildingRoute] while the request is in flight so the UI can show
+  /// a loading indicator.  Resets it on completion or error.
+  Future<void> _startRouteToSelectedDestination() async {
+    if (_selectedDestination == null) return;
+    setState(() => _isBuildingRoute = true);
+
+    try {
+      final from = _truckPosition ?? _origin;
+      final dest = _selectedDestination!;
+      final url =
+          "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
+          "${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}"
+          "?overview=full"
+          "&geometries=polyline6"
+          "&steps=true"
+          "&alternatives=true"
+          "&exclude=ferry"
+          "&access_token=$_mapboxToken";
+
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        throw Exception('Mapbox API error ${res.statusCode}');
+      }
+      final data = jsonDecode(res.body);
+      final routes = data["routes"] as List;
+      if (routes.isEmpty) return;
+      final route = routes[0] as Map<String, dynamic>;
+
+      final decoded = _decodePolyline6(route["geometry"] as String);
+      final newPoints = _simplifyRoute(decoded);
+      final allSteps = _extractAllSteps(route);
+      final turnByTurnList =
+          allSteps.map((s) => {'instruction': s.instruction}).toList();
+
+      setState(() {
+        _navSteps = allSteps;
+        _currentStepIndex = 0;
+        _routeData = {
+          "distanceMiles": (route["distance"] / 1609.34).round(),
+          "etaMinutes": (route["duration"] / 60).round(),
+          "turnByTurn": turnByTurnList,
+        };
+        _routePoints = newPoints.toSet().toList();
+        _isArrived = false;
+        _navigationActive = true;
+        _error = null;
+      });
+
+      // Center the map on the truck after the route loads.
+      if (_mapReady && _truckPosition != null) {
+        _mapController.move(_truckPosition!, _navigationZoomLevel);
+      }
+
+      _startRouteAnimation();
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      setState(() => _isBuildingRoute = false);
+    }
+  }
+
   /// Fetches a driving route from the Mapbox Directions API and updates all
   /// relevant state fields, including the decoded polyline6 coordinates used
   /// to draw the route on the map.
@@ -3017,6 +3100,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       _mapReady = true;
                       fetchRoute();
                     },
+                    // Long-press on the map to pin a destination.
+                    onLongPress: (TapPosition tapPosition, LatLng point) {
+                      setState(() {
+                        _selectedDestination = point;
+                        _selectedDestinationName = 'Pinned Destination';
+                      });
+                    },
                     // Disable camera follow when the user manually interacts
                     // with the map (drag / pinch / scroll) so they can freely
                     // explore without forced camera snaps back to the truck.
@@ -3185,6 +3275,71 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                 ),
+                // ── Destination picker buttons ────────────────────────────
+                // Visible only when the user has pinned a destination via
+                // long-press.  "Start Route" builds a route to the pin and
+                // launches navigation; "Clear" resets all destination state.
+                if (_selectedDestination != null)
+                  Positioned(
+                    bottom: 80,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ElevatedButton.icon(
+                            icon: _isBuildingRoute
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.navigation),
+                            label: Text(_isBuildingRoute
+                                ? 'Building…'
+                                : 'Start Route'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                            ),
+                            onPressed: _isBuildingRoute
+                                ? null
+                                : _startRouteToSelectedDestination,
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.clear),
+                            label: const Text('Clear'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _selectedDestination = null;
+                                _selectedDestinationName = null;
+                                _isBuildingRoute = false;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
-import 'screens/truck_map_screen.dart';
+import 'app.dart';
 
 void main() {
-  runApp(const MaterialApp(
-    debugShowCheckedModeBanner: false,
-    home: TruckMapScreen(),
-  ));
+  runApp(const SemitrackApp());
 }

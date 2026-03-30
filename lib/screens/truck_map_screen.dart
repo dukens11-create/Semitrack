@@ -175,6 +175,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Weigh station / port of entry alert state ─────────────────────────────
+  //
+  // _upcomingWeighStation is set to the nearest weigh station or port of entry
+  // within 1 mile (1 609 m) of the truck's current GPS position.  It is null
+  // when no such POI is nearby.  _weighAlertSpoken ensures the TTS warning
+  // fires only once per approach so the driver is not repeatedly interrupted.
+  RoutePoi? _upcomingWeighStation;
+  bool _weighAlertSpoken = false;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -422,6 +431,63 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ),
   ];
 
+  // ── Weigh station / port of entry mock dataset ────────────────────────────
+  //
+  // Hard-coded weigh stations and ports of entry covering the default
+  // Portland → Winnemucca route.  Replace with a real API or local DB in
+  // production.  Each entry carries a status string so the alert banner can
+  // display "Open", "Closed", "Bypass", or "Status unknown" to the driver.
+  static const List<RoutePoi> _mockWeighStations = [
+    RoutePoi(
+      id: 'ws1',
+      name: 'Baldock Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(45.267, -122.771),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws2',
+      name: 'Grants Pass Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(42.434, -123.338),
+      subtitle: 'I-5 Southbound',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws3',
+      name: 'Oregon–California Port of Entry',
+      type: PoiType.portOfEntry,
+      position: LatLng(42.004, -122.834),
+      subtitle: 'Commercial vehicles',
+      status: 'Open',
+    ),
+    RoutePoi(
+      id: 'ws4',
+      name: 'Ashland Inspection Site',
+      type: PoiType.weighStation,
+      position: LatLng(42.192, -122.709),
+      subtitle: 'I-5 Northbound',
+      status: 'Closed',
+    ),
+    RoutePoi(
+      id: 'ws5',
+      name: 'Lassen Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(40.483, -121.508),
+      subtitle: 'I-5 Southbound',
+      status: 'Bypass',
+    ),
+    RoutePoi(
+      id: 'ws6',
+      name: 'Truckee Weigh Station',
+      type: PoiType.weighStation,
+      position: LatLng(39.328, -120.183),
+      subtitle: 'I-80 Eastbound',
+      status: 'Open',
+    ),
+  ];
+
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
 
   /// Filters [allStops] to only those within [maxDistanceMeters] of any point
@@ -631,6 +697,182 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Weigh station / port of entry alert logic ────────────────────────────
+
+  /// Returns the nearest [RoutePoi] of type [PoiType.weighStation] or
+  /// [PoiType.portOfEntry] to the truck's current GPS position, regardless of
+  /// distance.  Returns null when [_truckPosition] is unavailable or
+  /// [_mockWeighStations] is empty.
+  RoutePoi? _findNearestWeighStation() {
+    if (_truckPosition == null) return null;
+    RoutePoi? nearest;
+    double nearestDistance = double.infinity;
+
+    for (final poi in _mockWeighStations) {
+      if (poi.type != PoiType.weighStation &&
+          poi.type != PoiType.portOfEntry) {
+        continue;
+      }
+      final meters = Geolocator.distanceBetween(
+        _truckPosition!.latitude,
+        _truckPosition!.longitude,
+        poi.position.latitude,
+        poi.position.longitude,
+      );
+      if (meters < nearestDistance) {
+        nearestDistance = meters;
+        nearest = poi;
+      }
+    }
+    return nearest;
+  }
+
+  /// Checks whether the truck is within 1 mile (1 609 m) of a weigh station
+  /// or port of entry and updates [_upcomingWeighStation] accordingly.
+  ///
+  /// When the truck enters the 1-mile radius the alert banner is shown and a
+  /// one-time TTS warning ("Weigh station ahead") is spoken.  When the truck
+  /// leaves the radius (or no position is available) the banner is hidden and
+  /// [_weighAlertSpoken] is reset so the warning fires again on the next
+  /// approach.
+  ///
+  /// Call this from the GPS position listener so it runs on every fix.
+  Future<void> _checkWeighStationAlert() async {
+    if (_truckPosition == null) return;
+
+    final poi = _findNearestWeighStation();
+
+    if (poi == null) {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+      return;
+    }
+
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    // ~1 mile alert radius
+    if (meters <= 1609.0) {
+      if (!_weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = poi;
+          _weighAlertSpoken = true;
+        });
+        await _speak('Weigh station ahead');
+      } else {
+        setState(() {
+          _upcomingWeighStation = poi;
+        });
+      }
+    } else {
+      if (_upcomingWeighStation != null || _weighAlertSpoken) {
+        setState(() {
+          _upcomingWeighStation = null;
+          _weighAlertSpoken = false;
+        });
+      }
+    }
+  }
+
+  /// Formats a distance in metres to a human-readable string.
+  ///
+  /// Values below 1 000 m are shown as "NNN m"; values from 1 km upward are
+  /// shown as "N.N km".  Matches the brevity expected in a navigation overlay.
+  String _formatRoadDistance(double meters) {
+    if (meters < 1000) {
+      return '${meters.toInt()} m';
+    }
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
+
+  // ── Weigh station alert banner widget ─────────────────────────────────────
+
+  /// Returns an orange alert banner positioned near the top of the map stack
+  /// when [_upcomingWeighStation] is set (truck within 1 mile of a weigh
+  /// station or port of entry).  Returns [SizedBox.shrink] when no alert is
+  /// active so the widget tree stays stable.
+  Widget _buildWeighStationAlertCard() {
+    if (_upcomingWeighStation == null || _truckPosition == null) {
+      return const SizedBox.shrink();
+    }
+
+    final poi = _upcomingWeighStation!;
+    final meters = Geolocator.distanceBetween(
+      _truckPosition!.latitude,
+      _truckPosition!.longitude,
+      poi.position.latitude,
+      poi.position.longitude,
+    );
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 140,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade700,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.warning_amber_rounded,
+              color: Colors.white,
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    poi.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    poi.status ?? poi.subtitle ?? 'Status unknown',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              _formatRoadDistance(meters),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Animates the map camera to follow the truck in navigation mode.
   ///
   /// Equivalent to the Google Maps navigation camera pattern:
@@ -828,6 +1070,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // ── Weigh station / port of entry proximity check ────────────────────────
+    // Run after position state is updated so _truckPosition is current.
+    _checkWeighStationAlert();
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -2388,6 +2634,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Weigh station / port of entry alert banner ────────────
+                // Shown below the navigation banner when the truck approaches
+                // a weigh station or port of entry within 1 mile.  Displays
+                // station name, status, and distance in an orange card.
+                _buildWeighStationAlertCard(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -2803,4 +3054,58 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+}
+
+// ── Weigh station / port of entry POI model ───────────────────────────────
+
+/// Classifies a route POI for marker colour and alert-logic selection.
+enum PoiType {
+  /// Fuel/rest stop — truck stop chain (Pilot, Love's, TA, etc.).
+  truckStop,
+
+  /// State or federal weigh station where commercial vehicles are weighed.
+  weighStation,
+
+  /// Rest area alongside the highway.
+  restArea,
+
+  /// Truck/commercial parking lot.
+  parking,
+
+  /// International or state border crossing for commercial vehicles.
+  portOfEntry,
+}
+
+/// A weigh station, port of entry, or similar driver-relevant point of interest.
+///
+/// Displayed as a map marker and shown in the [_buildWeighStationAlertCard]
+/// banner when the truck approaches within 1 mile.
+class RoutePoi {
+  const RoutePoi({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.position,
+    this.subtitle,
+    this.status,
+  });
+
+  /// Unique identifier for this POI (used as a marker key).
+  final String id;
+
+  /// Display name shown in the alert banner, e.g. "Baldock Weigh Station".
+  final String name;
+
+  /// POI category — drives marker colour and alert-logic filtering.
+  final PoiType type;
+
+  /// Geographic position of the POI.
+  final LatLng position;
+
+  /// Short secondary label, e.g. "I-5 Southbound".  Optional.
+  final String? subtitle;
+
+  /// Current operational status: "Open", "Closed", "Bypass", or null when
+  /// unknown.  Shown in the alert banner below the station name.
+  final String? status;
 }

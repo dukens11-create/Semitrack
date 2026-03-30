@@ -2174,17 +2174,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ButtonSegment(
                         value: 'fastest',
                         label: Text('Fastest'),
-                        icon: Icon(Icons.speed),
+                        icon: Icon(Icons.speed,
+                            semanticLabel: 'Fastest route'),
                       ),
                       ButtonSegment(
                         value: 'fuel',
                         label: Text('Fuel'),
-                        icon: Icon(Icons.local_gas_station),
+                        icon: Icon(Icons.local_gas_station,
+                            semanticLabel: 'Fuel-efficient route'),
                       ),
                       ButtonSegment(
                         value: 'truck_safe',
                         label: Text('Truck Safe'),
-                        icon: Icon(Icons.local_shipping),
+                        icon: Icon(Icons.local_shipping,
+                            semanticLabel: 'Truck-safe route'),
                       ),
                     ],
                     selected: {tempMode},
@@ -2227,7 +2230,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                   SwitchListTile(
                     contentPadding: const EdgeInsets.zero,
-                    title: const Text('Prefer truck-safe roads'),
+                    title: const Text('Auto-select safe alternative routes'),
                     subtitle: const Text(
                       'Avoids routes through restricted zones',
                       style: TextStyle(fontSize: 12),
@@ -3397,7 +3400,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       if (routeAvoidTolls)
                         const Chip(
                           label: Text('No Tolls'),
-                          avatar: Icon(Icons.money_off, size: 16),
+                          avatar: Icon(Icons.money_off, size: 16,
+                              semanticLabel: 'Avoiding tolls'),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
                         ),
@@ -3405,7 +3409,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         const Chip(
                           label: Text('No Ferries'),
                           avatar: Icon(Icons.directions_boat_outlined,
-                              size: 16),
+                              size: 16,
+                              semanticLabel: 'Avoiding ferries'),
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
                         ),

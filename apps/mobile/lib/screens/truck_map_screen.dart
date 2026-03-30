@@ -64,6 +64,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
 
+  // ── HOS (Hours of Service) break planning constants ───────────────────────
+  /// FMCSA 8-hour rule: warn the driver at 7 h 30 m so they have time to find
+  /// a suitable rest stop before the mandatory break at 8 h.
+  static const Duration _hosBreakDueSoon = Duration(hours: 7, minutes: 30);
+  static const Duration _hosBreakRequired = Duration(hours: 8);
+
+  /// Minimum GPS speed (m/s) to classify a tick as "driving" for HOS purposes.
+  /// 0.5 m/s ≈ 1.8 km/h — filters out GPS drift while the truck is parked.
+  static const double _hosMovingSpeedThreshold = 0.5;
+
+  /// Maximum elapsed seconds between GPS ticks that may be counted toward the
+  /// HOS drive clock.  Guards against skewing the timer during GPS outages or
+  /// when the app is resumed from the background after a long pause.
+  static const int _hosMaxTickGapSeconds = 120;
+
+  /// Maximum distance in metres from the route polyline for a rest stop to
+  /// qualify as a candidate for HOS break recommendations.
+  static const double _hosRouteProximityMeters = 5000;
+
+  /// Maximum number of rest stop recommendations shown in the HOS stop sheet.
+  static const int _hosMaxStopRecommendations = 3;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -210,6 +232,84 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Timestamp of the last "Slow down" TTS announcement.  Used to throttle
   /// repeated announcements so the driver is not nagged every few seconds.
   DateTime? _lastSlowDownAnnouncementTime;
+
+  // ── HOS (Hours of Service) break timer ────────────────────────────────────
+  /// Accumulated driving duration since the last break was reset.
+  /// Incremented on each GPS tick when the truck is moving (speed ≥ 0.5 m/s).
+  Duration _drivingSinceBreak = Duration.zero;
+
+  /// Wall-clock time of the most recent GPS tick classified as "driving".
+  /// Used to measure elapsed time between ticks accurately.
+  /// Null when the truck is stopped or the HOS timer has been reset.
+  DateTime? _lastDrivingTick;
+
+  /// Prevents repeated stop-suggestion modals within the same due-soon window
+  /// (7 h 30 m – 8 h).  Flips true when the first suggestion is shown; resets
+  /// once the driver clears the window (e.g. after a break reset).
+  bool _hosStopSuggested = false;
+
+  // ── Mock rest stop data (Portland, OR → Winnemucca, NV corridor) ──────────
+  /// Hardcoded rest stops used for HOS break recommendations.
+  /// In production this list would be fetched from a truck-stop POI API
+  /// (e.g. Pilot/Flying J, TruckPark, NATSO) and filtered server-side.
+  static const List<Map<String, dynamic>> _mockRestStops = [
+    {
+      'name': 'Pilot Travel Center',
+      'type': 'truck_stop',
+      'lat': 45.581,
+      'lng': -122.571,
+      'address': 'Portland, OR',
+      'amenities': ['Diesel', 'Showers', 'Restaurant', 'Parking'],
+    },
+    {
+      'name': "Love's Travel Stop",
+      'type': 'truck_stop',
+      'lat': 44.057,
+      'lng': -123.092,
+      'address': 'Eugene, OR',
+      'amenities': ['Diesel', 'Showers', 'Fast Food', 'Parking'],
+    },
+    {
+      'name': 'TA Travel Center',
+      'type': 'truck_stop',
+      'lat': 38.581,
+      'lng': -121.494,
+      'address': 'Sacramento, CA',
+      'amenities': ['Diesel', 'Showers', 'Full Restaurant', 'Truck Repair'],
+    },
+    {
+      'name': 'Flying J Travel Center',
+      'type': 'truck_stop',
+      'lat': 41.5,
+      'lng': -120.5,
+      'address': 'Alturas, CA',
+      'amenities': ['Diesel', 'Showers', 'Restaurant', 'ATM'],
+    },
+    {
+      'name': 'I-5 Rest Area',
+      'type': 'rest_area',
+      'lat': 43.5,
+      'lng': -122.8,
+      'address': 'I-5 NB, Douglas County, OR',
+      'amenities': ['Restrooms', 'Picnic Area', 'Pet Area'],
+    },
+    {
+      'name': 'Petro Stopping Center',
+      'type': 'truck_stop',
+      'lat': 39.8,
+      'lng': -120.9,
+      'address': 'Susanville, CA',
+      'amenities': ['Diesel', 'Showers', 'Iron Skillet Restaurant', 'Truck Repair'],
+    },
+    {
+      'name': 'Truck Parking Area',
+      'type': 'parking',
+      'lat': 42.1,
+      'lng': -121.8,
+      'address': 'US-97, Klamath Falls, OR',
+      'amenities': ['Truck Parking', 'Restrooms'],
+    },
+  ];
 
   // ── Fuel planning state ───────────────────────────────────────────────────
   //
@@ -1987,6 +2087,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _speedLimitMph = newSpeedLimit;
     });
 
+    // ── HOS timer update ──────────────────────────────────────────────────────
+    // Must run after setState so _truckPosition is current for distance calcs.
+    _updateHosTimer(position);
+
     // ── Over-speed announcement (throttled) ──────────────────────────────────
     // Only announce during active navigation and when speed data is available.
     if (_navigationMode && newSpeedMps >= 0) {
@@ -2076,6 +2180,267 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         if (mounted) setState(() => _navStatus = null);
       });
     }
+  }
+
+  // ── HOS break timer ───────────────────────────────────────────────────────
+
+  /// Updates the HOS drive clock on every GPS position event.
+  ///
+  /// Accumulates drive time only when the truck is moving (speed ≥
+  /// [_hosMovingSpeedThreshold] m/s).  When the truck stops, the tick timer
+  /// is paused so parked time is not counted toward HOS.
+  ///
+  /// Thresholds (FMCSA 8-hour rule):
+  ///   7 h 30 m → due-soon  (orange card, stop recommendation shown once)
+  ///   8 h      → required  (red card)
+  ///
+  /// The stop-suggestion flag resets when [_drivingSinceBreak] drops below the
+  /// due-soon threshold (i.e. after the driver taps RESET on the HOS card).
+  ///
+  /// TODO: auto-reset after a 30-minute continuous stop (FMCSA compliant).
+  void _updateHosTimer(Position position) {
+    final now = DateTime.now();
+    final bool isMoving = position.speed >= _hosMovingSpeedThreshold;
+
+    if (isMoving) {
+      if (_lastDrivingTick != null) {
+        final elapsed = now.difference(_lastDrivingTick!);
+        // Guard: only add reasonable intervals (< _hosMaxTickGapSeconds) to
+        // avoid skewing the timer during GPS outages or app-background events.
+        if (elapsed.inSeconds > 0 &&
+            elapsed.inSeconds < _hosMaxTickGapSeconds) {
+          setState(() => _drivingSinceBreak += elapsed);
+        }
+      }
+      _lastDrivingTick = now;
+    } else {
+      // Truck is stopped — pause the tick so parked time is not counted.
+      _lastDrivingTick = null;
+    }
+
+    final bool dueSoon = _drivingSinceBreak >= _hosBreakDueSoon &&
+        _drivingSinceBreak < _hosBreakRequired;
+    final bool required = _drivingSinceBreak >= _hosBreakRequired;
+
+    // Show stop recommendation sheet once when the driver enters the due-soon
+    // window.  Set the flag immediately (before any async work) to prevent a
+    // second GPS tick from triggering a duplicate sheet while the first
+    // addPostFrameCallback is still pending.
+    if ((dueSoon || required) && !_hosStopSuggested) {
+      _hosStopSuggested = true; // Set synchronously to prevent re-entry
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showHosStopSheet(context);
+      });
+    }
+
+    // Reset the suggestion flag once the driver is no longer in a break window
+    // (i.e. they have reset the HOS timer via the card button).
+    if (!dueSoon && !required && _hosStopSuggested) {
+      _hosStopSuggested = false;
+    }
+  }
+
+  // ── HOS rest-stop recommendation ──────────────────────────────────────────
+
+  /// Returns rest stops from [_mockRestStops] that lie within
+  /// [maxDistanceMeters] of any point on the current route polyline.
+  ///
+  /// When the route is empty all stops are returned so the feature degrades
+  /// gracefully (e.g. before the first route fetch completes).
+  List<Map<String, dynamic>> _filterStopsNearRoute({
+    double maxDistanceMeters = _hosRouteProximityMeters,
+  }) {
+    if (_routePoints.isEmpty) return List.of(_mockRestStops);
+    return _mockRestStops.where((stop) {
+      final lat = stop['lat'] as double;
+      final lng = stop['lng'] as double;
+      for (final pt in _routePoints) {
+        final d = Geolocator.distanceBetween(lat, lng, pt.latitude, pt.longitude);
+        if (d <= maxDistanceMeters) return true;
+      }
+      return false;
+    }).toList();
+  }
+
+  /// Shows a modal bottom sheet recommending up to 3 rest stops near the route.
+  ///
+  /// Candidates are filtered with [_filterStopsNearRoute] and sorted by
+  /// distance from the current truck position so the nearest options appear
+  /// first.  Tapping a stop tile calls [_showRestStopDetail] for POI details.
+  void _showHosStopSheet(BuildContext context) {
+    final nearby = _filterStopsNearRoute();
+    final pos = _truckPosition;
+    if (pos != null) {
+      nearby.sort((a, b) {
+        final dA = Geolocator.distanceBetween(
+            pos.latitude, pos.longitude, a['lat'] as double, a['lng'] as double);
+        final dB = Geolocator.distanceBetween(
+            pos.latitude, pos.longitude, b['lat'] as double, b['lng'] as double);
+        return dA.compareTo(dB);
+      });
+    }
+    // Show at most _hosMaxStopRecommendations nearest stops; fall back to the
+    // first _hosMaxStopRecommendations mocks if none are close to the route
+    // (e.g. very short test route).
+    final candidates = (nearby.isNotEmpty ? nearby : _mockRestStops)
+        .take(_hosMaxStopRecommendations)
+        .toList();
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Sheet header ───────────────────────────────────────────
+              Row(
+                children: [
+                  const Icon(Icons.king_bed_outlined,
+                      color: Colors.orange, size: 28),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Recommended Rest Stops',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(ctx).pop(),
+                  ),
+                ],
+              ),
+              const Text(
+                'Break required soon — top stops along your route:',
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              // ── Stop list ──────────────────────────────────────────────
+              for (final stop in candidates) ...[
+                _buildRestStopTile(ctx, stop),
+                const Divider(height: 8),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Builds a single row tile for a rest stop in the recommendation sheet.
+  Widget _buildRestStopTile(BuildContext ctx, Map<String, dynamic> stop) {
+    final type = stop['type'] as String;
+    final IconData typeIcon;
+    final Color typeColor;
+    switch (type) {
+      case 'truck_stop':
+        typeIcon = Icons.local_gas_station;
+        typeColor = Colors.blue;
+        break;
+      case 'rest_area':
+        typeIcon = Icons.park;
+        typeColor = Colors.green;
+        break;
+      default:
+        typeIcon = Icons.local_parking;
+        typeColor = Colors.purple;
+    }
+
+    // Distance from the current truck position (when known).
+    String distLabel = '';
+    final pos = _truckPosition;
+    if (pos != null) {
+      final d = Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        stop['lat'] as double,
+        stop['lng'] as double,
+      );
+      distLabel = d >= 1000
+          ? '${(d / 1000).toStringAsFixed(1)} km away'
+          : '${d.round()} m away';
+    }
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: CircleAvatar(
+        backgroundColor: typeColor.withOpacity(0.15),
+        child: Icon(typeIcon, color: typeColor, size: 20),
+      ),
+      title: Text(
+        stop['name'] as String,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+      subtitle: Text(
+        [if (distLabel.isNotEmpty) distLabel, stop['address'] as String]
+            .join(' · '),
+        style: const TextStyle(fontSize: 12),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        Navigator.of(ctx).pop();
+        _showRestStopDetail(stop);
+      },
+    );
+  }
+
+  /// Shows a dialog with detailed POI information for [stop].
+  void _showRestStopDetail(Map<String, dynamic> stop) {
+    final amenities = (stop['amenities'] as List).cast<String>();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(stop['name'] as String),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                stop['address'] as String,
+                style: const TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Amenities',
+                style:
+                    TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: amenities
+                    .map((a) => Chip(
+                          label: Text(a,
+                              style: const TextStyle(fontSize: 11)),
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                        ))
+                    .toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // ── Trip statistics logic ──────────────────────────────────────────────────
@@ -4166,6 +4531,116 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds the HOS (Hours of Service) break status overlay card.
+  ///
+  /// Positioned at the bottom-left of the map during active navigation.
+  /// Color coding follows the FMCSA 8-hour rule:
+  ///   • black   — normal driving window (< 7 h 30 m)
+  ///   • orange  — break due soon (7 h 30 m – 8 h)
+  ///   • red     — break required immediately (≥ 8 h)
+  ///
+  /// A RESET button lets the driver acknowledge the break and restart the clock.
+  /// TODO: auto-reset after a verified 30-minute continuous stop (FMCSA HOS).
+  Widget _buildHosCard() {
+    final Duration driving = _drivingSinceBreak;
+    final bool dueSoon =
+        driving >= _hosBreakDueSoon && driving < _hosBreakRequired;
+    final bool required = driving >= _hosBreakRequired;
+
+    // Card background color matches urgency level.
+    final Color cardColor = required
+        ? Colors.red.shade700
+        : dueSoon
+            ? Colors.orange.shade700
+            : Colors.black87;
+
+    final String statusLabel = required
+        ? 'BREAK REQUIRED'
+        : dueSoon
+            ? 'BREAK DUE SOON'
+            : 'HOS';
+
+    // Format accumulated drive time as "Xh Ym" or "Ym".
+    final int h = driving.inHours;
+    final int m = driving.inMinutes.remainder(60);
+    final String timeLabel = h > 0 ? '${h}h ${m}m' : '${m}m';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.35),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // ── Status label ───────────────────────────────────────────────
+          Text(
+            statusLabel,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 2),
+          // ── Accumulated drive time ─────────────────────────────────────
+          Text(
+            timeLabel,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              height: 1.0,
+            ),
+          ),
+          const Text(
+            'driving',
+            style: TextStyle(color: Colors.white70, fontSize: 10),
+          ),
+          const SizedBox(height: 6),
+          // ── Reset button ───────────────────────────────────────────────
+          // Driver taps this after taking their break to restart the clock.
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _drivingSinceBreak = Duration.zero;
+                _lastDrivingTick = null;
+                _hosStopSuggested = false;
+              });
+            },
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'RESET',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -4386,6 +4861,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     bottom: 24,
                     right: 16,
                     child: _buildSpeedPanel(),
+                  ),
+                // ── HOS break status card ─────────────────────────────────
+                // Positioned above the POI toggle FAB at the bottom-left
+                // during active navigation. Color progresses black → orange →
+                // red as the drive clock approaches and exceeds the FMCSA
+                // 8-hour break threshold.
+                if (_navigationMode)
+                  Positioned(
+                    bottom: 80,
+                    left: 16,
+                    child: _buildHosCard(),
                   ),
                 // ── POI toggle FAB ────────────────────────────────────────
                 // Floating action button to show/hide truck stop POI markers.

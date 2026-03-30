@@ -558,8 +558,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       status: 'Open',
     ),
   ];
-    ),
-  ];
 
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
 
@@ -2647,13 +2645,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                   SwitchListTile(
-                    contentPadding: const EdgeInsets.zero,
+                    contentPadding: EdgeInsets.zero,
                     title: const Text('Tolls'),
                     value: tempTolls,
                     onChanged: (v) => setSheetState(() => tempTolls = v),
                   ),
                   SwitchListTile(
-                    contentPadding: const EdgeInsets.zero,
+                    contentPadding: EdgeInsets.zero,
                     title: const Text('Ferries'),
                     value: tempFerries,
                     onChanged: (v) => setSheetState(() => tempFerries = v),
@@ -2670,7 +2668,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                   SwitchListTile(
-                    contentPadding: const EdgeInsets.zero,
+                    contentPadding: EdgeInsets.zero,
                     title: const Text('Auto-select safe alternative routes'),
                     subtitle: const Text(
                       'Avoids routes through restricted zones',

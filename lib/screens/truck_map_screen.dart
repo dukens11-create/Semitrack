@@ -10,6 +10,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../models/trip_stop.dart';
+import '../models/stop_appointment.dart';
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -197,6 +200,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'riskScore': 92.0,       // 92 → "Low" risk bucket
   };
 
+  // ── Shipper / receiver appointment state ──────────────────────────────────
+  //
+  // _tripStops holds the ordered list of dispatch stops for the current load.
+  // _appointments maps stopId → StopAppointment with time window, facility,
+  // reference, and notes.  Both are seeded with demo data so the overlay is
+  // never blank; a real integration would populate them from a dispatcher API.
+  List<TripStop> _tripStops = [];
+  Map<String, StopAppointment> _appointments = {};
+
+  /// Whether the appointment warning overlay is currently dismissed by the
+  /// driver.  Resets to false when a new appointment is saved or a stop's
+  /// status changes.
+  bool _appointmentWarningDismissed = false;
+
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
 
@@ -251,6 +268,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    _seedDemoAppointments();
   }
 
   @override
@@ -515,10 +533,639 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _buildTruckMarker(),
       if (_isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      ..._buildStopMarkers(),
     ];
   }
 
-  /// Shows a modal bottom sheet with full details for [stop].
+  // ── Shipper / receiver appointment helpers ────────────────────────────────
+
+  /// Seeds demo trip stops + appointments so the overlay is visible on first
+  /// launch.  Replace with a dispatcher API call in production.
+  void _seedDemoAppointments() {
+    _tripStops = [
+      TripStop(
+        id: 'stop_1',
+        name: 'Portland Freight Hub',
+        position: const LatLng(45.5231, -122.6765),
+        type: StopType.pickup,
+      ),
+      TripStop(
+        id: 'stop_2',
+        name: 'Boise, ID (Waypoint)',
+        position: const LatLng(43.6150, -116.2023),
+        type: StopType.waypoint,
+      ),
+      TripStop(
+        id: 'stop_3',
+        name: 'Reno Distribution Center',
+        position: const LatLng(39.5296, -119.8138),
+        type: StopType.delivery,
+      ),
+    ];
+    _appointments = {
+      'stop_1': StopAppointment(
+        stopId: 'stop_1',
+        type: 'pickup',
+        appointmentTime: DateTime.now().add(const Duration(hours: 1)),
+        earliestArrival: DateTime.now().add(const Duration(minutes: 45)),
+        latestArrival: DateTime.now().add(const Duration(hours: 2)),
+        facilityName: 'Portland Freight Hub',
+        referenceNumber: 'BOL-20240101',
+        note: 'Dock 4 - call 503-555-0120',
+      ),
+      'stop_3': StopAppointment(
+        stopId: 'stop_3',
+        type: 'delivery',
+        appointmentTime: DateTime.now().add(const Duration(hours: 13)),
+        earliestArrival:
+            DateTime.now().add(const Duration(hours: 12, minutes: 30)),
+        latestArrival: DateTime.now().add(const Duration(hours: 14)),
+        facilityName: 'Reno Distribution Center',
+        referenceNumber: 'PO-88421',
+        note: 'Gate B - check in at security',
+      ),
+    };
+  }
+
+  /// Simple per-stop ETA estimator: 60 mph average speed from the current
+  /// truck position along the ordered stop list.
+  static const double _etaAvgSpeedMph = 60.0;
+  static const double _metersPerMileAppt = 1609.34;
+
+  DateTime _stopEta(int stopIndex) {
+    if (_tripStops.isEmpty || stopIndex >= _tripStops.length) {
+      return DateTime.now();
+    }
+    final origin =
+        _truckPosition ?? _tripStops.first.position;
+    double totalMeters = 0;
+    var from = origin;
+    for (int i = 0; i <= stopIndex; i++) {
+      totalMeters += Geolocator.distanceBetween(
+        from.latitude,
+        from.longitude,
+        _tripStops[i].position.latitude,
+        _tripStops[i].position.longitude,
+      );
+      from = _tripStops[i].position;
+    }
+    final miles = totalMeters / _metersPerMileAppt;
+    final minutes = (miles / _etaAvgSpeedMph * 60).round();
+    return DateTime.now().add(Duration(minutes: minutes));
+  }
+
+  /// Returns true when any appointment window will be missed.
+  bool get _hasLateAppointment {
+    for (int i = 0; i < _tripStops.length; i++) {
+      final appt = _appointments[_tripStops[i].id];
+      if (appt != null && appt.isLate(_stopEta(i))) return true;
+    }
+    return false;
+  }
+
+  /// Returns true when any appointment is at risk (within 30 min of cutoff).
+  bool get _hasAtRiskAppointment {
+    if (_hasLateAppointment) return false;
+    for (int i = 0; i < _tripStops.length; i++) {
+      final appt = _appointments[_tripStops[i].id];
+      if (appt != null && appt.isAtRisk(_stopEta(i))) return true;
+    }
+    return false;
+  }
+
+  /// Builds stop markers (numbered pins) for each [TripStop] on the map.
+  List<Marker> _buildStopMarkers() {
+    if (_tripStops.isEmpty) return const [];
+    return List.generate(_tripStops.length, (i) {
+      final stop = _tripStops[i];
+      Color markerColor;
+      switch (stop.type) {
+        case StopType.pickup:
+          markerColor = Colors.blue.shade700;
+          break;
+        case StopType.delivery:
+          markerColor = Colors.green.shade700;
+          break;
+        case StopType.waypoint:
+          markerColor = Colors.grey.shade600;
+          break;
+      }
+      return Marker(
+        point: stop.position,
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showStopAppointmentSheet(i),
+          child: Container(
+            decoration: BoxDecoration(
+              color: markerColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              '${i + 1}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  /// Shows a read-only detail + edit sheet for the appointment at [stopIndex].
+  void _showStopAppointmentSheet(int stopIndex) {
+    if (stopIndex >= _tripStops.length) return;
+    final stop = _tripStops[stopIndex];
+    final appt = _appointments[stop.id];
+    final eta = _stopEta(stopIndex);
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header ─────────────────────────────────────────────
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: _stopBadgeColor(stop.type),
+                    child: Text(
+                      '${stopIndex + 1}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          stop.type.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _stopBadgeColor(stop.type),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // ── Edit button ──────────────────────────────────
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    tooltip: 'Edit appointment',
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showEditAppointmentSheet(stopIndex);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              if (appt == null) ...[
+                const Text(
+                  'No appointment set for this stop.',
+                  style: TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add Appointment'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showEditAppointmentSheet(stopIndex);
+                    },
+                  ),
+                ),
+              ] else ...[
+                // ── ETA vs window ────────────────────────────────────
+                _apptDetailRow(Icons.schedule, 'ETA',
+                    _formatApptDateTime(eta)),
+                if (appt.appointmentTime != null)
+                  _apptDetailRow(Icons.calendar_today, 'Appointment',
+                      _formatApptDateTime(appt.appointmentTime!)),
+                if (appt.earliestArrival != null ||
+                    appt.latestArrival != null)
+                  _apptDetailRow(
+                    Icons.access_time,
+                    'Window',
+                    '${appt.earliestArrival != null ? _formatApptDateTime(appt.earliestArrival!) : "-"}'
+                        '  ->  '
+                        '${appt.latestArrival != null ? _formatApptDateTime(appt.latestArrival!) : "-"}',
+                  ),
+                // ── Lateness warning ─────────────────────────────────
+                if (appt.isLate(eta))
+                  _statusChip(
+                      'LATE - will miss appointment window', Colors.red),
+                if (!appt.isLate(eta) && appt.isAtRisk(eta))
+                  _statusChip('AT RISK - less than 30 min margin',
+                      Colors.orange),
+                if (!appt.isLate(eta) && !appt.isAtRisk(eta))
+                  _statusChip('On Time', Colors.green),
+                const SizedBox(height: 8),
+                // ── Facility / reference / note ──────────────────────
+                if (appt.facilityName != null)
+                  _apptDetailRow(Icons.business, 'Facility',
+                      appt.facilityName!),
+                if (appt.referenceNumber != null)
+                  _apptDetailRow(Icons.tag, 'Reference',
+                      appt.referenceNumber!),
+                if (appt.note != null && appt.note!.isNotEmpty)
+                  _apptDetailRow(
+                      Icons.notes, 'Notes', appt.note!),
+              ],
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Color _stopBadgeColor(StopType type) {
+    switch (type) {
+      case StopType.pickup:
+        return Colors.blue.shade700;
+      case StopType.delivery:
+        return Colors.green.shade700;
+      case StopType.waypoint:
+        return Colors.grey.shade600;
+    }
+  }
+
+  Widget _apptDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: Colors.grey),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 90,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(String text, Color color) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 13),
+      ),
+    );
+  }
+
+  String _formatApptDateTime(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '${dt.month}/${dt.day}  $h:$m';
+  }
+
+  /// Opens an editable bottom sheet to set / update an appointment.
+  void _showEditAppointmentSheet(int stopIndex) {
+    if (stopIndex >= _tripStops.length) return;
+    final stop = _tripStops[stopIndex];
+    final appt = _appointments[stop.id];
+
+    final facilityCtrl =
+        TextEditingController(text: appt?.facilityName ?? '');
+    final refCtrl =
+        TextEditingController(text: appt?.referenceNumber ?? '');
+    final noteCtrl = TextEditingController(text: appt?.note ?? '');
+    String apptType = appt?.type ?? stop.type.name;
+    DateTime? apptTime = appt?.appointmentTime;
+    DateTime? earliest = appt?.earliestArrival;
+    DateTime? latest = appt?.latestArrival;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            Widget timeTile(
+              String label,
+              DateTime? value,
+              void Function(DateTime) onPicked,
+            ) {
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(label,
+                    style:
+                        const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(
+                  value != null
+                      ? _formatApptDateTime(value)
+                      : 'Not set',
+                  style: TextStyle(
+                    color:
+                        value != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+                trailing: const Icon(Icons.access_time),
+                onTap: () async {
+                  final date = await showDatePicker(
+                    context: ctx,
+                    initialDate: value ?? DateTime.now(),
+                    firstDate: DateTime.now()
+                        .subtract(const Duration(days: 1)),
+                    lastDate: DateTime.now()
+                        .add(const Duration(days: 365)),
+                  );
+                  if (date == null || !ctx.mounted) return;
+                  final time = await showTimePicker(
+                    context: ctx,
+                    initialTime: value != null
+                        ? TimeOfDay.fromDateTime(value)
+                        : TimeOfDay.now(),
+                  );
+                  if (time == null) return;
+                  onPicked(DateTime(date.year, date.month, date.day,
+                      time.hour, time.minute));
+                },
+              );
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Edit Appointment – ${stop.name}',
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    DropdownButtonFormField<String>(
+                      value: apptType,
+                      decoration:
+                          const InputDecoration(labelText: 'Type'),
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'pickup', child: Text('Pickup')),
+                        DropdownMenuItem(
+                            value: 'delivery',
+                            child: Text('Delivery')),
+                        DropdownMenuItem(
+                            value: 'waypoint',
+                            child: Text('Waypoint')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          setSheetState(() => apptType = v);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: facilityCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Facility name',
+                          prefixIcon: Icon(Icons.business)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: refCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Reference / BOL / PO #',
+                          prefixIcon: Icon(Icons.tag)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteCtrl,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Notes (dock #, phone, gate code)',
+                        prefixIcon: Icon(Icons.notes),
+                      ),
+                    ),
+                    const Divider(),
+                    timeTile('Appointment time', apptTime, (v) {
+                      setSheetState(() => apptTime = v);
+                    }),
+                    timeTile('Earliest arrival', earliest, (v) {
+                      setSheetState(() => earliest = v);
+                    }),
+                    timeTile('Latest arrival (cutoff)', latest, (v) {
+                      setSheetState(() => latest = v);
+                    }),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        if (_appointments.containsKey(stop.id))
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.delete_outline,
+                                  color: Colors.red),
+                              label: const Text('Clear',
+                                  style:
+                                      TextStyle(color: Colors.red)),
+                              onPressed: () {
+                                setState(() {
+                                  _appointments.remove(stop.id);
+                                  _appointmentWarningDismissed = false;
+                                });
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                          ),
+                        if (_appointments.containsKey(stop.id))
+                          const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.save),
+                            label: const Text('Save'),
+                            onPressed: () {
+                              setState(() {
+                                _appointments[stop.id] =
+                                    StopAppointment(
+                                  stopId: stop.id,
+                                  type: apptType,
+                                  appointmentTime: apptTime,
+                                  earliestArrival: earliest,
+                                  latestArrival: latest,
+                                  facilityName:
+                                      facilityCtrl.text
+                                              .trim()
+                                              .isEmpty
+                                          ? null
+                                          : facilityCtrl.text.trim(),
+                                  referenceNumber:
+                                      refCtrl.text.trim().isEmpty
+                                          ? null
+                                          : refCtrl.text.trim(),
+                                  note:
+                                      noteCtrl.text.trim().isEmpty
+                                          ? null
+                                          : noteCtrl.text.trim(),
+                                );
+                                _appointmentWarningDismissed = false;
+                              });
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Builds the appointment warning card shown on the map when any stop is
+  /// late or at risk.  Dismissed by the driver via a close button.
+  Widget _buildAppointmentWarningCard() {
+    if (_appointmentWarningDismissed ||
+        _tripStops.isEmpty ||
+        (!_hasLateAppointment && !_hasAtRiskAppointment)) {
+      return const SizedBox.shrink();
+    }
+
+    final isLate = _hasLateAppointment;
+    final color = isLate ? Colors.red.shade700 : Colors.orange.shade700;
+    final icon = isLate ? Icons.alarm_off : Icons.alarm;
+    final message = isLate
+        ? 'Stop appointment window will be missed!'
+        : 'One or more stops are at risk of late arrival.';
+
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 70,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    message,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: () {
+                      if (_tripStops.isNotEmpty) {
+                        _showStopAppointmentSheet(0);
+                      }
+                    },
+                    child: const Text(
+                      'Tap to view stop details',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white70),
+              onPressed: () => setState(
+                  () => _appointmentWarningDismissed = true),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   ///
   /// Displays brand, name, diesel price (if known), address (if known), and a
   /// close button.  Styled consistently with the arrival sheet.
@@ -2449,6 +3096,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // once navigation has started (_tripStartTime != null) so the
                 // panel never appears on a blank or pre-route map view.
                 if (_tripStartTime != null) _buildTripStatsPanel(),
+                // ── Appointment warning card ──────────────────────────────
+                // Warns the driver when any stop's ETA exceeds the appointment
+                // window or is within 30 min of the cutoff.  Dismissible.
+                _buildAppointmentWarningCard(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Always visible during active navigation.  Positioned at the
                 // bottom-right corner of the map so it never obscures the
@@ -2718,7 +3369,124 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ),
         ),
+
+        // ── Dispatch Stops / Appointments ────────────────────────────────
+        if (_tripStops.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Dispatch Stops',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  for (int i = 0; i < _tripStops.length; i++) ...[
+                    _buildStopRow(i),
+                    if (i < _tripStops.length - 1)
+                      const Divider(height: 8),
+                  ],
+                ],
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// Builds a compact summary row for a dispatch stop in the route-info panel.
+  Widget _buildStopRow(int index) {
+    final stop = _tripStops[index];
+    final appt = _appointments[stop.id];
+    final eta = _stopEta(index);
+
+    Color statusColor = Colors.grey.shade400;
+    String statusText = 'No Appt';
+    if (appt != null) {
+      if (appt.isLate(eta)) {
+        statusColor = Colors.red;
+        statusText = 'LATE';
+      } else if (appt.isAtRisk(eta)) {
+        statusColor = Colors.orange;
+        statusText = 'At Risk';
+      } else {
+        statusColor = Colors.green;
+        statusText = 'On Time';
+      }
+    }
+
+    return InkWell(
+      onTap: () => _showStopAppointmentSheet(index),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 13,
+              backgroundColor: _stopBadgeColor(stop.type),
+              child: Text(
+                '${index + 1}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(stop.name,
+                      style:
+                          const TextStyle(fontWeight: FontWeight.w600)),
+                  if (appt?.facilityName != null)
+                    Text(appt!.facilityName!,
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.grey)),
+                  if (appt?.latestArrival != null)
+                    Text(
+                      'Cutoff: ${_formatApptDateTime(appt!.latestArrival!)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: statusColor == Colors.red
+                            ? Colors.red
+                            : Colors.black87,
+                      ),
+                    ),
+                  if (appt?.note != null && appt!.note!.isNotEmpty)
+                    Text(
+                      appt.note!,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.grey),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: statusColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                statusText,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

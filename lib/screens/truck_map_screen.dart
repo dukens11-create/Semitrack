@@ -42,6 +42,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// rapid repeated API calls in areas with poor GPS accuracy.
   static const int _rerouteThrottleSeconds = 8;
 
+  // ── Trip statistics constants ─────────────────────────────────────────────
+  /// Metres per mile conversion factor, used to convert GPS distances to miles.
+  static const double _metersPerMile = 1609.34;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -98,6 +102,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Timestamp of the last automatic reroute, used to throttle rerouting
   /// frequency to at most one reroute every [_rerouteThrottleSeconds] seconds.
   DateTime? _lastRerouteTime;
+
+  // ── Trip statistics ────────────────────────────────────────────────────────
+  // Initialized by _startTripStats() when navigation begins and updated on
+  // every GPS fix via _updateTripStats().  All fields reset at trip start so
+  // the stats always reflect the current navigation session only.
+
+  /// Timestamp when the current trip was started.  Null until
+  /// [_startTripStats] is first called (i.e., before any route begins).
+  DateTime? _tripStartTime;
+
+  /// Timestamp of the last GPS fix where the truck was moving (speed ≥ 1 m/s).
+  DateTime? _lastMoveTime;
+
+  /// Cumulative stopped time accumulated when GPS speed is below 1 m/s.
+  /// Resets to [Duration.zero] each time [_startTripStats] is called.
+  Duration _stoppedDuration = Duration.zero;
+
+  /// Total miles driven since the trip was started, computed from successive
+  /// GPS point-to-point distances via [Geolocator.distanceBetween].
+  double _milesDriven = 0.0;
+
+  /// Latitude of the previous GPS fix, used to compute incremental distance.
+  /// Zero until the first GPS fix arrives after [_startTripStats] is called.
+  double _lastTripLat = 0.0;
+
+  /// Longitude of the previous GPS fix, used to compute incremental distance.
+  double _lastTripLng = 0.0;
+
+  /// Timestamp of the previous GPS fix, used to compute the actual elapsed
+  /// time between fixes for accurate stopped-time accumulation.
+  DateTime? _lastGpsTimestamp;
 
   /// Navigation status message shown in the UI during special events such as
   /// rerouting (e.g. "Rerouting...").  Null when no status is active.
@@ -373,6 +408,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Off-route detection: reroute when >30 m from the route line ─────────
     _checkOffRoute(gpsPoint);
 
+    // ── Trip statistics: update mileage and stopped time from live GPS ───────
+    _updateTripStats(position);
+
     // ── Update truck position and heading from real GPS data ─────────────────
     // Snap to the nearest ahead-of-index route point for step/off-route logic.
     final nearest = _nearestRouteIndex(gpsPoint);
@@ -468,6 +506,122 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
+  // ── Trip statistics logic ──────────────────────────────────────────────────
+
+  /// Resets all trip-statistics fields to zero and stamps [_tripStartTime] to
+  /// the current wall-clock time.
+  ///
+  /// Call this once when route navigation begins (e.g. inside
+  /// [_startRouteAnimation]) so that every new navigation session starts with
+  /// clean counters regardless of prior trips.
+  void _startTripStats() {
+    setState(() {
+      _tripStartTime = DateTime.now();
+      _lastMoveTime = DateTime.now();
+      _stoppedDuration = Duration.zero;
+      _milesDriven = 0.0;
+      // Reset last-known position so the first GPS fix does not compute a
+      // bogus distance from (0, 0) to the real location.
+      _lastTripLat = 0.0;
+      _lastTripLng = 0.0;
+      // Reset GPS timestamp so the first fix delta starts fresh.
+      _lastGpsTimestamp = null;
+    });
+  }
+
+  /// Updates trip statistics from the latest [pos] GPS fix.
+  ///
+  /// On each call:
+  ///   1. Adds the metres-to-miles distance from the previous GPS fix to the
+  ///      current one to [_milesDriven] using [Geolocator.distanceBetween].
+  ///   2. Accumulates [_stoppedDuration] by the real time elapsed since the
+  ///      previous GPS fix when [pos.speed] is below 1 m/s (stopped / very
+  ///      slow), otherwise records [_lastMoveTime].  Using the actual time
+  ///      delta is more accurate than a fixed 1-second increment because GPS
+  ///      update frequency varies with speed and device settings.
+  ///   3. Stores [pos.latitude] / [pos.longitude] as the new previous fix for
+  ///      the next incremental distance calculation.
+  ///
+  /// No-ops if the trip has not been started ([_tripStartTime] is null).
+  void _updateTripStats(Position pos) {
+    if (_tripStartTime == null) return;
+
+    final now = DateTime.now();
+    final currentLat = pos.latitude;
+    final currentLng = pos.longitude;
+
+    // Only compute incremental distance once we have a valid previous fix.
+    // Both lat and lng must be non-zero to avoid a bogus distance from the
+    // initialization values of (0.0, 0.0).
+    if (_lastTripLat != 0.0 && _lastTripLng != 0.0) {
+      final meters = Geolocator.distanceBetween(
+        _lastTripLat,
+        _lastTripLng,
+        currentLat,
+        currentLng,
+      );
+      // Convert metres to miles and add to the running total.
+      _milesDriven += meters / _metersPerMile;
+    }
+
+    // Store the current position as the reference for the next GPS fix.
+    _lastTripLat = currentLat;
+    _lastTripLng = currentLng;
+
+    // Compute how long it has been since the previous GPS fix so that stopped
+    // time reflects real elapsed wall-clock seconds rather than a fixed 1-s
+    // estimate per update (GPS fires at varying intervals).
+    final fixDelta = _lastGpsTimestamp != null
+        ? now.difference(_lastGpsTimestamp!)
+        : Duration.zero;
+
+    // Accumulate stopped time when the truck is not moving.
+    if (pos.speed < 1.0 && fixDelta > Duration.zero) {
+      _stoppedDuration += fixDelta;
+    } else if (pos.speed >= 1.0) {
+      // Truck is moving — record this as the most recent movement time.
+      _lastMoveTime = now;
+    }
+
+    // Record when this GPS fix arrived for the next delta calculation.
+    _lastGpsTimestamp = now;
+
+    // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
+    if (mounted) setState(() {});
+  }
+
+  // ── Trip statistics computed display strings ───────────────────────────────
+
+  /// Returns the elapsed trip time as a formatted "Xh Ym" string, or '--'
+  /// when no trip has been started.
+  String get _tripElapsedText {
+    if (_tripStartTime == null) return '--';
+    final diff = DateTime.now().difference(_tripStartTime!);
+    final hours = diff.inHours;
+    final minutes = diff.inMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  /// Returns the cumulative stopped time as a formatted "Xh Ym" string.
+  String get _stoppedTimeText {
+    final hours = _stoppedDuration.inHours;
+    final minutes = _stoppedDuration.inMinutes % 60;
+    return '${hours}h ${minutes}m';
+  }
+
+  /// Returns the average speed in mph for this trip, or '--' when the trip
+  /// has not started or has not elapsed enough time for a meaningful value.
+  String get _avgSpeedText {
+    if (_tripStartTime == null) return '--';
+    final elapsedSeconds =
+        DateTime.now().difference(_tripStartTime!).inSeconds;
+    // Avoid division-by-zero and nonsensical values on very short elapsed times.
+    if (elapsedSeconds <= 0) return '--';
+    final elapsedHours = elapsedSeconds / 3600.0;
+    final avg = _milesDriven / elapsedHours;
+    return '${avg.toStringAsFixed(1)} mph';
+  }
+
   /// Returns the index of the route point closest to [point], searching only
   /// from the current truck index onward to prevent backward snapping.
   int _nearestRouteIndex(LatLng point) {
@@ -511,6 +665,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Launch smooth async animation; pass the current generation so the
     // loop can self-cancel if _startRouteAnimation is called again.
+    // Initialize trip statistics so the stats panel shows live data from the
+    // moment navigation begins.
+    _startTripStats();
     _runSmoothRouteAnimation(_animGeneration);
   }
 
@@ -1178,6 +1335,98 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return result.trim();
   }
 
+  // ── Trip Stats panel ──────────────────────────────────────────────────────
+
+  /// Builds the live Trip Stats overlay card.
+  ///
+  /// Shows four live-updating metrics in two rows:
+  ///   Top row:    Miles driven  |  Elapsed time
+  ///   Bottom row: Stopped time  |  Average speed
+  ///
+  /// The card is only rendered when [_tripStartTime] is non-null (i.e. after
+  /// navigation has begun), so it never appears on a blank map.  All values
+  /// update on every [setState] call triggered by [_updateTripStats].
+  Widget _buildTripStatsPanel() {
+    return Positioned(
+      // Position above the rerouting status indicator (bottom: 16) and any
+      // future bottom-bar UI.  Horizontal padding matches the nav banner.
+      left: 16,
+      right: 16,
+      bottom: 110,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Trip Stats',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 10),
+            // ── Top row: miles driven + elapsed time ─────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _statItem('Miles', _milesDriven.toStringAsFixed(1)),
+                _statItem('Elapsed', _tripElapsedText),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // ── Bottom row: stopped time + average speed ──────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _statItem('Stopped', _stoppedTimeText),
+                _statItem('Avg Speed', _avgSpeedText),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single labelled stat item for the Trip Stats panel.
+  ///
+  /// [label] is rendered in a small grey caption style; [value] is rendered
+  /// bold below it — matching the visual hierarchy used in real trucking apps.
+  Widget _statItem(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Builds the premium turn-by-turn navigation banner that floats at the top
   /// of the map, styled like a modern GPS app (Google Maps / Apple Maps).
   ///
@@ -1452,6 +1701,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Trip Stats panel ──────────────────────────────────────
+                // Overlays live trip metrics (miles, elapsed time, stopped
+                // time, average speed) at the bottom of the map.  Only shown
+                // once navigation has started (_tripStartTime != null) so the
+                // panel never appears on a blank or pre-route map view.
+                if (_tripStartTime != null) _buildTripStatsPanel(),
               ],
             ),
           ),

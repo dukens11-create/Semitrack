@@ -174,6 +174,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  // ── Destination picker state ──────────────────────────────────────────────
+  //
+  // Set by long-pressing the map.  _startRouteToSelectedDestination() uses
+  // these fields to fetch a route to the pinned point and launch navigation.
+  LatLng? _selectedDestination;
+  String? _selectedDestinationName;
+  bool _isBuildingRoute = false;
+
   // ── Truck Stop POI state ───────────────────────────────────────────────────
   //
   // _truckStops holds the filtered list of stops near the current route.

@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../features/documents/documents_screen.dart';
 import '../models/trip_stop.dart';
 import '../models/stop_appointment.dart';
 
@@ -178,6 +179,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Active trip identifier (used by the documents panel) ──────────────────
+  //
+  // Set to the load/trip ID string when a route begins so the documents FAB
+  // can pass it to TripDocumentsScreen for pre-filtered display.
+  // Currently populated from the route response; can be wired to a real
+  // trip-management backend in future iterations.
+  String _activeTripId = '';
   // ── Weigh station / port-of-entry POI state ───────────────────────────────
   //
   // _routePois holds all weigh station and port-of-entry POIs for the route.
@@ -1416,6 +1424,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Opens the trip documents panel in a modal bottom sheet.
+  ///
+  /// Uses a [DraggableScrollableSheet] so the driver can expand the panel
+  /// to full-screen height when reviewing multiple documents, or collapse it
+  /// back to a peek height while keeping the map partially visible.
+  ///
+  /// [_activeTripId] is passed to [TripDocumentsScreen] so the list is
+  /// pre-filtered to the current trip's documents.
+  void _openDocumentsSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      // Rounded top corners to match the existing bottom sheets in the app.
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        // DraggableScrollableSheet allows expanding/collapsing with a swipe.
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55, // ~55 % of screen height on open
+          minChildSize: 0.35,     // minimum peek height
+          maxChildSize: 0.92,     // near full-screen at maximum expansion
+          builder: (_, scrollController) {
+            return ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+              child: TripDocumentsScreen(
+                activeTripId: _activeTripId,
+              ),
+            );
+          },
   // ── Weigh station / port-of-entry methods ─────────────────────────────────
 
   /// Maps a weigh station status string to a colour for the status badge.
@@ -4373,6 +4413,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           : Icons.local_gas_station_outlined,
                       color: Colors.white,
                     ),
+                  ),
+                ),
+                // ── Documents FAB ─────────────────────────────────────────
+                // Quick-access button for the trip documents panel.
+                // Positioned just above the POI toggle FAB on the left so it
+                // is always reachable during active navigation.  Opens the
+                // TripDocumentsScreen in a DraggableScrollableSheet so the
+                // driver can review / add paperwork without leaving the map.
+                Positioned(
+                  bottom: 80,
+                  left: 16,
+                  child: FloatingActionButton.small(
+                    heroTag: 'docs_fab',
+                    tooltip: 'Trip documents',
+                    backgroundColor: Colors.indigo.shade600,
+                    onPressed: _openDocumentsSheet,
+                    child: const Icon(Icons.description, color: Colors.white),
                   ),
                 ),
               ],

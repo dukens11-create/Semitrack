@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../services/settings_controller.dart';
 import 'driver_dashboard_screen.dart';
 import 'truck_map_screen.dart';
 import 'trips_screen.dart';
@@ -7,9 +6,7 @@ import 'documents_screen.dart';
 import 'profile_screen.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, required this.settingsController});
-
-  final SettingsController settingsController;
+  const AppShell({super.key});
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -18,21 +15,20 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
 
+  final List<Widget> _screens = const [
+    DriverDashboardScreen(),
+    TruckMapScreen(),
+    TripsScreen(),
+    DocumentsScreen(),
+    ProfileScreen(),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final sc = widget.settingsController;
-    final screens = <Widget>[
-      const DriverDashboardScreen(),
-      TruckMapScreen(settingsController: sc),
-      const TripsScreen(),
-      const DocumentsScreen(),
-      ProfileScreen(settingsController: sc),
-    ];
-
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: screens,
+        children: _screens,
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,

@@ -1749,13 +1749,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                   SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
+                    contentPadding: const EdgeInsets.zero,
                     title: const Text('Tolls'),
                     value: tempTolls,
                     onChanged: (v) => setSheetState(() => tempTolls = v),
                   ),
                   SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
+                    contentPadding: const EdgeInsets.zero,
                     title: const Text('Ferries'),
                     value: tempFerries,
                     onChanged: (v) => setSheetState(() => tempFerries = v),
@@ -1772,7 +1772,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                   SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
+                    contentPadding: const EdgeInsets.zero,
                     title: const Text('Prefer truck-safe roads'),
                     subtitle: const Text(
                       'Avoids routes through restricted zones',

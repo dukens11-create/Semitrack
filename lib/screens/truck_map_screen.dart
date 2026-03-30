@@ -980,13 +980,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the banner background [Color] based on proximity to the next
   /// maneuver, providing real-time urgency feedback like a real GPS app:
-  ///   < 50 m   → orange  (very close — urgent)
-  ///   < 150 m  → yellow  (medium — alert)
-  ///   otherwise → near-black semi-transparent (default)
+  ///   < 50 m   → red     (very close — act now)
+  ///   < 150 m  → orange  (approaching — prepare to turn)
+  ///   otherwise → Colors.black87 (default driving mode)
   Color _getBannerColor(double meters) {
-    if (meters < _urgentColorThresholdMeters) return Colors.orange;
-    if (meters < _mediumColorThresholdMeters) return Colors.yellow.shade700;
-    return Colors.black.withOpacity(0.85);
+    if (meters < _urgentColorThresholdMeters) return Colors.red;
+    if (meters < _mediumColorThresholdMeters) return Colors.orange;
+    return Colors.black87;
+  }
+
+  /// Returns true when the driver has reached the final navigation step and
+  /// is within the imminent-maneuver threshold of the destination.
+  ///
+  /// Checking both conditions prevents premature "arrived" messages at the
+  /// start of the last leg when the destination may still be hundreds of
+  /// metres away.
+  bool _hasArrived() {
+    if (_navSteps.isEmpty) return false;
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    return safeIndex >= _navSteps.length - 1 &&
+        _distanceToNextStep() < _imminentManeuverThresholdMeters;
   }
 
   /// Returns the distance in metres from the truck's current position to the
@@ -1093,19 +1106,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
 
-    // Distance to the next maneuver — declared first because Dart requires a
-    // local variable to be declared before any reference to it in the same
-    // block (forward reference rule).  Placing this here ensures both the
-    // `isArrived` check below and the UI widgets further down can safely
-    // reference `distanceToNext` without a compile-time "used before
-    // declaration" error.
+    // ── Declare all computed values before any UI reference ────────────────
+    // isArrived uses _hasArrived() so distanceToNext can be declared right
+    // after without any forward-reference issue.
+    final bool isArrived = _hasArrived();
+
+    // distanceToNext MUST be declared before isImminent and bannerColor so
+    // that Dart's forward-reference rule is never violated.
     final double distanceToNext = _distanceToNextStep();
 
-    // Arrival is detected when the driver is on the very last navigation step
-    // AND is within the imminent threshold of the destination.  Checking both
-    // conditions prevents premature "arrived" messages at the start of the
-    // last step when the destination may still be hundreds of metres away.
-    final bool isArrived = safeIndex >= _navSteps.length - 1 &&
+    // isImminent flags when the driver is within the alert threshold —
+    // may be used for accessibility cues or future audio feedback.
+    final bool isImminent =
         distanceToNext < _imminentManeuverThresholdMeters;
 
     // Banner background color: green on arrival, urgency-based otherwise.
@@ -1195,9 +1207,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   // ── Distance to next turn (right side) ──────────────────────
                   // Shows distance to the *next* maneuver only, never total route.
                   // Hidden on arrival since there is no next maneuver.
+                  // When isImminent (< threshold), 'Now' is shown directly so
+                  // the driver sees an instant cue without sub-threshold maths.
                   if (!isArrived)
                     Text(
-                      _formatDistance(distanceToNext),
+                      isImminent ? 'Now' : _formatDistance(distanceToNext),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,

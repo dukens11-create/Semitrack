@@ -175,12 +175,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
-  // ── Weigh station / port of entry alert state ─────────────────────────────
+  // ── Weigh station / port-of-entry POI state ───────────────────────────────
   //
-  // _upcomingWeighStation is set to the nearest weigh station or port of entry
-  // within 1 mile (1 609 m) of the truck's current GPS position.  It is null
-  // when no such POI is nearby.  _weighAlertSpoken ensures the TTS warning
-  // fires only once per approach so the driver is not repeatedly interrupted.
+  // _routePois holds all weigh station and port-of-entry POIs for the route.
+  // _showWeighStations controls marker visibility.
+  // _upcomingWeighStation is set to the nearest station within 1 mile
+  // (1 609 m).  _weighAlertSpoken ensures the TTS warning fires only once per
+  // approach so the driver is not repeatedly interrupted.
+  List<RoutePoi> _routePois = _mockRoutePois;
+  bool _showWeighStations = true;
   RoutePoi? _upcomingWeighStation;
   bool _weighAlertSpoken = false;
 
@@ -458,13 +461,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ),
   ];
 
-  // ── Weigh station / port of entry mock dataset ────────────────────────────
+  // ── Weigh station / port-of-entry mock dataset ────────────────────────────
   //
   // Hard-coded weigh stations and ports of entry covering the default
   // Portland → Winnemucca route.  Replace with a real API or local DB in
-  // production.  Each entry carries a status string so the alert banner can
-  // display "Open", "Closed", "Bypass", or "Status unknown" to the driver.
-  static const List<RoutePoi> _mockWeighStations = [
+  // production.  Each entry carries a status string so the alert banner and
+  // details sheet can display "Open", "Closed", "Bypass", or "Status unknown".
+  static const List<RoutePoi> _mockRoutePois = [
     RoutePoi(
       id: 'ws1',
       name: 'Baldock Weigh Station',
@@ -488,6 +491,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: LatLng(42.004, -122.834),
       subtitle: 'Commercial vehicles',
       status: 'Open',
+      bypassAvailable: true,
+      note: 'Check transponder before bypassing',
     ),
     RoutePoi(
       id: 'ws4',
@@ -512,6 +517,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: LatLng(39.328, -120.183),
       subtitle: 'I-80 Eastbound',
       status: 'Open',
+    ),
+  ];
     ),
   ];
 
@@ -608,6 +615,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _buildTruckMarker(),
       if (_isArrived || _customDestination != null) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      ..._buildWeighStationMarkers(),
     ];
   }
 
@@ -724,18 +732,66 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  // ── Weigh station / port of entry alert logic ────────────────────────────
+  // ── Weigh station / port-of-entry methods ─────────────────────────────────
+
+  /// Maps a weigh station status string to a colour for the status badge.
+  ///
+  /// - `'open'`     → red   (driver must stop — urgent)
+  /// - `'closed'`   → green (safe to pass)
+  /// - `'bypass'`   → blue  (transponder bypass may be used)
+  /// - anything else → grey  (unknown status)
+  Color _weighStatusColor(String? status) {
+    switch ((status ?? '').toLowerCase()) {
+      case 'open':
+        return Colors.red;
+      case 'closed':
+        return Colors.green;
+      case 'bypass':
+      case 'bypass available':
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  /// Maps a weigh station status to an alert banner background colour.
+  ///
+  /// Uses stronger shades so the banner is clearly visible over the map.
+  Color _weighAlertColor(RoutePoi poi) {
+    switch ((poi.status ?? '').toLowerCase()) {
+      case 'open':
+        return Colors.red.shade700;
+      case 'closed':
+        return Colors.green.shade700;
+      case 'bypass':
+      case 'bypass available':
+        return Colors.blue.shade700;
+      default:
+        return Colors.orange.shade700;
+    }
+  }
+
+  /// Formats a distance in metres to a human-readable string.
+  ///
+  /// Values below 1 000 m are shown as "NNN m"; values from 1 km upward are
+  /// shown as "N.N km".  Matches the brevity expected in a navigation overlay.
+  String _formatRoadDistance(double meters) {
+    if (meters < 1000) {
+      return '${meters.toInt()} m';
+    }
+    return '${(meters / 1000).toStringAsFixed(1)} km';
+  }
 
   /// Returns the nearest [RoutePoi] of type [PoiType.weighStation] or
-  /// [PoiType.portOfEntry] to the truck's current GPS position, regardless of
-  /// distance.  Returns null when [_truckPosition] is unavailable or
-  /// [_mockWeighStations] is empty.
+  /// [PoiType.portOfEntry] from [_routePois] to the truck's current GPS
+  /// position.  Returns null when [_truckPosition] is unavailable or
+  /// [_routePois] is empty.
   RoutePoi? _findNearestWeighStation() {
     if (_truckPosition == null) return null;
     RoutePoi? nearest;
     double nearestDistance = double.infinity;
 
-    for (final poi in _mockWeighStations) {
+    for (final poi in _routePois) {
       if (poi.type != PoiType.weighStation &&
           poi.type != PoiType.portOfEntry) {
         continue;
@@ -809,23 +865,152 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Formats a distance in metres to a human-readable string.
+  /// Shows a modal bottom sheet with full details for the given [RoutePoi].
   ///
-  /// Values below 1 000 m are shown as "NNN m"; values from 1 km upward are
-  /// shown as "N.N km".  Matches the brevity expected in a navigation overlay.
-  String _formatRoadDistance(double meters) {
-    if (meters < 1000) {
-      return '${meters.toInt()} m';
-    }
-    return '${(meters / 1000).toStringAsFixed(1)} km';
+  /// Displays: station name, distance from truck, colour-coded status badge,
+  /// bypass availability, driver notes, and a button to centre the map on the
+  /// station.
+  void _showWeighStationSheet(RoutePoi poi) {
+    final double meters = _truckPosition != null
+        ? Geolocator.distanceBetween(
+            _truckPosition!.latitude,
+            _truckPosition!.longitude,
+            poi.position.latitude,
+            poi.position.longitude,
+          )
+        : 0.0;
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Station name ───────────────────────────────────────────────
+              Text(
+                poi.name,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              // ── Status badge + distance ────────────────────────────────────
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _weighStatusColor(poi.status),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      poi.status ?? 'Unknown',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  if (_truckPosition != null)
+                    Text(_formatRoadDistance(meters)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              // ── Bypass availability ────────────────────────────────────────
+              if (poi.bypassAvailable != null)
+                Text(
+                  poi.bypassAvailable!
+                      ? 'Bypass: Available'
+                      : 'Bypass: Not available',
+                  style: const TextStyle(fontSize: 16),
+                ),
+              // ── Driver note ────────────────────────────────────────────────
+              if (poi.note != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  poi.note!,
+                  style: const TextStyle(
+                      fontSize: 15, color: Colors.black87),
+                ),
+              ],
+              const SizedBox(height: 20),
+              // ── Center-on-station button ───────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _mapController.move(poi.position, 16);
+                  },
+                  icon: const Icon(Icons.center_focus_strong),
+                  label: const Text('Center on Station'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
-  // ── Weigh station alert banner widget ─────────────────────────────────────
+  /// Builds the list of [Marker]s for each visible weigh station / port of
+  /// entry POI in [_routePois].
+  ///
+  /// Returns an empty list when [_showWeighStations] is false.
+  List<Marker> _buildWeighStationMarkers() {
+    if (!_showWeighStations) return const [];
 
-  /// Returns an orange alert banner positioned near the top of the map stack
-  /// when [_upcomingWeighStation] is set (truck within 1 mile of a weigh
+    return _routePois
+        .where((poi) =>
+            poi.type == PoiType.weighStation ||
+            poi.type == PoiType.portOfEntry)
+        .map((poi) {
+      return Marker(
+        point: poi.position,
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showWeighStationSheet(poi),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _weighStatusColor(poi.status),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.scale,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns a colour-coded alert banner positioned near the top of the map
+  /// stack when [_upcomingWeighStation] is set (truck within 1 mile of a weigh
   /// station or port of entry).  Returns [SizedBox.shrink] when no alert is
-  /// active so the widget tree stays stable.
+  /// active so the widget tree stays stable.  Tapping the banner opens the
+  /// full details sheet via [_showWeighStationSheet].
   Widget _buildWeighStationAlertCard() {
     if (_upcomingWeighStation == null || _truckPosition == null) {
       return const SizedBox.shrink();
@@ -843,58 +1028,61 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       left: 16,
       right: 16,
       top: 140,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.orange.shade700,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 10,
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            const Icon(
-              Icons.warning_amber_rounded,
-              color: Colors.white,
-              size: 28,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    poi.name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    poi.status ?? poi.subtitle ?? 'Status unknown',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+      child: GestureDetector(
+        onTap: () => _showWeighStationSheet(poi),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _weighAlertColor(poi),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
               ),
-            ),
-            Text(
-              _formatRoadDistance(meters),
-              style: const TextStyle(
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.warning_amber_rounded,
                 color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+                size: 28,
               ),
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      poi.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      poi.status ?? poi.subtitle ?? 'Status unknown',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                _formatRoadDistance(meters),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1097,15 +1285,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
-
     // ── Weigh station / port of entry proximity check ────────────────────────
     // Run after position state is updated so _truckPosition is current.
+
+    // ── Weigh station proximity check ────────────────────────────────────────
+    // Runs after every GPS fix so the alert card and voice warning stay
+    // current as the truck moves along the route.
     _checkWeighStationAlert();
   }
-
-  /// Advances to the next step when the driver comes within 20 m of the
-  /// upcoming maneuver point, then speaks the new instruction aloud.
-  void _checkStepAdvancement(LatLng current) {
     if (_navSteps.isEmpty) return;
     final nextIdx = _currentStepIndex + 1;
     if (nextIdx >= _navSteps.length) return;
@@ -3172,10 +3359,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
-                // ── Weigh station / port of entry alert banner ────────────
-                // Shown below the navigation banner when the truck approaches
-                // a weigh station or port of entry within 1 mile.  Displays
-                // station name, status, and distance in an orange card.
+                // ── Route Options FAB ──────────────────────────────────────
+                // Top-right corner of the map; opens the options bottom sheet
+                // so the driver can change route mode and avoidance settings.
+                _buildRouteOptionsButton(),
+                // ── Weigh station proximity alert card ────────────────────
+                // Shown when the truck is within 1 mile of a weigh station
+                // or port of entry.  Banner colour reflects open/closed/bypass
+                // status; tapping it opens the full details sheet.
                 _buildWeighStationAlertCard(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
@@ -3621,10 +3812,11 @@ enum PoiType {
   portOfEntry,
 }
 
-/// A weigh station, port of entry, or similar driver-relevant point of interest.
+/// A trucking-relevant point of interest along the planned route.
 ///
 /// Displayed as a map marker and shown in the [_buildWeighStationAlertCard]
-/// banner when the truck approaches within 1 mile.
+/// banner when the truck approaches within 1 mile.  Tapping the banner or
+/// marker opens [_showWeighStationSheet] for full details.
 class RoutePoi {
   const RoutePoi({
     required this.id,
@@ -3632,13 +3824,16 @@ class RoutePoi {
     required this.type,
     required this.position,
     this.subtitle,
+    this.availableSpots,
     this.status,
+    this.bypassAvailable,
+    this.note,
   });
 
-  /// Unique identifier for this POI (used as a marker key).
+  /// Unique identifier used as the map marker ID.
   final String id;
 
-  /// Display name shown in the alert banner, e.g. "Baldock Weigh Station".
+  /// Display name shown in the alert card and details sheet.
   final String name;
 
   /// POI category — drives marker colour and alert-logic filtering.
@@ -3650,7 +3845,16 @@ class RoutePoi {
   /// Short secondary label, e.g. "I-5 Southbound".  Optional.
   final String? subtitle;
 
+  /// Available parking or staging spots, if known.
+  final int? availableSpots;
+
   /// Current operational status: "Open", "Closed", "Bypass", or null when
-  /// unknown.  Shown in the alert banner below the station name.
+  /// unknown.  Shown in the alert banner and details sheet.
   final String? status;
+
+  /// Whether a transponder bypass is available at this facility.
+  final bool? bypassAvailable;
+
+  /// Driver-facing note, e.g. "Check transponder before bypassing".
+  final String? note;
 }

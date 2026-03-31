@@ -202,6 +202,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   String? _selectedDestinationName;
   bool _isBuildingRoute = false;
 
+  // ── Multi-stop leg breakdown ───────────────────────────────────────────────
+  //
+  // _tripLegs holds the per-segment breakdown for a multi-stop route built by
+  // _buildMultiStopRoute().  _activeLegIndex tracks which leg the driver is
+  // currently on; it advances automatically as each stop is reached.  Both are
+  // reset by _clearActiveRoute().
+  List<TripLeg> _tripLegs = const [];
+  int _activeLegIndex = 0;
+
   // ── Truck Stop POI state ───────────────────────────────────────────────────
   //
   // _truckStops holds the filtered list of stops near the current route.
@@ -574,6 +583,52 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
       return false;
     }).toList();
+  }
+
+  /// Returns the number of fuel stops (non-rest-area truck stops) within
+  /// [maxDistanceMeters] of any point in [routePoints].
+  int _countFuelStopsForRoute(
+    List<LatLng> routePoints, {
+    double maxDistanceMeters = 5000,
+  }) {
+    return _mockTruckStops
+        .where((stop) => stop.brand != 'Rest Area')
+        .where((stop) {
+          for (final pt in routePoints) {
+            final d = Geolocator.distanceBetween(
+              stop.position.latitude,
+              stop.position.longitude,
+              pt.latitude,
+              pt.longitude,
+            );
+            if (d <= maxDistanceMeters) return true;
+          }
+          return false;
+        })
+        .length;
+  }
+
+  /// Returns the number of weigh-station [MapPoi]s within [maxDistanceMeters]
+  /// of any point in [routePoints].
+  int _countWeighStationsForRoute(
+    List<LatLng> routePoints, {
+    double maxDistanceMeters = 5000,
+  }) {
+    return _mapPois
+        .where((p) => p.type == PoiType.weighStation)
+        .where((poi) {
+          for (final pt in routePoints) {
+            final d = Geolocator.distanceBetween(
+              poi.position.latitude,
+              poi.position.longitude,
+              pt.latitude,
+              pt.longitude,
+            );
+            if (d <= maxDistanceMeters) return true;
+          }
+          return false;
+        })
+        .length;
   }
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -1039,6 +1094,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _checkArrival(gpsPoint);
       if (_isArrived) return; // arrival was just triggered — stop all processing
 
+      // Leg arrival detection: advance active leg when driver reaches each stop.
+      _checkLegArrival(gpsPoint);
+
       // Step advancement: speak instruction when nearing next maneuver.
       _checkStepAdvancement(gpsPoint);
 
@@ -1248,6 +1306,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _lastTripLng = 0.0;
       _lastGpsTimestamp = null;
       _truckStops = const [];
+      _tripLegs = const [];
+      _activeLegIndex = 0;
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
@@ -1473,6 +1533,94 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _navigationStarted = true;
     });
     _startRouteAnimation();
+  }
+
+  // ── Multi-stop leg breakdown ───────────────────────────────────────────────
+
+  /// Builds a multi-stop route by fetching individual legs from origin to each
+  /// stop in [stops] and combining them into both a single merged polyline
+  /// (for map display) and a [TripLeg] list (for the leg breakdown sheet).
+  ///
+  /// [originPosition] is the departure coordinate; [originName] is its display
+  /// name shown in the first leg card (e.g. "Current Location").  Sets
+  /// [_tripLegs] and [_activeLegIndex] = 0 once all legs are built.
+  Future<void> _buildMultiStopRoute(
+    List<_StopEntry> stops,
+    LatLng originPosition,
+    String originName,
+  ) async {
+    if (stops.isEmpty) return;
+
+    final combinedPoints = <LatLng>[];
+    final combinedSteps = <_NavStep>[];
+    final builtLegs = <TripLeg>[];
+
+    LatLng from = originPosition;
+    String fromName = originName;
+
+    for (int i = 0; i < stops.length; i++) {
+      final stop = stops[i];
+      final result = await _fetchRouteFromApi(from, stop.position);
+      if (result == null) continue;
+
+      final restrictions = _evaluateRouteRestrictions(result.points);
+
+      builtLegs.add(TripLeg(
+        id: 'leg_$i',
+        fromName: fromName,
+        toName: stop.name,
+        fromPosition: from,
+        toPosition: stop.position,
+        points: result.points,
+        steps: result.steps,
+        distanceMiles: result.distanceMiles,
+        durationSeconds: result.durationSeconds,
+        restrictionCount: restrictions.length,
+      ));
+
+      combinedPoints.addAll(result.points);
+      combinedSteps.addAll(result.steps);
+
+      from = stop.position;
+      fromName = stop.name;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _tripLegs = builtLegs;
+      _activeLegIndex = 0;
+      _routePoints = combinedPoints.toSet().toList();
+      _navSteps = combinedSteps;
+      _currentStepIndex = 0;
+      _selectedDestination = stops.last.position;
+      _selectedDestinationName = stops.last.name;
+      _navigationActive = true;
+      _isArrived = false;
+      _isLoading = false;
+    });
+
+    _fitCameraToRoute(_routePoints);
+    _updateRouteViolationWarnings();
+  }
+
+  /// Checks whether the truck has reached the end of the current active leg.
+  ///
+  /// Called from [_onGpsPosition] during active navigation.  When the truck is
+  /// within [_arrivalThresholdMeters] of the current leg's destination, the
+  /// active leg index is advanced.  When all legs are complete the normal
+  /// [_checkArrival] flow handles the final destination.
+  void _checkLegArrival(LatLng current) {
+    if (_tripLegs.isEmpty) return;
+    if (_activeLegIndex >= _tripLegs.length - 1) return;
+
+    final activeLeg = _tripLegs[_activeLegIndex];
+    final dist = _distanceBetween(current, activeLeg.toPosition);
+
+    if (dist <= _arrivalThresholdMeters) {
+      setState(() {
+        _activeLegIndex++;
+      });
+    }
   }
 
   /// Drives smooth truck movement through every segment of [_routePoints].
@@ -1812,8 +1960,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// shaping point between origin and destination, guiding the route away from
   /// a restriction.
   ///
-  /// Returns the decoded, simplified route polyline or an empty list on error.
-  Future<List<LatLng>> _fetchRouteFromApi(
+  /// Returns a [RouteResult] containing the decoded polyline points, parsed
+  /// turn-by-turn steps, distance in miles, and duration in seconds.
+  /// Returns `null` on error or when no routes are returned.
+  Future<RouteResult?> _fetchRouteFromApi(
     LatLng origin,
     LatLng destination, {
     LatLng? viaPoint,
@@ -1838,13 +1988,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final res = await http.get(Uri.parse(url));
       final data = jsonDecode(res.body);
       final routes = data['routes'] as List?;
-      if (routes == null || routes.isEmpty) return const [];
+      if (routes == null || routes.isEmpty) return null;
       final route = routes[0] as Map<String, dynamic>;
       final decoded = _decodePolyline6(route['geometry'] as String);
-      return _simplifyRoute(decoded);
+      final points = _simplifyRoute(decoded);
+      final steps = _extractAllSteps(route);
+      final distanceMiles = (route['distance'] as num).toDouble() / 1609.34;
+      final durationSeconds = (route['duration'] as num).toInt();
+      return RouteResult(
+        points: points,
+        steps: steps,
+        distanceMiles: distanceMiles,
+        durationSeconds: durationSeconds,
+      );
     } catch (e) {
       print('_fetchRouteFromApi error: $e');
-      return const [];
+      return null;
     }
   }
 
@@ -1885,12 +2044,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         attemptNumber: _restrictionRerouteAttempts - 1,
       );
 
-      final newPoints = await _fetchRouteFromApi(origin, dest, viaPoint: avoidPt);
-      if (newPoints.isEmpty) {
+      final result = await _fetchRouteFromApi(origin, dest, viaPoint: avoidPt);
+      if (result == null || result.points.isEmpty) {
         // API call failed — stop retrying.
         break;
       }
-      candidatePoints = newPoints;
+      candidatePoints = result.points;
     }
 
     // Final check after all attempts.
@@ -2491,6 +2650,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           final distMi = (r["distance"] as num).toDouble() / 1609.34;
           final durSec = (r["duration"] as num).toInt();
           final restrictions = _evaluateRouteRestrictions(pts);
+          final rFuel = _countFuelStopsForRoute(pts);
+          final rWeigh = _countWeighStationsForRoute(pts);
           final label = ri < routeLabels.length
               ? routeLabels[ri]
               : 'Alternative ${ri + 1}';
@@ -2502,6 +2663,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             distanceMiles: distMi,
             durationSeconds: durSec,
             restrictionCount: restrictions.length,
+            fuelStopCount: rFuel,
+            weighStationCount: rWeigh,
             routeData: {
               "distanceMiles": distMi.round(),
               "etaMinutes": (durSec / 60).round(),
@@ -2582,6 +2745,42 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           .map((s) => {'instruction': s.instruction})
           .toList();
 
+      // ── Build RouteOption list from all returned alternatives ───────────────
+      // Labels are assigned in order: recommended, fastest, fuel-saver.
+      // For each alternative, decode points and compute per-route counts so
+      // the driver can compare alternatives in the bottom sheet.
+      const routeLabels = ['Recommended', 'Fastest', 'Fuel Saver'];
+      final options = <RouteOption>[];
+      for (int i = 0; i < routes.length; i++) {
+        final r = routes[i] as Map<String, dynamic>;
+        final rDecoded = _decodePolyline6(r["geometry"] as String);
+        final rPoints = _simplifyRoute(rDecoded).toSet().toList();
+        final rSteps = _extractAllSteps(r);
+        final rMiles = (r["distance"] as num) / 1609.34;
+        final rSeconds = (r["duration"] as num).toInt();
+        final rRestrictions = _evaluateRouteRestrictions(rPoints).length;
+        final rFuel = _countFuelStopsForRoute(rPoints);
+        final rWeigh = _countWeighStationsForRoute(rPoints);
+        options.add(RouteOption(
+          id: 'route_$i',
+          label: i < routeLabels.length ? routeLabels[i] : 'Route ${i + 1}',
+          points: rPoints,
+          steps: rSteps,
+          distanceMiles: rMiles,
+          durationSeconds: rSeconds,
+          restrictionCount: rRestrictions,
+          fuelStopCount: rFuel,
+          weighStationCount: rWeigh,
+          routeData: {
+            "distanceMiles": rMiles.round(),
+            "etaMinutes": (rSeconds / 60).round(),
+            "turnByTurn": rSteps
+                .map((s) => {'instruction': s.instruction})
+                .toList(),
+          },
+        ));
+      }
+
       setState(() {
         _navSteps = allSteps;
         _currentStepIndex = 0;
@@ -2596,6 +2795,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Deduplicate to remove any repeated coordinates that could cause
         // overlapping polyline segments near the route origin/destination.
         _routePoints = _routePoints.toSet().toList();
+        _routeOptions = options;
+        _selectedRouteOptionIndex = routeIndex;
         _isLoading = false;
       });
 
@@ -2665,6 +2866,208 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Reset all prior navigation/trip state before starting a new session.
     _clearActiveRoute();
     await fetchRoute();
+  }
+
+  /// Applies [RouteOption] at [index] as the active previewed route.
+  ///
+  /// Updates [_routePoints], [_navSteps], [_routeData], and related state so
+  /// the map and preview panel immediately reflect the chosen alternative.
+  /// Closes the bottom sheet if open, then fits the camera to the new route.
+  void _applyRouteOption(int index) {
+    if (index < 0 || index >= _routeOptions.length) return;
+    final opt = _routeOptions[index];
+    setState(() {
+      _selectedRouteOptionIndex = index;
+      _routePoints = opt.points;
+      _navSteps = opt.steps;
+      _currentStepIndex = 0;
+      _routeData = opt.routeData;
+    });
+    // Fit camera to the newly selected route so the driver sees the full path.
+    _fitCameraToRoute(opt.points);
+    _updateRouteViolationWarnings();
+  }
+
+  /// Opens a modal bottom sheet listing all available [_routeOptions] so the
+  /// driver can compare alternatives before committing to a route.
+  ///
+  /// Each option is shown as a card with: label, distance, ETA, restriction
+  /// count, fuel stops, and weigh stations — all as info chips.  Tapping a
+  /// card applies that route option and dismisses the sheet.
+  void _showRouteOptionsBottomSheet() {
+    if (_routeOptions.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Drag handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const Text(
+                    'Choose Your Route',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  ..._routeOptions.asMap().entries.map((entry) {
+                    final i = entry.key;
+                    final opt = entry.value;
+                    final isSelected = i == _selectedRouteOptionIndex;
+                    final etaH = opt.durationSeconds ~/ 3600;
+                    final etaM = (opt.durationSeconds % 3600) ~/ 60;
+                    final etaLabel =
+                        etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
+                    return GestureDetector(
+                      onTap: () {
+                        _applyRouteOption(i);
+                        Navigator.of(ctx).pop();
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? Colors.blue.shade50
+                              : Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected
+                                ? Colors.blue.shade600
+                                : Colors.grey.shade200,
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  opt.label,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: isSelected
+                                        ? Colors.blue.shade800
+                                        : Colors.black87,
+                                  ),
+                                ),
+                                if (isSelected) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.shade600,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: const Text(
+                                      'Selected',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                _routeChip(
+                                  '🚚',
+                                  '${opt.distanceMiles.toStringAsFixed(0)} mi',
+                                ),
+                                _routeChip('⏱', etaLabel),
+                                _routeChip(
+                                  '⚠️',
+                                  '${opt.restrictionCount} restrictions',
+                                  color: opt.restrictionCount > 0
+                                      ? Colors.red.shade50
+                                      : null,
+                                  borderColor: opt.restrictionCount > 0
+                                      ? Colors.red.shade200
+                                      : null,
+                                  textColor: opt.restrictionCount > 0
+                                      ? Colors.red.shade700
+                                      : null,
+                                ),
+                                _routeChip(
+                                    '⛽', '${opt.fuelStopCount} fuel stops'),
+                                _routeChip(
+                                    '⚖️',
+                                    '${opt.weighStationCount} weigh stations'),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Builds a small info chip for use inside the route options bottom sheet.
+  Widget _routeChip(
+    String emoji,
+    String label, {
+    Color? color,
+    Color? borderColor,
+    Color? textColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color ?? Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: borderColor ?? Colors.grey.shade300),
+      ),
+      child: Text(
+        '$emoji $label',
+        style: TextStyle(
+          fontSize: 12,
+          color: textColor ?? Colors.black87,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
   }
 
   /// Updates [_routeViolations] with human-readable warning strings by checking
@@ -3209,61 +3612,261 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Builds the "Start Navigation" button shown when a route has been built
-  /// during preview but the user has not yet started the navigation session.
+  /// Builds the bottom navigation actions panel shown when a route has been
+  /// built during preview but the user has not yet started the navigation
+  /// session.
   ///
-  /// Tapping calls [_startNavigation] to begin GPS tracking and trip stats.
-  /// Hidden once [_navigationStarted] is true so it never overlaps the live
-  /// navigation UI.
+  /// When multiple route alternatives are available, an outlined
+  /// "See Route Details" button is shown above the "Start Navigation" button
+  /// so the driver can compare alternatives — distance, ETA, restrictions,
+  /// fuel stops, and weigh stations — via [_showRouteOptionsBottomSheet] before
+  /// committing to a route.
+  ///
+  /// Tapping "Start Navigation" calls [_startNavigation] to begin GPS tracking
+  /// and trip stats.  Hidden once [_navigationStarted] is true.
   Widget _buildStartNavigationButton() {
-    return Row(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
+        if (_routeOptions.length > 1) ...[
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.blue.shade700,
+              side: BorderSide(color: Colors.blue.shade600, width: 1.5),
+              padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              elevation: 6,
+              backgroundColor: Colors.white.withOpacity(0.95),
             ),
-            icon: const Icon(Icons.navigation),
-            label: const Text(
-              'Start Navigation',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            icon: const Icon(Icons.compare_arrows, size: 20),
+            label: Text(
+              'See Route Details (${_routeOptions.length} options)',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600),
             ),
-            onPressed: _startNavigation,
+            onPressed: _showRouteOptionsBottomSheet,
           ),
-        ),
-        if (_routeViolations.isNotEmpty) ...[
-          const SizedBox(width: 10),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 6,
-            ),
-            icon: const Icon(Icons.alt_route),
-            label: const Text(
-              'Optimize for Truck',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-            ),
-            onPressed:
-                _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
-          ),
+          const SizedBox(height: 8),
         ],
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 6,
+                ),
+                icon: const Icon(Icons.navigation),
+                label: const Text(
+                  'Start Navigation',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                onPressed: _startNavigation,
+              ),
+            ),
+            if (_routeViolations.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 6,
+                ),
+                icon: const Icon(Icons.alt_route),
+                label: const Text(
+                  'Optimize for Truck',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+                onPressed:
+                    _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
+              ),
+            ],
+          ],
+        ),
       ],
     );
   }
 
-  /// Builds a single labelled row for the Trip Preview Intelligence Panel.
+  // ── Leg breakdown UI helpers ───────────────────────────────────────────────
+
+  /// Formats [seconds] into a human-readable duration string such as
+  /// "1h 24m" or "38m".
+  String _formatDuration(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    return h > 0 ? '${h}h ${m}m' : '${m}m';
+  }
+
+  /// Displays a card showing the current active leg during navigation.
+  ///
+  /// Shows: leg counter, from → to names, distance and duration, and a
+  /// colour-coded restriction warning.  Hidden when no legs exist or
+  /// navigation has not started.
+  Widget _buildCurrentLegCard() {
+    if (_tripLegs.isEmpty || !_navigationStarted) {
+      return const SizedBox.shrink();
+    }
+    if (_activeLegIndex >= _tripLegs.length) return const SizedBox.shrink();
+    final leg = _tripLegs[_activeLegIndex];
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: 250,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.12),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Leg ${_activeLegIndex + 1} of ${_tripLegs.length}',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text('${leg.fromName} → ${leg.toName}'),
+            const SizedBox(height: 6),
+            Text(
+              '${leg.distanceMiles.toStringAsFixed(0)} mi • ${_formatDuration(leg.durationSeconds)}',
+            ),
+            const SizedBox(height: 6),
+            Text(
+              leg.restrictionCount == 0
+                  ? 'No known restrictions'
+                  : '${leg.restrictionCount} restriction warning(s)',
+              style: TextStyle(
+                color:
+                    leg.restrictionCount == 0 ? Colors.green : Colors.red,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shows a modal bottom sheet listing all trip legs with their from/to
+  /// names, distance, duration, and restriction count.  The active leg is
+  /// highlighted in green.
+  void _showLegBreakdownSheet() {
+    if (_tripLegs.isEmpty) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const Text(
+                'Trip Legs',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 14),
+              ...List.generate(_tripLegs.length, (index) {
+                final leg = _tripLegs[index];
+                final active = index == _activeLegIndex;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color:
+                        active ? Colors.green.shade50 : Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: active
+                          ? Colors.green
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Leg ${index + 1}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('${leg.fromName} → ${leg.toName}'),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${leg.distanceMiles.toStringAsFixed(0)} mi • ${_formatDuration(leg.durationSeconds)}',
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        leg.restrictionCount == 0
+                            ? 'No restrictions'
+                            : '${leg.restrictionCount} restriction warning(s)',
+                        style: TextStyle(
+                          color: leg.restrictionCount == 0
+                              ? Colors.green
+                              : Colors.red,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Builds a mini FAB that opens the leg breakdown sheet during navigation.
+  ///
+  /// Hidden when there are no legs or navigation has not started.
+  Widget _buildLegBreakdownButton() {
+    if (_tripLegs.isEmpty || !_navigationStarted) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      right: 16,
+      bottom: 320,
+      child: FloatingActionButton(
+        mini: true,
+        heroTag: 'leg_breakdown',
+        backgroundColor: Colors.white,
+        onPressed: _showLegBreakdownSheet,
+        child: const Icon(Icons.list_alt, color: Colors.black),
+      ),
+    );
+  }
   ///
   /// [emoji] is a leading emoji icon, [label] is the category name, and
   /// [value] is the computed display string.  [valueColor] may override the
@@ -3304,25 +3907,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   // ── Route alternatives helpers ─────────────────────────────────────────────
-
-  /// Switches the active route preview to [index] from [_routeOptions].
-  ///
-  /// Updates [_routePoints], [_navSteps], and [_routeData] to match the
-  /// chosen option and fits the camera to the new polyline.  Does **not**
-  /// start navigation — that remains gated behind the Start Navigation button.
-  void _applyRouteOption(int index) {
-    if (index < 0 || index >= _routeOptions.length) return;
-    final option = _routeOptions[index];
-    setState(() {
-      _selectedRouteOptionIndex = index;
-      _routePoints = option.points.toSet().toList();
-      _navSteps = option.steps;
-      _currentStepIndex = 0;
-      _routeData = option.routeData;
-    });
-    _updateRouteViolationWarnings();
-    _fitCameraToRoute(option.points);
-  }
 
   /// Builds the route stats summary section of the preview panel.
   Widget _buildPreviewIntelligencePanel() {
@@ -4648,6 +5232,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildRestrictionAlertCard(),
                   ),
+                // ── Active leg card ───────────────────────────────────────
+                // Shows the current leg (from → to, miles, duration,
+                // restriction count) when navigating a multi-stop trip.
+                _buildCurrentLegCard(),
+                // ── Leg breakdown FAB ─────────────────────────────────────
+                // Opens the full trip leg breakdown sheet during navigation.
+                _buildLegBreakdownButton(),
                 // ── Smart restriction rerouting progress banner ───────────
                 // Shown as an overlay at the top of the map while an
                 // automatic avoid-restriction reroute is in progress.
@@ -5292,55 +5883,6 @@ const List<TruckRestriction> _sampleRestrictions = [
   ),
 ];
 
-
-// ── Route alternatives model ──────────────────────────────────────────────────
-
-/// A single route alternative surfaced to the driver before navigation starts.
-///
-/// Built from every route returned by the Mapbox Directions
-/// `&alternatives=true` call and displayed as a selectable card in
-/// [_buildRouteAlternativesCard].  The driver taps a card to preview that route
-/// on the map; only the selected option is used when "Start Navigation" is
-/// pressed.
-class RouteOption {
-  RouteOption({
-    required this.id,
-    required this.label,
-    required this.points,
-    required this.steps,
-    required this.distanceMiles,
-    required this.durationSeconds,
-    required this.restrictionCount,
-    required this.routeData,
-  });
-
-  /// Stable id, e.g. `"route_0"`, `"route_1"`.
-  final String id;
-
-  /// Human-readable label, e.g. `"Recommended"`, `"Fastest"`, `"Alternative"`.
-  final String label;
-
-  /// Decoded, simplified polyline points for this route.
-  final List<LatLng> points;
-
-  /// Turn-by-turn navigation steps parsed from the Mapbox response.
-  final List<_NavStep> steps;
-
-  /// Total route distance in miles.
-  final double distanceMiles;
-
-  /// Total route duration in seconds.
-  final int durationSeconds;
-
-  /// Number of truck restrictions (violating the current truck profile) found
-  /// along this route.  Zero means no conflicts; any positive value indicates
-  /// at least one low-bridge / weight / length / no-truck or hazmat conflict.
-  final int restrictionCount;
-
-  /// Route data map compatible with [_routeData] / [_buildRouteInfo].
-  final Map<String, dynamic> routeData;
-}
-
 // ── Destination search model ──────────────────────────────────────────────────
 
 /// A single place suggestion returned by the Mapbox Geocoding v5 API.
@@ -5362,5 +5904,146 @@ class PlaceSuggestion {
   final String placeName;
 
   /// Geographic coordinate of the place.
+  final LatLng position;
+}
+
+// ── Route alternatives model ──────────────────────────────────────────────────
+
+/// Represents one route alternative returned by the Mapbox Directions API.
+///
+/// Holds all data needed to preview the route on the map and display key
+/// truck-relevant metrics in the route comparison bottom sheet.
+class RouteOption {
+  const RouteOption({
+    required this.id,
+    required this.label,
+    required this.points,
+    required this.steps,
+    required this.distanceMiles,
+    required this.durationSeconds,
+    required this.restrictionCount,
+    required this.fuelStopCount,
+    required this.weighStationCount,
+    required this.routeData,
+  });
+
+  /// Unique identifier for this alternative, e.g. 'route_0'.
+  final String id;
+
+  /// Human-readable label shown in the bottom sheet, e.g. 'Recommended'.
+  final String label;
+
+  /// Decoded and simplified polyline points for map rendering.
+  final List<LatLng> points;
+
+  /// Turn-by-turn navigation steps for this route.
+  final List<_NavStep> steps;
+
+  /// Route length in miles.
+  final double distanceMiles;
+
+  /// Estimated travel time in seconds.
+  final int durationSeconds;
+
+  /// Number of truck restrictions along this route.
+  final int restrictionCount;
+
+  /// Number of fuel stops (non-rest-area truck stops) within 5 km of route.
+  final int fuelStopCount;
+
+  /// Number of weigh stations within 5 km of route.
+  final int weighStationCount;
+
+  /// Legacy route data map used by the route info panel and preview panel.
+  final Map<String, dynamic> routeData;
+}
+
+// ── Multi-stop leg models ─────────────────────────────────────────────────────
+
+/// Raw result returned by [_TruckMapScreenState._fetchRouteFromApi].
+///
+/// Contains everything needed to display a route on the map and for use in
+/// either a [RouteOption] (pre-navigation selection) or a [TripLeg]
+/// (per-segment breakdown during navigation).
+class RouteResult {
+  const RouteResult({
+    required this.points,
+    required this.steps,
+    required this.distanceMiles,
+    required this.durationSeconds,
+  });
+
+  /// Decoded, simplified polyline points.
+  final List<LatLng> points;
+
+  /// Turn-by-turn navigation steps.
+  final List<_NavStep> steps;
+
+  /// Route distance in miles.
+  final double distanceMiles;
+
+  /// Route travel time in seconds.
+  final int durationSeconds;
+}
+
+/// A single leg of a multi-stop trip (e.g. origin → stop 1).
+///
+/// Built by [_TruckMapScreenState._buildMultiStopRoute] from the ordered list
+/// of stops.  [_activeLegIndex] tracks which leg the driver is currently on
+/// and advances automatically as each intermediate stop is reached.
+class TripLeg {
+  const TripLeg({
+    required this.id,
+    required this.fromName,
+    required this.toName,
+    required this.fromPosition,
+    required this.toPosition,
+    required this.points,
+    required this.steps,
+    required this.distanceMiles,
+    required this.durationSeconds,
+    required this.restrictionCount,
+  });
+
+  /// Stable identifier, e.g. `"leg_0"`, `"leg_1"`.
+  final String id;
+
+  /// Display name of the departure point (e.g. "Current Location" or stop name).
+  final String fromName;
+
+  /// Display name of the arrival point (the stop name).
+  final String toName;
+
+  /// Geographic coordinate of the departure point.
+  final LatLng fromPosition;
+
+  /// Geographic coordinate of the arrival point.
+  final LatLng toPosition;
+
+  /// Decoded, simplified polyline points for this leg.
+  final List<LatLng> points;
+
+  /// Turn-by-turn navigation steps for this leg.
+  final List<_NavStep> steps;
+
+  /// Leg distance in miles.
+  final double distanceMiles;
+
+  /// Leg travel time in seconds.
+  final int durationSeconds;
+
+  /// Number of truck-restriction violations found along this leg's route.
+  final int restrictionCount;
+}
+
+/// A named waypoint used when building a multi-stop route via
+/// [_TruckMapScreenState._buildMultiStopRoute].
+class _StopEntry {
+  const _StopEntry({required this.name, required this.position});
+
+  /// Display name of the stop (shown in the leg card and breakdown sheet).
+  final String name;
+
+  /// Geographic coordinate of the stop.
   final LatLng position;
 }

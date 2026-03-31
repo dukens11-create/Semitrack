@@ -266,7 +266,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Set to false automatically when the user manually pans/zooms the map so
   // they can freely explore without forced camera snaps.  Tapping the recenter
   // FAB resets this to true and immediately re-centres the camera.
-  bool _followTruck = true;
+  // Default is false: camera follow is only enabled once an active route begins.
+  bool _followTruck = false;
+
+  // ── Navigation session guard ───────────────────────────────────────────────
+  /// True when a destination has been selected **and** the navigation session
+  /// is currently active (i.e. after a route has been built and before
+  /// arrival / clear).  All trip-logic methods (arrival, step advance, TTS,
+  /// reroute, POI / restriction alerts, camera follow) are gated on this flag
+  /// so that none of those behaviours fire in plain GPS-tracking mode.
+  bool get _hasActiveDestination =>
+      _selectedDestination != null && _navigationActive;
 
   // ── Navigation pause state ─────────────────────────────────────────────────
   // When true, live GPS tracking and camera follow updates are suspended.
@@ -906,6 +916,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Do not move the camera after arrival — the trip is complete and the
     // driver is viewing the arrival sheet or the overview.
     if (!_mapReady || _truckPosition == null || _isArrived) return;
+    // Only follow the truck when actively navigating to a destination.
+    if (!_hasActiveDestination) return;
     // Skip camera follow if user is freely exploring the map.
     if (!_followTruck) return;
     // Shift the camera target slightly ahead of the truck (−_cameraLeadLatitude°)
@@ -984,35 +996,46 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the route geometry when not available.
   void _onGpsPosition(Position position) {
     // Ignore all GPS updates once the driver has arrived — the trip is done.
-    if (_routePoints.isEmpty || _isArrived) return;
+    if (_isArrived) return;
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
 
-    // ── Arrival detection: check proximity to destination first ─────────────
-    // Always evaluated before step/off-route logic so arrival wins immediately.
-    _checkArrival(gpsPoint);
-    if (_isArrived) return; // arrival was just triggered — stop all processing
+    // ── Navigation-specific logic ─────────────────────────────────────────
+    // The following checks only run when there is an active destination and
+    // a live navigation session.  In plain GPS-tracking mode (no destination
+    // selected) the truck marker and speed panel still update, but no
+    // turn-by-turn, rerouting, TTS, or POI-alert behaviour fires.
+    if (_hasActiveDestination) {
+      // Arrival detection: check proximity to destination first.
+      // Always evaluated before step/off-route logic so arrival wins immediately.
+      _checkArrival(gpsPoint);
+      if (_isArrived) return; // arrival was just triggered — stop all processing
 
-    // ── Step advancement: speak instruction when nearing next maneuver ──────
-    _checkStepAdvancement(gpsPoint);
+      // Step advancement: speak instruction when nearing next maneuver.
+      _checkStepAdvancement(gpsPoint);
 
-    // ── Off-route detection: reroute when >30 m from the route line ─────────
-    _checkOffRoute(gpsPoint);
+      // Off-route detection: reroute when >30 m from the route line.
+      _checkOffRoute(gpsPoint);
 
-    // ── POI proximity alerts: warn driver when within 500 m of a POI ─────────
-    _checkPoiAlerts(gpsPoint);
+      // POI proximity alerts: warn driver when within 500 m of a POI.
+      _checkPoiAlerts(gpsPoint);
 
-    // ── Restriction proximity alerts: warn about upcoming violations ──────────
-    _checkRestrictionAheadAlert(gpsPoint);
+      // Restriction proximity alerts: warn about upcoming violations.
+      _checkRestrictionAheadAlert(gpsPoint);
 
-    // ── Trip statistics: update mileage and stopped time from live GPS ───────
-    _updateTripStats(position);
+      // Trip statistics: update mileage and stopped time from live GPS.
+      _updateTripStats(position);
+    }
 
-    // ── Update truck position and heading from real GPS data ─────────────────
-    // Snap to the nearest ahead-of-index route point for step/off-route logic.
-    final nearest = _nearestRouteIndex(gpsPoint);
+    // ── Update truck position and heading (tracking + navigation) ─────────
+    // Snap to the nearest ahead-of-index route point for step/off-route logic
+    // only when a route exists; otherwise keep the raw GPS fix for display.
+    int nearest = _truckIndex;
+    if (_routePoints.isNotEmpty) {
+      nearest = _nearestRouteIndex(gpsPoint);
+    }
 
     // Prefer the true device heading from GPS (heading ≥ 0 = valid fix).
     // Fall back to route-computed bearing when heading is unavailable (−1).
@@ -1020,7 +1043,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (position.heading >= 0) {
       // Real device compass heading — use directly for marker rotation.
       trueBearing = position.heading;
-    } else if (nearest != _truckIndex) {
+    } else if (_routePoints.isNotEmpty && nearest != _truckIndex) {
       // No GPS heading but route index changed: compute from route geometry.
       trueBearing = _bearingBetween(
         _routePoints[_truckIndex.clamp(0, _routePoints.length - 1)],
@@ -1049,9 +1072,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _speedLimitMph = newSpeedLimit;
     });
 
-    // ── Over-speed announcement (throttled) ──────────────────────────────────
+    // ── Over-speed announcement (navigation only, throttled) ──────────────
     // Only announce during active navigation and when speed data is available.
-    if (_navigationMode && newSpeedMps >= 0) {
+    if (_hasActiveDestination && _navigationMode && newSpeedMps >= 0) {
       final double speedMph = newSpeedMps * _mpsToMph;
       if (speedMph > newSpeedLimit) {
         final now = DateTime.now();
@@ -1068,6 +1091,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     // Keep the camera centred on the truck while in navigation mode.
+    // _followTruckCamera() itself guards on _hasActiveDestination so this
+    // call is safe in both tracking and navigation modes.
     if (_navigationMode) {
       _followTruckCamera();
     }
@@ -1154,6 +1179,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Reset GPS timestamp so the first fix delta starts fresh.
       _lastGpsTimestamp = null;
     });
+  }
+
+  /// Resets all navigation and trip-statistics state to idle.
+  ///
+  /// Cancels any in-flight route animation and stops TTS.  All navigation
+  /// flags, route geometry, turn-by-turn steps, and trip counters are cleared
+  /// so the screen returns to plain GPS-tracking mode.
+  ///
+  /// Call when:
+  ///   • The user explicitly clears the current destination.
+  ///   • The trip completes and the driver taps "Done" on the arrival sheet.
+  ///   • A new destination is chosen (via [_startRouteToSelectedDestination]).
+  void _clearActiveRoute() {
+    _animTimer?.cancel();
+    _animGeneration++; // invalidate any in-flight smooth animation loop
+    _tts.stop();
+    setState(() {
+      _navigationActive = false;
+      _navigationMode = false;
+      _isArrived = false;
+      _followTruck = false;
+      _routePoints = const [];
+      _navSteps = const [];
+      _currentStepIndex = 0;
+      _routeData = null;
+      _routeViolations = const [];
+      _restrictionAhead = null;
+      _navStatus = null;
+      _isRerouting = false;
+      _isRestrictionRerouting = false;
+      _restrictionRerouteAttempts = 0;
+      _tripStartTime = null;
+      _lastMoveTime = null;
+      _milesDriven = 0.0;
+      _stoppedDuration = Duration.zero;
+      _lastTripLat = 0.0;
+      _lastTripLng = 0.0;
+      _lastGpsTimestamp = null;
+      _truckStops = const [];
+    });
+    _restrictionAlertShown.clear();
+    _poiAlertShown.clear();
   }
 
   /// Updates trip statistics from the latest [pos] GPS fix.
@@ -1346,9 +1413,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
     // _navigationActive is set true here so _followTruckCamera and step checks
     // are enabled for the duration of the trip.
+    // _followTruck is re-enabled so the camera automatically centres on the
+    // truck at route start (user may have panned away during destination search).
     setState(() {
       _navigationMode = true;
       _navigationActive = true;
+      _followTruck = true;
     });
     if (_mapReady && _truckPosition != null) {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
@@ -2463,12 +2533,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// set by either [_showDestinationSearch] or [_onMapLongPress].
   Future<void> _startRouteToSelectedDestination() async {
     if (_selectedDestination == null) return;
-    // Reset navigation state for a fresh trip.
-    setState(() {
-      _isArrived = false;
-      _navigationActive = false;
-      _routeViolations = const [];
-    });
+    // Reset all prior navigation/trip state before starting a new session.
+    _clearActiveRoute();
     await fetchRoute();
   }
 
@@ -3414,12 +3480,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                   onPressed: () {
                     Navigator.of(ctx).pop();
-                    // Return to overview mode so the driver sees the full route.
+                    // Clear all navigation/trip state and return to idle mode.
                     if (mounted) {
-                      setState(() => _navigationMode = false);
-                      if (_routePoints.isNotEmpty && _mapReady) {
-                        _fitCameraToRoute(_routePoints);
-                      }
+                      _clearActiveRoute();
+                      setState(() {
+                        _selectedDestination = null;
+                        _selectedDestinationName = null;
+                      });
                     }
                   },
                   child: const Text(
@@ -3791,7 +3858,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     initialZoom: 6,
                     onMapReady: () {
                       _mapReady = true;
-                      fetchRoute();
+                      // Do NOT auto-start a route here.  Navigation only begins
+                      // after the user picks a destination and taps "Start Route".
                     },
                     // Long-press on map sets the tapped coordinate as the new
                     // destination and immediately starts routing.
@@ -3849,7 +3917,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Floats at the top of the map so the current maneuver
                 // instruction is always visible during active navigation,
                 // independent of the scrollable info panel below the map.
-                if (_navSteps.isNotEmpty)
+                // Also shown on arrival so the driver sees the arrival message.
+                if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -3861,14 +3930,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // overlap the navigation banner.  Visible at all other times
                 // so the driver can search a destination without opening a
                 // modal sheet.
-                if (_navSteps.isEmpty) _buildSearchBar(),
+                if (!_hasActiveDestination && !_isArrived) _buildSearchBar(),
                 // ── Search results overlay ────────────────────────────────
-                if (_navSteps.isEmpty && _searchResults.isNotEmpty)
+                if (!_hasActiveDestination && !_isArrived && _searchResults.isNotEmpty)
                   _buildSearchResults(),
                 // ── Destination hint banner ───────────────────────────────
                 // Shown when no destination is selected and no route is loaded,
                 // prompting the driver to pick a destination to start navigation.
-                if (_selectedDestination == null && _routePoints.isEmpty && !_isLoading)
+                if (_selectedDestination == null && !_hasActiveDestination && !_isLoading)
                   Positioned(
                     bottom: 80,
                     left: 16,
@@ -3900,17 +3969,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                 // ── Start Route button ─────────────────────────────────────
                 // Shown when a destination has been selected (via search or
-                // long-press) but no route has been built yet.  Gives the
-                // driver an explicit confirmation step before routing begins.
+                // long-press) but no active navigation session exists yet.
+                // Gives the driver an explicit confirmation step before routing begins.
                 if (_selectedDestination != null &&
-                    _routePoints.isEmpty &&
+                    !_hasActiveDestination &&
                     !_isLoading)
                   _buildStartRouteButton(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
                 // 800 m of a restriction it violates, providing a prominent
                 // in-route warning with type icon and limit details.
-                if (_restrictionAhead != null)
+                // Only rendered during an active navigation session.
+                if (_hasActiveDestination && _restrictionAhead != null)
                   Positioned(
                     top: _navSteps.isNotEmpty ? 90 : 68,
                     left: 0,
@@ -3920,7 +3990,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Smart restriction rerouting progress banner ───────────
                 // Shown as an overlay at the top of the map while an
                 // automatic avoid-restriction reroute is in progress.
-                if (_isRestrictionRerouting) _buildRestrictionRerouteBanner(),
+                if (_hasActiveDestination && _isRestrictionRerouting)
+                  _buildRestrictionRerouteBanner(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
                 // Icon and tooltip change based on follow state:
@@ -3979,14 +4050,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Trip Stats panel ──────────────────────────────────────
                 // Overlays live trip metrics (miles, elapsed time, stopped
                 // time, average speed) at the bottom of the map.  Only shown
-                // once navigation has started (_tripStartTime != null) so the
-                // panel never appears on a blank or pre-route map view.
-                if (_tripStartTime != null) _buildTripStatsPanel(),
+                // once navigation has started with an active destination so the
+                // panel never appears in plain GPS-tracking mode.
+                if (_hasActiveDestination && _tripStartTime != null)
+                  _buildTripStatsPanel(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
-                // Always visible during active navigation.  Positioned at the
-                // bottom-right corner of the map so it never obscures the
-                // navigation banner or the rerouting indicator.
-                if (_navigationMode)
+                // Visible during active navigation with a destination.
+                // Positioned at the bottom-right corner of the map so it never
+                // obscures the navigation banner or the rerouting indicator.
+                if (_navigationMode && _hasActiveDestination)
                   Positioned(
                     bottom: 24,
                     right: 16,
@@ -4035,7 +4107,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
 
           // ── Route info + Phase 5 intelligence ────────────────────────────
-          if (_routeData != null)
+          if ((_hasActiveDestination || _isArrived) && _routeData != null)
             Expanded(
               flex: 1,
               child: _buildRouteInfo(_routeData!),

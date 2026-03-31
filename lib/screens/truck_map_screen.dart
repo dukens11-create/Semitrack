@@ -129,6 +129,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _isArrived = false;
   bool _navigationActive = false;
 
+  // _navigationStarted is set true only when the user explicitly presses the
+  // "Start Navigation" button after previewing the route.  It gates trip stats,
+  // GPS tracking logic, and all navigation UI so the driver must opt in before
+  // the session begins (route preview vs active trip).
+  bool _navigationStarted = false;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -1198,6 +1204,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() {
       _navigationActive = false;
       _navigationMode = false;
+      _navigationStarted = false;
       _isArrived = false;
       _followTruck = false;
       _routePoints = const [];
@@ -1430,6 +1437,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // moment navigation begins.
     _startTripStats();
     _runSmoothRouteAnimation(_animGeneration);
+  }
+
+  /// Called when the user taps the "Start Navigation" button after previewing
+  /// the route.  Sets [_navigationStarted] true and launches the GPS tracking
+  /// session and route animation.
+  ///
+  /// Does nothing if no route has been loaded yet.
+  void _startNavigation() {
+    if (_routePoints.isEmpty) return;
+    setState(() {
+      _navigationStarted = true;
+    });
+    _startRouteAnimation();
   }
 
   /// Drives smooth truck movement through every segment of [_routePoints].
@@ -2506,7 +2526,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
 
       _fitCameraToRoute(newPoints);
-      _startRouteAnimation();
+      // Only start the route animation (and GPS tracking) when the user has
+      // already opted in by pressing "Start Navigation".  This covers rerouting
+      // during an active trip.  For a fresh route build the driver first sees a
+      // preview and must press the "Start Navigation" button to begin the trip.
+      if (_navigationStarted) {
+        _startRouteAnimation();
+      }
 
       // After the route is loaded, update the route violation warnings panel
       // so the driver sees any low-bridge or weight-limit conflicts in the info
@@ -2990,6 +3016,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 await _startRouteToSelectedDestination();
                 if (mounted) setState(() => _isBuildingRoute = false);
               },
+      ),
+    );
+  }
+
+  /// Builds the "Start Navigation" button shown when a route has been built
+  /// during preview but the user has not yet started the navigation session.
+  ///
+  /// Tapping calls [_startNavigation] to begin GPS tracking and trip stats.
+  /// Hidden once [_navigationStarted] is true so it never overlaps the live
+  /// navigation UI.
+  Widget _buildStartNavigationButton() {
+    return Positioned(
+      bottom: 120,
+      left: 16,
+      right: 16,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 6,
+        ),
+        icon: const Icon(Icons.navigation),
+        label: const Text(
+          'Start Navigation',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        onPressed: _startNavigation,
       ),
     );
   }
@@ -3969,12 +4026,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                 // ── Start Route button ─────────────────────────────────────
                 // Shown when a destination has been selected (via search or
-                // long-press) but no active navigation session exists yet.
+                // long-press) but no route has been built yet.
                 // Gives the driver an explicit confirmation step before routing begins.
                 if (_selectedDestination != null &&
                     !_hasActiveDestination &&
-                    !_isLoading)
+                    !_isLoading &&
+                    _routePoints.isEmpty)
                   _buildStartRouteButton(),
+                // ── Start Navigation button ────────────────────────────────
+                // Shown after the route is built in preview mode but before the
+                // driver has started the navigation session.  Pressing it calls
+                // _startNavigation() to begin GPS tracking and trip stats,
+                // matching real GPS app behaviour (preview → explicit start).
+                if (_routePoints.isNotEmpty &&
+                    !_navigationStarted &&
+                    !_isLoading)
+                  _buildStartNavigationButton(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
                 // 800 m of a restriction it violates, providing a prominent

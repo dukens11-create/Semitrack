@@ -2656,6 +2656,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             distanceMiles: distMi,
             durationSeconds: durSec,
             restrictionCount: restrictions.length,
+            fuelStopCount: _countFuelStopsForRoute(pts),
+            weighStationCount: _countWeighStationsForRoute(pts),
             routeData: {
               "distanceMiles": distMi.round(),
               "etaMinutes": (durSec / 60).round(),
@@ -2857,26 +2859,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Reset all prior navigation/trip state before starting a new session.
     _clearActiveRoute();
     await fetchRoute();
-  }
-
-  /// Applies [RouteOption] at [index] as the active previewed route.
-  ///
-  /// Updates [_routePoints], [_navSteps], [_routeData], and related state so
-  /// the map and preview panel immediately reflect the chosen alternative.
-  /// Closes the bottom sheet if open, then fits the camera to the new route.
-  void _applyRouteOption(int index) {
-    if (index < 0 || index >= _routeOptions.length) return;
-    final opt = _routeOptions[index];
-    setState(() {
-      _selectedRouteOptionIndex = index;
-      _routePoints = opt.points;
-      _navSteps = opt.steps;
-      _currentStepIndex = 0;
-      _routeData = opt.routeData;
-    });
-    // Fit camera to the newly selected route so the driver sees the full path.
-    _fitCameraToRoute(opt.points);
-    _updateRouteViolationWarnings();
   }
 
   /// Opens a modal bottom sheet listing all available [_routeOptions] so the

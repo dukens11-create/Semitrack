@@ -626,33 +626,74 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .length;
   }
 
+  /// Normalizes a raw truck-stop name or brand string into a canonical
+  /// lower-case brand key used by [_getTruckStopLogo].
+  ///
+  /// Handles messy real-world inputs such as "Love's Travel Stop", "Loves",
+  /// "Flying J Travel Center", "TA Petro", as well as Canadian brands
+  /// (Petro-Canada, Husky, Esso, Ultramar, Irving) and regional chains
+  /// (Kwik Trip, Maverik, Casey's, Sapp Bros).
+  ///
+  /// Returns one of the canonical keys: pilot, flyingj, loves, ta, petro,
+  /// ambest, roadranger, kwiktrip, maverik, caseys, sappbros, petro-canada,
+  /// husky, esso, ultramar, irving, independent, or 'default'.
+  String _normalizeTruckStopBrand(String rawName) {
+    final n = rawName.toLowerCase().trim();
+
+    // National chains
+    if (n.contains('pilot')) return 'pilot';
+    if (n.contains('flying j') || n.contains('flyingj')) return 'flyingj';
+    if (n.contains("love's") || n.contains('loves')) return 'loves';
+    if (n.contains('road ranger') || n.contains('roadranger')) return 'roadranger';
+    if (n.contains('am best') || n.contains('ambest')) return 'ambest';
+    if (n.contains('sapp bros') || n.contains('sappbros')) return 'sappbros';
+
+    // Canadian brands (check before generic 'petro' to avoid false match)
+    if (n.contains('petro-canada') ||
+        n.contains('petrocanada') ||
+        n.contains('petro canada')) return 'petro-canada';
+    if (n.contains('husky')) return 'husky';
+    if (n.contains('esso')) return 'esso';
+    if (n.contains('ultramar')) return 'ultramar';
+    if (n.contains('irving')) return 'irving';
+
+    // TA / Petro (must follow petro-canada check above)
+    if (n == 'ta' ||
+        n.startsWith('ta ') ||
+        n.contains('travelcenters') ||
+        n.contains('travel center') ||
+        n.contains('ta petro')) return 'ta';
+    if (n.contains('petro')) return 'petro';
+
+    // Regional chains
+    if (n.contains('kwik trip') || n.contains('kwiktrip')) return 'kwiktrip';
+    if (n.contains('maverik')) return 'maverik';
+    if (n.contains("casey's") || n.contains('caseys')) return 'caseys';
+
+    // Independent
+    if (n.contains('independent') || n == 'indie') return 'independent';
+
+    return 'default';
+  }
+
   /// Returns the asset path for the logo image that corresponds to [brand].
   ///
-  /// Brand matching is case-insensitive.  Unknown or independent stops fall
-  /// back to the generic `default_stop.png` placeholder.
-  String _logoPathForBrand(String brand) {
-    switch (brand.toLowerCase()) {
-      case 'pilot':
-        return 'assets/logos/pilot.png';
-      case 'flying j':
-      case 'flyingj':
-        return 'assets/logos/flyingj.png';
-      case 'love\'s':
-      case 'loves':
-        return 'assets/logos/loves.png';
-      case 'ta':
-        return 'assets/logos/ta.png';
-      case 'petro':
-        return 'assets/logos/petro.png';
-      case 'road ranger':
-      case 'roadranger':
-        return 'assets/logos/roadranger.png';
-      case 'am best':
-      case 'ambest':
-        return 'assets/logos/ambest.png';
-      default:
-        return 'assets/logos/default_stop.png';
-    }
+  /// [brand] must be a canonical key produced by [_normalizeTruckStopBrand].
+  /// Unknown or unrecognised keys fall back to the generic `default.png`
+  /// placeholder so every stop always has a visible icon.
+  ///
+  /// NOTE: The logo files in `assets/logos/truckstops/` are placeholder
+  /// app-safe images.  Replace them with licensed artwork before distributing
+  /// an app that displays official brand trademarks.
+  String _getTruckStopLogo(String brand) {
+    const knownBrands = {
+      'pilot', 'flyingj', 'loves', 'ta', 'petro', 'ambest', 'roadranger',
+      'kwiktrip', 'maverik', 'caseys', 'sappbros',
+      'petro-canada', 'husky', 'esso', 'ultramar', 'irving',
+      'independent',
+    };
+    final key = knownBrands.contains(brand) ? brand : 'default';
+    return 'assets/logos/truckstops/$key.png';
   }
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -660,15 +701,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Each marker displays the brand logo loaded from `assets/logos/` so drivers
-  /// can instantly recognise Pilot, Flying J, Love's, TA, Petro, Road Ranger,
-  /// AM Best, and independent stops at a glance.  Tapping a marker calls
-  /// [_showTruckStopSheet] with the stop's full details.
+  /// Each marker displays the brand logo loaded from `assets/logos/truckstops/`
+  /// so drivers can instantly recognise Pilot, Flying J, Love's, TA, Petro,
+  /// Road Ranger, AM Best, regional chains (Kwik Trip, Maverik, Casey's, Sapp
+  /// Bros), Canadian brands, and independent stops at a glance.  Brand names
+  /// are first normalised via [_normalizeTruckStopBrand] so messy or partial
+  /// names (e.g. "Love's Travel Stop", "TA Petro") resolve correctly.
+  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     return _truckStops.map((stop) {
-      final String logoPath = _logoPathForBrand(stop.brand);
+      final normalizedBrand = _normalizeTruckStopBrand(stop.brand);
+      final String logoPath = _getTruckStopLogo(normalizedBrand);
 
       return Marker(
         point: stop.position,

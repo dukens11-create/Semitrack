@@ -67,6 +67,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_updateRouteViolationWarnings] and [_isTruckSafe].
   static const double _restrictionProximityThresholdMeters = 100.0;
 
+  /// Multiplier applied to [_restrictionProximityThresholdMeters] when
+  /// building red-overlay polyline segments for the map preview.  The larger
+  /// radius ensures the red overlay visually leads into the restricted zone.
+  static const double _restrictionSegmentThresholdMultiplier = 3.0;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -2633,7 +2638,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (index == 0) return 'Fastest';
     if (restrictionCount == 0) return 'Truck Safer';
     if (index == 1) return 'Recommended';
-    return 'Alternative ${index + 1}';
+    return 'Alternative $index';
   }
 
   /// Counts the number of [_restrictions] violations for [routePoints].
@@ -2654,7 +2659,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       bool isRestricted = false;
       for (final r in _restrictions) {
         if (!_violatesRestriction(r)) continue;
-        if (_distanceBetween(pt, r.position) <= _restrictionProximityThresholdMeters * 3) {
+        if (_distanceBetween(pt, r.position) <= _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier) {
           isRestricted = true;
           break;
         }
@@ -2663,7 +2668,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (!isRestricted) {
         for (final zone in _restrictedZones) {
           final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
-          if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters * 3) {
+          if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier) {
             isRestricted = true;
             break;
           }

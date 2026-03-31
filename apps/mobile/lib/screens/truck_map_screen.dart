@@ -185,16 +185,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
-  // ── Route alternatives state ──────────────────────────────────────────────
+  // ── Route alternatives (pre-navigation selection) ─────────────────────────
   //
-  // Populated by _fetchAllRouteOptions() after a destination is selected.
-  // Each entry represents one Mapbox alternative with its decoded geometry,
-  // nav steps, distance, duration, and restriction count.
-  // _selectedRouteOptionIndex tracks which option the driver has chosen.
-  // _routePoints is always kept in sync with the selected option's points.
-  List<_RouteOption> _routeOptions = const [];
+  // _routeOptions holds the list of RouteOption cards built from the Mapbox
+  // alternatives response.  _selectedRouteOptionIndex tracks which card is
+  // highlighted; tapping a card calls _applyRouteOption() to update the
+  // preview.  Both are reset by _clearActiveRoute().
+  List<RouteOption> _routeOptions = const [];
   int _selectedRouteOptionIndex = 0;
-  bool _isLoadingRouteOptions = false;
 
   // ── Destination picker state ──────────────────────────────────────────────
   //
@@ -1242,7 +1240,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _restrictionRerouteAttempts = 0;
       _routeOptions = const [];
       _selectedRouteOptionIndex = 0;
-      _isLoadingRouteOptions = false;
       _tripStartTime = null;
       _lastMoveTime = null;
       _milesDriven = 0.0;
@@ -2433,7 +2430,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
-  /// fails the [_isTruckSafe] check.
+  /// fails the [_isTruckSafe] check.  In pre-navigation mode all returned
+  /// routes are surfaced as selectable [RouteOption] cards; in active
+  /// navigation / rerouting mode the single best route is used directly.
   Future<void> fetchRoute({bool alternative = false, LatLng? fromPosition}) async {
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
@@ -2474,6 +2473,84 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final data = jsonDecode(res.body);
       final routes = data["routes"] as List;
+
+      // ── PRE-NAVIGATION: build all route alternatives ───────────────────────
+      // When navigation has not yet started (route preview / selection mode),
+      // parse every returned route into a RouteOption card so the driver can
+      // pick the best option before committing.  The auto-selected default is
+      // the first route with zero truck-restriction violations; if all have
+      // violations, route 0 is selected.
+      if (!_navigationStarted && routes.isNotEmpty) {
+        const routeLabels = ['Recommended', 'Fastest', 'Alternative'];
+        final newOptions = <RouteOption>[];
+        for (int ri = 0; ri < routes.length; ri++) {
+          final r = routes[ri] as Map<String, dynamic>;
+          final decoded = _decodePolyline6(r["geometry"] as String);
+          final pts = _simplifyRoute(decoded);
+          final steps = _extractAllSteps(r);
+          final distMi = (r["distance"] as num).toDouble() / 1609.34;
+          final durSec = (r["duration"] as num).toInt();
+          final restrictions = _evaluateRouteRestrictions(pts);
+          final label = ri < routeLabels.length
+              ? routeLabels[ri]
+              : 'Alternative ${ri + 1}';
+          newOptions.add(RouteOption(
+            id: 'route_$ri',
+            label: label,
+            points: pts,
+            steps: steps,
+            distanceMiles: distMi,
+            durationSeconds: durSec,
+            restrictionCount: restrictions.length,
+            routeData: {
+              "distanceMiles": distMi.round(),
+              "etaMinutes": (durSec / 60).round(),
+              "turnByTurn":
+                  steps.map((s) => {'instruction': s.instruction}).toList(),
+            },
+          ));
+        }
+
+        // Prefer the first restriction-free option as the default selection.
+        int defaultIdx = 0;
+        for (int i = 0; i < newOptions.length; i++) {
+          if (newOptions[i].restrictionCount == 0) {
+            defaultIdx = i;
+            break;
+          }
+        }
+
+        final selectedOpt = newOptions[defaultIdx];
+        final newPoints = selectedOpt.points.toSet().toList();
+
+        setState(() {
+          _routeOptions = newOptions;
+          _selectedRouteOptionIndex = defaultIdx;
+          _navSteps = selectedOpt.steps;
+          _currentStepIndex = 0;
+          _routeData = selectedOpt.routeData;
+          // Clean replacement – never use addAll() here.
+          _routePoints = newPoints;
+          _isLoading = false;
+        });
+
+        print("Route points count: ${_routePoints.length}");
+        if (selectedOpt.steps.isNotEmpty) {
+          _speak(selectedOpt.steps.first.instruction);
+        }
+
+        // Filter POIs and update violation warnings for the selected route.
+        final nearbyStops =
+            _filterStopsNearRoute(_mockTruckStops, newPoints);
+        setState(() => _truckStops = nearbyStops);
+        _fitCameraToRoute(newPoints);
+        _updateRouteViolationWarnings();
+        // Smart rerouting is skipped in pre-navigation mode — the driver can
+        // choose a cleaner route from the alternatives panel instead.
+        return;
+      }
+
+      // ── ACTIVE NAVIGATION / REROUTING ─────────────────────────────────────
       // Use the alternative route (index 1) when requested and available,
       // otherwise fall back to the primary route (index 0).
       final routeIndex =
@@ -2587,7 +2664,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_selectedDestination == null) return;
     // Reset all prior navigation/trip state before starting a new session.
     _clearActiveRoute();
-    await _fetchAllRouteOptions();
+    await fetchRoute();
   }
 
   /// Updates [_routeViolations] with human-readable warning strings by checking
@@ -2627,39 +2704,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
-  // ── Route alternatives helpers ─────────────────────────────────────────────
-
-  /// Returns a label for a route option based on its index and restriction count.
-  ///
-  /// Index 0 is always "Fastest" (primary Mapbox route), index 1 with fewer
-  /// restrictions is "Truck Safer", and the remainder use "Recommended".
-  /// When restriction counts differ, the label reflects safety preference.
-  String _routeOptionLabel(int index, int restrictionCount) {
-    if (index == 0) return 'Fastest';
-    if (restrictionCount == 0) return 'Truck Safer';
-    if (index == 1) return 'Recommended';
-    return 'Alternative $index';
-  }
-
-  /// Counts the number of [_restrictions] violations for [routePoints].
-  int _countRouteRestrictions(List<LatLng> routePoints) {
-    return _evaluateRouteRestrictions(routePoints).length;
-  }
+  // ── Route color-coding helpers ─────────────────────────────────────────────
 
   /// Builds a list of red-overlay polyline segments for the selected route's
   /// restricted points.
   ///
   /// Returns a list of short [LatLng] pairs, each covering one route point
   /// (and the next if available) that falls within restriction proximity.
+  /// Used by the [PolylineLayer] to draw red overlays over dangerous segments.
   List<List<LatLng>> _buildRestrictionSegments(List<LatLng> routePoints) {
     final segments = <List<LatLng>>[];
     if (routePoints.isEmpty) return segments;
+    final threshold =
+        _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier;
     for (int i = 0; i < routePoints.length; i++) {
       final pt = routePoints[i];
       bool isRestricted = false;
       for (final r in _restrictions) {
         if (!_violatesRestriction(r)) continue;
-        if (_distanceBetween(pt, r.position) <= _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier) {
+        if (_distanceBetween(pt, r.position) <= threshold) {
           isRestricted = true;
           break;
         }
@@ -2667,8 +2730,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Also check _restrictedZones
       if (!isRestricted) {
         for (final zone in _restrictedZones) {
-          final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
-          if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier) {
+          final zonePt =
+              LatLng(zone['lat']! as double, zone['lng']! as double);
+          if (_distanceBetween(pt, zonePt) <= threshold) {
             isRestricted = true;
             break;
           }
@@ -2680,141 +2744,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
     return segments;
-  }
-
-  /// Fetches all available route alternatives from Mapbox and populates
-  /// [_routeOptions].  Sets [_routePoints] to the selected option's geometry.
-  ///
-  /// This replaces the single-route logic in [_startRouteToSelectedDestination]
-  /// for the destination-preview flow.  Rerouting during active navigation
-  /// still uses [fetchRoute] directly.
-  Future<void> _fetchAllRouteOptions() async {
-    if (_isLoadingRouteOptions) return;
-    setState(() {
-      _isLoadingRouteOptions = true;
-      _isLoading = true;
-      _routeOptions = const [];
-      _selectedRouteOptionIndex = 0;
-      _routePoints = const [];
-      _error = null;
-    });
-
-    try {
-      final from = _truckPosition ?? _origin;
-      final dest = _selectedDestination ?? _destination;
-      final url =
-          'https://api.mapbox.com/directions/v5/mapbox/driving-traffic/'
-          '${from.longitude},${from.latitude};${dest.longitude},${dest.latitude}'
-          '?overview=full'
-          '&geometries=polyline6'
-          '&steps=true'
-          '&alternatives=true'
-          '&exclude=ferry'
-          '&access_token=$_mapboxToken';
-
-      final res = await http.get(Uri.parse(url));
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final routes = (data['routes'] as List?) ?? const <dynamic>[];
-
-      final options = <_RouteOption>[];
-      for (int i = 0; i < routes.length; i++) {
-        final route = routes[i] as Map<String, dynamic>;
-        final decoded = _decodePolyline6(route['geometry'] as String);
-        final points = _simplifyRoute(decoded);
-        final steps = _extractAllSteps(route);
-        final distanceMiles = (route['distance'] as num).toDouble() / 1609.34;
-        final durationSeconds = (route['duration'] as num).toInt();
-        final restrictions = _countRouteRestrictions(points);
-        final label = _routeOptionLabel(i, restrictions);
-        options.add(_RouteOption(
-          id: 'route_$i',
-          label: label,
-          points: points,
-          steps: steps,
-          distanceMiles: distanceMiles,
-          durationSeconds: durationSeconds,
-          restrictionCount: restrictions,
-        ));
-      }
-
-      if (options.isEmpty) {
-        setState(() {
-          _error = 'No routes found';
-          _isLoading = false;
-          _isLoadingRouteOptions = false;
-        });
-        return;
-      }
-
-      // Choose the lowest-restriction option as the default selection.
-      int bestIndex = 0;
-      int fewestRestrictions = options[0].restrictionCount;
-      for (int i = 1; i < options.length; i++) {
-        if (options[i].restrictionCount < fewestRestrictions) {
-          fewestRestrictions = options[i].restrictionCount;
-          bestIndex = i;
-        }
-      }
-
-      final selected = options[bestIndex];
-      final turnByTurn = selected.steps
-          .map((s) => <String, dynamic>{'instruction': s.instruction})
-          .toList();
-
-      setState(() {
-        _routeOptions = options;
-        _selectedRouteOptionIndex = bestIndex;
-        _routePoints = selected.points.toSet().toList();
-        _navSteps = selected.steps;
-        _currentStepIndex = 0;
-        _routeData = {
-          'distanceMiles': selected.distanceMiles.round(),
-          'etaMinutes': (selected.durationSeconds / 60).round(),
-          'turnByTurn': turnByTurn,
-        };
-        _isLoading = false;
-        _isLoadingRouteOptions = false;
-      });
-
-      // Update nearby truck stops and restriction warnings for the selected route.
-      final nearbyStops = _filterStopsNearRoute(_mockTruckStops, selected.points);
-      setState(() => _truckStops = nearbyStops);
-      _updateRouteViolationWarnings();
-      _fitCameraToRoute(selected.points);
-
-      if (selected.steps.isNotEmpty) {
-        _speak(selected.steps.first.instruction);
-      }
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-        _isLoadingRouteOptions = false;
-      });
-    }
-  }
-
-  /// Selects the route option at [index] and updates [_routePoints] and
-  /// related state so the map preview reflects the chosen alternative.
-  void _onSelectRouteOption(int index) {
-    if (index < 0 || index >= _routeOptions.length) return;
-    final opt = _routeOptions[index];
-    final turnByTurn = opt.steps
-        .map((s) => <String, dynamic>{'instruction': s.instruction})
-        .toList();
-    setState(() {
-      _selectedRouteOptionIndex = index;
-      _routePoints = opt.points.toSet().toList();
-      _navSteps = opt.steps;
-      _currentStepIndex = 0;
-      _routeData = {
-        'distanceMiles': opt.distanceMiles.round(),
-        'etaMinutes': (opt.durationSeconds / 60).round(),
-        'turnByTurn': turnByTurn,
-      };
-    });
-    _updateRouteViolationWarnings();
-    _fitCameraToRoute(opt.points);
   }
 
   /// Shows a modal bottom sheet with a Mapbox geocoding search field.
@@ -3374,6 +3303,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Route alternatives helpers ─────────────────────────────────────────────
+
+  /// Switches the active route preview to [index] from [_routeOptions].
+  ///
+  /// Updates [_routePoints], [_navSteps], and [_routeData] to match the
+  /// chosen option and fits the camera to the new polyline.  Does **not**
+  /// start navigation — that remains gated behind the Start Navigation button.
+  void _applyRouteOption(int index) {
+    if (index < 0 || index >= _routeOptions.length) return;
+    final option = _routeOptions[index];
+    setState(() {
+      _selectedRouteOptionIndex = index;
+      _routePoints = option.points.toSet().toList();
+      _navSteps = option.steps;
+      _currentStepIndex = 0;
+      _routeData = option.routeData;
+    });
+    _updateRouteViolationWarnings();
+    _fitCameraToRoute(option.points);
+  }
+
   /// Builds the route stats summary section of the preview panel.
   Widget _buildPreviewIntelligencePanel() {
     final distanceMiles =
@@ -3503,7 +3453,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 final etaM = etaMins % 60;
                 final etaLabel = etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
                 return GestureDetector(
-                  onTap: () => _onSelectRouteOption(i),
+                  onTap: () => _applyRouteOption(i),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     width: 110,
@@ -5343,16 +5293,17 @@ const List<TruckRestriction> _sampleRestrictions = [
 ];
 
 
-// ── Destination search model ──────────────────────────────────────────────────
+// ── Route alternatives model ──────────────────────────────────────────────────
 
-/// A single route option for the route alternatives preview.
+/// A single route alternative surfaced to the driver before navigation starts.
 ///
-/// Populated by [_TruckMapScreenState._fetchAllRouteOptions] from the Mapbox
-/// Directions API response.  The [label] describes the route character
-/// (e.g. "Fastest", "Truck Safer", "Recommended") and is derived from the
-/// route index and [restrictionCount].
-class _RouteOption {
-  const _RouteOption({
+/// Built from every route returned by the Mapbox Directions
+/// `&alternatives=true` call and displayed as a selectable card in
+/// [_buildRouteAlternativesCard].  The driver taps a card to preview that route
+/// on the map; only the selected option is used when "Start Navigation" is
+/// pressed.
+class RouteOption {
+  RouteOption({
     required this.id,
     required this.label,
     required this.points,
@@ -5360,29 +5311,37 @@ class _RouteOption {
     required this.distanceMiles,
     required this.durationSeconds,
     required this.restrictionCount,
+    required this.routeData,
   });
 
-  /// Stable identifier for this option, e.g. 'route_0'.
+  /// Stable id, e.g. `"route_0"`, `"route_1"`.
   final String id;
 
-  /// Human-readable label, e.g. 'Fastest', 'Truck Safer', 'Recommended'.
+  /// Human-readable label, e.g. `"Recommended"`, `"Fastest"`, `"Alternative"`.
   final String label;
 
-  /// Decoded, simplified route geometry as [LatLng] points.
+  /// Decoded, simplified polyline points for this route.
   final List<LatLng> points;
 
-  /// Extracted turn-by-turn navigation steps.
+  /// Turn-by-turn navigation steps parsed from the Mapbox response.
   final List<_NavStep> steps;
 
-  /// Route distance in miles.
+  /// Total route distance in miles.
   final double distanceMiles;
 
-  /// Route duration in seconds.
+  /// Total route duration in seconds.
   final int durationSeconds;
 
-  /// Number of truck restriction violations along this route.
+  /// Number of truck restrictions (violating the current truck profile) found
+  /// along this route.  Zero means no conflicts; any positive value indicates
+  /// at least one low-bridge / weight / length / no-truck or hazmat conflict.
   final int restrictionCount;
+
+  /// Route data map compatible with [_routeData] / [_buildRouteInfo].
+  final Map<String, dynamic> routeData;
 }
+
+// ── Destination search model ──────────────────────────────────────────────────
 
 /// A single place suggestion returned by the Mapbox Geocoding v5 API.
 ///

@@ -626,37 +626,60 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .length;
   }
 
+  /// Returns the asset path for the logo image that corresponds to [brand].
+  ///
+  /// Brand matching is case-insensitive.  Unknown or independent stops fall
+  /// back to the generic `default_stop.png` placeholder.
+  String _logoPathForBrand(String brand) {
+    switch (brand.toLowerCase()) {
+      case 'pilot':
+        return 'assets/logos/pilot.png';
+      case 'flying j':
+      case 'flyingj':
+        return 'assets/logos/flyingj.png';
+      case 'love\'s':
+      case 'loves':
+        return 'assets/logos/loves.png';
+      case 'ta':
+        return 'assets/logos/ta.png';
+      case 'petro':
+        return 'assets/logos/petro.png';
+      case 'road ranger':
+      case 'roadranger':
+        return 'assets/logos/roadranger.png';
+      case 'am best':
+      case 'ambest':
+        return 'assets/logos/ambest.png';
+      default:
+        return 'assets/logos/default_stop.png';
+    }
+  }
+
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
   ///
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Each marker uses a petrol-pump icon (or a rest-area chair icon) on a
-  /// coloured rounded background so it stands out from the route polyline.
-  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
+  /// Each marker displays the brand logo loaded from `assets/logos/` so drivers
+  /// can instantly recognise Pilot, Flying J, Love's, TA, Petro, Road Ranger,
+  /// AM Best, and independent stops at a glance.  Tapping a marker calls
+  /// [_showTruckStopSheet] with the stop's full details.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     return _truckStops.map((stop) {
-      // Choose icon based on brand for quick visual differentiation.
-      final bool isRestArea = stop.brand == 'Rest Area';
-      final IconData iconData =
-          isRestArea ? Icons.airline_seat_recline_normal : Icons.local_gas_station;
-      // Azure-blue for fuel stops; teal for rest areas — both distinct from
-      // the red truck / destination markers.
-      final Color markerColor =
-          isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+      final String logoPath = _logoPathForBrand(stop.brand);
 
       return Marker(
         point: stop.position,
-        width: 36,
-        height: 36,
+        width: 44,
+        height: 44,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
           child: Container(
             decoration: BoxDecoration(
-              color: markerColor,
+              color: Colors.white,
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
@@ -666,10 +689,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
               ],
             ),
-            child: Icon(
-              iconData,
-              color: Colors.white,
-              size: 20,
+            padding: const EdgeInsets.all(4),
+            child: ClipOval(
+              child: Image.asset(
+                logoPath,
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.local_gas_station,
+                  color: Colors.blue,
+                  size: 24,
+                ),
+              ),
             ),
           ),
         ),

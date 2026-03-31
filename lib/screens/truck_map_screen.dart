@@ -2766,18 +2766,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Inline search bar logic ───────────────────────────────────────────────
 
-  /// Queries the Mapbox Geocoding v5 API for [query] and updates
+  /// Called from [TextField.onChanged] to debounce geocoding requests.
+  ///
+  /// Cancels any pending debounce timer and schedules a new one for 350 ms.
+  /// This prevents excessive API calls on every keystroke while still feeling
+  /// responsive to the user.  When the timer fires, [_searchPlaces] is called
+  /// with the current query value.
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    final q = value.trim();
+    if (q.isEmpty) {
+      setState(() {
+        _searchResults = const [];
+        _isSearching = false;
+      });
+      return;
+    }
+    setState(() => _isSearching = true);
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _searchPlaces(q),
+    );
+  }
+
+  /// Executes a geocoding request for [query] and populates
   /// [_searchResults] with up to 5 [PlaceSuggestion] objects.
   ///
   /// Sets [_isSearching] while the request is in flight so the search bar can
   /// show a loading indicator.  Clears results and stops the spinner on any
   /// error, letting the UI degrade gracefully without a hard crash.
-  ///
-  /// Calls from [TextField.onChanged] are debounced (400 ms) so that a new
-  /// HTTP request is only sent once the user pauses typing, avoiding excessive
-  /// API calls on every keystroke.
   Future<void> _searchPlaces(String query) async {
-    _searchDebounce?.cancel();
     final q = query.trim();
     if (q.isEmpty) {
       setState(() {
@@ -2786,10 +2804,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       });
       return;
     }
-    _searchDebounce = Timer(
-      const Duration(milliseconds: 400),
-      () => _executeSearch(q),
-    );
+    await _executeSearch(q);
   }
 
   /// Immediately fires a geocoding request for [q] without any debounce delay.
@@ -2923,7 +2938,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   borderSide: BorderSide.none,
                 ),
               ),
-              onChanged: _searchPlaces,
+              onChanged: _onSearchChanged,
               onSubmitted: (q) {
                 // Cancel any pending debounce and execute the search immediately.
                 _searchDebounce?.cancel();
@@ -2937,46 +2952,75 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
   /// Builds the search results overlay below the search bar.
   ///
-  /// Each result is a [ListTile] showing the place name and full address.
+  /// Shows a loading spinner while [_isSearching] is true, a "No results
+  /// found" message when the search completed with an empty list, or a
+  /// scrollable [ListView] of [ListTile]s for each [PlaceSuggestion].
+  /// Returns [SizedBox.shrink] when there is nothing to display.
   /// Tapping a tile calls [_selectDestinationFromSearch] to set the
   /// destination and dismiss the list.
   Widget _buildSearchResults() {
+    final hasText = _searchController.text.trim().isNotEmpty;
+    if (!hasText && !_isSearching && _searchResults.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    Widget content;
+    if (_isSearching) {
+      content = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 20),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    } else if (_searchResults.isEmpty) {
+      content = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        child: Text(
+          'No results found',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    } else {
+      content = ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 260),
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: _searchResults.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) {
+            final s = _searchResults[i];
+            return ListTile(
+              leading: const Icon(Icons.location_on_outlined),
+              title: Text(
+                s.name.isNotEmpty ? s.name : s.placeName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: s.placeName.isNotEmpty && s.name != s.placeName
+                  ? Text(
+                      s.placeName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : null,
+              onTap: () => _selectDestinationFromSearch(s),
+            );
+          },
+        ),
+      );
+    }
+
     return Positioned(
       top: 68,
       left: 12,
       right: 12,
       child: Material(
-        elevation: 6,
+        elevation: 8,
         borderRadius: BorderRadius.circular(12),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260),
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              itemCount: _searchResults.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, i) {
-                final s = _searchResults[i];
-                return ListTile(
-                  leading: const Icon(Icons.place, color: Colors.deepOrange),
-                  title: Text(
-                    s.name.isNotEmpty ? s.name : s.placeName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: s.placeName.isNotEmpty && s.name != s.placeName
-                      ? Text(
-                          s.placeName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : null,
-                  onTap: () => _selectDestinationFromSearch(s),
-                );
-              },
-            ),
+          child: Container(
+            color: Colors.white,
+            child: content,
           ),
         ),
       ),
@@ -4153,8 +4197,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // modal sheet.
                 if (!_hasActiveDestination && !_isArrived) _buildSearchBar(),
                 // ── Search results overlay ────────────────────────────────
-                if (!_hasActiveDestination && !_isArrived && _searchResults.isNotEmpty)
-                  _buildSearchResults(),
+                // _buildSearchResults returns SizedBox.shrink() when there is
+                // nothing to show, so the condition here is simply the same
+                // guard used for the search bar itself.
+                if (!_hasActiveDestination && !_isArrived) _buildSearchResults(),
                 // ── Destination hint banner ───────────────────────────────
                 // Shown when no destination is selected and no route is loaded,
                 // prompting the driver to pick a destination to start navigation.

@@ -1,4 +1,4 @@
-import 'package:latlong2/latlong2.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Categories of truck restrictions placed on roads.
 enum RestrictionType {

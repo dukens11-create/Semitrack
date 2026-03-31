@@ -188,10 +188,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   String? _selectedDestinationName;
   bool _isBuildingRoute = false;
 
-  // ── Route alternatives state ───────────────────────────────────────────────
+  // ── Route alternatives (pre-navigation selection) ─────────────────────────
   //
-  // _routeOptions holds all fetched route alternatives (up to 3 from Mapbox).
-  // _selectedRouteOptionIndex is the index of the currently previewed option.
+  // _routeOptions holds the list of RouteOption cards built from the Mapbox
+  // alternatives response.  _selectedRouteOptionIndex tracks which card is
+  // highlighted; tapping a card calls _applyRouteOption() to update the
+  // preview.  Both are reset by _clearActiveRoute().
   List<RouteOption> _routeOptions = const [];
   int _selectedRouteOptionIndex = 0;
 
@@ -2469,7 +2471,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
   /// instead of the primary one, allowing the caller to avoid a route that
-  /// fails the [_isTruckSafe] check.
+  /// fails the [_isTruckSafe] check.  In pre-navigation mode all returned
+  /// routes are surfaced as selectable [RouteOption] cards; in active
+  /// navigation / rerouting mode the single best route is used directly.
   Future<void> fetchRoute({bool alternative = false, LatLng? fromPosition}) async {
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
@@ -2510,6 +2514,84 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final data = jsonDecode(res.body);
       final routes = data["routes"] as List;
+
+      // ── PRE-NAVIGATION: build all route alternatives ───────────────────────
+      // When navigation has not yet started (route preview / selection mode),
+      // parse every returned route into a RouteOption card so the driver can
+      // pick the best option before committing.  The auto-selected default is
+      // the first route with zero truck-restriction violations; if all have
+      // violations, route 0 is selected.
+      if (!_navigationStarted && routes.isNotEmpty) {
+        const routeLabels = ['Recommended', 'Fastest', 'Alternative'];
+        final newOptions = <RouteOption>[];
+        for (int ri = 0; ri < routes.length; ri++) {
+          final r = routes[ri] as Map<String, dynamic>;
+          final decoded = _decodePolyline6(r["geometry"] as String);
+          final pts = _simplifyRoute(decoded);
+          final steps = _extractAllSteps(r);
+          final distMi = (r["distance"] as num).toDouble() / 1609.34;
+          final durSec = (r["duration"] as num).toInt();
+          final restrictions = _evaluateRouteRestrictions(pts);
+          final label = ri < routeLabels.length
+              ? routeLabels[ri]
+              : 'Alternative ${ri + 1}';
+          newOptions.add(RouteOption(
+            id: 'route_$ri',
+            label: label,
+            points: pts,
+            steps: steps,
+            distanceMiles: distMi,
+            durationSeconds: durSec,
+            restrictionCount: restrictions.length,
+            routeData: {
+              "distanceMiles": distMi.round(),
+              "etaMinutes": (durSec / 60).round(),
+              "turnByTurn":
+                  steps.map((s) => {'instruction': s.instruction}).toList(),
+            },
+          ));
+        }
+
+        // Prefer the first restriction-free option as the default selection.
+        int defaultIdx = 0;
+        for (int i = 0; i < newOptions.length; i++) {
+          if (newOptions[i].restrictionCount == 0) {
+            defaultIdx = i;
+            break;
+          }
+        }
+
+        final selectedOpt = newOptions[defaultIdx];
+        final newPoints = selectedOpt.points.toSet().toList();
+
+        setState(() {
+          _routeOptions = newOptions;
+          _selectedRouteOptionIndex = defaultIdx;
+          _navSteps = selectedOpt.steps;
+          _currentStepIndex = 0;
+          _routeData = selectedOpt.routeData;
+          // Clean replacement – never use addAll() here.
+          _routePoints = newPoints;
+          _isLoading = false;
+        });
+
+        print("Route points count: ${_routePoints.length}");
+        if (selectedOpt.steps.isNotEmpty) {
+          _speak(selectedOpt.steps.first.instruction);
+        }
+
+        // Filter POIs and update violation warnings for the selected route.
+        final nearbyStops =
+            _filterStopsNearRoute(_mockTruckStops, newPoints);
+        setState(() => _truckStops = nearbyStops);
+        _fitCameraToRoute(newPoints);
+        _updateRouteViolationWarnings();
+        // Smart rerouting is skipped in pre-navigation mode — the driver can
+        // choose a cleaner route from the alternatives panel instead.
+        return;
+      }
+
+      // ── ACTIVE NAVIGATION / REROUTING ─────────────────────────────────────
       // Use the alternative route (index 1) when requested and available,
       // otherwise fall back to the primary route (index 0).
       final routeIndex =
@@ -3498,6 +3580,179 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Route alternatives helpers ─────────────────────────────────────────────
+
+  /// Switches the active route preview to [index] from [_routeOptions].
+  ///
+  /// Updates [_routePoints], [_navSteps], and [_routeData] to match the
+  /// chosen option and fits the camera to the new polyline.  Does **not**
+  /// start navigation — that remains gated behind the Start Navigation button.
+  void _applyRouteOption(int index) {
+    if (index < 0 || index >= _routeOptions.length) return;
+    final option = _routeOptions[index];
+    setState(() {
+      _selectedRouteOptionIndex = index;
+      _routePoints = option.points.toSet().toList();
+      _navSteps = option.steps;
+      _currentStepIndex = 0;
+      _routeData = option.routeData;
+    });
+    _updateRouteViolationWarnings();
+    _fitCameraToRoute(option.points);
+  }
+
+  /// Builds the horizontally-scrollable route alternatives selection panel.
+  ///
+  /// Shows 2–3 selectable [RouteOption] cards above the Start Navigation
+  /// button.  The currently selected card is highlighted in blue.  Tapping a
+  /// card calls [_applyRouteOption] to update the map preview without starting
+  /// navigation.
+  ///
+  /// Each card displays:
+  ///   - Route label (Recommended / Fastest / Alternative)
+  ///   - Distance in miles and ETA
+  ///   - Truck restriction count (green if zero, red if any)
+  ///
+  /// [bottom] controls the Positioned widget's distance from the screen bottom
+  /// so the panel can be shifted upward when the Intelligence Panel is visible.
+  Widget _buildRouteOptionsPanel({double bottom = 184}) {
+    return Positioned(
+      bottom: bottom,
+      left: 0,
+      right: 0,
+      child: SizedBox(
+        height: 110,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 16, bottom: 4),
+              child: Text(
+                'Choose your route',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  shadows: [
+                    Shadow(blurRadius: 3, color: Color(0xAA000000)),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 88,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                itemCount: _routeOptions.length,
+                itemBuilder: (context, index) {
+                  final option = _routeOptions[index];
+                  final isSelected = index == _selectedRouteOptionIndex;
+                  final distMi =
+                      option.distanceMiles.toStringAsFixed(0);
+                  final etaMin = option.durationSeconds ~/ 60;
+                  final etaH = etaMin ~/ 60;
+                  final etaM = etaMin % 60;
+                  final etaLabel =
+                      etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
+                  final hasRestrictions = option.restrictionCount > 0;
+
+                  return GestureDetector(
+                    onTap: () => _applyRouteOption(index),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 148,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color:
+                            isSelected ? Colors.blue.shade700 : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected
+                              ? Colors.blue.shade900
+                              : Colors.grey.shade300,
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.18),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            option.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$distMi mi · $etaLabel',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isSelected
+                                  ? Colors.white70
+                                  : Colors.black54,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Icon(
+                                hasRestrictions
+                                    ? Icons.warning_amber
+                                    : Icons.check_circle,
+                                size: 14,
+                                color: hasRestrictions
+                                    ? Colors.red.shade300
+                                    : Colors.green.shade400,
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  hasRestrictions
+                                      ? '${option.restrictionCount} restriction${option.restrictionCount > 1 ? 's' : ''}'
+                                      : 'No restrictions',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: hasRestrictions
+                                        ? (isSelected
+                                            ? Colors.red.shade200
+                                            : Colors.red.shade600)
+                                        : (isSelected
+                                            ? Colors.green.shade200
+                                            : Colors.green.shade700),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Builds the Trip Preview Intelligence Panel shown above the Start
   /// Navigation button while the route has been built but navigation has
   /// not yet started.
@@ -3505,7 +3760,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Displays a summary card with Distance, ETA, Fuel Stops, Weigh Stations,
   /// Restrictions, and Weather Risk so the driver can review key route
   /// insights before committing to the trip.
-  Widget _buildPreviewIntelligencePanel() {
+  ///
+  /// [bottom] is the Positioned widget's distance from the screen bottom so
+  /// the panel can be shifted upward when the route alternatives panel is
+  /// also visible.
+  Widget _buildPreviewIntelligencePanel({double bottom = 300}) {
     final distanceMiles =
         (_routeData?['distanceMiles'] as num?)?.toInt() ?? 0;
     final etaMinutes =
@@ -3529,7 +3788,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hasRestrictions = restrictionCount > 0;
 
     return Positioned(
-      bottom: 188,
+      bottom: bottom,
       left: 16,
       right: 16,
       child: Container(
@@ -4576,10 +4835,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // started.  Summarises Distance, ETA, Fuel Stops, Weigh
                 // Stations, Restrictions and Weather Risk so the driver can
                 // review key insights before pressing Start Navigation.
+                // When the route alternatives panel is also visible the
+                // intelligence panel is shifted upward to avoid overlap.
                 if (_routePoints.isNotEmpty &&
                     !_navigationStarted &&
                     !_isLoading)
-                  _buildPreviewIntelligencePanel(),
+                  _buildPreviewIntelligencePanel(
+                    bottom: _routeOptions.isNotEmpty ? 300 : 188,
+                  ),
+                // ── Route alternatives selection panel ─────────────────────
+                // Shown after routes are fetched (pre-navigation only) so the
+                // driver can choose between Recommended / Fastest / Alternative
+                // options before pressing Start Navigation.  Tapping a card
+                // updates the map preview and stats without starting the trip.
+                if (_routeOptions.isNotEmpty &&
+                    !_navigationStarted &&
+                    !_isLoading)
+                  _buildRouteOptionsPanel(),
                 // ── Start Navigation button ────────────────────────────────
                 // Shown after the route is built in preview mode but before the
                 // driver has started the navigation session.  Pressing it calls
@@ -5245,6 +5517,53 @@ const List<TruckRestriction> _sampleRestrictions = [
   ),
 ];
 
+
+// ── Route alternatives model ──────────────────────────────────────────────────
+
+/// A single route alternative surfaced to the driver before navigation starts.
+///
+/// Built from every route returned by the Mapbox Directions
+/// `&alternatives=true` call and displayed as a selectable card in
+/// [_buildRouteOptionsPanel].  The driver taps a card to preview that route on
+/// the map; only the selected option is used when "Start Navigation" is pressed.
+class RouteOption {
+  RouteOption({
+    required this.id,
+    required this.label,
+    required this.points,
+    required this.steps,
+    required this.distanceMiles,
+    required this.durationSeconds,
+    required this.restrictionCount,
+    required this.routeData,
+  });
+
+  /// Stable id, e.g. `"route_0"`, `"route_1"`.
+  final String id;
+
+  /// Human-readable label, e.g. `"Recommended"`, `"Fastest"`, `"Alternative"`.
+  final String label;
+
+  /// Decoded, simplified polyline points for this route.
+  final List<LatLng> points;
+
+  /// Turn-by-turn navigation steps parsed from the Mapbox response.
+  final List<_NavStep> steps;
+
+  /// Total route distance in miles.
+  final double distanceMiles;
+
+  /// Total route duration in seconds.
+  final int durationSeconds;
+
+  /// Number of truck restrictions (violating the current truck profile) found
+  /// along this route.  Zero means no conflicts; any positive value indicates
+  /// at least one low-bridge / weight / length / no-truck or hazmat conflict.
+  final int restrictionCount;
+
+  /// Route data map compatible with [_routeData] / [_buildRouteInfo].
+  final Map<String, dynamic> routeData;
+}
 
 // ── Destination search model ──────────────────────────────────────────────────
 

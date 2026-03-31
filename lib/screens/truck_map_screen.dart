@@ -291,13 +291,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Useful when the driver needs to review the route without the map moving.
   bool _navigationPaused = false;
 
-  // ── Selected destination state ─────────────────────────────────────────────
-  // Null until the user picks a destination via search or long-press.
-  // When set, fetchRoute() and arrival-detection use this position instead of
-  // the hardcoded default origin/destination constants.
-  LatLng? _selectedDestination;
-  String? _selectedDestinationName;
-
   // ── Search bar state ───────────────────────────────────────────────────────
   // _searchController drives the inline search TextField at the top of the map.
   // _searchResults holds the current geocoding suggestions from Mapbox.
@@ -309,7 +302,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<PlaceSuggestion> _searchResults = const [];
   bool _isSearching = false;
-  bool _isBuildingRoute = false;
   Timer? _searchDebounce;
 
   // ── Route restriction violations ───────────────────────────────────────────

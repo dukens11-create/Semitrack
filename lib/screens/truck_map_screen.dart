@@ -315,6 +315,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Each entry is a human-readable warning shown in the route info panel.
   List<String> _routeViolations = const [];
 
+  // ── Preview weather risk ───────────────────────────────────────────────────
+  // Optional string shown in the Trip Preview Intelligence Panel when weather
+  // risk data is available (e.g. 'Low', 'Moderate', 'High').  Null means no
+  // weather data is available and the Weather Risk row will be hidden.
+  String? _weatherRisk;
+
   // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
   static const _originLat = 45.5231;
   static const _originLng = -122.6765;
@@ -1212,6 +1218,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _currentStepIndex = 0;
       _routeData = null;
       _routeViolations = const [];
+      _weatherRisk = null;
       _restrictionAhead = null;
       _navStatus = null;
       _isRerouting = false;
@@ -3031,22 +3038,179 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       bottom: 120,
       left: 16,
       right: 16,
-      child: ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.green,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 6,
+              ),
+              icon: const Icon(Icons.navigation),
+              label: const Text(
+                'Start Navigation',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              onPressed: _startNavigation,
+            ),
           ),
-          elevation: 6,
+          if (_routeViolations.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 6,
+              ),
+              icon: const Icon(Icons.alt_route),
+              label: const Text(
+                'Optimize for Truck',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+              onPressed:
+                  _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Builds a single labelled row for the Trip Preview Intelligence Panel.
+  ///
+  /// [emoji] is a leading emoji icon, [label] is the category name, and
+  /// [value] is the computed display string.  [valueColor] may override the
+  /// default text colour for warnings.
+  Widget _previewRow(
+    String emoji,
+    String label,
+    String value, {
+    Color? valueColor,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 16)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.black87,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: valueColor ?? Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the Trip Preview Intelligence Panel shown above the Start
+  /// Navigation button while the route has been built but navigation has
+  /// not yet started.
+  ///
+  /// Displays a summary card with Distance, ETA, Fuel Stops, Weigh Stations,
+  /// Restrictions, and Weather Risk so the driver can review key route
+  /// insights before committing to the trip.
+  Widget _buildPreviewIntelligencePanel() {
+    final distanceMiles =
+        (_routeData?['distanceMiles'] as num?)?.toInt() ?? 0;
+    final etaMinutes =
+        (_routeData?['etaMinutes'] as num?)?.toInt() ?? 0;
+    final etaHours = etaMinutes ~/ 60;
+    final etaMins = etaMinutes % 60;
+    final etaLabel = etaHours > 0 ? '${etaHours}h ${etaMins}m' : '${etaMins}m';
+
+    // Fuel stops: truck stops near the route that are actual fuel providers
+    // (exclude rest-area brands which don't sell diesel).
+    final fuelStops = _truckStops
+        .where((s) => s.brand != 'Rest Area')
+        .length;
+
+    // Weigh stations: map POIs of weighStation type.
+    final weighStations = _mapPois
+        .where((p) => p.type == PoiType.weighStation)
+        .length;
+
+    final restrictionCount = _routeViolations.length;
+    final hasRestrictions = restrictionCount > 0;
+
+    return Positioned(
+      bottom: 188,
+      left: 16,
+      right: 16,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x29000000),
+              blurRadius: 12,
+              offset: Offset(0, 4),
+            ),
+          ],
         ),
-        icon: const Icon(Icons.navigation),
-        label: const Text(
-          'Start Navigation',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Route Preview',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _previewRow('🚚', 'Distance:', '$distanceMiles mi'),
+            _previewRow('⏱', 'ETA:', etaLabel),
+            _previewRow('⛽', 'Fuel Stops:', '$fuelStops'),
+            _previewRow('⚖️', 'Weigh Stations:', '$weighStations'),
+            _previewRow(
+              '⚠️',
+              'Restrictions:',
+              '$restrictionCount',
+              valueColor: hasRestrictions ? Colors.red : null,
+            ),
+            if (_weatherRisk != null)
+              _previewRow('🌧', 'Weather Risk:', _weatherRisk!),
+            if (hasRestrictions) ...[
+              const SizedBox(height: 6),
+              const Text(
+                '⚠️ Route has truck restrictions.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
         ),
-        onPressed: _startNavigation,
       ),
     );
   }
@@ -4033,6 +4197,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     !_isLoading &&
                     _routePoints.isEmpty)
                   _buildStartRouteButton(),
+                // ── Trip Preview Intelligence Panel ────────────────────────
+                // Shown while the route is built but navigation has not yet
+                // started.  Summarises Distance, ETA, Fuel Stops, Weigh
+                // Stations, Restrictions and Weather Risk so the driver can
+                // review key insights before pressing Start Navigation.
+                if (_routePoints.isNotEmpty &&
+                    !_navigationStarted &&
+                    !_isLoading)
+                  _buildPreviewIntelligencePanel(),
                 // ── Start Navigation button ────────────────────────────────
                 // Shown after the route is built in preview mode but before the
                 // driver has started the navigation session.  Pressing it calls

@@ -67,6 +67,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_updateRouteViolationWarnings] and [_isTruckSafe].
   static const double _restrictionProximityThresholdMeters = 100.0;
 
+  /// Multiplier applied to [_restrictionProximityThresholdMeters] when
+  /// building red-overlay polyline segments for the map preview.  The larger
+  /// radius ensures the red overlay visually leads into the restricted zone.
+  static const double _restrictionSegmentThresholdMultiplier = 3.0;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -180,14 +185,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
-  // ── Destination picker state ──────────────────────────────────────────────
-  //
-  // Set by long-pressing the map.  _startRouteToSelectedDestination() uses
-  // these fields to fetch a route to the pinned point and launch navigation.
-  LatLng? _selectedDestination;
-  String? _selectedDestinationName;
-  bool _isBuildingRoute = false;
-
   // ── Route alternatives (pre-navigation selection) ─────────────────────────
   //
   // _routeOptions holds the list of RouteOption cards built from the Mapbox
@@ -196,6 +193,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // preview.  Both are reset by _clearActiveRoute().
   List<RouteOption> _routeOptions = const [];
   int _selectedRouteOptionIndex = 0;
+
+  // ── Destination picker state ──────────────────────────────────────────────
+  //
+  // Set by long-pressing the map.  _startRouteToSelectedDestination() uses
+  // these fields to fetch a route to the pinned point and launch navigation.
+  LatLng? _selectedDestination;
+  String? _selectedDestinationName;
+  bool _isBuildingRoute = false;
 
   // ── Multi-stop leg breakdown ───────────────────────────────────────────────
   //
@@ -1368,6 +1373,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _isRerouting = false;
       _isRestrictionRerouting = false;
       _restrictionRerouteAttempts = 0;
+      _routeOptions = const [];
+      _selectedRouteOptionIndex = 0;
       _tripStartTime = null;
       _lastMoveTime = null;
       _milesDriven = 0.0;
@@ -1376,8 +1383,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _lastTripLng = 0.0;
       _lastGpsTimestamp = null;
       _truckStops = const [];
-      _routeOptions = const [];
-      _selectedRouteOptionIndex = 0;
       _tripLegs = const [];
       _activeLegIndex = 0;
     });
@@ -2722,6 +2727,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           final distMi = (r["distance"] as num).toDouble() / 1609.34;
           final durSec = (r["duration"] as num).toInt();
           final restrictions = _evaluateRouteRestrictions(pts);
+          final rFuel = _countFuelStopsForRoute(pts);
+          final rWeigh = _countWeighStationsForRoute(pts);
           final label = ri < routeLabels.length
               ? routeLabels[ri]
               : 'Alternative ${ri + 1}';
@@ -2733,8 +2740,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             distanceMiles: distMi,
             durationSeconds: durSec,
             restrictionCount: restrictions.length,
-            fuelStopCount: _countFuelStopsForRoute(pts),
-            weighStationCount: _countWeighStationsForRoute(pts),
+            fuelStopCount: rFuel,
+            weighStationCount: rWeigh,
             routeData: {
               "distanceMiles": distMi.round(),
               "etaMinutes": (durSec / 60).round(),
@@ -3155,6 +3162,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() {
       _routeViolations = violations;
     });
+  }
+
+  // ── Route color-coding helpers ─────────────────────────────────────────────
+
+  /// Builds a list of red-overlay polyline segments for the selected route's
+  /// restricted points.
+  ///
+  /// Returns a list of short [LatLng] pairs, each covering one route point
+  /// (and the next if available) that falls within restriction proximity.
+  /// Used by the [PolylineLayer] to draw red overlays over dangerous segments.
+  List<List<LatLng>> _buildRestrictionSegments(List<LatLng> routePoints) {
+    final segments = <List<LatLng>>[];
+    if (routePoints.isEmpty) return segments;
+    final threshold =
+        _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier;
+    for (int i = 0; i < routePoints.length; i++) {
+      final pt = routePoints[i];
+      bool isRestricted = false;
+      for (final r in _restrictions) {
+        if (!_violatesRestriction(r)) continue;
+        if (_distanceBetween(pt, r.position) <= threshold) {
+          isRestricted = true;
+          break;
+        }
+      }
+      // Also check _restrictedZones
+      if (!isRestricted) {
+        for (final zone in _restrictedZones) {
+          final zonePt =
+              LatLng(zone['lat']! as double, zone['lng']! as double);
+          if (_distanceBetween(pt, zonePt) <= threshold) {
+            isRestricted = true;
+            break;
+          }
+        }
+      }
+      if (isRestricted) {
+        final next = (i + 1 < routePoints.length) ? routePoints[i + 1] : pt;
+        segments.add([pt, next]);
+      }
+    }
+    return segments;
   }
 
   /// Shows a modal bottom sheet with a Mapbox geocoding search field.
@@ -3633,82 +3682,77 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Tapping "Start Navigation" calls [_startNavigation] to begin GPS tracking
   /// and trip stats.  Hidden once [_navigationStarted] is true.
   Widget _buildStartNavigationButton() {
-    return Positioned(
-      bottom: 120,
-      left: 16,
-      right: 16,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_routeOptions.length > 1) ...[
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.blue.shade700,
-                side: BorderSide(color: Colors.blue.shade600, width: 1.5),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                backgroundColor: Colors.white.withOpacity(0.95),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_routeOptions.length > 1) ...[
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.blue.shade700,
+              side: BorderSide(color: Colors.blue.shade600, width: 1.5),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
-              icon: const Icon(Icons.compare_arrows, size: 20),
-              label: Text(
-                'See Route Details (${_routeOptions.length} options)',
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-              onPressed: _showRouteOptionsBottomSheet,
+              backgroundColor: Colors.white.withOpacity(0.95),
             ),
-            const SizedBox(height: 8),
-          ],
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 6,
-                  ),
-                  icon: const Icon(Icons.navigation),
-                  label: const Text(
-                    'Start Navigation',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  onPressed: _startNavigation,
-                ),
-              ),
-              if (_routeViolations.isNotEmpty) ...[
-                const SizedBox(width: 10),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 6,
-                  ),
-                  icon: const Icon(Icons.alt_route),
-                  label: const Text(
-                    'Optimize for Truck',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                  ),
-                  onPressed:
-                      _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
-                ),
-              ],
-            ],
+            icon: const Icon(Icons.compare_arrows, size: 20),
+            label: Text(
+              'See Route Details (${_routeOptions.length} options)',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            onPressed: _showRouteOptionsBottomSheet,
           ),
+          const SizedBox(height: 8),
         ],
-      ),
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 6,
+                ),
+                icon: const Icon(Icons.navigation),
+                label: const Text(
+                  'Start Navigation',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                onPressed: _startNavigation,
+              ),
+            ),
+            if (_routeViolations.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 6,
+                ),
+                icon: const Icon(Icons.alt_route),
+                label: const Text(
+                  'Optimize for Truck',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+                onPressed:
+                    _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
+              ),
+            ],
+          ],
+        ),
+      ],
     );
   }
 
@@ -3921,189 +3965,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Route alternatives helpers ─────────────────────────────────────────────
 
-  /// Switches the active route preview to [index] from [_routeOptions].
-  ///
-  /// Updates [_routePoints], [_navSteps], and [_routeData] to match the
-  /// chosen option and fits the camera to the new polyline.  Does **not**
-  /// start navigation — that remains gated behind the Start Navigation button.
-  void _applyRouteOption(int index) {
-    if (index < 0 || index >= _routeOptions.length) return;
-    final option = _routeOptions[index];
-    setState(() {
-      _selectedRouteOptionIndex = index;
-      _routePoints = option.points.toSet().toList();
-      _navSteps = option.steps;
-      _currentStepIndex = 0;
-      _routeData = option.routeData;
-    });
-    _updateRouteViolationWarnings();
-    _fitCameraToRoute(option.points);
-  }
-
-  /// Builds the horizontally-scrollable route alternatives selection panel.
-  ///
-  /// Shows 2–3 selectable [RouteOption] cards above the Start Navigation
-  /// button.  The currently selected card is highlighted in blue.  Tapping a
-  /// card calls [_applyRouteOption] to update the map preview without starting
-  /// navigation.
-  ///
-  /// Each card displays:
-  ///   - Route label (Recommended / Fastest / Alternative)
-  ///   - Distance in miles and ETA
-  ///   - Truck restriction count (green if zero, red if any)
-  ///
-  /// [bottom] controls the Positioned widget's distance from the screen bottom
-  /// so the panel can be shifted upward when the Intelligence Panel is visible.
-  Widget _buildRouteOptionsPanel({double bottom = 184}) {
-    return Positioned(
-      bottom: bottom,
-      left: 0,
-      right: 0,
-      child: SizedBox(
-        height: 110,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(left: 16, bottom: 4),
-              child: Text(
-                'Choose your route',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  shadows: [
-                    Shadow(blurRadius: 3, color: Color(0xAA000000)),
-                  ],
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 88,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                itemCount: _routeOptions.length,
-                itemBuilder: (context, index) {
-                  final option = _routeOptions[index];
-                  final isSelected = index == _selectedRouteOptionIndex;
-                  final distMi =
-                      option.distanceMiles.toStringAsFixed(0);
-                  final etaMin = option.durationSeconds ~/ 60;
-                  final etaH = etaMin ~/ 60;
-                  final etaM = etaMin % 60;
-                  final etaLabel =
-                      etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
-                  final hasRestrictions = option.restrictionCount > 0;
-
-                  return GestureDetector(
-                    onTap: () => _applyRouteOption(index),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 148,
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color:
-                            isSelected ? Colors.blue.shade700 : Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected
-                              ? Colors.blue.shade900
-                              : Colors.grey.shade300,
-                          width: isSelected ? 2 : 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.18),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            option.label,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '$distMi mi · $etaLabel',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isSelected
-                                  ? Colors.white70
-                                  : Colors.black54,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Icon(
-                                hasRestrictions
-                                    ? Icons.warning_amber
-                                    : Icons.check_circle,
-                                size: 14,
-                                color: hasRestrictions
-                                    ? Colors.red.shade300
-                                    : Colors.green.shade400,
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  hasRestrictions
-                                      ? '${option.restrictionCount} restriction${option.restrictionCount > 1 ? 's' : ''}'
-                                      : 'No restrictions',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: hasRestrictions
-                                        ? (isSelected
-                                            ? Colors.red.shade200
-                                            : Colors.red.shade600)
-                                        : (isSelected
-                                            ? Colors.green.shade200
-                                            : Colors.green.shade700),
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Builds the Trip Preview Intelligence Panel shown above the Start
-  /// Navigation button while the route has been built but navigation has
-  /// not yet started.
-  ///
-  /// Displays a summary card with Distance, ETA, Fuel Stops, Weigh Stations,
-  /// Restrictions, and Weather Risk so the driver can review key route
-  /// insights before committing to the trip.
-  ///
-  /// [bottom] is the Positioned widget's distance from the screen bottom so
-  /// the panel can be shifted upward when the route alternatives panel is
-  /// also visible.
-  Widget _buildPreviewIntelligencePanel({double bottom = 300}) {
+  /// Builds the route stats summary section of the preview panel.
+  Widget _buildPreviewIntelligencePanel() {
     final distanceMiles =
         (_routeData?['distanceMiles'] as num?)?.toInt() ?? 0;
     final etaMinutes =
@@ -4123,63 +3986,274 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .where((p) => p.type == PoiType.weighStation)
         .length;
 
-    final restrictionCount = _routeViolations.length;
+    final restrictionCount = _selectedRouteOptionIndex < _routeOptions.length
+        ? _routeOptions[_selectedRouteOptionIndex].restrictionCount
+        : _routeViolations.length;
     final hasRestrictions = restrictionCount > 0;
 
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x29000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Route Preview',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _previewRow('🚚', 'Distance:', '$distanceMiles mi'),
+          _previewRow('⏱', 'ETA:', etaLabel),
+          _previewRow('⛽', 'Fuel Stops:', '$fuelStops'),
+          _previewRow('⚖️', 'Weigh Stations:', '$weighStations'),
+          _previewRow(
+            '⚠️',
+            'Restrictions:',
+            '$restrictionCount',
+            valueColor: hasRestrictions ? Colors.red : null,
+          ),
+          if (_weatherRisk != null)
+            _previewRow('🌧', 'Weather Risk:', _weatherRisk!),
+          if (hasRestrictions) ...[
+            const SizedBox(height: 6),
+            const Text(
+              '⚠️ Route has truck restrictions.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.red,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Builds the route alternatives selection card shown in preview mode.
+  ///
+  /// Displays each available route option as a tappable card with its label,
+  /// distance, ETA, and restriction count.  The selected option is highlighted
+  /// in blue; others are shown with a grey border.
+  Widget _buildRouteAlternativesCard() {
+    if (_routeOptions.length < 2) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x29000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Route Options',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 80,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _routeOptions.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final opt = _routeOptions[i];
+                final isSelected = i == _selectedRouteOptionIndex;
+                final distMi = opt.distanceMiles.toStringAsFixed(0);
+                final etaMins = opt.durationSeconds ~/ 60;
+                final etaH = etaMins ~/ 60;
+                final etaM = etaMins % 60;
+                final etaLabel = etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
+                return GestureDetector(
+                  onTap: () => _applyRouteOption(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 110,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? Colors.blue.shade50
+                          : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected
+                            ? Colors.blue.shade600
+                            : Colors.grey.shade300,
+                        width: isSelected ? 2 : 1,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          opt.label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected
+                                ? Colors.blue.shade700
+                                : Colors.black87,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          '$distMi mi · $etaLabel',
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.black54),
+                        ),
+                        Row(
+                          children: [
+                            Icon(
+                              opt.restrictionCount > 0
+                                  ? Icons.warning_amber_rounded
+                                  : Icons.check_circle_outline,
+                              size: 12,
+                              color: opt.restrictionCount > 0
+                                  ? Colors.red
+                                  : Colors.green,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              opt.restrictionCount > 0
+                                  ? '${opt.restrictionCount} restrict.'
+                                  : 'Clear',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: opt.restrictionCount > 0
+                                    ? Colors.red
+                                    : Colors.green.shade700,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the mini map legend explaining route colour coding.
+  ///
+  /// Positioned in the top-right of the map below the search bar so it does
+  /// not overlap with the search field or the navigation banner.
+  Widget _buildMapLegend() {
     return Positioned(
-      bottom: bottom,
-      left: 16,
-      right: 16,
+      top: 68,
+      right: 12,
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
+          color: Colors.white.withOpacity(0.92),
+          borderRadius: BorderRadius.circular(10),
           boxShadow: const [
             BoxShadow(
               color: Color(0x29000000),
-              blurRadius: 12,
-              offset: Offset(0, 4),
+              blurRadius: 8,
+              offset: Offset(0, 2),
             ),
           ],
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              'Route Preview',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 8),
-            _previewRow('🚚', 'Distance:', '$distanceMiles mi'),
-            _previewRow('⏱', 'ETA:', etaLabel),
-            _previewRow('⛽', 'Fuel Stops:', '$fuelStops'),
-            _previewRow('⚖️', 'Weigh Stations:', '$weighStations'),
-            _previewRow(
-              '⚠️',
-              'Restrictions:',
-              '$restrictionCount',
-              valueColor: hasRestrictions ? Colors.red : null,
-            ),
-            if (_weatherRisk != null)
-              _previewRow('🌧', 'Weather Risk:', _weatherRisk!),
-            if (hasRestrictions) ...[
-              const SizedBox(height: 6),
-              const Text(
-                '⚠️ Route has truck restrictions.',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.red,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
+            _legendRow(Colors.blue, 'Selected route'),
+            const SizedBox(height: 4),
+            _legendRow(Colors.grey.shade400, 'Alternative'),
+            const SizedBox(height: 4),
+            _legendRow(Colors.red, 'Restriction'),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single row for [_buildMapLegend] with a colour swatch and label.
+  Widget _legendRow(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 20,
+          height: 4,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: Colors.black87),
+        ),
+      ],
+    );
+  }
+
+  /// Builds the combined preview bottom panel: alternatives card, route stats,
+  /// and the Start Navigation / Optimize buttons.
+  ///
+  /// Replaces the previous separate Positioned widgets for the intelligence
+  /// panel and start button, providing a unified layout that avoids overlap.
+  Widget _buildPreviewBottomPanel() {
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildRouteAlternativesCard(),
+              if (_routeOptions.length >= 2) const SizedBox(height: 8),
+              _buildPreviewIntelligencePanel(),
+              const SizedBox(height: 8),
+              _buildStartNavigationButton(),
+            ],
+          ),
         ),
       ),
     );
@@ -5082,11 +5156,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     PolylineLayer(
                       polylines: [
+                        // ── Alternative routes (gray, behind selected) ──────
+                        for (int i = 0; i < _routeOptions.length; i++)
+                          if (i != _selectedRouteOptionIndex &&
+                              _routeOptions[i].points.isNotEmpty)
+                            Polyline(
+                              points: _routeOptions[i].points,
+                              strokeWidth: 4,
+                              color: Colors.grey.shade400,
+                              strokeJoin: StrokeJoin.round,
+                              strokeCap: StrokeCap.round,
+                            ),
+                        // ── Selected route (blue) ───────────────────────────
                         if (_routePoints.isNotEmpty)
                           Polyline(
                             points: _routePoints,
                             strokeWidth: 5,
                             color: Colors.blue,
+                            strokeJoin: StrokeJoin.round,
+                            strokeCap: StrokeCap.round,
+                          ),
+                        // ── Restriction overlays on selected route (red) ────
+                        for (final seg in _buildRestrictionSegments(_routePoints))
+                          Polyline(
+                            points: seg,
+                            strokeWidth: 8,
+                            color: Colors.red.withOpacity(0.85),
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
                           ),
@@ -5169,37 +5264,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     !_isLoading &&
                     _routePoints.isEmpty)
                   _buildStartRouteButton(),
-                // ── Trip Preview Intelligence Panel ────────────────────────
+                // ── Preview bottom panel ────────────────────────────────────
                 // Shown while the route is built but navigation has not yet
-                // started.  Summarises Distance, ETA, Fuel Stops, Weigh
-                // Stations, Restrictions and Weather Risk so the driver can
-                // review key insights before pressing Start Navigation.
-                // When the route alternatives panel is also visible the
-                // intelligence panel is shifted upward to avoid overlap.
+                // started.  Includes route alternatives cards, route stats
+                // summary, and the Start Navigation / Optimize buttons.
                 if (_routePoints.isNotEmpty &&
                     !_navigationStarted &&
                     !_isLoading)
-                  _buildPreviewIntelligencePanel(
-                    bottom: _routeOptions.isNotEmpty ? 300 : 188,
-                  ),
-                // ── Route alternatives selection panel ─────────────────────
-                // Shown after routes are fetched (pre-navigation only) so the
-                // driver can choose between Recommended / Fastest / Alternative
-                // options before pressing Start Navigation.  Tapping a card
-                // updates the map preview and stats without starting the trip.
-                if (_routeOptions.isNotEmpty &&
-                    !_navigationStarted &&
-                    !_isLoading)
-                  _buildRouteOptionsPanel(),
-                // ── Start Navigation button ────────────────────────────────
-                // Shown after the route is built in preview mode but before the
-                // driver has started the navigation session.  Pressing it calls
-                // _startNavigation() to begin GPS tracking and trip stats,
-                // matching real GPS app behaviour (preview → explicit start).
-                if (_routePoints.isNotEmpty &&
-                    !_navigationStarted &&
-                    !_isLoading)
-                  _buildStartNavigationButton(),
+                  _buildPreviewBottomPanel(),
+                // ── Map legend ─────────────────────────────────────────────
+                // Mini legend explaining route colour coding.  Visible in
+                // preview mode (route built, not yet navigating).
+                if (_routePoints.isNotEmpty && !_navigationStarted && !_isLoading)
+                  _buildMapLegend(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
                 // 800 m of a restriction it violates, providing a prominent

@@ -568,21 +568,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// scanning every stop against every route point.
   List<TruckStop> _filterStopsNearRoute(
     List<TruckStop> allStops,
-    List<LatLng> routePoints, {
-    double maxDistanceMeters = 5000,
-  }) {
-    return allStops.where((stop) {
-      for (final routePoint in routePoints) {
-        final d = Geolocator.distanceBetween(
-          stop.position.latitude,
-          stop.position.longitude,
-          routePoint.latitude,
-          routePoint.longitude,
-        );
-        if (d <= maxDistanceMeters) return true;
-      }
-      return false;
-    }).toList();
+    List<LatLng> routePoints,
+  ) {
+    return allStops;
   }
 
   /// Returns the number of fuel stops (non-rest-area truck stops) within
@@ -2779,10 +2767,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _speak(selectedOpt.steps.first.instruction);
         }
 
-        // Filter POIs and update violation warnings for the selected route.
-        final nearbyStops =
-            _filterStopsNearRoute(_mockTruckStops, newPoints);
-        setState(() => _truckStops = nearbyStops);
+        // Show all truck stops on the map regardless of route proximity.
+        setState(() => _truckStops = _mockTruckStops);
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
         // Smart rerouting is skipped in pre-navigation mode — the driver can
@@ -2885,13 +2871,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _speak(allSteps.first.instruction);
       }
 
-      // ── Filter nearby truck stop POIs ──────────────────────────────────────
-      // After the route is loaded, update the truck stop list to only show
-      // stops that are within 5 km of a route point.  setState is used so the
-      // MarkerLayer rebuilds immediately with the filtered markers.
-      final nearbyStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
+      // ── Show all truck stop POIs ───────────────────────────────────────────
+      // Display every stop in the dataset so drivers can explore all nearby
+      // options, not just those within 5 km of the route.
       setState(() {
-        _truckStops = nearbyStops;
+        _truckStops = _mockTruckStops;
       });
 
       // ── Evaluate truck restrictions along the new route ────────────────────
@@ -2943,6 +2927,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Reset all prior navigation/trip state before starting a new session.
     _clearActiveRoute();
     await fetchRoute();
+  }
+
+  /// Switches the active route preview to the option at [index] in
+  /// [_routeOptions].
+  ///
+  /// Updates [_selectedRouteOptionIndex], [_routePoints], [_navSteps],
+  /// [_routeData], and [_truckStops] so the map polyline, turn-by-turn steps,
+  /// and truck stop markers all reflect the newly selected alternative.
+  void _applyRouteOption(int index) {
+    if (index < 0 || index >= _routeOptions.length) return;
+    final opt = _routeOptions[index];
+    setState(() {
+      _selectedRouteOptionIndex = index;
+      _routePoints = opt.points.toSet().toList();
+      _navSteps = opt.steps;
+      _currentStepIndex = 0;
+      _routeData = opt.routeData;
+      _truckStops = _mockTruckStops;
+    });
+    _fitCameraToRoute(_routePoints);
+    _updateRouteViolationWarnings();
   }
 
   /// Opens a modal bottom sheet listing all available [_routeOptions] so the

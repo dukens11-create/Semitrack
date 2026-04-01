@@ -978,11 +978,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 'default';
   }
 
+  /// Maps each canonical brand key to its PNG asset path.
   static const Map<String, String> _brandIcons = {
-    'petro': 'assets/logos/truckstops/petro.png',
-    'qt':    'assets/logos/truckstops/qt.png',
-    'exxon': 'assets/logos/truckstops/exxon.png',
-    'mobil': 'assets/logos/truckstops/mobil.png',
+    'pilot':   'assets/logos/pilot.png',
+    'loves':   'assets/logos/loves.png',
+    'ta':      'assets/logos/ta.png',
+    'flyingj': 'assets/logos/flyingj.png',
+    'petro':   'assets/logos/truckstops/petro.png',
+    'qt':      'assets/logos/truckstops/qt.png',
+    'exxon':   'assets/logos/truckstops/exxon.png',
+    'mobil':   'assets/logos/truckstops/mobil.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].

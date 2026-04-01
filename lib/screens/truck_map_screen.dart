@@ -1079,12 +1079,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
           child: bytes != null
-              ? Image.memory(
-                  bytes,
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
+              ? ClipOval(
+                  child: Image.memory(
+                    bytes,
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
                 )
               : const Icon(
                   Icons.local_gas_station,
@@ -1121,12 +1123,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           child: GestureDetector(
             onTap: () => _showPoiAlert(poi),
             child: bytes != null
-                ? Image.memory(
-                    bytes,
-                    width: 40,
-                    height: 40,
-                    fit: BoxFit.contain,
-                    gaplessPlayback: true,
+                ? ClipOval(
+                    child: Image.memory(
+                      bytes,
+                      width: 40,
+                      height: 40,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
                   )
                 : Icon(Icons.scale,
                     color: Colors.orange.shade700, size: 32),

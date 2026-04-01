@@ -1024,7 +1024,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'rest':       'assets/logos/rest.png',
     // ── Additional logos in assets/logos/truckstops/ ───────────────────────
     'kwiktrip':     'assets/logos/truckstops/kwiktrip.png',
-    'maverik':      'assets/logos/truckstops/maverik.png',
+    'maverik':      'assets/logos/maverik.png',
     'caseys':       'assets/logos/truckstops/caseys.png',
     'sappbros':     'assets/logos/truckstops/sappbros.png',
     'petro-canada': 'assets/logos/truckstops/petro-canada.png',

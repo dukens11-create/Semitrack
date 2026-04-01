@@ -597,6 +597,60 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'I-80 Eastbound, CA',
       icon: 'default',
     ),
+    TruckStop(
+      id: '9',
+      name: 'Mobil Truck Stop',
+      brand: 'Mobil',
+      position: const LatLng(41.500, -122.300),
+      address: 'Weed, CA',
+      dieselPrice: 4.38,
+      icon: 'mobil',
+    ),
+    TruckStop(
+      id: '10',
+      name: 'Exxon Travel Plaza',
+      brand: 'Exxon',
+      position: const LatLng(40.400, -122.250),
+      address: 'Red Bluff, CA',
+      dieselPrice: 4.41,
+      icon: 'exxon',
+    ),
+    TruckStop(
+      id: '11',
+      name: 'Chevron Truck Stop',
+      brand: 'Chevron',
+      position: const LatLng(39.500, -121.700),
+      address: 'Orland, CA',
+      dieselPrice: 4.33,
+      icon: 'chevron',
+    ),
+    TruckStop(
+      id: '12',
+      name: 'Shell Travel Center',
+      brand: 'Shell',
+      position: const LatLng(38.900, -121.600),
+      address: 'Williams, CA',
+      dieselPrice: 4.30,
+      icon: 'shell',
+    ),
+    TruckStop(
+      id: '13',
+      name: 'BP Truck Stop',
+      brand: 'BP',
+      position: const LatLng(40.580, -122.350),
+      address: 'Cottonwood, CA',
+      dieselPrice: 4.27,
+      icon: 'bp',
+    ),
+    TruckStop(
+      id: '14',
+      name: 'Circle K Travel Stop',
+      brand: 'Circle K',
+      position: const LatLng(39.800, -121.750),
+      address: 'Corning, CA',
+      dieselPrice: 4.22,
+      icon: 'circlek',
+    ),
   ];
 
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
@@ -670,12 +724,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Handles messy real-world inputs such as "Love's Travel Stop", "Loves",
   /// "Flying J Travel Center", "TA Petro", as well as Canadian brands
-  /// (Petro-Canada, Husky, Esso, Ultramar, Irving) and regional chains
-  /// (Kwik Trip, Maverik, Casey's, Sapp Bros).
+  /// (Petro-Canada, Husky, Esso, Ultramar, Irving), regional chains
+  /// (Kwik Trip, Maverik, Casey's, Sapp Bros), and major fuel brands
+  /// (Mobil, Exxon, Chevron, Shell, BP, Circle K).
   ///
   /// Returns one of the canonical keys: pilot, flyingj, loves, ta, petro,
   /// ambest, roadranger, kwiktrip, maverik, caseys, sappbros, petro-canada,
-  /// husky, esso, ultramar, irving, independent, or 'default'.
+  /// husky, esso, ultramar, irving, independent, mobil, exxon, chevron,
+  /// shell, bp, circlek, or 'default'.
   String _normalizeTruckStopBrand(String rawName) {
     final n = rawName.toLowerCase().trim();
 
@@ -709,6 +765,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (n.contains('maverik')) return 'maverik';
     if (n.contains("casey's") || n.contains('caseys')) return 'caseys';
 
+    // Major fuel brands with uploaded logos
+    if (n.contains('mobil')) return 'mobil';
+    if (n.contains('exxon')) return 'exxon';
+    if (n.contains('chevron')) return 'chevron';
+    if (n.contains('shell')) return 'shell';
+    if (n.contains('bp') || n.contains('british petroleum')) return 'bp';
+    if (n.contains('circle k') || n.contains('circlek')) return 'circlek';
+
     // Independent
     if (n.contains('independent') || n == 'indie') return 'independent';
 
@@ -738,6 +802,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'ultramar':     'assets/logos/truckstops/ultramar.png',
     'irving':       'assets/logos/truckstops/irving.png',
     'independent':  'assets/logos/truckstops/independent.png',
+    // Brands with uploaded high-resolution logos
+    'mobil':        'assets/logos/truckstops/mobil.png',
+    'exxon':        'assets/logos/truckstops/exxon.png',
+    'chevron':      'assets/logos/truckstops/chevron.png',
+    'shell':        'assets/logos/truckstops/shell.png',
+    'bp':           'assets/logos/truckstops/bp.png',
+    'circlek':      'assets/logos/truckstops/circlek.png',
     'default':      'assets/logos/truckstops/default.png',
   };
 

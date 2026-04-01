@@ -40,5 +40,4 @@ flutter:
   #   3. Hot-reload or rebuild the app.
   assets:
     - assets/icons/truck_top.png
-    - assets/logos/
     - assets/logos/truckstops/

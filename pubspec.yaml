@@ -41,3 +41,7 @@ flutter:
   assets:
     - assets/icons/truck_top.png
     - assets/logos/truckstops/
+    - assets/logos/shower.png
+    - assets/logos/gym.png
+    - assets/logos/food.png
+    - assets/logos/walmart.png

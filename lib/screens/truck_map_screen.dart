@@ -22,6 +22,14 @@ import 'package:semitrack_mobile/models/truck_restriction.dart';
 class TruckMapScreen extends StatefulWidget {
   const TruckMapScreen({super.key});
 
+  /// Broadcasts the live navigation state to other widgets (e.g. [AppShell])
+  /// so they can hide/show the bottom navigation bar without requiring a
+  /// direct reference to [_TruckMapScreenState].
+  ///
+  /// Set to `true` when the driver presses "Start Navigation" and back to
+  /// `false` when they press "Stop Navigation" or the trip is cleared.
+  static final ValueNotifier<bool> isNavigatingNotifier = ValueNotifier(false);
+
   @override
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
@@ -136,11 +144,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _isArrived = false;
   bool _navigationActive = false;
 
-  // _navigationStarted is set true only when the user explicitly presses the
+  // _isNavigating is set true only when the user explicitly presses the
   // "Start Navigation" button after previewing the route.  It gates trip stats,
   // GPS tracking logic, and all navigation UI so the driver must opt in before
   // the session begins (route preview vs active trip).
-  bool _navigationStarted = false;
+  //
+  // When true: planning UI (search bar, route options, preview panel, legend,
+  // AppBar, bottom nav bar) is hidden; only the map + navigation components
+  // remain visible.
+  bool _isNavigating = false;
 
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
@@ -1751,7 +1763,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() {
       _navigationActive = false;
       _navigationMode = false;
-      _navigationStarted = false;
+      _isNavigating = false;
       _isArrived = false;
       _followTruck = false;
       _routePoints = const [];
@@ -1780,6 +1792,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
+    // Notify other widgets (e.g. AppShell) that navigation has ended so the
+    // bottom navigation bar and other planning UI are restored.
+    TruckMapScreen.isNavigatingNotifier.value = false;
   }
 
   /// Updates trip statistics from the latest [pos] GPS fix.
@@ -1992,16 +2007,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Called when the user taps the "Start Navigation" button after previewing
-  /// the route.  Sets [_navigationStarted] true and launches the GPS tracking
+  /// the route.  Sets [_isNavigating] true and launches the GPS tracking
   /// session and route animation.
   ///
   /// Does nothing if no route has been loaded yet.
   void _startNavigation() {
     if (_routePoints.isEmpty) return;
     setState(() {
-      _navigationStarted = true;
+      _isNavigating = true;
     });
+    // Notify AppShell (and any other listeners) that navigation is now active
+    // so the bottom navigation bar is hidden during the driving session.
+    TruckMapScreen.isNavigatingNotifier.value = true;
     _startRouteAnimation();
+  }
+
+  /// Stops the active navigation session and returns to planning/idle UI.
+  ///
+  /// Delegates to [_clearActiveRoute] which resets all trip state, stops TTS,
+  /// cancels the route animation, and resets [_isNavigating] to false.
+  void _stopNavigation() {
+    _clearActiveRoute();
   }
 
   // ── Multi-stop leg breakdown ───────────────────────────────────────────────
@@ -3108,7 +3134,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // pick the best option before committing.  The auto-selected default is
       // the first route with zero truck-restriction violations; if all have
       // violations, route 0 is selected.
-      if (!_navigationStarted && routes.isNotEmpty) {
+      if (!_isNavigating && routes.isNotEmpty) {
         const routeLabels = ['Recommended', 'Fastest', 'Alternative'];
         final newOptions = <RouteOption>[];
         for (int ri = 0; ri < routes.length; ri++) {
@@ -3299,7 +3325,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // already opted in by pressing "Start Navigation".  This covers rerouting
       // during an active trip.  For a fresh route build the driver first sees a
       // preview and must press the "Start Navigation" button to begin the trip.
-      if (_navigationStarted) {
+      if (_isNavigating) {
         _startRouteAnimation();
       }
 
@@ -4089,7 +4115,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// committing to a route.
   ///
   /// Tapping "Start Navigation" calls [_startNavigation] to begin GPS tracking
-  /// and trip stats.  Hidden once [_navigationStarted] is true.
+  /// and trip stats.  Hidden once [_isNavigating] is true.
   Widget _buildStartNavigationButton() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -4181,7 +4207,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// colour-coded restriction warning.  Hidden when no legs exist or
   /// navigation has not started.
   Widget _buildCurrentLegCard() {
-    if (_tripLegs.isEmpty || !_navigationStarted) {
+    if (_tripLegs.isEmpty || !_isNavigating) {
       return const SizedBox.shrink();
     }
     if (_activeLegIndex >= _tripLegs.length) return const SizedBox.shrink();
@@ -4318,7 +4344,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Hidden when there are no legs or navigation has not started.
   Widget _buildLegBreakdownButton() {
-    if (_tripLegs.isEmpty || !_navigationStarted) {
+    if (_tripLegs.isEmpty || !_isNavigating) {
       return const SizedBox.shrink();
     }
     return Positioned(
@@ -5349,6 +5375,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  /// Builds the navigation controls overlay shown only while [_isNavigating].
+  ///
+  /// Provides a "Stop Navigation" button so the driver can end the active
+  /// trip and return to the planning UI.  Positioned at the bottom-left so
+  /// it does not overlap the recenter FAB (bottom-right) or speed panel.
+  Widget _buildNavigationControls() {
+    return Positioned(
+      bottom: 24,
+      left: 16,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.red.shade700,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 6,
+        ),
+        icon: const Icon(Icons.stop_circle_outlined),
+        label: const Text(
+          'Stop Navigation',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+        ),
+        // _stopNavigation resets all trip state and restores planning UI.
+        onPressed: _stopNavigation,
+      ),
+    );
+  }
+
   /// Builds the live speed / speed-limit overlay panel (PositionPanel).
   ///
   /// Always visible while [_navigationMode] is active, positioned at the
@@ -5447,7 +5503,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      // AppBar is hidden during active navigation so the full screen is used
+      // for the map and turn-by-turn components.
+      appBar: _isNavigating ? null : AppBar(
         // Show destination name in the title when one is selected.
         title: _selectedDestinationName != null
             ? Column(
@@ -5677,14 +5735,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Shown while the route is built but navigation has not yet
                 // started.  Includes route alternatives cards, route stats
                 // summary, and the Start Navigation / Optimize buttons.
+                // ── Planning UI: hidden once navigation starts ─────────────
+                // Preview bottom panel + map legend are only shown in the
+                // route-preview state (_isNavigating == false).
                 if (_routePoints.isNotEmpty &&
-                    !_navigationStarted &&
+                    !_isNavigating &&
                     !_isLoading)
                   _buildPreviewBottomPanel(),
-                // ── Map legend ─────────────────────────────────────────────
-                // Mini legend explaining route colour coding.  Visible in
-                // preview mode (route built, not yet navigating).
-                if (_routePoints.isNotEmpty && !_navigationStarted && !_isLoading)
+                if (_routePoints.isNotEmpty && !_isNavigating && !_isLoading)
                   _buildMapLegend(),
                 // ── Restriction ahead alert card ──────────────────────────
                 // Shown just below the nav banner when the truck is within
@@ -5783,33 +5841,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     child: _buildSpeedPanel(),
                   ),
                 // ── POI toggle FAB ────────────────────────────────────────
-                // Floating action button to show/hide truck stop POI markers.
-                // Positioned at the bottom-left so it does not overlap the
-                // speed panel (bottom-right) or the rerouting indicator
-                // (bottom-centre).  Available at all times, not just during
-                // navigation, so drivers can inspect stops before departing.
-                Positioned(
-                  bottom: 24,
-                  left: 16,
-                  child: FloatingActionButton.small(
-                    heroTag: 'poi_toggle',
-                    tooltip: _showTruckStops
-                        ? 'Hide truck stops'
-                        : 'Show truck stops',
-                    backgroundColor: _showTruckStops
-                        ? Colors.blue.shade700
-                        : Colors.grey.shade700,
-                    onPressed: () {
-                      setState(() => _showTruckStops = !_showTruckStops);
-                    },
-                    child: Icon(
-                      _showTruckStops
-                          ? Icons.local_gas_station
-                          : Icons.local_gas_station_outlined,
-                      color: Colors.white,
+                // Hidden during navigation so the Stop Navigation button can
+                // occupy the same bottom-left slot without overlap.
+                if (!_isNavigating)
+                  Positioned(
+                    bottom: 24,
+                    left: 16,
+                    child: FloatingActionButton.small(
+                      heroTag: 'poi_toggle',
+                      tooltip: _showTruckStops
+                          ? 'Hide truck stops'
+                          : 'Show truck stops',
+                      backgroundColor: _showTruckStops
+                          ? Colors.blue.shade700
+                          : Colors.grey.shade700,
+                      onPressed: () {
+                        setState(() => _showTruckStops = !_showTruckStops);
+                      },
+                      child: Icon(
+                        _showTruckStops
+                            ? Icons.local_gas_station
+                            : Icons.local_gas_station_outlined,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
-                ),
+                // ── Navigation controls ───────────────────────────────────
+                // Stop Navigation button: only visible while _isNavigating.
+                // Tapping calls _stopNavigation to end the trip and restore
+                // planning UI.
+                if (_isNavigating) _buildNavigationControls(),
               ],
             ),
           ),

@@ -940,7 +940,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// (Mobil, Exxon, Chevron, Shell, BP, Circle K).
   ///
   /// Returns one of the canonical keys: pilot, flyingj, loves, ta, petro,
-  /// ambest, roadranger, kwiktrip, maverik, caseys, sappbros, petro-canada,
+  /// ambest, roadranger, kwiktrip, qt, maverik, caseys, sappbros, petro-canada,
   /// husky, esso, ultramar, irving, independent, mobil, exxon, chevron,
   /// shell, bp, circlek, or 'default'.
   String _normalizeTruckStopBrand(String rawName) {
@@ -973,6 +973,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Regional chains
     if (n.contains('kwik trip') || n.contains('kwiktrip')) return 'kwiktrip';
+    if (n == 'qt' || n.contains('quiktrip') || n.contains('quicktrip') || n.contains('quick trip')) return 'qt';
     if (n.contains('maverik')) return 'maverik';
     if (n.contains("casey's") || n.contains('caseys')) return 'caseys';
 
@@ -1024,7 +1025,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'pilot':      'assets/logos/pilot.png',
     'loves':      'assets/logos/loves.png',
     'ta':         'assets/logos/ta.png',
-    'petro':      'assets/logos/petro.png',
     'flyingj':    'assets/logos/flyingj.png',
     'ambest':     'assets/logos/ambest.png',
     'roadranger': 'assets/logos/roadranger.png',
@@ -1035,7 +1035,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Equivalent to: await mapboxMap.style.addImage("rest", restBytes);
     'rest':       'assets/logos/rest.png',
     // ── Additional logos in assets/logos/truckstops/ ───────────────────────
+    'petro':        'assets/logos/truckstops/petro.png',
     'kwiktrip':     'assets/logos/truckstops/kwiktrip.png',
+    'qt':           'assets/logos/truckstops/qt.png',
     'maverik':      'assets/logos/maverik.png',
     'caseys':       'assets/logos/truckstops/caseys.png',
     'sappbros':     'assets/logos/truckstops/sappbros.png',

@@ -218,6 +218,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Expand this section later to support real API data, weigh stations, etc.
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
+  bool _iconsPreloaded = false;
 
   // ── Map POI state (weigh stations, police, ports of entry) ─────────────────
   //
@@ -378,6 +379,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Preload every uploaded brand icon once so Image.asset renders without flicker.
+    if (!_iconsPreloaded) {
+      _iconsPreloaded = true;
+      for (final path in _brandIcons.values) {
+        precacheImage(AssetImage(path), context);
+      }
+    }
   }
 
   @override
@@ -669,25 +682,31 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 'default';
   }
 
-  /// Returns the asset path for the logo image that corresponds to [brand].
+  /// Maps every canonical brand key to its uploaded PNG asset path.
   ///
-  /// [brand] must be a canonical key produced by [_normalizeTruckStopBrand].
-  /// Unknown or unrecognised keys fall back to the generic `default.png`
-  /// placeholder so every stop always has a visible icon.
-  ///
-  /// NOTE: The logo files in `assets/logos/truckstops/` are placeholder
-  /// app-safe images.  Replace them with licensed artwork before distributing
-  /// an app that displays official brand trademarks.
-  String _getTruckStopLogo(String brand) {
-    const knownBrands = {
-      'pilot', 'flyingj', 'loves', 'ta', 'petro', 'ambest', 'roadranger',
-      'kwiktrip', 'maverik', 'caseys', 'sappbros',
-      'petro-canada', 'husky', 'esso', 'ultramar', 'irving',
-      'independent',
-    };
-    final key = knownBrands.contains(brand) ? brand : 'default';
-    return 'assets/logos/truckstops/$key.png';
-  }
+  /// Only brands whose logo files exist in `assets/logos/truckstops/` are
+  /// listed here.  Any stop whose normalised name is not in this map falls
+  /// back to `_brandIcons['default']`.
+  static const Map<String, String> _brandIcons = {
+    'pilot':        'assets/logos/truckstops/pilot.png',
+    'flyingj':      'assets/logos/truckstops/flyingj.png',
+    'loves':        'assets/logos/truckstops/loves.png',
+    'ta':           'assets/logos/truckstops/ta.png',
+    'petro':        'assets/logos/truckstops/petro.png',
+    'ambest':       'assets/logos/truckstops/ambest.png',
+    'roadranger':   'assets/logos/truckstops/roadranger.png',
+    'kwiktrip':     'assets/logos/truckstops/kwiktrip.png',
+    'maverik':      'assets/logos/truckstops/maverik.png',
+    'caseys':       'assets/logos/truckstops/caseys.png',
+    'sappbros':     'assets/logos/truckstops/sappbros.png',
+    'petro-canada': 'assets/logos/truckstops/petro-canada.png',
+    'husky':        'assets/logos/truckstops/husky.png',
+    'esso':         'assets/logos/truckstops/esso.png',
+    'ultramar':     'assets/logos/truckstops/ultramar.png',
+    'irving':       'assets/logos/truckstops/irving.png',
+    'independent':  'assets/logos/truckstops/independent.png',
+    'default':      'assets/logos/truckstops/default.png',
+  };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
   ///
@@ -697,16 +716,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Each marker displays the brand logo loaded from `assets/logos/truckstops/`
   /// so drivers can instantly recognise Pilot, Flying J, Love's, TA, Petro,
   /// Road Ranger, AM Best, regional chains (Kwik Trip, Maverik, Casey's, Sapp
-  /// Bros), Canadian brands, and independent stops at a glance.  Brand names
+  /// Bros), Canadian brands, and independent stops at a glance.  Stop names
   /// are first normalised via [_normalizeTruckStopBrand] so messy or partial
   /// names (e.g. "Love's Travel Stop", "TA Petro") resolve correctly.
+  /// Brands without an uploaded PNG fall back to the default icon.
   /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     return _truckStops.map((stop) {
-      final normalizedBrand = _normalizeTruckStopBrand(stop.brand);
-      final String logoPath = _getTruckStopLogo(normalizedBrand);
+      final String logoPath =
+          _brandIcons[_normalizeTruckStopBrand(stop.name)] ??
+          _brandIcons['default']!;
 
       return Marker(
         point: stop.position,

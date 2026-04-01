@@ -915,7 +915,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// (Mobil, Exxon, Chevron, Shell, BP, Circle K).
   ///
   /// Returns one of the canonical keys: pilot, flyingj, loves, ta, petro,
-  /// ambest, roadranger, kwiktrip, maverik, caseys, sappbros, petro-canada,
+  /// ambest, roadranger, kwiktrip, qt, maverik, caseys, sappbros, petro-canada,
   /// husky, esso, ultramar, irving, independent, mobil, exxon, chevron,
   /// shell, bp, circlek, or 'default'.
   String _normalizeTruckStopBrand(String rawName) {
@@ -948,6 +948,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Regional chains
     if (n.contains('kwik trip') || n.contains('kwiktrip')) return 'kwiktrip';
+    if (n == 'qt' || n.contains('quiktrip') || n.contains('quicktrip') || n.contains('quick trip')) return 'qt';
     if (n.contains('maverik')) return 'maverik';
     if (n.contains("casey's") || n.contains('caseys')) return 'caseys';
 
@@ -986,6 +987,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'loves':       'assets/logos/loves.png',
     'ta':          'assets/logos/ta.png',
     'flyingj':     'assets/logos/flyingj.png',
+    'petro':       'assets/logos/truckstops/petro.png',
+    'qt':          'assets/logos/truckstops/qt.png',
+    'exxon':       'assets/logos/truckstops/exxon.png',
+    'mobil':       'assets/logos/truckstops/mobil.png',
     'shell':       'assets/logos/truckstops/shell.png',
     'chevron':     'assets/logos/truckstops/chevron.png',
     'maverik':     'assets/logos/maverik.png',

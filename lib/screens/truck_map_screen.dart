@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
@@ -218,7 +220,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Expand this section later to support real API data, weigh stations, etc.
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
-  bool _iconsPreloaded = false;
+
+  // Holds each brand's PNG decoded as raw bytes so markers can render via
+  // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
+  // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
+  Map<String, Uint8List> _brandIconBytes = {};
 
   // ── Map POI state (weigh stations, police, ports of entry) ─────────────────
   //
@@ -379,18 +385,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Preload every uploaded brand icon once so Image.asset renders without flicker.
-    if (!_iconsPreloaded) {
-      _iconsPreloaded = true;
-      for (final path in _brandIcons.values) {
-        precacheImage(AssetImage(path), context);
-      }
-    }
+    // Load all brand icon PNGs as raw bytes once at startup so that
+    // _buildTruckStopMarkers() can render them via Image.memory() without
+    // needing a BuildContext — the flutter_map equivalent of registering images
+    // with Mapbox style.addImage() before adding a SymbolLayer.
+    _preloadBrandIcons();
   }
 
   @override
@@ -404,6 +403,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.dispose();
   }
 
+  // ── Brand icon preloader ──────────────────────────────────────────────────
+
+  /// Loads every brand PNG listed in [_brandIcons] as raw [Uint8List] bytes
+  /// using [rootBundle.load], then stores them in [_brandIconBytes] keyed by
+  /// their canonical brand key (e.g. 'pilot', 'loves', 'default').
+  ///
+  /// This mirrors the Mapbox `style.addImage()` registration step: each entry
+  /// in [_brandIconBytes] acts as a named image that [_buildTruckStopMarkers]
+  /// can look up by the stop's [TruckStop.icon] key — exactly like a Mapbox
+  /// SymbolLayer using `iconImage: ["get", "icon"]`.
+  ///
+  /// Assets that cannot be loaded (e.g. missing PNG file) are silently skipped;
+  /// the marker builder falls back to the 'default' entry or an icon widget.
+  Future<void> _preloadBrandIcons() async {
+    final loaded = <String, Uint8List>{};
+    for (final entry in _brandIcons.entries) {
+      try {
+        final data = await rootBundle.load(entry.value);
+        loaded[entry.key] = data.buffer.asUint8List();
+      } catch (_) {
+        // Asset missing — skip; marker builder will use fallback Icon widget.
+      }
+    }
+    if (mounted) setState(() => _brandIconBytes = loaded);
+  }
+
   // ── Truck marker builders ─────────────────────────────────────────────────
   //
   // flutter_map uses Widget-based, stateless markers that are rebuilt each
@@ -412,7 +437,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //
   //   Google Maps Flutter              flutter_map equivalent
   //   ─────────────────────────────    ────────────────────────────────────────
-  //   BitmapDescriptor.fromAssetImage  Image.asset (warmed by Flutter cache)
+  //   BitmapDescriptor.fromAssetImage  Image.memory (from rootBundle bytes)
   //   Marker(anchor: Offset(0.5,0.5))  Marker(alignment: Alignment.center)
   //   marker.rotation = bearing        AnimatedRotation(turns: bearing/360)
   //   markers = {truckMarker, …}       MarkerLayer(markers: […]) in build()
@@ -509,6 +534,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(45.581, -122.571),
       address: 'Portland, OR',
       dieselPrice: 4.25,
+      icon: 'pilot',
     ),
     TruckStop(
       id: '2',
@@ -517,6 +543,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(44.057, -123.092),
       address: 'Eugene, OR',
       dieselPrice: 4.19,
+      icon: 'loves',
     ),
     TruckStop(
       id: '3',
@@ -525,6 +552,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(42.328, -122.875),
       address: 'Medford, OR',
       dieselPrice: 4.35,
+      icon: 'ta',
     ),
     TruckStop(
       id: '4',
@@ -533,6 +561,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(41.740, -122.637),
       address: 'Yreka, CA',
       dieselPrice: 4.45,
+      icon: 'petro',
     ),
     TruckStop(
       id: '5',
@@ -541,6 +570,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(40.770, -122.388),
       address: 'Redding, CA',
       dieselPrice: 4.29,
+      icon: 'flyingj',
     ),
     TruckStop(
       id: '6',
@@ -549,6 +579,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(39.724, -121.836),
       address: 'Chico, CA',
       dieselPrice: 4.32,
+      icon: 'pilot',
     ),
     TruckStop(
       id: '7',
@@ -556,6 +587,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(43.210, -122.990),
       address: 'I-5 Northbound, OR',
+      icon: 'default',
     ),
     TruckStop(
       id: '8',
@@ -563,6 +595,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
+      icon: 'default',
     ),
   ];
 
@@ -713,56 +746,44 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Each marker displays the brand logo loaded from `assets/logos/truckstops/`
-  /// so drivers can instantly recognise Pilot, Flying J, Love's, TA, Petro,
-  /// Road Ranger, AM Best, regional chains (Kwik Trip, Maverik, Casey's, Sapp
-  /// Bros), Canadian brands, and independent stops at a glance.  Stop names
-  /// are first normalised via [_normalizeTruckStopBrand] so messy or partial
-  /// names (e.g. "Love's Travel Stop", "TA Petro") resolve correctly.
-  /// Brands without an uploaded PNG fall back to the default icon.
+  /// Each marker renders the brand logo as a clean icon using the pre-registered
+  /// bytes from [_brandIconBytes] — the flutter_map equivalent of a Mapbox
+  /// SymbolLayer with `iconImage: ["get", "icon"]`.  The icon key is resolved
+  /// via [TruckStop.icon] (explicit) or by normalising the stop name via
+  /// [_normalizeTruckStopBrand] (fallback).  Stops whose key has no registered
+  /// bytes fall back to the 'default' entry or an icon widget.
   /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     return _truckStops.map((stop) {
-      final String logoPath =
-          _brandIcons[_normalizeTruckStopBrand(stop.name)] ??
-          _brandIcons['default']!;
+      // Resolve the icon key: prefer the explicit TruckStop.icon field, then
+      // normalise from the stop name — mirrors iconImage: ["get", "icon"].
+      final String iconKey =
+          stop.icon ?? _normalizeTruckStopBrand(stop.name);
+      final Uint8List? bytes =
+          _brandIconBytes[iconKey] ?? _brandIconBytes['default'];
 
       return Marker(
         point: stop.position,
-        width: 44,
-        height: 44,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(4),
-            child: ClipOval(
-              child: Image.asset(
-                logoPath,
-                width: 36,
-                height: 36,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const Icon(
+          child: bytes != null
+              ? Image.memory(
+                  bytes,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                )
+              : const Icon(
                   Icons.local_gas_station,
                   color: Colors.blue,
-                  size: 24,
+                  size: 32,
                 ),
-              ),
-            ),
-          ),
         ),
       );
     }).toList();
@@ -5773,6 +5794,7 @@ class TruckStop {
     required this.position,
     this.address,
     this.dieselPrice,
+    this.icon,
   });
 
   /// Unique identifier for this stop (used as the marker ID prefix).
@@ -5792,6 +5814,14 @@ class TruckStop {
 
   /// Current diesel price in USD per gallon.  Null when price is unavailable.
   final double? dieselPrice;
+
+  /// Canonical brand icon key that matches a registered entry in
+  /// [_TruckMapScreenState._brandIconBytes] (e.g. 'pilot', 'loves', 'ta').
+  /// Mirrors the GeoJSON feature `properties["icon"]` used by a Mapbox
+  /// SymbolLayer with `iconImage: ["get", "icon"]`.
+  /// When null, [_TruckMapScreenState._normalizeTruckStopBrand] is used as
+  /// a fallback so legacy or API-sourced stops still resolve correctly.
+  final String? icon;
 }
 
 // ── Map POI types, model, and sample data ─────────────────────────────────────

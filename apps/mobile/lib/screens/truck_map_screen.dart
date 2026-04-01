@@ -535,6 +535,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Portland, OR',
       dieselPrice: 4.25,
       icon: 'pilot',
+      description: 'Large Pilot with 24/7 fuel, truck parking, showers, and Subway restaurant.',
     ),
     TruckStop(
       id: '2',
@@ -544,6 +545,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Eugene, OR',
       dieselPrice: 4.19,
       icon: 'loves',
+      description: "Love's with CAT scale, showers, Hardee's, and tire care center.",
     ),
     TruckStop(
       id: '3',
@@ -553,6 +555,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Medford, OR',
       dieselPrice: 4.35,
       icon: 'ta',
+      description: 'TA with full truck service shop, Iron Skillet, showers, and CAT scale.',
     ),
     TruckStop(
       id: '4',
@@ -562,6 +565,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Yreka, CA',
       dieselPrice: 4.45,
       icon: 'petro',
+      description: 'Petro with certified truck lube, CAT scale, Iron Skillet, and 24/7 fuel.',
     ),
     TruckStop(
       id: '5',
@@ -571,6 +575,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Redding, CA',
       dieselPrice: 4.29,
       icon: 'flyingj',
+      description: 'Flying J with myPilot rewards, truck parking for 150 rigs, and Denny\'s.',
     ),
     TruckStop(
       id: '6',
@@ -580,6 +585,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Chico, CA',
       dieselPrice: 4.32,
       icon: 'pilot',
+      description: 'Pilot with 24/7 diesel, DEF dispensers, showers, and convenience store.',
     ),
     TruckStop(
       id: '7',
@@ -588,6 +594,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(43.210, -122.990),
       address: 'I-5 Northbound, OR',
       icon: 'default',
+      description: 'Oregon DOT rest area with parking, restrooms, picnic tables, and dog walk area.',
     ),
     TruckStop(
       id: '8',
@@ -596,6 +603,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
       icon: 'default',
+      description: 'Caltrans rest area with truck-specific parking bays and vending machines.',
     ),
     TruckStop(
       id: '9',
@@ -605,6 +613,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Weed, CA',
       dieselPrice: 4.38,
       icon: 'mobil',
+      description: 'Mobil with high-flow diesel pumps, DEF, and 24-hour convenience store.',
     ),
     TruckStop(
       id: '10',
@@ -614,6 +623,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Red Bluff, CA',
       dieselPrice: 4.41,
       icon: 'exxon',
+      description: 'Exxon travel plaza with Speedpass+, truck diesel lanes, and quick mart.',
     ),
     TruckStop(
       id: '11',
@@ -623,6 +633,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Orland, CA',
       dieselPrice: 4.33,
       icon: 'chevron',
+      description: 'Chevron with Techron diesel, DEF, truck parking, and 24/7 service.',
     ),
     TruckStop(
       id: '12',
@@ -632,6 +643,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Williams, CA',
       dieselPrice: 4.30,
       icon: 'shell',
+      description: 'Shell with V-Power diesel, car wash, and large-format truck canopy.',
     ),
     TruckStop(
       id: '13',
@@ -641,6 +653,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Cottonwood, CA',
       dieselPrice: 4.27,
       icon: 'bp',
+      description: 'BP with Amoco Ultimate diesel, DEF, and convenience store with hot food.',
     ),
     TruckStop(
       id: '14',
@@ -650,6 +663,116 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Corning, CA',
       dieselPrice: 4.22,
       icon: 'circlek',
+      description: 'Convenience store with diesel lanes and a quick DEF fill-up station.',
+    ),
+    // ── New stops ────────────────────────────────────────────────────────────
+    TruckStop(
+      id: '15',
+      name: "Love's Travel Stop",
+      brand: "Love's",
+      position: const LatLng(46.871, -114.017),
+      address: 'Missoula, MT',
+      dieselPrice: 4.18,
+      icon: 'loves',
+      description: 'Full-service Love\'s with showers, laundry, CAT scale, and Subway restaurant on-site.',
+    ),
+    TruckStop(
+      id: '16',
+      name: 'TA Travel Center',
+      brand: 'TA',
+      position: const LatLng(43.613, -116.202),
+      address: 'Boise, ID',
+      dieselPrice: 4.31,
+      icon: 'ta',
+      description: 'TravelCenters of America — diesel, DEF, parking for 200+ trucks, Iron Skillet restaurant.',
+    ),
+    TruckStop(
+      id: '17',
+      name: 'Pilot Flying J',
+      brand: 'Pilot',
+      position: const LatLng(47.658, -117.426),
+      address: 'Spokane, WA',
+      dieselPrice: 4.24,
+      icon: 'pilot',
+      description: 'Pilot Flying J with myPilot rewards, 24/7 fuel, truck parking, and Denny\'s inside.',
+    ),
+    TruckStop(
+      id: '18',
+      name: 'Petro Stopping Center',
+      brand: 'Petro',
+      position: const LatLng(41.263, -95.855),
+      address: 'Omaha, NE',
+      dieselPrice: 4.12,
+      icon: 'petro',
+      description: 'Petro truck stop with Iron Skillet diner, CAT scale, and full truck service center.',
+    ),
+    TruckStop(
+      id: '19',
+      name: 'Flying J Travel Center',
+      brand: 'Flying J',
+      position: const LatLng(36.170, -115.139),
+      address: 'Las Vegas, NV',
+      dieselPrice: 4.47,
+      icon: 'flyingj',
+      description: 'Flying J with myPilot loyalty perks, diesel exhaust fluid, showers, and Wi-Fi lounge.',
+    ),
+    TruckStop(
+      id: '20',
+      name: 'Maverik Adventure\'s First Stop',
+      brand: 'Maverik',
+      position: const LatLng(40.760, -111.891),
+      address: 'Salt Lake City, UT',
+      dieselPrice: 4.09,
+      icon: 'maverik',
+      description: 'Maverik BonFire grill, diesel, DEF, and adventure-themed convenience store.',
+    ),
+    TruckStop(
+      id: '21',
+      name: 'Kwik Trip Travel Center',
+      brand: 'Kwik Trip',
+      position: const LatLng(43.787, -88.787),
+      address: 'Fond du Lac, WI',
+      dieselPrice: 4.05,
+      icon: 'kwiktrip',
+      description: 'Kwik Trip with fresh bakery, hot food, truck lanes, and loyalty card savings.',
+    ),
+    TruckStop(
+      id: '22',
+      name: 'Weigh Station – I-5 Southbound',
+      brand: 'Weigh Station',
+      position: const LatLng(44.940, -123.022),
+      address: 'Salem, OR – I-5 SB',
+      icon: 'weight_station',
+      description: 'Oregon DOT portable scale site. All vehicles over 26,001 lbs must stop when open.',
+    ),
+    TruckStop(
+      id: '23',
+      name: 'Weigh Station – I-80 Westbound',
+      brand: 'Weigh Station',
+      position: const LatLng(41.120, -112.017),
+      address: 'Ogden, UT – I-80 WB',
+      icon: 'weight_station',
+      description: 'Utah DOT permanent weigh station. WIM sensors active 24/7; booths open Mon–Fri.',
+    ),
+    TruckStop(
+      id: '24',
+      name: 'Sapp Bros Travel Center',
+      brand: 'Sapp Bros',
+      position: const LatLng(40.869, -97.598),
+      address: 'York, NE',
+      dieselPrice: 4.10,
+      icon: 'sappbros',
+      description: 'Family-owned Sapp Bros with apple logo, showers, scales, and home-cooked meals.',
+    ),
+    TruckStop(
+      id: '25',
+      name: 'Road Ranger Fuel Center',
+      brand: 'Road Ranger',
+      position: const LatLng(41.880, -87.630),
+      address: 'Chicago, IL',
+      dieselPrice: 4.55,
+      icon: 'roadranger',
+      description: 'Road Ranger high-volume diesel lanes with cardlock access and reefer plug-ins.',
     ),
   ];
 
@@ -680,7 +803,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     double maxDistanceMeters = 5000,
   }) {
     return _mockTruckStops
-        .where((stop) => stop.brand != 'Rest Area')
+        .where((stop) =>
+            stop.brand != 'Rest Area' && stop.brand != 'Weigh Station')
         .where((stop) {
           for (final pt in routePoints) {
             final d = Geolocator.distanceBetween(
@@ -776,6 +900,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Independent
     if (n.contains('independent') || n == 'indie') return 'independent';
 
+    // Weigh stations / scales — must check last so branded stops resolve first
+    if (n.contains('weigh station') ||
+        n.contains('weight station') ||
+        n.contains('weigh sta') ||
+        n.contains('scale') ||
+        n == 'weigh') return 'weight_station';
+
     return 'default';
   }
 
@@ -803,13 +934,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'irving':       'assets/logos/truckstops/irving.png',
     'independent':  'assets/logos/truckstops/independent.png',
     // Brands with uploaded high-resolution logos
-    'mobil':        'assets/logos/truckstops/mobil.png',
-    'exxon':        'assets/logos/truckstops/exxon.png',
-    'chevron':      'assets/logos/truckstops/chevron.png',
-    'shell':        'assets/logos/truckstops/shell.png',
-    'bp':           'assets/logos/truckstops/bp.png',
-    'circlek':      'assets/logos/truckstops/circlek.png',
-    'default':      'assets/logos/truckstops/default.png',
+    'mobil':          'assets/logos/truckstops/mobil.png',
+    'exxon':          'assets/logos/truckstops/exxon.png',
+    'chevron':        'assets/logos/truckstops/chevron.png',
+    'shell':          'assets/logos/truckstops/shell.png',
+    'bp':             'assets/logos/truckstops/bp.png',
+    'circlek':        'assets/logos/truckstops/circlek.png',
+    // Weigh station icon — registered exactly like a Mapbox style.addImage()
+    // entry so that any stop or POI whose icon key is 'weight_station' renders
+    // the dedicated logo rather than a generic fallback.
+    'weight_station': 'assets/logos/truckstops/weight_station.png',
+    'default':        'assets/logos/truckstops/default.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -862,11 +997,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds map [Marker]s for all [MapPoi] entries in [_mapPois].
   ///
-  /// Weigh stations are rendered in orange, police in deep-purple, and ports
-  /// of entry in indigo so drivers can instantly distinguish POI types at a
-  /// glance.  Tapping a marker shows a brief info sheet via [_showPoiAlert].
+  /// Weigh stations are rendered using the registered `weight_station` PNG
+  /// logo (mirrors a Mapbox SymbolLayer `iconImage: ["get", "icon"]` lookup).
+  /// Police and ports of entry retain coloured icon markers for instant
+  /// type recognition.  Tapping a marker shows a brief info sheet via
+  /// [_showPoiAlert].
   List<Marker> _buildPoiMarkers() {
     return _mapPois.map((poi) {
+      // Weigh stations use the dedicated PNG logo loaded in _preloadBrandIcons.
+      if (poi.type == PoiType.weighStation) {
+        final Uint8List? bytes = _brandIconBytes['weight_station'] ??
+            _brandIconBytes['default'];
+        return Marker(
+          point: poi.position,
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () => _showPoiAlert(poi),
+            child: bytes != null
+                ? Image.memory(
+                    bytes,
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                  )
+                : Icon(Icons.scale,
+                    color: Colors.orange.shade700, size: 32),
+          ),
+        );
+      }
+
       final Color color;
       final IconData icon;
       switch (poi.type) {
@@ -1036,8 +1198,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
       builder: (ctx) {
         final bool isRestArea = stop.brand == 'Rest Area';
-        final Color headerColor =
-            isRestArea ? Colors.teal.shade700 : Colors.blue.shade700;
+        final bool isWeighStation = stop.brand == 'Weigh Station';
+        final Color headerColor = isRestArea
+            ? Colors.teal.shade700
+            : isWeighStation
+                ? Colors.orange.shade700
+                : Colors.blue.shade700;
         return Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
           child: Column(
@@ -1052,7 +1218,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     child: Icon(
                       isRestArea
                           ? Icons.airline_seat_recline_normal
-                          : Icons.local_gas_station,
+                          : isWeighStation
+                              ? Icons.scale
+                              : Icons.local_gas_station,
                       color: Colors.white,
                     ),
                   ),
@@ -1112,7 +1280,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+              ],
+              // ── Description snippet ───────────────────────────────────────
+              if (stop.description != null) ...[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline,
+                        size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        stop.description!,
+                        style: const TextStyle(fontSize: 14, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
               ],
               // ── Close button ─────────────────────────────────────────────
               SizedBox(
@@ -4094,9 +4280,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final etaLabel = etaHours > 0 ? '${etaHours}h ${etaMins}m' : '${etaMins}m';
 
     // Fuel stops: truck stops near the route that are actual fuel providers
-    // (exclude rest-area brands which don't sell diesel).
+    // (exclude rest-area and weigh-station brands which don't sell diesel).
     final fuelStops = _truckStops
-        .where((s) => s.brand != 'Rest Area')
+        .where((s) => s.brand != 'Rest Area' && s.brand != 'Weigh Station')
         .length;
 
     // Weigh stations: map POIs of weighStation type.
@@ -5866,6 +6052,7 @@ class TruckStop {
     this.address,
     this.dieselPrice,
     this.icon,
+    this.description,
   });
 
   /// Unique identifier for this stop (used as the marker ID prefix).
@@ -5893,6 +6080,11 @@ class TruckStop {
   /// When null, [_TruckMapScreenState._normalizeTruckStopBrand] is used as
   /// a fallback so legacy or API-sourced stops still resolve correctly.
   final String? icon;
+
+  /// Short description shown in the info window / bottom sheet snippet,
+  /// e.g. "Full-service truck stop with scales, showers & restaurant."
+  /// When null the description row is omitted from the info sheet.
+  final String? description;
 }
 
 // ── Map POI types, model, and sample data ─────────────────────────────────────

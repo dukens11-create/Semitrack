@@ -404,20 +404,49 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   // ── Brand icon preloader ──────────────────────────────────────────────────
+  //
+  // flutter_map equivalent of the Mapbox native SDK pattern:
+  //
+  //   Mapbox (native SDK)                flutter_map equivalent
+  //   ──────────────────────────────     ──────────────────────────────────────
+  //   style.addImage("pilot", bytes)  →  _brandIconBytes["pilot"] = bytes
+  //   style.addImage("weigh", bytes)  →  _brandIconBytes["weigh"] = bytes
+  //   GeoJSON Feature { brand:"pilot" }→  TruckStop(icon: 'pilot', ...)
+  //   SymbolLayer iconImage:["get","brand"]→ Image.memory(_brandIconBytes[stop.icon])
+  //
+  // To add or change a logo:
+  //   1. Place a 64×64 px RGBA PNG in assets/logos/ (e.g. mylogo.png).
+  //   2. Add an entry to [_brandIcons]: 'mylogo': 'assets/logos/mylogo.png'
+  //   3. In [_normalizeTruckStopBrand] map the stop name to that key.
+  //   4. Set TruckStop(icon: 'mylogo', ...) on any sample stops.
+  //   5. Run `flutter pub get` and hot-reload.
 
-  /// Loads every brand PNG listed in [_brandIcons] as raw [Uint8List] bytes
-  /// using [rootBundle.load], then stores them in [_brandIconBytes] keyed by
-  /// their canonical brand key (e.g. 'pilot', 'loves', 'default').
+  /// Reusable logo loader: reads every PNG listed in [_brandIcons] into raw
+  /// [Uint8List] bytes via [rootBundle.load] and stores them in
+  /// [_brandIconBytes] keyed by their canonical brand key.
   ///
-  /// This mirrors the Mapbox `style.addImage()` registration step: each entry
-  /// in [_brandIconBytes] acts as a named image that [_buildTruckStopMarkers]
-  /// can look up by the stop's [TruckStop.icon] key — exactly like a Mapbox
-  /// SymbolLayer using `iconImage: ["get", "icon"]`.
+  /// **Mapbox addImage() equivalent.**  In the native Mapbox SDK you would do:
+  /// ```dart
+  /// // Mapbox style.addImage() — registers each image under a named key.
+  /// for (final entry in logos.entries) {
+  ///   final bytes = await rootBundle.load(entry.value);
+  ///   await mapboxMap.style.addImage(entry.key, bytes.buffer.asUint8List());
+  /// }
+  /// ```
+  /// In flutter_map there is no style layer — instead we store the decoded
+  /// bytes in [_brandIconBytes] and pass them directly to [Image.memory] when
+  /// building each [Marker].  The look-up by key mirrors
+  /// `iconImage: ["get", "brand"]` in a Mapbox SymbolLayer.
   ///
-  /// Assets that cannot be loaded (e.g. missing PNG file) are silently skipped;
-  /// the marker builder falls back to the 'default' entry or an icon widget.
+  /// Call this once after map style loads (currently invoked from [initState]).
+  /// Assets that cannot be loaded are silently skipped; the marker builder
+  /// falls back to the 'default' entry or a generic icon widget.
   Future<void> _preloadBrandIcons() async {
     final loaded = <String, Uint8List>{};
+
+    // Load all registered logos — equivalent to calling style.addImage() for
+    // each entry.  Keys match PNG filenames without .png, mirroring the Mapbox
+    // GeoJSON property { "brand": "<key>" } + SymbolLayer iconImage:["get","brand"].
     for (final entry in _brandIcons.entries) {
       try {
         final data = await rootBundle.load(entry.value);
@@ -426,6 +455,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Asset missing — skip; marker builder will use fallback Icon widget.
       }
     }
+
     if (mounted) setState(() => _brandIconBytes = loaded);
   }
 
@@ -525,7 +555,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //
   // Hard-coded stops covering the default Portland → Winnemucca route.
   // Replace with a real API call or local database in a production build.
-  // Add more brands here: Petro, Flying J, rest areas, weigh stations, etc.
+  //
+  // ── GeoJSON / SymbolLayer equivalent ──────────────────────────────────────
+  // In the native Mapbox SDK you would represent these locations as a
+  // GeoJSON FeatureCollection and render them with a SymbolLayer:
+  //
+  //   {
+  //     "type": "FeatureCollection",
+  //     "features": [
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-122.571, 45.581] },
+  //         "properties": { "brand": "pilot" }   // key == PNG filename w/o .png
+  //       },
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-123.092, 44.057] },
+  //         "properties": { "brand": "loves" }
+  //       },
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-122.875, 42.328] },
+  //         "properties": { "brand": "ta" }
+  //       },
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-122.637, 41.740] },
+  //         "properties": { "brand": "petro" }
+  //       },
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-123.022, 44.940] },
+  //         "properties": { "brand": "weigh" }   // assets/logos/weigh.png
+  //       },
+  //       { "type": "Feature",
+  //         "geometry": { "type": "Point", "coordinates": [-122.990, 43.210] },
+  //         "properties": { "brand": "rest" }    // assets/logos/rest.png
+  //       }
+  //     ]
+  //   }
+  //
+  // With the SymbolLayer configured as:
+  //   iconImage: ["get", "brand"]   // picks the image registered via addImage()
+  //
+  // In flutter_map, TruckStop.icon plays the role of the "brand" GeoJSON
+  // property, and _brandIconBytes[stop.icon] plays the role of addImage().
+  // To add a new logo type: place <name>.png in assets/logos/, add an entry
+  // to _brandIconsFromLogos, and create a TruckStop with icon: '<name>'.
   static final List<TruckStop> _mockTruckStops = [
     TruckStop(
       id: '1',
@@ -593,7 +664,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(43.210, -122.990),
       address: 'I-5 Northbound, OR',
-      icon: 'default',
+      // 'rest' matches assets/logos/rest.png — the custom rest-area marker.
+      icon: 'rest',
       description: 'Oregon DOT rest area with parking, restrooms, picnic tables, and dog walk area.',
     ),
     TruckStop(
@@ -602,7 +674,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Rest Area',
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
-      icon: 'default',
+      // 'rest' matches assets/logos/rest.png — the custom rest-area marker.
+      icon: 'rest',
       description: 'Caltrans rest area with truck-specific parking bays and vending machines.',
     ),
     TruckStop(
@@ -742,7 +815,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Weigh Station',
       position: const LatLng(44.940, -123.022),
       address: 'Salem, OR – I-5 SB',
-      icon: 'weight_station',
+      // 'weigh' matches assets/logos/weigh.png — the custom weigh-station marker.
+      icon: 'weigh',
       description: 'Oregon DOT portable scale site. All vehicles over 26,001 lbs must stop when open.',
     ),
     TruckStop(
@@ -751,7 +825,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       brand: 'Weigh Station',
       position: const LatLng(41.120, -112.017),
       address: 'Ogden, UT – I-80 WB',
-      icon: 'weight_station',
+      // 'weigh' matches assets/logos/weigh.png — the custom weigh-station marker.
+      icon: 'weigh',
       description: 'Utah DOT permanent weigh station. WIM sensors active 24/7; booths open Mon–Fri.',
     ),
     TruckStop(
@@ -900,29 +975,54 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Independent
     if (n.contains('independent') || n == 'indie') return 'independent';
 
-    // Weigh stations / scales — must check last so branded stops resolve first
+    // Rest areas — matches before weigh-station to avoid false positives
+    if (n.contains('rest area') || n.contains('rest stop') || n == 'rest') {
+      return 'rest';
+    }
+
+    // Weigh stations / scales — must check last so branded stops resolve first.
+    // Returns 'weigh' to match assets/logos/weigh.png (Mapbox addImage key).
     if (n.contains('weigh station') ||
         n.contains('weight station') ||
         n.contains('weigh sta') ||
         n.contains('scale') ||
-        n == 'weigh') return 'weight_station';
+        n == 'weigh') return 'weigh';
 
     return 'default';
   }
 
-  /// Maps every canonical brand key to its uploaded PNG asset path.
+  /// Maps every canonical brand key to its PNG asset path.
   ///
-  /// Only brands whose logo files exist in `assets/logos/truckstops/` are
-  /// listed here.  Any stop whose normalised name is not in this map falls
-  /// back to `_brandIcons['default']`.
+  /// Each key equals the PNG filename without `.png`, which mirrors the Mapbox
+  /// `style.addImage(key, bytes)` convention.  The GeoJSON `{ "brand": "<key>" }`
+  /// property and `iconImage: ["get", "brand"]` SymbolLayer map directly to
+  /// these keys.  In flutter_map, [TruckStop.icon] plays the role of "brand".
+  ///
+  /// ── How to add a new logo ──────────────────────────────────────────────────
+  ///   1. Drop <name>.png (64×64 px RGBA) into assets/logos/
+  ///      (or assets/logos/truckstops/ for truckstop-only brands).
+  ///   2. Add: '<name>': 'assets/logos/<name>.png'  to this map.
+  ///   3. Map the stop name in [_normalizeTruckStopBrand] to return '<name>'.
+  ///   4. Set TruckStop(icon: '<name>', …) on sample stops.
+  ///   5. Run `flutter pub get` and hot-reload.
   static const Map<String, String> _brandIcons = {
-    'pilot':        'assets/logos/truckstops/pilot.png',
-    'flyingj':      'assets/logos/truckstops/flyingj.png',
-    'loves':        'assets/logos/truckstops/loves.png',
-    'ta':           'assets/logos/truckstops/ta.png',
-    'petro':        'assets/logos/truckstops/petro.png',
-    'ambest':       'assets/logos/truckstops/ambest.png',
-    'roadranger':   'assets/logos/truckstops/roadranger.png',
+    // ── Custom logos in assets/logos/ (primary directory) ─────────────────
+    // Key == PNG filename without .png — matches Mapbox addImage() id and
+    // the GeoJSON "brand" property used by iconImage: ["get", "brand"].
+    'pilot':      'assets/logos/pilot.png',
+    'loves':      'assets/logos/loves.png',
+    'ta':         'assets/logos/ta.png',
+    'petro':      'assets/logos/petro.png',
+    'flyingj':    'assets/logos/flyingj.png',
+    'ambest':     'assets/logos/ambest.png',
+    'roadranger': 'assets/logos/roadranger.png',
+    // Weigh-station custom logo — filename "weigh.png"; brand key "weigh".
+    // Equivalent to: await mapboxMap.style.addImage("weigh", weighBytes);
+    'weigh':      'assets/logos/weigh.png',
+    // Rest-area custom logo — filename "rest.png"; brand key "rest".
+    // Equivalent to: await mapboxMap.style.addImage("rest", restBytes);
+    'rest':       'assets/logos/rest.png',
+    // ── Additional logos in assets/logos/truckstops/ ───────────────────────
     'kwiktrip':     'assets/logos/truckstops/kwiktrip.png',
     'maverik':      'assets/logos/truckstops/maverik.png',
     'caseys':       'assets/logos/truckstops/caseys.png',
@@ -933,16 +1033,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'ultramar':     'assets/logos/truckstops/ultramar.png',
     'irving':       'assets/logos/truckstops/irving.png',
     'independent':  'assets/logos/truckstops/independent.png',
-    // Brands with uploaded high-resolution logos
-    'mobil':          'assets/logos/truckstops/mobil.png',
-    'exxon':          'assets/logos/truckstops/exxon.png',
-    'chevron':        'assets/logos/truckstops/chevron.png',
-    'shell':          'assets/logos/truckstops/shell.png',
-    'bp':             'assets/logos/truckstops/bp.png',
-    'circlek':        'assets/logos/truckstops/circlek.png',
-    // Weigh station icon — registered exactly like a Mapbox style.addImage()
-    // entry so that any stop or POI whose icon key is 'weight_station' renders
-    // the dedicated logo rather than a generic fallback.
+    'mobil':        'assets/logos/truckstops/mobil.png',
+    'exxon':        'assets/logos/truckstops/exxon.png',
+    'chevron':      'assets/logos/truckstops/chevron.png',
+    'shell':        'assets/logos/truckstops/shell.png',
+    'bp':           'assets/logos/truckstops/bp.png',
+    'circlek':      'assets/logos/truckstops/circlek.png',
+    // Legacy key kept for backward compatibility with any existing TruckStop
+    // data that uses icon: 'weight_station'.  New stops should use 'weigh'.
     'weight_station': 'assets/logos/truckstops/weight_station.png',
     'default':        'assets/logos/truckstops/default.png',
   };
@@ -1000,16 +1098,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds map [Marker]s for all [MapPoi] entries in [_mapPois].
   ///
-  /// Weigh stations are rendered using the registered `weight_station` PNG
-  /// logo (mirrors a Mapbox SymbolLayer `iconImage: ["get", "icon"]` lookup).
+  /// Weigh stations are rendered using the registered `weigh` PNG logo from
+  /// assets/logos/weigh.png (mirrors a Mapbox SymbolLayer
+  /// `iconImage: ["get", "brand"]` lookup where brand == "weigh").
   /// Police and ports of entry retain coloured icon markers for instant
   /// type recognition.  Tapping a marker shows a brief info sheet via
   /// [_showPoiAlert].
   List<Marker> _buildPoiMarkers() {
     return _mapPois.map((poi) {
       // Weigh stations use the dedicated PNG logo loaded in _preloadBrandIcons.
+      // 'weigh' is tried first (assets/logos/weigh.png); falls back to the
+      // legacy 'weight_station' key and then to 'default'.
       if (poi.type == PoiType.weighStation) {
-        final Uint8List? bytes = _brandIconBytes['weight_station'] ??
+        final Uint8List? bytes = _brandIconBytes['weigh'] ??
+            _brandIconBytes['weight_station'] ??
             _brandIconBytes['default'];
         return Marker(
           point: poi.position,

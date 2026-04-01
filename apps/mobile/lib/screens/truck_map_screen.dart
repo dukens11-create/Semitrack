@@ -977,9 +977,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 'default';
   }
 
-  // Logo assets have been removed. _brandIconBytes will always be empty;
-  // marker builders fall back to Icon widgets automatically.
-  static const Map<String, String> _brandIcons = {};
+  /// Maps each canonical brand key to its PNG asset path.
+  static const Map<String, String> _brandIcons = {
+    'pilot':   'assets/logos/pilot.png',
+    'loves':   'assets/logos/loves.png',
+    'ta':      'assets/logos/ta.png',
+    'flyingj': 'assets/logos/flyingj.png',
+  };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
   ///

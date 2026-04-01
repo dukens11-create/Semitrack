@@ -829,9 +829,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return _truckStops.map((stop) {
       // Resolve the icon key: prefer the explicit TruckStop.icon field, then
-      // normalise from the stop name — mirrors iconImage: ["get", "icon"].
-      final String iconKey =
-          stop.icon ?? _normalizeTruckStopBrand(stop.name);
+      // normalise from the stop name, then from the brand — mirrors
+      // iconImage: ["get", "icon"].  Falls back to 'default' (red T icon) for
+      // any stop whose name AND brand are not specifically recognised.
+      final nameKey = _normalizeTruckStopBrand(stop.name);
+      final String iconKey = stop.icon ??
+          (nameKey != 'default' ? nameKey : _normalizeTruckStopBrand(stop.brand));
       final Uint8List? bytes =
           _brandIconBytes[iconKey] ?? _brandIconBytes['default'];
 

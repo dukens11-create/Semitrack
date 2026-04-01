@@ -982,6 +982,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'petro-canada':'assets/logos/truckstops/petro-canada.png',
     'circlek':     'assets/logos/truckstops/circlek.png',
     'bp':          'assets/logos/truckstops/bp.png',
+    'pilot':       'assets/logos/pilot.png',
+    'loves':       'assets/logos/loves.png',
+    'ta':          'assets/logos/ta.png',
+    'flyingj':     'assets/logos/flyingj.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].

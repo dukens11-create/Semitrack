@@ -415,22 +415,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.dispose();
   }
 
-  // ── Brand icon preloader ──────────────────────────────────────────────────
+  // ── Icon preloader ────────────────────────────────────────────────────────
   //
   // flutter_map equivalent of the Mapbox native SDK pattern:
   //
   //   Mapbox (native SDK)                flutter_map equivalent
   //   ──────────────────────────────     ──────────────────────────────────────
-  //   style.addImage("pilot", bytes)  →  _brandIconBytes["pilot"] = bytes
   //   style.addImage("weigh", bytes)  →  _brandIconBytes["weigh"] = bytes
-  //   GeoJSON Feature { brand:"pilot" }→  TruckStop(icon: 'pilot', ...)
+  //   GeoJSON Feature { brand:"weigh" }→  TruckStop(icon: 'weigh', ...)
   //   SymbolLayer iconImage:["get","brand"]→ Image.memory(_brandIconBytes[stop.icon])
   //
-  // To add or change a logo:
-  //   1. Place a 64×64 px RGBA PNG in assets/logos/ (e.g. mylogo.png).
-  //   2. Add an entry to [_brandIcons]: 'mylogo': 'assets/logos/mylogo.png'
+  // To add or change an icon:
+  //   1. Place a 64×64 px RGBA PNG in assets/logos/ (e.g. myicon.png).
+  //   2. Add an entry to [_brandIcons]: 'myicon': 'assets/logos/myicon.png'
   //   3. In [_normalizeTruckStopBrand] map the stop name to that key.
-  //   4. Set TruckStop(icon: 'mylogo', ...) on any sample stops.
+  //   4. Set TruckStop(icon: 'myicon', ...) on any sample stops.
   //   5. Run `flutter pub get` and hot-reload.
 
   /// Reusable logo loader: reads every PNG listed in [_brandIcons] into raw
@@ -1003,54 +1002,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 'default';
   }
 
-  /// Maps every canonical brand key to its PNG asset path.
+  /// Maps every canonical icon key to its PNG asset path.
   ///
   /// Each key equals the PNG filename without `.png`, which mirrors the Mapbox
   /// `style.addImage(key, bytes)` convention.  The GeoJSON `{ "brand": "<key>" }`
   /// property and `iconImage: ["get", "brand"]` SymbolLayer map directly to
   /// these keys.  In flutter_map, [TruckStop.icon] plays the role of "brand".
   ///
-  /// ── How to add a new logo ──────────────────────────────────────────────────
-  ///   1. Drop <name>.png (64×64 px RGBA) into assets/logos/
-  ///      (or assets/logos/truckstops/ for truckstop-only brands).
+  /// ── How to add a new icon ──────────────────────────────────────────────────
+  ///   1. Drop <name>.png (64×64 px RGBA) into assets/logos/.
   ///   2. Add: '<name>': 'assets/logos/<name>.png'  to this map.
   ///   3. Map the stop name in [_normalizeTruckStopBrand] to return '<name>'.
   ///   4. Set TruckStop(icon: '<name>', …) on sample stops.
   ///   5. Run `flutter pub get` and hot-reload.
   static const Map<String, String> _brandIcons = {
-    // ── Custom logos in assets/logos/ (primary directory) ─────────────────
-    // Key == PNG filename without .png — matches Mapbox addImage() id and
-    // the GeoJSON "brand" property used by iconImage: ["get", "brand"].
-    'pilot':      'assets/logos/pilot.png',
-    'loves':      'assets/logos/loves.png',
-    'ta':         'assets/logos/ta.png',
-    'petro':      'assets/logos/petro.png',
-    'flyingj':    'assets/logos/flyingj.png',
-    'ambest':     'assets/logos/ambest.png',
-    'roadranger': 'assets/logos/roadranger.png',
     // Weigh-station custom logo — filename "weigh.png"; brand key "weigh".
     // Equivalent to: await mapboxMap.style.addImage("weigh", weighBytes);
     'weigh':      'assets/logos/weigh.png',
     // Rest-area custom logo — filename "rest.png"; brand key "rest".
     // Equivalent to: await mapboxMap.style.addImage("rest", restBytes);
     'rest':       'assets/logos/rest.png',
-    // ── Additional logos in assets/logos/truckstops/ ───────────────────────
-    'kwiktrip':     'assets/logos/truckstops/kwiktrip.png',
-    'maverik':      'assets/logos/maverik.png',
-    'caseys':       'assets/logos/truckstops/caseys.png',
-    'sappbros':     'assets/logos/truckstops/sappbros.png',
-    'petro-canada': 'assets/logos/truckstops/petro-canada.png',
-    'husky':        'assets/logos/truckstops/husky.png',
-    'esso':         'assets/logos/truckstops/esso.png',
-    'ultramar':     'assets/logos/truckstops/ultramar.png',
-    'irving':       'assets/logos/truckstops/irving.png',
-    'independent':  'assets/logos/truckstops/independent.png',
-    'mobil':        'assets/logos/truckstops/mobil.png',
-    'exxon':        'assets/logos/truckstops/exxon.png',
-    'chevron':      'assets/logos/truckstops/chevron.png',
-    'shell':        'assets/logos/truckstops/shell.png',
-    'bp':           'assets/logos/truckstops/bp.png',
-    'circlek':      'assets/logos/truckstops/circlek.png',
     // Legacy key kept for backward compatibility with any existing TruckStop
     // data that uses icon: 'weight_station'.  New stops should use 'weigh'.
     'weight_station': 'assets/logos/truckstops/weight_station.png',

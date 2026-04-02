@@ -11,9 +11,12 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/services/warning_manager.dart';
+import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -280,7 +283,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final Set<String> _restrictionAlertShown = {};
   TruckRestriction? _restrictionAhead;
 
-  // ── Smart restriction rerouting state ─────────────────────────────────────
+  // ── Warning popup manager ──────────────────────────────────────────────────
+  //
+  // _warningManager evaluates proximity to each [WarningSign] on every GPS
+  // fix and exposes [activePopups] for the [WarningPopupStack] overlay.
+  // It is seeded from the static [warningSigns] list; in production this list
+  // would be replaced by API-loaded data matching the active route corridor.
+  late final WarningManager _warningManager;
+
+
   // _isRestrictionRerouting is true while an automatic avoid-restriction
   // reroute is in progress so the UI can show the rerouting banner.
   // _restrictionRerouteAttempts counts how many avoid-point retries have been
@@ -418,6 +429,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    // Initialise the warning manager with the pre-seeded sign list.
+    // In production, replace [warningSigns] with API-loaded data for the
+    // active route corridor.
+    _warningManager = WarningManager(signs: warningSigns);
     // Load all brand icon PNGs as raw bytes once at startup so that
     // _buildTruckStopMarkers() can render them via Image.memory() without
     // needing a BuildContext — the flutter_map equivalent of registering images
@@ -433,6 +448,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _tts.stop();
     _searchController.dispose();
     _searchDebounce?.cancel();
+    _warningManager.dispose();
     super.dispose();
   }
 
@@ -1522,7 +1538,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Restriction proximity alerts: warn about upcoming violations.
       _checkRestrictionAheadAlert(gpsPoint);
 
-      // Warning sign proximity alerts: banner for safety hazards ahead.
+      // Warning sign proximity: update the WarningManager so popup cards
+      // are added / updated / evicted based on the truck's distance to each
+      // sign along the active route.
+      _warningManager.update(
+        truckPosition: gpsPoint,
+        routePoints: _routePoints,
+      );
+
+      // Warning sign proximity alerts: single-banner alert for safety hazards.
       _checkWarningAheadAlert(gpsPoint);
 
       // Trip statistics: update mileage and stopped time from live GPS.
@@ -1728,6 +1752,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
+    // Reset warning manager so the next navigation session starts clean.
+    _warningManager.reset();
     _warningAlertShown.clear();
     // Notify other widgets (e.g. AppShell) that navigation has ended so the
     // bottom navigation bar and other planning UI are restored.
@@ -1956,6 +1982,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Notify AppShell (and any other listeners) that navigation is now active
     // so the bottom navigation bar is hidden during the driving session.
     TruckMapScreen.isNavigatingNotifier.value = true;
+    // Start the warning manager so it evaluates proximity on each GPS fix.
+    _warningManager.startNavigation();
     _startRouteAnimation();
   }
 
@@ -5953,6 +5981,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
+                  ),
+                // ── Warning popup stack ───────────────────────────────────
+                // Stacked top-right cards for road-hazard warning signs along
+                // the active route.  Only visible during active navigation.
+                // High severity cards are pinned until dismissed; medium/low
+                // cards auto-dismiss after a short interval.  Positioned below
+                // the nav banner so it never overlaps the turn instruction.
+                if (_isNavigating)
+                  Positioned(
+                    top: _navSteps.isNotEmpty ? 96 : 74,
+                    right: 8,
+                    child: WarningPopupStack(manager: _warningManager),
                   ),
                 // ── Warning sign alert banner ─────────────────────────────
                 // Shown when a truck safety warning sign is within

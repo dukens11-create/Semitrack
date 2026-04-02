@@ -1,3 +1,18 @@
+/// Severity levels for truck road-hazard warning signs.
+///
+/// Used by the [WarningManager] and popup widgets to control card colour,
+/// auto-dismiss behaviour, and stacking priority.
+enum WarningSeverity {
+  /// Critical hazard — red badge, always pinned, never auto-dismissed.
+  high,
+
+  /// Moderate concern — orange badge, auto-dismissed after 10 s.
+  medium,
+
+  /// Informational — blue badge, auto-dismissed after 6 s.
+  low,
+}
+
 /// A truck safety warning sign shown on the map and used for route-proximity
 /// detection.
 ///
@@ -5,7 +20,7 @@
 /// aware of, such as low bridges, weight restrictions, construction zones, or
 /// high-wind areas.
 ///
-/// **Severity levels:**
+/// **Severity levels (string field [severity]):**
 /// - `'high'`   — immediate danger / legal restriction (banner: red)
 /// - `'medium'` — caution required (banner: orange)
 /// - `'low'`    — informational (banner: blue/green)

@@ -12,6 +12,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
+import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -4649,11 +4650,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final modifier = maneuver?['modifier'] as String? ?? 'straight';
       // Step distance in metres from the Mapbox response.
       final distanceMeters = (step['distance'] as num?)?.toDouble() ?? 0.0;
+      // Road identity fields — used by RoadGuidanceBanner chips.
+      // 'ref' holds the shield number (e.g. "I-75", "US 19"); may be absent.
+      final roadRef = step['ref'] as String? ?? '';
+      // 'name' holds the full road name (e.g. "Interstate 75 North").
+      final roadName = step['name'] as String? ?? '';
+      // 'exits' holds the exit label (e.g. "352B") when applicable.
+      final exitNumber = step['exits'] as String?;
       return _NavStep(
         instruction,
         LatLng(lat, lng),
         maneuver: modifier,
         distanceMeters: distanceMeters,
+        roadRef: roadRef,
+        roadName: roadName,
+        exitNumber: exitNumber,
       );
     }).toList();
   }
@@ -5297,6 +5308,121 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds a [RoadGuidanceBanner] from the current navigation step.
+  ///
+  /// Parses the road-reference string (e.g. "I-75") stored in
+  /// [_NavStep.roadRef] to determine [RouteType] and construct [RoadInfo]
+  /// objects.  When road data is unavailable (local street, no ref field) it
+  /// falls back to a generic [RouteType.localRoad] entry so the banner is
+  /// always safe to display.
+  ///
+  /// The next step (if any) supplies [ManeuverInfo.nextRoad]; the step after
+  /// that populates the optional [ManeuverInfo.thenRoad] preview row.
+  Widget _buildRoadGuidanceBanner() {
+    // Clamp index to prevent RangeError on degenerate step lists.
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+
+    // ── Build RoadInfo from a raw Mapbox ref string ────────────────────────
+    // Accepts "I-75", "US 19", "SR 826", or an empty string for local roads.
+    RoadInfo parseRoadInfo(String ref, String name, String direction) {
+      final upper = ref.trim().toUpperCase();
+      if (upper.startsWith('I-') || upper.startsWith('I ')) {
+        final number = upper.replaceFirst(RegExp(r'^I[-\s]'), '');
+        return RoadInfo(
+          routeNumber: number,
+          routeName: name.isNotEmpty ? name : 'Interstate $number',
+          routeType: RouteType.interstate,
+          direction: direction,
+        );
+      }
+      if (upper.startsWith('US ') || upper.startsWith('US-')) {
+        final number = upper.replaceFirst(RegExp(r'^US[-\s]'), '');
+        return RoadInfo(
+          routeNumber: number,
+          routeName: name.isNotEmpty ? name : 'US Highway $number',
+          routeType: RouteType.usHighway,
+          direction: direction,
+        );
+      }
+      // Match any two-letter state abbreviation prefix followed by a space
+      // or hyphen, covering all 50 US state route designations.
+      final stateRouteMatch =
+          RegExp(r'^([A-Z]{2})[-\s](\S+)').firstMatch(upper);
+      if (stateRouteMatch != null) {
+        final number = stateRouteMatch.group(2) ?? upper;
+        return RoadInfo(
+          routeNumber: number,
+          routeName: name.isNotEmpty ? name : 'State Route $number',
+          routeType: RouteType.stateRoute,
+          direction: direction,
+        );
+      }
+      // Local road: use the road name as the label; route number is empty.
+      // Fall back to 'Unknown Road' when both ref and name are absent.
+      final displayName = name.isNotEmpty
+          ? name
+          : (ref.isNotEmpty ? ref : 'Unknown Road');
+      return RoadInfo(
+        routeNumber: '',
+        routeName: displayName,
+        routeType: RouteType.localRoad,
+        direction: direction,
+      );
+    }
+
+    // ── Extract direction hint from the instruction text ───────────────────
+    // Looks for compass suffixes like "toward Atlanta" and strips them, then
+    // checks for explicit "N / S / E / W" tokens near the road reference.
+    String directionFromInstruction(String instruction) {
+      final upper = instruction.toUpperCase();
+      if (upper.contains(' NORTH') || upper.contains(' NB')) return 'N';
+      if (upper.contains(' SOUTH') || upper.contains(' SB')) return 'S';
+      if (upper.contains(' EAST') || upper.contains(' EB')) return 'E';
+      if (upper.contains(' WEST') || upper.contains(' WB')) return 'W';
+      return '';
+    }
+
+    // Current road is derived from this step's ref/name.
+    final currentDir = directionFromInstruction(step.instruction);
+    final currentRoad = parseRoadInfo(step.roadRef, step.roadName, currentDir);
+
+    // Next road is the step that the driver transitions onto (step + 1).
+    final hasNext = safeIndex + 1 < _navSteps.length;
+    final nextStep = hasNext ? _navSteps[safeIndex + 1] : null;
+    final nextDir = nextStep != null
+        ? directionFromInstruction(nextStep.instruction)
+        : '';
+    final nextRoad = nextStep != null
+        ? parseRoadInfo(nextStep.roadRef, nextStep.roadName, nextDir)
+        : currentRoad; // fall back to current road if no next step exists
+
+    // Then-road is the step after next — shown as a dimmed preview.
+    final hasThen = safeIndex + 2 < _navSteps.length;
+    final thenStep = hasThen ? _navSteps[safeIndex + 2] : null;
+    final thenRoad = thenStep != null
+        ? parseRoadInfo(
+            thenStep.roadRef,
+            thenStep.roadName,
+            directionFromInstruction(thenStep.instruction),
+          )
+        : null;
+
+    final maneuver = ManeuverInfo(
+      instruction: step.instruction,
+      maneuverType: step.maneuver,
+      distanceMeters: _distanceToNextStep(),
+      currentRoad: currentRoad,
+      nextRoad: nextRoad,
+      thenRoad: thenRoad,
+      exitNumber: step.exitNumber,
+      // Lane hint is not yet emitted by Mapbox; reserved for future use.
+      laneHint: null,
+    );
+
+    return RoadGuidanceBanner(maneuver: maneuver);
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   /// Builds the navigation controls overlay shown only while [_isNavigating].
@@ -5587,17 +5713,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
-                // ── Navigation banner ─────────────────────────────────────
-                // Floats at the top of the map so the current maneuver
-                // instruction is always visible during active navigation,
-                // independent of the scrollable info panel below the map.
-                // Also shown on arrival so the driver sees the arrival message.
+                // ── Road guidance banner ──────────────────────────────────
+                // Full-featured highway guidance overlay with road chips, exit
+                // number, lane hint, and then-road preview.  Replaces the
+                // legacy navigation banner during active turn-by-turn routing
+                // and on arrival.  Positioned top/centred above the map.
                 if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
                   Positioned(
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: _buildNavBanner(),
+                    child: _isArrived ? _buildNavBanner() : _buildRoadGuidanceBanner(),
                   ),
                 // ── Inline search bar ─────────────────────────────────────
                 // Hidden during active turn-by-turn navigation so it does not
@@ -6101,12 +6227,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 /// [maneuver] is the Mapbox `maneuver.modifier` value and drives the icon
 /// displayed in the navigation banner.  [distanceMeters] is summed across
 /// remaining steps to derive the remaining-distance label.
+///
+/// [roadRef] is the raw Mapbox `ref` field for the step's road (e.g. "I-75"
+/// or "US 19") and is used to populate [RoadGuidanceBanner] chips.
+/// [roadName] is the Mapbox `name` field (e.g. "Interstate 75 North").
+/// [exitNumber] is the Mapbox `exits` field (e.g. "352B"), when present.
 class _NavStep {
   const _NavStep(
     this.instruction,
     this.location, {
     this.maneuver = 'straight',
     this.distanceMeters = 0.0,
+    this.roadRef = '',
+    this.roadName = '',
+    this.exitNumber,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -6121,6 +6255,18 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+
+  /// Mapbox `ref` value for the road at this step (e.g. "I-75", "US 19").
+  /// Empty string when the API omits the field (e.g. local streets).
+  final String roadRef;
+
+  /// Mapbox `name` value for the road at this step (e.g. "Interstate 75").
+  /// Empty string when the API omits the field.
+  final String roadName;
+
+  /// Mapbox `exits` value when the step involves an exit (e.g. "352B").
+  /// Null when the step is not an exit maneuver.
+  final String? exitNumber;
 }
 
 /// A truck-friendly point of interest along the route.

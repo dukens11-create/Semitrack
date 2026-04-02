@@ -160,6 +160,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // remain visible.
   bool _isNavigating = false;
 
+  // _panelExpanded controls the collapsible floating dashboard panel.
+  // When false only the header row (destination + ETA) is shown; when true
+  // the HOS/fuel summary cards and quick-action chips are also visible.
+  bool _panelExpanded = false;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -5691,6 +5696,230 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Floating Dashboard Panel ───────────────────────────────────────────────
+
+  /// Builds the collapsible floating dashboard panel shown in the idle/planning
+  /// state (no destination selected, no route loaded, not navigating).
+  ///
+  /// Collapsed: shows a destination-hint prompt and HOS drive-time remaining
+  /// with an expand chevron.
+  /// Expanded: also shows HOS and Fuel summary cards plus quick-action chips.
+  ///
+  /// Hidden during active navigation ([_isNavigating] == true) so the driver's
+  /// view is not cluttered during a live trip.
+  Widget _buildFloatingDashboard() {
+    final driveMinLeft =
+        (_intelligence['driveMinutesLeft'] as num?)?.toInt() ?? 0;
+    final hosH = driveMinLeft ~/ 60;
+    final hosM = driveMinLeft % 60;
+    final hosLabel = hosH > 0 ? '${hosH}h ${hosM}m' : '${hosM}m';
+
+    return Positioned(
+      left: 16,
+      right: 16,
+      bottom: 16,
+      child: SafeArea(
+        top: false,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.97),
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.13),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ── Header row: hint text + chevron ──────────────────────────
+              GestureDetector(
+                onTap: () =>
+                    setState(() => _panelExpanded = !_panelExpanded),
+                child: Row(
+                  children: [
+                    const Icon(Icons.map_outlined,
+                        size: 22, color: Color(0xFF6C52A6)),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Search or long-press map to set destination',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      _panelExpanded
+                          ? Icons.keyboard_arrow_down
+                          : Icons.keyboard_arrow_up,
+                      size: 26,
+                      color: Colors.black54,
+                    ),
+                  ],
+                ),
+              ),
+              // ── Summary row: HOS remaining ────────────────────────────────
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(Icons.access_time_outlined,
+                      size: 16, color: Colors.black54),
+                  const SizedBox(width: 4),
+                  Text(
+                    'HOS: $hosLabel remaining',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+              // ── Expanded section: cards + quick actions ───────────────────
+              if (_panelExpanded) ...[
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _dashboardInfoCard(
+                        title: 'HOS',
+                        value: hosLabel,
+                        subtitle: 'Drive time left',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _dashboardInfoCard(
+                        title: 'Fuel',
+                        value: '--',
+                        subtitle: 'Connect ELD for data',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Quick Actions',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.black.withOpacity(0.85),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _dashboardActionChip(Icons.search, 'New Trip'),
+                    _dashboardActionChip(
+                        Icons.bookmark_outline, 'Saved Trips'),
+                    _dashboardActionChip(
+                        Icons.description_outlined, 'Documents'),
+                    _dashboardActionChip(Icons.star_border, 'Favorites'),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a compact summary card used inside [_buildFloatingDashboard].
+  Widget _dashboardInfoCard({
+    required String title,
+    required String value,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F2FA),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.black54,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds a quick-action chip used inside [_buildFloatingDashboard].
+  ///
+  /// Tapping the chip provides ink-splash feedback.  The [onTap] callback
+  /// is optional; when omitted the chip is still visually interactive.
+  Widget _dashboardActionChip(IconData icon, String label,
+      {VoidCallback? onTap}) {
+    return Material(
+      color: const Color(0xFFF0E9F9),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: const Color(0xFF6C52A6)),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF6C52A6),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   /// Builds the navigation controls overlay shown only while [_isNavigating].
@@ -6009,6 +6238,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // nothing to show, so the condition here is simply the same
                 // guard used for the search bar itself.
                 if (!_hasActiveDestination && !_isArrived) _buildSearchResults(),
+                // ── Floating dashboard panel ───────────────────────────────
+                // Shown in the idle state (no destination selected, no route,
+                // not navigating) as a collapsible planning and status panel.
+                // Hidden once the driver picks a destination, starts a route,
+                // or begins active navigation so it never overlaps planning UI.
+                if (!_isNavigating &&
+                    !_isArrived &&
+                    !_isLoading &&
+                    _routePoints.isEmpty &&
+                    _selectedDestination == null)
+                  _buildFloatingDashboard(),
                 // ── Destination hint banner ───────────────────────────────
                 // Shown when no destination is selected and no route is loaded,
                 // prompting the driver to pick a destination to start navigation.

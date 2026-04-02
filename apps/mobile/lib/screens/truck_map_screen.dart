@@ -8375,6 +8375,661 @@ class MainNavigationAlertCard extends StatelessWidget {
       ],
     );
   }
+
+  // ── Compact navigation overlay widgets ────────────────────────────────────
+  //
+  // The eight methods below provide production-quality, GPS-style overlay
+  // widgets for TruckMapScreen.  They are intentionally self-contained so
+  // that each one can be placed inside the Stack that wraps the map without
+  // requiring changes to state logic.
+  //
+  // ⚠️  DEVELOPER NOTE — REPLACE STATIC DEMO DATA BEFORE SHIPPING:
+  //   Several values are hard-coded for demo/preview purposes.  Search for
+  //   the string "TODO(live-data)" in this file to find every location where
+  //   a static value should be replaced with a live data source.
+  //   For example:
+  //     • Next-step distance  → derive from _distanceToNextStep() / _navSteps
+  //     • Trip ETA / arrival  → compute from _tripProgressInfo
+  //     • Speed limit         → read _speedLimitMph
+  //     • Service chips list  → populate from _closestTruckStopsAhead
+  //     • Alert list          → populate from _navAlerts
+
+  /// Compact GPS-style "next step" card positioned at the top-left of the map.
+  ///
+  /// Shows the maneuver icon, the upcoming road name, and the distance to the
+  /// next turn.  Only visible while [_isNavigating] is true and there are
+  /// remaining steps.
+  ///
+  /// Replace the hard-coded distance label with a call to
+  /// [_distanceToNextStep] and format it for the driver display.
+  /// TODO(live-data): replace '0.4 mi' with formatted _distanceToNextStep().
+  Widget _buildCompactNextStepCard() {
+    // Only show during active navigation with available steps.
+    if (!_isNavigating || _navSteps.isEmpty) return const SizedBox.shrink();
+
+    // Clamp index to avoid out-of-bounds access on step list changes.
+    final int safeIndex =
+        _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final _NavStep step = _navSteps[safeIndex];
+
+    // Format the distance-to-next-step in a human-readable string.
+    // TODO(live-data): replace this static label with real-time distance.
+    final double distMeters = _distanceToNextStep();
+    final String distLabel = distMeters < 160
+        ? '${distMeters.round()} ft'
+        : '${(distMeters * 0.000621371).toStringAsFixed(1)} mi';
+
+    return Positioned(
+      top: 0,
+      left: 12,
+      right: 80, // leave room for the compass button on the right
+      child: SafeArea(
+        bottom: false,
+        child: Container(
+          margin: const EdgeInsets.only(top: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            // Dark translucent background for GPS-navigation aesthetics.
+            color: Colors.black.withOpacity(0.82),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.35),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              // ── Maneuver direction icon ────────────────────────────────
+              Icon(
+                _maneuverIcon(step.maneuver),
+                color: Colors.white,
+                size: 28,
+              ),
+              const SizedBox(width: 10),
+              // ── Road name + distance ───────────────────────────────────
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Primary: upcoming road name (or instruction fallback).
+                    Text(
+                      step.name.isNotEmpty ? step.name : step.instruction,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    // Secondary: distance until the maneuver.
+                    Text(
+                      'in $distLabel',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white.withOpacity(0.75),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Round, dark/translucent compass button overlay positioned at the top-right
+  /// of the map.
+  ///
+  /// Tapping the button re-centres the camera to north-up and re-engages the
+  /// camera-follow mode so the driver never loses their position.
+  ///
+  /// Only visible while [_isNavigating] is true.
+  Widget _buildSmallCompassButton() {
+    if (!_isNavigating) return const SizedBox.shrink();
+
+    return Positioned(
+      top: 0,
+      right: 12,
+      child: SafeArea(
+        bottom: false,
+        child: Container(
+          margin: const EdgeInsets.only(top: 8),
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            // Translucent dark circle — matches GPS compass button conventions.
+            color: Colors.black.withOpacity(0.72),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.30),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              // Re-engage camera follow and snap back to north-up heading.
+              onTap: () {
+                setState(() => _followTruck = true);
+                if (_truckPosition != null) {
+                  mapController.animateCamera(
+                    CameraUpdate.newLatLngZoom(_truckPosition!, 15),
+                  );
+                }
+              },
+              child: const Center(
+                child: Icon(
+                  Icons.explore_outlined, // compass rose icon
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a stacked column of compact alert chips on the right side of the
+  /// map, showing up to three active [NavigationAlert]s.
+  ///
+  /// Alerts are sourced from [_navAlerts].  Each chip is built by the private
+  /// helper [_smallRightAlert].  Only visible during active navigation.
+  ///
+  /// TODO(live-data): [_navAlerts] is seeded with sample data; replace with
+  /// a live alert feed (weather / traffic / restriction APIs).
+  Widget _buildRightSideAlertStack() {
+    if (!_isNavigating || _navAlerts.isEmpty) return const SizedBox.shrink();
+
+    // Show at most 3 alerts to avoid cluttering the map viewport.
+    final visibleAlerts = _navAlerts.take(3).toList();
+
+    return Positioned(
+      right: 12,
+      // Position below the compass button (48 px button + 8 top margin + 8 gap).
+      top: 74,
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (final alert in visibleAlerts) ...[
+              _smallRightAlert(alert),
+              const SizedBox(height: 6),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single compact alert chip for [_buildRightSideAlertStack].
+  ///
+  /// Displays the alert-type icon on the left and a short distance/label on
+  /// the right, styled as a pill card with a coloured border.
+  ///
+  /// TODO(live-data): replace the fallback '–' distance with a real value
+  /// derived from the alert's geographic position and the current truck location.
+  Widget _smallRightAlert(NavigationAlert alert) {
+    // Map alert type to a recognisable Material icon.
+    IconData alertIcon;
+    Color alertColor;
+    switch (alert.type) {
+      case AlertType.weighStation:
+        alertIcon = Icons.monitor_weight_outlined;
+        alertColor = const Color(0xFFF57C00); // amber
+        break;
+      case AlertType.construction:
+        alertIcon = Icons.construction_outlined;
+        alertColor = const Color(0xFFF9A825); // yellow
+        break;
+      case AlertType.lowBridge:
+        alertIcon = Icons.height_outlined;
+        alertColor = const Color(0xFFD32F2F); // red
+        break;
+      case AlertType.accident:
+        alertIcon = Icons.warning_amber_outlined;
+        alertColor = const Color(0xFFD32F2F);
+        break;
+      case AlertType.weather:
+        alertIcon = Icons.cloud_outlined;
+        alertColor = const Color(0xFF0288D1); // blue
+        break;
+      default:
+        alertIcon = Icons.info_outlined;
+        alertColor = const Color(0xFF6C52A6); // brand purple
+    }
+
+    // TODO(live-data): compute real distance to this alert from truck position.
+    final String distText = alert.distanceMiles != null
+        ? '${alert.distanceMiles!.toStringAsFixed(1)} mi'
+        : '–';
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 110),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.80),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: alertColor.withOpacity(0.8), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(alertIcon, color: alertColor, size: 16),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              distText,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Horizontally scrollable row of compact service / truckstop chips shown
+  /// at the bottom of the map during active navigation.
+  ///
+  /// Each chip is built by [_serviceChip].  Chips are sourced from
+  /// [_closestTruckStopsAhead] — the list is already sorted by distance ahead
+  /// and limited to the two closest stops.
+  ///
+  /// Only visible when navigating and at least one ahead-stop is available.
+  ///
+  /// TODO(live-data): [_closestTruckStopsAhead] is populated by
+  /// [_refreshClosestTruckStops].  Ensure that method is called on every GPS
+  /// update and that the POI dataset includes your desired service categories.
+  Widget _buildBottomServiceChips() {
+    if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      // Float above the main alert/trip strip area.
+      bottom: 168,
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 52,
+          child: ListView.builder(
+            // Horizontal scroll so a long list stays accessible.
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: _closestTruckStopsAhead.length,
+            itemBuilder: (context, index) {
+              final AheadTruckStop ahead = _closestTruckStopsAhead[index];
+              return _serviceChip(ahead);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single service chip for [_buildBottomServiceChips].
+  ///
+  /// Displays the brand logo (or a fallback icon when the asset is not yet
+  /// loaded), the brand name, and the route distance ahead formatted as miles.
+  ///
+  /// TODO(live-data): logo bytes come from [_brandIconBytes] which is populated
+  /// in [_loadBrandIcons].  Ensure all desired logos are present in
+  /// `assets/logos/` and listed in `pubspec.yaml`.
+  Widget _serviceChip(AheadTruckStop ahead) {
+    // Distance ahead formatted for compact display.
+    final String milesText =
+        ahead.routeMilesAhead < 10
+            ? '${ahead.routeMilesAhead.toStringAsFixed(1)} mi'
+            : '${ahead.routeMilesAhead.round()} mi';
+
+    // Resolve the brand logo bytes (may be null if not yet loaded).
+    final Uint8List? logoBytes =
+        _brandIconBytes[ahead.poi.logoName] ??
+        _brandIconBytes['default'];
+
+    return Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.14),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Brand logo ───────────────────────────────────────────────
+          if (logoBytes != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.memory(
+                logoBytes,
+                width: 24,
+                height: 24,
+                fit: BoxFit.contain,
+              ),
+            )
+          else
+            const Icon(Icons.local_gas_station_outlined,
+                size: 22, color: Color(0xFF6C52A6)),
+          const SizedBox(width: 6),
+          // ── Brand name + distance ────────────────────────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                ahead.poi.brand,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
+              ),
+              Text(
+                milesText,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.black.withOpacity(0.50),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Compact trip-stats strip anchored to the bottom of the screen.
+  ///
+  /// Shows three key values side-by-side:
+  ///   • Miles remaining on the active route.
+  ///   • Estimated drive time remaining.
+  ///   • Projected arrival time.
+  ///
+  /// Only visible during active navigation.  An "expand" chevron on the right
+  /// may be wired to open the full trip breakdown sheet.
+  ///
+  /// TODO(live-data): values are read from [_tripProgressInfo].  Ensure that
+  /// [_updateTripProgress] is being called on each GPS tick so the strip stays
+  /// current.
+  Widget _buildCompactTripStrip() {
+    if (!_isNavigating) return const SizedBox.shrink();
+
+    // ── Derive display values from live trip progress ──────────────────────
+    // TODO(live-data): _tripProgressInfo is updated by _updateTripProgress();
+    // verify that it is called on every GPS fix.
+    final double milesLeft = _tripProgressInfo.milesRemaining;
+    final Duration timeLeft = _tripProgressInfo.durationRemaining;
+    final DateTime eta = _tripProgressInfo.etaLocal;
+
+    // Format miles remaining.
+    final String milesStr = milesLeft < 10
+        ? milesLeft.toStringAsFixed(1)
+        : milesLeft.round().toString();
+
+    // Format drive time remaining: "1 h 24 m" or "38 m".
+    final int totalMinutes = timeLeft.inMinutes;
+    final String timeStr = totalMinutes >= 60
+        ? '${totalMinutes ~/ 60} h ${totalMinutes % 60} m'
+        : '$totalMinutes m';
+
+    // Format ETA as local hh:mm with AM/PM.
+    final String etaStr =
+        '${eta.hour % 12 == 0 ? 12 : eta.hour % 12}:${eta.minute.toString().padLeft(2, '0')} '
+        '${eta.hour < 12 ? 'AM' : 'PM'}';
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.96),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 10,
+                offset: const Offset(0, -2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              // ── Miles remaining ──────────────────────────────────────
+              Expanded(
+                child: _compactTripStat(
+                  Icons.straighten_outlined,
+                  '$milesStr mi',
+                  'remaining',
+                ),
+              ),
+              _tripStripDivider(),
+              // ── Drive time remaining ─────────────────────────────────
+              Expanded(
+                child: _compactTripStat(
+                  Icons.access_time_outlined,
+                  timeStr,
+                  'drive time',
+                ),
+              ),
+              _tripStripDivider(),
+              // ── Arrival time ─────────────────────────────────────────
+              Expanded(
+                child: _compactTripStat(
+                  Icons.flag_outlined,
+                  etaStr,
+                  'arrival',
+                ),
+              ),
+              // ── Expand / more button ─────────────────────────────────
+              GestureDetector(
+                // Wire to _showLegBreakdownSheet() to open the full trip
+                // breakdown bottom sheet.
+                onTap: _showLegBreakdownSheet,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0E9F9),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.keyboard_arrow_up,
+                    size: 20,
+                    color: Color(0xFF6C52A6),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Thin vertical divider used between stats in [_buildCompactTripStrip].
+  Widget _tripStripDivider() {
+    return Container(
+      width: 1,
+      height: 30,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      color: Colors.black12,
+    );
+  }
+
+  /// Single labelled stat cell used inside [_buildCompactTripStrip].
+  Widget _compactTripStat(IconData icon, String value, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 14, color: Colors.black45),
+            const SizedBox(width: 4),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: Colors.black45,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Compact speed-indicator card showing the current speed and the estimated
+  /// speed limit, positioned at the bottom-left corner of the map.
+  ///
+  /// Visual behaviour:
+  ///   • Normal driving: white card with speed in black and limit badge below.
+  ///   • Over the speed limit: red border + red speed text to alert the driver.
+  ///
+  /// Only visible during active navigation.
+  ///
+  /// TODO(live-data): [_currentSpeedMps] and [_speedLimitMph] are updated from
+  /// the GPS stream via [_onGpsPosition].  No changes required here once the
+  /// GPS subscription is active; just ensure [_buildCompactSpeedBox] is placed
+  /// inside the map Stack.
+  Widget _buildCompactSpeedBox() {
+    if (!_isNavigating) return const SizedBox.shrink();
+
+    // Convert raw GPS m/s → mph; clamp to 0 when no fix available yet.
+    final double speedMph =
+        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    final int speedInt = speedMph.round();
+    final int limitInt = _speedLimitMph.round();
+
+    // Over-speed flag: only raise when a valid GPS fix has been received.
+    final bool overLimit =
+        _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
+
+    // Colour tokens for normal vs over-speed states.
+    final Color speedColor = overLimit ? Colors.red : Colors.black87;
+    final Color borderColor =
+        overLimit ? Colors.red : Colors.transparent;
+
+    return Positioned(
+      left: 12,
+      // Float above the compact trip strip (assumed ~80 px tall + safe-area).
+      bottom: 92,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          width: 64,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Current speed (large, prominent) ────────────────────
+              Text(
+                '$speedInt',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: speedColor,
+                  height: 1.0,
+                ),
+              ),
+              // ── Unit label ───────────────────────────────────────────
+              Text(
+                'mph',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: speedColor.withOpacity(0.75),
+                ),
+              ),
+              const SizedBox(height: 4),
+              // ── Speed-limit badge ────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD32F2F), // MUTCD red
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '$limitInt',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ── TripSummaryStrip ───────────────────────────────────────────────────────────

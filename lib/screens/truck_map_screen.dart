@@ -6358,12 +6358,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // overlap the navigation banner.  Visible at all other times
                 // so the driver can search a destination without opening a
                 // modal sheet.
-                if (!_hasActiveDestination && !_isArrived) _buildSearchBar(),
+                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
+                  _buildSearchBar(),
                 // ── Search results overlay ────────────────────────────────
                 // _buildSearchResults returns SizedBox.shrink() when there is
                 // nothing to show, so the condition here is simply the same
                 // guard used for the search bar itself.
-                if (!_hasActiveDestination && !_isArrived) _buildSearchResults(),
+                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
+                  _buildSearchResults(),
                 // ── Floating dashboard panel ───────────────────────────────
                 // Shown in the idle state (no destination selected, no route,
                 // not navigating) as a collapsible planning and status panel.

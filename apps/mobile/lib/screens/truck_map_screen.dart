@@ -521,6 +521,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
 
+    // Register logoAsset paths from MapPoi entries (Walmart, restaurant, gym,
+    // etc.) so _buildPoiMarkers() can render them via Image.memory().
+    for (final poi in _mapPois) {
+      final path = poi.logoAsset;
+      if (path != null && !loaded.containsKey(path)) {
+        try {
+          final data = await rootBundle.load(path);
+          loaded[path] = data.buffer.asUint8List();
+        } catch (_) {
+          // Asset missing — skip; marker builder falls back to icon widget.
+        }
+      }
+    }
+
     if (mounted) setState(() => _brandIconBytes = loaded);
   }
 
@@ -1098,6 +1112,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'roadranger': 'assets/logos/road ranger.png',
     'ambest':     'assets/logos/ambest.png',
     'quicktrip':  'assets/logos/quicktrip.png',
+    'walmart':    'assets/logos/walmart.png',
+    'restaurant': 'assets/logos/restaurant.png',
+    'gym':        'assets/logos/gym.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -1159,13 +1176,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds map [Marker]s for all [MapPoi] entries in [_mapPois].
   ///
-  /// Weigh stations fall back to an Icon widget since no logo images are
-  /// registered.  Police and ports of entry retain coloured icon markers for
-  /// instant type recognition.  Tapping a marker shows a brief info sheet via
-  /// [_showPoiAlert].
+  /// POIs with a [MapPoi.logoAsset] (Walmart, restaurant, gym) render their
+  /// brand logo via [Image.memory] — the flutter_map equivalent of Mapbox
+  /// `style.addImage` + `iconImage`.  Weigh stations, police, and ports of
+  /// entry fall back to coloured Icon widgets for instant type recognition.
+  /// Tapping any marker shows a brief info sheet via [_showPoiAlert].
   List<Marker> _buildPoiMarkers() {
     return _mapPois.map((poi) {
-      // Weigh stations use an Icon widget (no logo assets registered).
+      // POIs with a logoAsset render their brand logo (Walmart, restaurant, gym).
+      if (poi.logoAsset != null) {
+        final Uint8List? bytes = _brandIconBytes[poi.logoAsset];
+        return Marker(
+          point: poi.position,
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () => _showPoiAlert(poi),
+            child: bytes != null
+                ? ClipOval(
+                    child: Image.memory(
+                      bytes,
+                      width: 40,
+                      height: 40,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
+                  )
+                : const Icon(Icons.place, color: Colors.blue, size: 32),
+          ),
+        );
+      }
+
+      // Weigh stations use an Icon widget.
       if (poi.type == PoiType.weighStation) {
         return Marker(
           point: poi.position,
@@ -1194,6 +1237,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         case PoiType.portOfEntry:
           color = Colors.indigo.shade700;
           icon = Icons.border_all;
+          break;
+        case PoiType.walmart:
+          color = Colors.blue.shade700;
+          icon = Icons.store;
+          break;
+        case PoiType.restaurant:
+          color = Colors.red.shade700;
+          icon = Icons.restaurant;
+          break;
+        case PoiType.gym:
+          color = Colors.green.shade700;
+          icon = Icons.fitness_center;
           break;
       }
       return Marker(
@@ -1268,6 +1323,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         typeLabel = 'Port of Entry';
         typeIcon = Icons.border_all;
         typeColor = Colors.indigo.shade700;
+        break;
+      case PoiType.walmart:
+        typeLabel = 'Walmart';
+        typeIcon = Icons.store;
+        typeColor = Colors.blue.shade700;
+        break;
+      case PoiType.restaurant:
+        typeLabel = 'Restaurant';
+        typeIcon = Icons.restaurant;
+        typeColor = Colors.red.shade700;
+        break;
+      case PoiType.gym:
+        typeLabel = 'Gym';
+        typeIcon = Icons.fitness_center;
+        typeColor = Colors.green.shade700;
         break;
     }
     showDialog<void>(
@@ -6978,12 +7048,22 @@ enum PoiType {
 
   /// International or inter-state port of entry inspection facility.
   portOfEntry,
+
+  /// Walmart store — useful for supplies, parking, and amenities.
+  walmart,
+
+  /// Restaurant or diner along the route.
+  restaurant,
+
+  /// Gym or fitness centre for driver rest-stop exercise.
+  gym,
 }
 
 /// A map point of interest (POI) relevant to commercial truck drivers.
 ///
-/// Used for weigh stations, police checkpoints, and ports of entry that are
-/// rendered as coloured markers on the map and trigger proximity alerts.
+/// Used for weigh stations, police checkpoints, ports of entry, Walmart
+/// stores, restaurants, and gyms that are rendered as markers on the map
+/// and trigger proximity alerts.
 class MapPoi {
   const MapPoi({
     required this.id,
@@ -6991,6 +7071,7 @@ class MapPoi {
     required this.type,
     required this.name,
     required this.status,
+    this.logoAsset,
   });
 
   /// Unique identifier — also used as the alert-deduplication key.
@@ -6999,7 +7080,8 @@ class MapPoi {
   /// Geographic coordinate of the POI.
   final LatLng position;
 
-  /// Category of this POI (weigh station, police, or port of entry).
+  /// Category of this POI (weigh station, police, port of entry, Walmart,
+  /// restaurant, or gym).
   final PoiType type;
 
   /// Human-readable name displayed in markers and alert dialogs.
@@ -7007,6 +7089,13 @@ class MapPoi {
 
   /// Operational status string, e.g. "Open", "Closed", "Bypass Required".
   final String status;
+
+  /// Flutter asset path for the logo image used as the map marker icon.
+  ///
+  /// When set, [_buildPoiMarkers] renders this PNG via [Image.memory] (the
+  /// flutter_map equivalent of Mapbox `style.addImage` + `iconImage`).
+  /// Leave null to fall back to a coloured Icon widget.
+  final String? logoAsset;
 }
 
 /// Sample [MapPoi] data used when no live feed is available.
@@ -7059,6 +7148,81 @@ const List<MapPoi> _sampleMapPois = [
     type: PoiType.portOfEntry,
     name: 'Oregon / California Port of Entry',
     status: 'Open',
+  ),
+  // ── Walmart stores ───────────────────────────────────────────────────────
+  MapPoi(
+    id: 'walmart_woodburn_or',
+    position: LatLng(45.148, -122.858),
+    type: PoiType.walmart,
+    name: 'Walmart Supercenter – Woodburn, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/walmart.png',
+  ),
+  MapPoi(
+    id: 'walmart_medford_or',
+    position: LatLng(42.332, -122.896),
+    type: PoiType.walmart,
+    name: 'Walmart Supercenter – Medford, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/walmart.png',
+  ),
+  MapPoi(
+    id: 'walmart_winnemucca_nv',
+    position: LatLng(40.975, -117.742),
+    type: PoiType.walmart,
+    name: 'Walmart Supercenter – Winnemucca, NV',
+    status: 'Open',
+    logoAsset: 'assets/logos/walmart.png',
+  ),
+  // ── Restaurants ──────────────────────────────────────────────────────────
+  MapPoi(
+    id: 'restaurant_salem_or',
+    position: LatLng(44.924, -123.017),
+    type: PoiType.restaurant,
+    name: 'Denny\'s – Salem, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/restaurant.png',
+  ),
+  MapPoi(
+    id: 'restaurant_grants_pass_or',
+    position: LatLng(42.434, -123.337),
+    type: PoiType.restaurant,
+    name: 'Black Bear Diner – Grants Pass, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/restaurant.png',
+  ),
+  MapPoi(
+    id: 'restaurant_lovelock_nv',
+    position: LatLng(40.181, -118.477),
+    type: PoiType.restaurant,
+    name: 'Sturgeon\'s Restaurant – Lovelock, NV',
+    status: 'Open',
+    logoAsset: 'assets/logos/restaurant.png',
+  ),
+  // ── Gyms ─────────────────────────────────────────────────────────────────
+  MapPoi(
+    id: 'gym_portland_or',
+    position: LatLng(45.528, -122.681),
+    type: PoiType.gym,
+    name: 'Planet Fitness – Portland, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/gym.png',
+  ),
+  MapPoi(
+    id: 'gym_eugene_or',
+    position: LatLng(44.052, -123.088),
+    type: PoiType.gym,
+    name: '24 Hour Fitness – Eugene, OR',
+    status: 'Open',
+    logoAsset: 'assets/logos/gym.png',
+  ),
+  MapPoi(
+    id: 'gym_reno_nv',
+    position: LatLng(39.537, -119.812),
+    type: PoiType.gym,
+    name: 'Planet Fitness – Reno, NV',
+    status: 'Open',
+    logoAsset: 'assets/logos/gym.png',
   ),
 ];
 

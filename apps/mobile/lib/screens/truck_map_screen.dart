@@ -180,6 +180,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     LaneGuidanceItem(type: LaneArrowType.slightRight, isRecommended: false),
   ];
 
+  // ── Navigation alert state ─────────────────────────────────────────────────
+  // Sample alerts shown during active navigation.  In production these would
+  // be populated from live weather/traffic/restriction APIs.
+  late List<NavigationAlert> _navAlerts;
+
+  // Sample trip progress info for the TripSummaryStrip.
+  late TripProgressInfo _tripProgressInfo;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -448,6 +456,46 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void initState() {
     super.initState();
+    _navAlerts = [
+      NavigationAlert(
+        id: 'alert_wind_1',
+        type: AlertType.windAdvisory,
+        severity: AlertSeverity.high,
+        title: 'Wind Advisory',
+        subtitle: 'Gusts up to 60 mph',
+        message: 'High crosswinds reported — reduce speed and use caution.',
+        distanceMiles: 12.0,
+        roadName: 'I-80 Westbound',
+        suggestedAction: 'Reduce speed, grip steering firmly.',
+      ),
+      NavigationAlert(
+        id: 'alert_fuel_1',
+        type: AlertType.fuelDistance,
+        severity: AlertSeverity.low,
+        title: 'Fuel Ahead',
+        subtitle: 'Flying J Truck Stop',
+        distanceMiles: 143.0,
+        roadName: 'US-95 N',
+        suggestedAction: 'Plan fuel stop at next exit.',
+      ),
+      NavigationAlert(
+        id: 'alert_restriction_1',
+        type: AlertType.restrictionDistance,
+        severity: AlertSeverity.medium,
+        title: 'Truck Restriction',
+        subtitle: 'Weight limit 80,000 lbs',
+        message: 'Bridge weight restriction ahead — verify gross vehicle weight.',
+        distanceMiles: 139.0,
+        roadName: 'NV-227',
+        suggestedAction: 'Confirm vehicle weight or use alternate route.',
+      ),
+    ];
+    _tripProgressInfo = TripProgressInfo(
+      milesRemaining: 318.0,
+      durationRemaining: const Duration(hours: 5, minutes: 12),
+      etaLocal: DateTime.now().add(const Duration(hours: 5, minutes: 12)),
+      timezoneLabel: 'PDT',
+    );
     _initTts();
     _startGps();
     // Initialise the warning manager with the pre-seeded sign list.
@@ -6188,6 +6236,57 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Mini alert row builder ─────────────────────────────────────────────────
+  Widget _buildMiniAlertRow() {
+    return Positioned(
+      top: 8,
+      left: 16,
+      right: 16,
+      child: SafeArea(
+        child: MiniAlertRow(
+          alerts: _navAlerts,
+          onNext: () {
+            // Cycle to next un-dismissed alert (future: scroll the main card).
+          },
+        ),
+      ),
+    );
+  }
+
+  // ── Main navigation alert card builder ────────────────────────────────────
+  Widget _buildMainAlertCard() {
+    final active = _navAlerts.where((a) => !a.isDismissed).toList();
+    if (active.isEmpty) return const SizedBox.shrink();
+    final primary = active.first;
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 80,
+      child: MainNavigationAlertCard(
+        alert: primary,
+        tripInfo: _tripProgressInfo,
+        onDismiss: () {
+          setState(() {
+            final idx = _navAlerts.indexWhere((a) => a.id == primary.id);
+            if (idx != -1) {
+              _navAlerts[idx] = _navAlerts[idx].copyWith(isDismissed: true);
+            }
+          });
+        },
+        onToggleExpand: () {
+          setState(() {
+            final idx = _navAlerts.indexWhere((a) => a.id == primary.id);
+            if (idx != -1) {
+              _navAlerts[idx] = _navAlerts[idx]
+                  .copyWith(isExpanded: !_navAlerts[idx].isExpanded);
+            }
+          });
+        },
+      ),
+    );
+  }
+
   /// Builds the navigation controls overlay shown only while [_isNavigating].
   ///
   /// Provides a "Stop Navigation" button so the driver can end the active
@@ -6731,6 +6830,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Mini alert row ─────────────────────────────────────────
+                // Compact horizontal chips showing nearby alerts (wind,
+                // fuel, restriction) during active navigation.
+                if (_isNavigating) _buildMiniAlertRow(),
+                // ── Main alert card ────────────────────────────────────────
+                // Primary expandable alert card with trip summary strip.
+                // Floats above the Stop Navigation button during navigation.
+                if (_isNavigating) _buildMainAlertCard(),
                 // ── Navigation controls ───────────────────────────────────
                 // Stop Navigation button: only visible while _isNavigating.
                 // Tapping calls _stopNavigation to end the trip and restore
@@ -7472,6 +7579,514 @@ class _StopEntry {
 
   /// Geographic coordinate of the stop.
   final LatLng position;
+}
+
+// ── Navigation alert system ────────────────────────────────────────────────────
+
+enum AlertType {
+  /// Issued advisory warning about wind conditions along the route.
+  windAdvisory,
+  fuelDistance,
+  restrictionDistance,
+  weather,
+  lowBridge,
+  construction,
+  accident,
+  roadClosure,
+  hazmat,
+  /// A designated high-wind geographic area (e.g. a canyon or pass).
+  highWind,
+  steepGrade,
+}
+
+enum AlertSeverity {
+  low,
+  medium,
+  high,
+}
+
+class NavigationAlert {
+  final String id;
+  final AlertType type;
+  final AlertSeverity severity;
+  final String title;
+  final String? subtitle;
+  final String? message;
+  final double? distanceMiles;
+  final Duration? timeRemaining;
+  final DateTime? etaLocal;
+  final String? roadName;
+  final String? suggestedAction;
+  final bool isExpanded;
+  final bool isDismissed;
+
+  const NavigationAlert({
+    required this.id,
+    required this.type,
+    required this.severity,
+    required this.title,
+    this.subtitle,
+    this.message,
+    this.distanceMiles,
+    this.timeRemaining,
+    this.etaLocal,
+    this.roadName,
+    this.suggestedAction,
+    this.isExpanded = false,
+    this.isDismissed = false,
+  });
+
+  NavigationAlert copyWith({
+    bool? isExpanded,
+    bool? isDismissed,
+  }) {
+    return NavigationAlert(
+      id: id,
+      type: type,
+      severity: severity,
+      title: title,
+      subtitle: subtitle,
+      message: message,
+      distanceMiles: distanceMiles,
+      timeRemaining: timeRemaining,
+      etaLocal: etaLocal,
+      roadName: roadName,
+      suggestedAction: suggestedAction,
+      isExpanded: isExpanded ?? this.isExpanded,
+      isDismissed: isDismissed ?? this.isDismissed,
+    );
+  }
+}
+
+class TripProgressInfo {
+  final double milesRemaining;
+  final Duration durationRemaining;
+  final DateTime etaLocal;
+  final String timezoneLabel;
+
+  const TripProgressInfo({
+    required this.milesRemaining,
+    required this.durationRemaining,
+    required this.etaLocal,
+    required this.timezoneLabel,
+  });
+}
+
+// ── Navigation alert utility functions ────────────────────────────────────────
+
+String _fmtMiles(double miles) => '${miles.toStringAsFixed(0)} mi';
+
+String _fmtDuration(Duration duration) {
+  final h = duration.inHours;
+  final m = duration.inMinutes % 60;
+  if (h > 0) return '${h}h ${m}m';
+  return '${m}m';
+}
+
+/// Formats [dt] as a 12-hour AM/PM clock string.
+///
+/// [dt] is expected to already be in the device's local timezone (use
+/// [DateTime.now] or [DateTime.toLocal] before passing in).
+/// The [TripProgressInfo.timezoneLabel] field is used as the display-only
+/// timezone hint shown alongside this value in [TripSummaryStrip].
+String _fmtEta(DateTime dt) {
+  final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+  final minute = dt.minute.toString().padLeft(2, '0');
+  final period = dt.hour >= 12 ? 'PM' : 'AM';
+  return '$hour:$minute $period';
+}
+
+Color _alertSeverityColor(AlertSeverity severity) {
+  switch (severity) {
+    case AlertSeverity.low:
+      return Colors.green;
+    case AlertSeverity.medium:
+      return Colors.orange;
+    case AlertSeverity.high:
+      return Colors.red;
+  }
+}
+
+IconData _alertTypeIcon(AlertType type) {
+  switch (type) {
+    case AlertType.windAdvisory:
+    case AlertType.highWind:
+      return Icons.air;
+    case AlertType.fuelDistance:
+      return Icons.local_gas_station;
+    case AlertType.restrictionDistance:
+    case AlertType.lowBridge:
+    case AlertType.hazmat:
+      return Icons.warning_amber_rounded;
+    case AlertType.weather:
+      return Icons.cloud;
+    case AlertType.construction:
+      return Icons.construction;
+    case AlertType.accident:
+      return Icons.car_crash;
+    case AlertType.roadClosure:
+      return Icons.block;
+    case AlertType.steepGrade:
+      return Icons.trending_down;
+  }
+}
+
+// ── MiniAlertChip ──────────────────────────────────────────────────────────────
+
+class MiniAlertChip extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color iconColor;
+  final VoidCallback? onTap;
+
+  const MiniAlertChip({
+    super.key,
+    required this.icon,
+    required this.text,
+    this.iconColor = Colors.red,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: iconColor, size: 18),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              color: Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return chip;
+    return GestureDetector(onTap: onTap, child: chip);
+  }
+}
+
+// ── MiniAlertRow ───────────────────────────────────────────────────────────────
+
+class MiniAlertRow extends StatelessWidget {
+  final List<NavigationAlert> alerts;
+  final VoidCallback? onNext;
+
+  const MiniAlertRow({
+    super.key,
+    required this.alerts,
+    this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = alerts.where((a) => !a.isDismissed).toList();
+    if (visible.isEmpty) return const SizedBox.shrink();
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          ...visible.map(
+            (a) => Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: MiniAlertChip(
+                icon: _alertTypeIcon(a.type),
+                text: a.distanceMiles != null
+                    ? _fmtMiles(a.distanceMiles!)
+                    : a.title,
+                iconColor: _alertSeverityColor(a.severity),
+              ),
+            ),
+          ),
+          MiniAlertChip(
+            icon: Icons.chevron_right,
+            text: 'Next',
+            iconColor: Colors.blueGrey,
+            onTap: onNext,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── MainNavigationAlertCard ────────────────────────────────────────────────────
+
+class MainNavigationAlertCard extends StatelessWidget {
+  final NavigationAlert alert;
+  final TripProgressInfo? tripInfo;
+  final VoidCallback? onDismiss;
+  final VoidCallback? onToggleExpand;
+
+  const MainNavigationAlertCard({
+    super.key,
+    required this.alert,
+    this.tripInfo,
+    this.onDismiss,
+    this.onToggleExpand,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _alertSeverityColor(alert.severity);
+    final icon = _alertTypeIcon(alert.type);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Main alert row ──────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Severity-colored icon container
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: color, size: 24),
+                ),
+                const SizedBox(width: 12),
+                // Title + subtitle
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        alert.title,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: color,
+                        ),
+                      ),
+                      if (alert.subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          alert.subtitle!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                // Distance badge
+                if (alert.distanceMiles != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _fmtMiles(alert.distanceMiles!),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 6),
+                // More / Collapse button
+                GestureDetector(
+                  onTap: onToggleExpand,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      alert.isExpanded ? 'Less' : 'More',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Dismiss button
+                GestureDetector(
+                  onTap: onDismiss,
+                  child: const Icon(
+                    Icons.close,
+                    size: 20,
+                    color: Colors.black38,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // ── Expandable "More" panel ────────────────────────────────────
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: _buildMorePanel(color),
+            crossFadeState: alert.isExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 250),
+          ),
+          // ── Trip summary strip ─────────────────────────────────────────
+          if (tripInfo != null) ...[
+            const Divider(height: 1, thickness: 1, color: Color(0xFFF0F0F0)),
+            TripSummaryStrip(tripInfo: tripInfo!),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMorePanel(Color color) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 16, thickness: 1, color: Color(0xFFF0F0F0)),
+          if (alert.roadName != null) ...[
+            _moreRow(Icons.route, 'Road', alert.roadName!),
+            const SizedBox(height: 6),
+          ],
+          if (alert.message != null) ...[
+            _moreRow(Icons.info_outline, 'Details', alert.message!),
+            const SizedBox(height: 6),
+          ],
+          if (alert.suggestedAction != null)
+            _moreRow(Icons.directions, 'Action', alert.suggestedAction!),
+        ],
+      ),
+    );
+  }
+
+  Widget _moreRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: Colors.black45),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 13, color: Colors.black87),
+              children: [
+                TextSpan(
+                  text: '$label: ',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                TextSpan(text: value),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── TripSummaryStrip ───────────────────────────────────────────────────────────
+
+class TripSummaryStrip extends StatelessWidget {
+  final TripProgressInfo tripInfo;
+
+  const TripSummaryStrip({super.key, required this.tripInfo});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          _stat(Icons.straighten, _fmtMiles(tripInfo.milesRemaining), 'left'),
+          _divider(),
+          _stat(Icons.access_time, _fmtDuration(tripInfo.durationRemaining),
+              'drive time'),
+          _divider(),
+          _stat(Icons.flag_outlined, _fmtEta(tripInfo.etaLocal),
+              tripInfo.timezoneLabel),
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(IconData icon, String value, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: Colors.black45),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+            ),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 11, color: Colors.black45),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _divider() {
+    return Container(
+      width: 1,
+      height: 28,
+      color: const Color(0xFFE0E0E0),
+    );
+  }
 }
 
 // ── Sample truck safety warning sign data ─────────────────────────────────────

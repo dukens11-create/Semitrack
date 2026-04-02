@@ -6027,7 +6027,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget _buildRoadGuidanceBanner() {
     if (_navSteps.isEmpty) return const SizedBox.shrink();
     return Positioned(
-      top: 0,
+      top: 16,
       left: 0,
       right: 0,
       child: RoadGuidanceBanner(maneuver: _buildCurrentManeuverInfo()),
@@ -6048,9 +6048,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const SizedBox.shrink();
     }
     return Positioned(
-      top: 172,
-      left: 0,
-      right: 0,
+      top: 165,
+      left: 16,
+      right: 16,
       child: Center(
         child: SafeArea(
           bottom: false,
@@ -6434,16 +6434,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Mini alert row builder ─────────────────────────────────────────────────
   Widget _buildMiniAlertRow() {
     return Positioned(
-      top: 8,
+      top: 110,
       left: 16,
       right: 16,
-      child: SafeArea(
-        child: MiniAlertRow(
-          alerts: _navAlerts,
-          onNext: () {
-            // Cycle to next un-dismissed alert (future: scroll the main card).
-          },
-        ),
+      child: MiniAlertRow(
+        alerts: _navAlerts,
+        onNext: () {
+          // Cycle to next un-dismissed alert (future: scroll the main card).
+        },
       ),
     );
   }
@@ -6455,9 +6453,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final primary = active.first;
 
     return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 80,
+      left: 16,
+      right: 16,
+      bottom: 110,
       child: MainNavigationAlertCard(
         alert: primary,
         tripInfo: _tripProgressInfo,
@@ -6490,10 +6488,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// devices.
   Widget _buildStopNavigationButton() {
     return Positioned(
+      bottom: 24,
       left: 20,
       right: 20,
-      bottom: 30, // Floating above the bottom for better UX
       child: SafeArea(
+        top: false,
         child: SizedBox(
           height: 60,
           child: ElevatedButton.icon(
@@ -7004,7 +7003,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // obscures the navigation banner or the rerouting indicator.
                 if (_navigationMode && _hasActiveDestination)
                   Positioned(
-                    bottom: 24,
+                    bottom: 140,
                     right: 16,
                     child: _buildSpeedPanel(),
                   ),
@@ -7051,11 +7050,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Tapping calls _stopNavigation to end the trip and restore
                 // planning UI.
                 if (_isNavigating) _buildStopNavigationButton(),
-                // ── Road name + distance card ─────────────────────────────
-                // GPS-style card showing the current road, distance to the
-                // next maneuver in miles, and the upcoming street name.
-                // Floats below the RoadGuidanceBanner during active navigation.
-                if (_isNavigating) _buildRoadInfoCard(),
               ],
             ),
           ),

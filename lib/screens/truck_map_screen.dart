@@ -289,6 +289,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final List<MapPoi> _mapPois = List<MapPoi>.from(_sampleMapPois);
   final Set<String> _poiAlertShown = {};
 
+  // ── Ahead-on-route weigh stations ─────────────────────────────────────────
+  //
+  // Holds the next 1–2 weigh stations ahead of the truck on the current route,
+  // sorted by ascending route miles.  Updated on every GPS fix while
+  // _isNavigating is true via _refreshClosestWeighStationsAhead().
+  List<AheadWeighStation> _closestWeighStationsAhead = const [];
+
   // ── Truck profile (height / weight / length / hazmat) ─────────────────────
   //
   // These defaults represent a standard 5-axle semi.  In a production build
@@ -356,6 +363,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Radius in metres within which an ahead-on-route warning triggers the
   /// top alert banner (and TTS) for the driver.
   static const double _warningAlertRadiusMeters = 1000.0;
+
+  /// Maximum cross-track distance (metres) for a weigh station to be
+  /// considered "on" the active route and eligible for ahead-on-route display.
+  static const double _weighStationProximityMeters = 500.0;
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -1691,6 +1702,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // Warning sign proximity alerts: single-banner alert for safety hazards.
       _checkWarningAheadAlert(gpsPoint);
+
+      // Ahead-on-route weigh stations: refresh the closest 1–2 stations
+      // ahead on the active route so the ClosestWeighStationsRow stays current.
+      if (_isNavigating) _refreshClosestWeighStationsAhead();
 
       // Trip statistics: update mileage and stopped time from live GPS.
       _updateTripStats(position);
@@ -3609,6 +3624,133 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
     );
   }
+
+  // ── Ahead-on-route weigh station logic ──────────────────────────────────────
+
+  /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
+  /// segment of [routePoints].
+  ///
+  /// Uses the same spherical cross-track formula as [_isWarningNearRoute] so
+  /// results are accurate at any latitude.  Falls back to a simple point check
+  /// for single-point polylines.
+  bool _isWeighStationNearRoute(WeighStationPoi poi, List<LatLng> routePoints) {
+    if (routePoints.isEmpty) return false;
+    if (routePoints.length == 1) {
+      return _distanceBetween(poi.position, routePoints.first) <=
+          _weighStationProximityMeters;
+    }
+    for (int i = 0; i < routePoints.length - 1; i++) {
+      final d =
+          _crossTrackDistance(poi.position, routePoints[i], routePoints[i + 1]);
+      if (d <= _weighStationProximityMeters) return true;
+    }
+    return false;
+  }
+
+  /// Finds the nearest route-point index for [poi] by scanning [_routePoints].
+  ///
+  /// Only considers route points at or after [startIndex] so that stations
+  /// behind the truck are naturally excluded.  Returns -1 when no point is
+  /// found within [_weighStationProximityMeters].
+  int _nearestRouteIndexForPoi(WeighStationPoi poi, int startIndex) {
+    double best = double.infinity;
+    int bestIdx = -1;
+    for (int i = startIndex; i < _routePoints.length; i++) {
+      final d = _distanceBetween(poi.position, _routePoints[i]);
+      if (d < best) {
+        best = d;
+        bestIdx = i;
+      }
+    }
+    return (best <= _weighStationProximityMeters) ? bestIdx : -1;
+  }
+
+  /// Returns the next 1–2 weigh stations that are ahead of the truck on the
+  /// active route, sorted by ascending route distance.
+  ///
+  /// A station is considered "ahead" when its nearest route-point index is
+  /// strictly greater than [_truckIndex] AND the station is within
+  /// [_weighStationProximityMeters] of the route polyline.  Route miles are
+  /// approximated by summing Haversine segment lengths from [_truckIndex] to
+  /// the station's nearest route point.
+  List<AheadWeighStation> _getClosestWeighStationsAheadOnRoute() {
+    if (_routePoints.isEmpty) return const [];
+
+    // Derive WeighStationPoi entries from existing MapPoi data so there is a
+    // single source of truth for weigh-station coordinates.
+    final weighPois = _mapPois
+        .where((p) => p.type == PoiType.weighStation)
+        .map((p) => WeighStationPoi.fromMapPoi(p))
+        .toList();
+
+    final List<AheadWeighStation> candidates = [];
+
+    for (final poi in weighPois) {
+      // Skip stations not near the route at all.
+      if (!_isWeighStationNearRoute(poi, _routePoints)) continue;
+
+      // Find nearest route point strictly ahead of current truck position.
+      final idx = _nearestRouteIndexForPoi(poi, _truckIndex + 1);
+      if (idx < 0) continue; // station is behind or off-route
+
+      // Compute approximate route miles from truck to this station.
+      double meters = 0.0;
+      for (int i = _truckIndex; i < idx && i + 1 < _routePoints.length; i++) {
+        meters += _distanceBetween(_routePoints[i], _routePoints[i + 1]);
+      }
+      final double miles = meters / _metersPerMile;
+
+      candidates.add(AheadWeighStation(
+        poi: poi,
+        milesAhead: miles,
+        routeIndex: idx,
+      ));
+    }
+
+    // Sort ascending by route miles and return the closest 2.
+    candidates.sort((a, b) => a.milesAhead.compareTo(b.milesAhead));
+    return candidates.take(2).toList();
+  }
+
+  /// Recomputes [_closestWeighStationsAhead] from the current truck position
+  /// and triggers a rebuild so the [ClosestWeighStationsRow] updates in place.
+  ///
+  /// Called on every GPS fix when [_isNavigating] is true (see
+  /// [_onGpsPosition]).  The computation is O(n·m) in the number of weigh
+  /// stations × route points, which is fast enough for real-time updates given
+  /// the small dataset sizes involved.
+  void _refreshClosestWeighStationsAhead() {
+    final next = _getClosestWeighStationsAheadOnRoute();
+    // Avoid a redundant rebuild if the list content hasn't changed.
+    if (next.length == _closestWeighStationsAhead.length &&
+        next.every((s) => _closestWeighStationsAhead
+            .any((existing) => existing.poi.id == s.poi.id &&
+                (existing.milesAhead - s.milesAhead).abs() < 0.05))) {
+      return;
+    }
+    setState(() => _closestWeighStationsAhead = next);
+  }
+
+  /// Builds the compact row of [ClosestWeighStationChip] widgets displayed
+  /// above the Stop Navigation button during active navigation.
+  ///
+  /// Returns [SizedBox.shrink] when there are no weigh stations ahead so the
+  /// row takes up no space in the widget tree.
+  Widget _buildClosestWeighStationsRow() {
+    if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      // Position above the Stop Navigation button (bottom ~30 + 60 height + gap)
+      bottom: 100,
+      left: 16,
+      right: 16,
+      child: ClosestWeighStationsRow(
+        stations: _closestWeighStationsAhead,
+      ),
+    );
+  }
+
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
@@ -7050,6 +7192,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Tapping calls _stopNavigation to end the trip and restore
                 // planning UI.
                 if (_isNavigating) _buildStopNavigationButton(),
+                // ── Closest weigh stations ahead row ─────────────────────
+                // Compact chip row showing the next 1–2 weigh stations on the
+                // active route with distance and logo.  Only visible while
+                // navigating and when at least one station lies ahead.
+                _buildClosestWeighStationsRow(),
               ],
             ),
           ),
@@ -8647,3 +8794,197 @@ const List<WarningSign> _sampleWarningSigns = [
     icon: WarningTypes.animalCrossing,
   ),
 ];
+
+// ── WeighStationPoi model ──────────────────────────────────────────────────────
+
+/// A weigh station point-of-interest enriched with logo asset information.
+///
+/// Wraps the core fields from [MapPoi] and adds [logoName] so UI widgets can
+/// load the station's brand logo from `assets/logos/{logoName}.png`.
+class WeighStationPoi {
+  const WeighStationPoi({
+    required this.id,
+    required this.position,
+    required this.name,
+    required this.status,
+    this.logoName = 'weigh_station',
+  });
+
+  /// Unique identifier — matches the source [MapPoi.id].
+  final String id;
+
+  /// Geographic coordinate of the weigh station.
+  final LatLng position;
+
+  /// Human-readable station name shown in chips and dialogs.
+  final String name;
+
+  /// Operational status string, e.g. "Open", "Closed", "Bypass Required".
+  final String status;
+
+  /// PNG filename (without `.png`) under `assets/logos/` used to display the
+  /// station's logo.  Defaults to `'weigh_station'` when no branded logo exists.
+  final String logoName;
+
+  /// Constructs a [WeighStationPoi] from an existing [MapPoi] of type
+  /// [PoiType.weighStation].  The [logoName] defaults to `'weigh_station'`.
+  factory WeighStationPoi.fromMapPoi(MapPoi poi) {
+    return WeighStationPoi(
+      id: poi.id,
+      position: poi.position,
+      name: poi.name,
+      status: poi.status,
+    );
+  }
+}
+
+// ── AheadWeighStation model ────────────────────────────────────────────────────
+
+/// A weigh station that lies ahead of the truck on the active route, together
+/// with pre-computed distance information.
+///
+/// Produced by [_TruckMapScreenState._getClosestWeighStationsAheadOnRoute] and
+/// consumed by [ClosestWeighStationChip] / [ClosestWeighStationsRow].
+class AheadWeighStation {
+  const AheadWeighStation({
+    required this.poi,
+    required this.milesAhead,
+    required this.routeIndex,
+  });
+
+  /// The weigh station POI data including its name and logo.
+  final WeighStationPoi poi;
+
+  /// Approximate route miles from the truck's current position to this station.
+  final double milesAhead;
+
+  /// Index into `_routePoints` of the nearest point to this station.
+  /// Used internally to order stations and is not shown in the UI.
+  final int routeIndex;
+}
+
+// ── ClosestWeighStationChip widget ────────────────────────────────────────────
+
+/// A compact navigation chip displaying a single weigh station ahead on route.
+///
+/// Shows the station's logo (from `assets/logos/{logoName}.png`), its short
+/// name, and the remaining route miles.  Styled as a dark rounded card so it
+/// blends with the navigation overlay without obscuring the map.
+///
+/// **Usage:**
+/// ```dart
+/// ClosestWeighStationChip(station: aheadStation)
+/// ```
+class ClosestWeighStationChip extends StatelessWidget {
+  final AheadWeighStation station;
+
+  const ClosestWeighStationChip({super.key, required this.station});
+
+  @override
+  Widget build(BuildContext context) {
+    final poi = station.poi;
+    final miles = station.milesAhead;
+
+    // Format distance: show one decimal place below 10 miles, zero above.
+    final String distLabel =
+        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.82),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Station logo ──────────────────────────────────────────────────
+          // Loads `assets/logos/{logoName}.png`; falls back to a scale icon
+          // when the file is missing so the chip is always renderable.
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Image.asset(
+              'assets/logos/${poi.logoName}.png',
+              width: 26,
+              height: 26,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.scale,
+                color: Colors.white70,
+                size: 22,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ── Name + distance ───────────────────────────────────────────────
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                poi.name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                distLabel,
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontSize: 11,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── ClosestWeighStationsRow widget ────────────────────────────────────────────
+
+/// A horizontal row of [ClosestWeighStationChip]s showing the next 1–2 weigh
+/// stations ahead of the driver on the active route.
+///
+/// Displayed as an overlay during active navigation, positioned above the Stop
+/// Navigation button so it is visible without blocking the map.  The row is
+/// automatically empty (zero size) when [stations] is empty.
+///
+/// **Usage:**
+/// ```dart
+/// ClosestWeighStationsRow(stations: _closestWeighStationsAhead)
+/// ```
+class ClosestWeighStationsRow extends StatelessWidget {
+  final List<AheadWeighStation> stations;
+
+  const ClosestWeighStationsRow({super.key, required this.stations});
+
+  @override
+  Widget build(BuildContext context) {
+    if (stations.isEmpty) return const SizedBox.shrink();
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < stations.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          ClosestWeighStationChip(station: stations[i]),
+        ],
+      ],
+    );
+  }
+}

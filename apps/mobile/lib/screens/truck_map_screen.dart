@@ -7,9 +7,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mbx;
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
@@ -118,7 +118,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _animTimer is kept for cancellation (e.g. in dispose) even though
   // route animation is now driven by _runSmoothRouteAnimation.  The GPS
   // stream takes priority when real device location fixes are available.
-  StreamSubscription<Position>? _gpsSubscription;
+  StreamSubscription<geo.Position>? _gpsSubscription;
   Timer? _animTimer; // kept for dispose / GPS-mode cancellation
 
   // Generation counter — incremented each time a new smooth animation is
@@ -200,7 +200,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Duration _stoppedDuration = Duration.zero;
 
   /// Total miles driven since the trip was started, computed from successive
-  /// GPS point-to-point distances via [Geolocator.distanceBetween].
+  /// GPS point-to-point distances via [geo.Geolocator.distanceBetween].
   double _milesDriven = 0.0;
 
   /// Latitude of the previous GPS fix, used to compute incremental distance.
@@ -1004,7 +1004,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// on [routePoints].  Call this after a new route loads to refresh the POI
   /// overlay without showing every stop in the country.
   ///
-  /// Uses [Geolocator.distanceBetween] for GPS-grade accuracy.
+  /// Uses [geo.Geolocator.distanceBetween] for GPS-grade accuracy.
   ///
   /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
   /// With the current mock dataset (≤ 10 stops) this is negligible.  When
@@ -1029,7 +1029,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             stop.brand != 'Rest Area' && stop.brand != 'Weigh Station')
         .where((stop) {
           for (final pt in routePoints) {
-            final d = Geolocator.distanceBetween(
+            final d = geo.Geolocator.distanceBetween(
               stop.position.latitude,
               stop.position.longitude,
               pt.latitude,
@@ -1052,7 +1052,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .where((p) => p.type == PoiType.weighStation)
         .where((poi) {
           for (final pt in routePoints) {
-            final d = Geolocator.distanceBetween(
+            final d = geo.Geolocator.distanceBetween(
               poi.position.latitude,
               poi.position.longitude,
               pt.latitude,
@@ -1226,7 +1226,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _checkPoiAlerts(LatLng currentPosition) {
     for (final poi in _mapPois) {
       if (_poiAlertShown.contains(poi.id)) continue;
-      final double dist = Geolocator.distanceBetween(
+      final double dist = geo.Geolocator.distanceBetween(
         currentPosition.latitude,
         currentPosition.longitude,
         poi.position.latitude,
@@ -1550,22 +1550,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// ahead of the current position, so the marker always follows the real
   /// device location when available.
   Future<void> _startGps() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return;
 
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return;
+    geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+    if (permission == geo.LocationPermission.denied) {
+      permission = await geo.Geolocator.requestPermission();
+      if (permission == geo.LocationPermission.denied) return;
     }
-    if (permission == LocationPermission.deniedForever) return;
+    if (permission == geo.LocationPermission.deniedForever) return;
 
-    const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
+    const locationSettings = geo.LocationSettings(
+      accuracy: geo.LocationAccuracy.high,
       distanceFilter: 10,
     );
 
-    _gpsSubscription = Geolocator.getPositionStream(
+    _gpsSubscription = geo.Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(_onGpsPosition);
   }
@@ -1587,7 +1587,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the heading is unavailable (stationary, cold start, or no sensor).  We
   /// use the true heading when ≥ 0, falling back to the bearing derived from
   /// the route geometry when not available.
-  void _onGpsPosition(Position position) {
+  void _onGpsPosition(geo.Position position) {
     // Ignore all GPS updates once the driver has arrived — the trip is done.
     if (_isArrived) return;
     // Pause guard: skip all tracking updates while navigation is paused.
@@ -1724,7 +1724,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// from the nearest point on the route polyline.  When off-route, triggers a
   /// full reroute from the current live GPS position to the original destination.
   ///
-  /// Uses [Geolocator.distanceBetween] for GPS-grade distance measurement and
+  /// Uses [geo.Geolocator.distanceBetween] for GPS-grade distance measurement and
   /// throttles reroutes to at most one every [_rerouteThrottleSeconds] seconds
   /// to prevent rapid repeated API calls in areas with poor GPS accuracy.
   void _checkOffRoute(LatLng current) {
@@ -1738,10 +1738,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     // Compute minimum distance from current position to any route point using
-    // Geolocator.distanceBetween for accurate GPS-grade measurement.
+    // geo.Geolocator.distanceBetween for accurate GPS-grade measurement.
     double minDist = double.infinity;
     for (final pt in _routePoints) {
-      final d = Geolocator.distanceBetween(
+      final d = geo.Geolocator.distanceBetween(
         current.latitude,
         current.longitude,
         pt.latitude,
@@ -1847,7 +1847,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// On each call:
   ///   1. Adds the metres-to-miles distance from the previous GPS fix to the
-  ///      current one to [_milesDriven] using [Geolocator.distanceBetween].
+  ///      current one to [_milesDriven] using [geo.Geolocator.distanceBetween].
   ///   2. Accumulates [_stoppedDuration] by the real time elapsed since the
   ///      previous GPS fix when [pos.speed] is below 1 m/s (stopped / very
   ///      slow), otherwise records [_lastMoveTime].  Using the actual time
@@ -1857,7 +1857,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///      the next incremental distance calculation.
   ///
   /// No-ops if the trip has not been started ([_tripStartTime] is null).
-  void _updateTripStats(Position pos) {
+  void _updateTripStats(geo.Position pos) {
     if (_tripStartTime == null) return;
 
     final now = DateTime.now();
@@ -1868,7 +1868,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Both lat and lng must be non-zero to avoid a bogus distance from the
     // initialization values of (0.0, 0.0).
     if (_lastTripLat != 0.0 && _lastTripLng != 0.0) {
-      final meters = Geolocator.distanceBetween(
+      final meters = geo.Geolocator.distanceBetween(
         _lastTripLat,
         _lastTripLng,
         currentLat,
@@ -4977,16 +4977,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Production Mapbox map widget ──────────────────────────────────────────
 
   /// Called by [MapWidget] once the native Mapbox map is fully initialised.
-  void _onMapCreated(MapboxMap mapboxMap) {
+  void _onMapCreated(mbx.MapboxMap mapboxMap) {
     // Production map setup (camera, overlays, etc.) goes here.
   }
 
   /// Returns a full-screen [MapWidget] using the Mapbox Maps Flutter SDK.
   Widget _buildMap() {
     return Positioned.fill(
-      child: MapWidget(
+      child: mbx.MapWidget(
         key: const ValueKey("mapWidget"),
-        styleUri: MapboxStyles.MAPBOX_STREETS,
+        styleUri: mbx.MapboxStyles.MAPBOX_STREETS,
         onMapCreated: _onMapCreated,
       ),
     );

@@ -52,6 +52,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Distance threshold below which the banner turns yellow (medium alert).
   static const double _mediumColorThresholdMeters = 150.0;
 
+  /// Top offset for the road-info card below the RoadGuidanceBanner.
+  /// The banner is approximately 170 px tall; 180 px provides a small gap.
+  static const double _kRoadInfoCardTopOffset = 180.0;
+
   // ── Arrival detection threshold ───────────────────────────────────────────
   /// Radius in metres within which the driver is considered to have arrived at
   /// the destination.  30 m provides a comfortable buffer that triggers before
@@ -5055,11 +5059,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final modifier = maneuver?['modifier'] as String? ?? 'straight';
       // Step distance in metres from the Mapbox response.
       final distanceMeters = (step['distance'] as num?)?.toDouble() ?? 0.0;
+      // Road name for this step (e.g. "US-95", "Wells Ave").
+      final stepName = (step['name'] as String?) ?? '';
       return _NavStep(
         instruction,
         LatLng(lat, lng),
         maneuver: modifier,
         distanceMeters: distanceMeters,
+        name: stepName,
       );
     }).toList();
   }
@@ -5224,6 +5231,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Medium range: round to nearest 10 m to avoid jitter.
     if (meters < 1000.0) return '${(meters / 10).round() * 10} m';
     return '${(meters / 1000.0).toStringAsFixed(1)} km';
+  }
+
+  /// Formats a distance in metres as a human-readable miles string for the
+  /// road info card, e.g. "33.6 mi".
+  String _formatDistanceMiles(double meters) {
+    final miles = meters / 1609.344;
+    if (miles < 0.1) return '< 0.1 mi';
+    if (miles < 10.0) return '${miles.toStringAsFixed(1)} mi';
+    return '${miles.toStringAsFixed(0)} mi';
   }
 
   /// Returns the banner background [Color] based on proximity to the next
@@ -6043,6 +6059,135 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  /// Builds a GPS-style road name + distance info card shown during active
+  /// navigation.  The card floats below the [RoadGuidanceBanner] and displays:
+  ///   • An up-arrow icon for visual context.
+  ///   • "Stay on" label + the current road name from the Mapbox step.
+  ///   • Distance to the next maneuver in miles.
+  ///   • The next road name in a compact chip below the distance.
+  ///
+  /// Only rendered when [_isNavigating] is true and [_navSteps] is non-empty.
+  Widget _buildRoadInfoCard() {
+    if (_navSteps.isEmpty) return const SizedBox.shrink();
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final currentStep = _navSteps[safeIndex];
+    final hasNextStep = safeIndex + 1 < _navSteps.length;
+    final nextStep = hasNextStep ? _navSteps[safeIndex + 1] : null;
+
+    final String currentRoad = currentStep.name.isNotEmpty
+        ? currentStep.name
+        : 'En Route';
+    final String distanceLabel = _formatDistanceMiles(_distanceToNextStep());
+    final String nextRoad = nextStep != null && nextStep.name.isNotEmpty
+        ? nextStep.name
+        : '';
+
+    return Positioned(
+      // Positioned below the RoadGuidanceBanner (~170 px tall) with a small gap.
+      top: _kRoadInfoCardTopOffset,
+      left: 16,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.95),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black45,
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Arrow icon ──────────────────────────────────────────────────
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: Colors.white12,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.arrow_upward,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // ── Road + distance info ────────────────────────────────────────
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Stay on',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    // Current road name
+                    Text(
+                      currentRoad,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    // Distance to next maneuver in miles
+                    Text(
+                      distanceLabel,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    if (nextRoad.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      // Next road chip
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          nextRoad,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Builds the navigation controls overlay shown only while [_isNavigating].
   ///
   /// Provides a "Stop Navigation" button so the driver can end the active
@@ -6591,6 +6736,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Tapping calls _stopNavigation to end the trip and restore
                 // planning UI.
                 if (_isNavigating) _buildNavigationControls(),
+                // ── Road name + distance card ─────────────────────────────
+                // GPS-style card showing the current road, distance to the
+                // next maneuver in miles, and the upcoming street name.
+                // Floats below the RoadGuidanceBanner during active navigation.
+                if (_isNavigating) _buildRoadInfoCard(),
               ],
             ),
           ),
@@ -6908,6 +7058,7 @@ class _NavStep {
     this.location, {
     this.maneuver = 'straight',
     this.distanceMeters = 0.0,
+    this.name = '',
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -6922,6 +7073,10 @@ class _NavStep {
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;
+
+  /// Road name for this step, e.g. "US-95" or "Wells Ave", from the Mapbox
+  /// Directions API `name` field.
+  final String name;
 }
 
 /// A truck-friendly point of interest along the route.

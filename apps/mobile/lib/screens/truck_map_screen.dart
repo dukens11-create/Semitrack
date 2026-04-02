@@ -267,6 +267,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
+  // ── Closest truck stops ahead (navigation mode) ───────────────────────────
+  //
+  // Holds up to 2 AheadTruckStop entries representing the nearest truck stops
+  // ahead of the driver on the active route.  Refreshed on every GPS update
+  // while _isNavigating == true.  Empty when not navigating or when no stops
+  // are within range of the active route.
+  List<AheadTruckStop> _closestTruckStopsAhead = [];
+
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -1755,6 +1763,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_navigationMode) {
       _followTruckCamera();
     }
+
+    // Refresh the 2-closest-ahead truck stops row on every GPS fix during
+    // active navigation so the UI stays in sync with the driver's position.
+    if (_isNavigating) {
+      _refreshClosestTruckStopsAhead();
+    }
   }
 
   /// Advances to the next step when the driver comes within 20 m of the
@@ -1884,6 +1898,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _truckStops = const [];
       _tripLegs = const [];
       _activeLegIndex = 0;
+      _closestTruckStopsAhead = const [];
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
@@ -2344,6 +2359,170 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final ax =
         sinDLat * sinDLat + math.cos(lat1) * math.cos(lat2) * sinDLng * sinDLng;
     return 6371000 * 2 * math.atan2(math.sqrt(ax), math.sqrt(1 - ax));
+  }
+
+  // ── Closest-truck-stops-ahead helpers ─────────────────────────────────────
+
+  /// Returns the great-circle distance in **miles** between two coordinates
+  /// using the Haversine formula.
+  double _distanceMiles(
+      double lat1, double lng1, double lat2, double lng2) {
+    const r = 3958.8; // Earth's radius in miles
+    final dLat = (lat2 - lat1) * math.pi / 180.0;
+    final dLng = (lng2 - lng1) * math.pi / 180.0;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180.0) *
+            math.cos(lat2 * math.pi / 180.0) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+  }
+
+  /// Finds the index of the [RoutePoint] in [routePoints] closest to the
+  /// given coordinate.  Searches the **entire** list (unlike [_nearestRouteIndex]
+  /// which starts from [_truckIndex]) so it works correctly for arbitrary POIs.
+  int _findNearestRouteIndexForPoi(
+      double lat, double lng, List<RoutePoint> routePoints) {
+    double minDist = double.infinity;
+    int minIdx = 0;
+    for (int i = 0; i < routePoints.length; i++) {
+      final d =
+          _distanceMiles(lat, lng, routePoints[i].lat, routePoints[i].lng);
+      if (d < minDist) {
+        minDist = d;
+        minIdx = i;
+      }
+    }
+    return minIdx;
+  }
+
+  /// Sums the segment-by-segment route distance in **miles** between two
+  /// indices in [points].  Returns 0 when [endIndex] ≤ [startIndex].
+  double _routeDistanceMilesBetweenIndices(
+      List<RoutePoint> points, int startIndex, int endIndex) {
+    if (endIndex <= startIndex) return 0.0;
+    double total = 0.0;
+    for (int i = startIndex; i < endIndex; i++) {
+      total += _distanceMiles(
+        points[i].lat, points[i].lng,
+        points[i + 1].lat, points[i + 1].lng,
+      );
+    }
+    return total;
+  }
+
+  /// Returns `true` when [poi] is within [maxDistanceMiles] of **any** point
+  /// in [routePoints], meaning it is on or very close to the active route.
+  bool _isPoiNearRoute(
+    TruckStopPoi poi,
+    List<RoutePoint> routePoints, {
+    double maxDistanceMiles = 2.0,
+  }) {
+    for (final pt in routePoints) {
+      if (_distanceMiles(poi.latitude, poi.longitude, pt.lat, pt.lng) <=
+          maxDistanceMiles) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Returns up to 2 [AheadTruckStop] entries representing the nearest truck
+  /// stops **ahead** of the driver on the active route, sorted by route miles.
+  ///
+  /// A stop is considered "ahead" when its nearest route index is strictly
+  /// greater than the driver's nearest route index.  Stops closer than
+  /// 0.2 miles (virtually passed) are excluded.  Stops farther than
+  /// [maxOffRouteMiles] from the route polyline are also excluded.
+  List<AheadTruckStop> _getClosestTruckStopsAheadOnRoute({
+    required double driverLat,
+    required double driverLng,
+    required List<RoutePoint> routePoints,
+    required List<TruckStopPoi> truckStops,
+    double maxOffRouteMiles = 2.0,
+  }) {
+    if (routePoints.isEmpty) return const [];
+
+    final driverIdx =
+        _findNearestRouteIndexForPoi(driverLat, driverLng, routePoints);
+
+    final List<AheadTruckStop> ahead = [];
+    for (final poi in truckStops) {
+      if (!_isPoiNearRoute(poi, routePoints,
+          maxDistanceMiles: maxOffRouteMiles)) {
+        continue;
+      }
+      final poiIdx =
+          _findNearestRouteIndexForPoi(poi.latitude, poi.longitude, routePoints);
+      if (poiIdx < driverIdx) continue; // behind the driver on the route
+
+      final routeMilesAhead =
+          _routeDistanceMilesBetweenIndices(routePoints, driverIdx, poiIdx);
+      if (routeMilesAhead < 0.2) continue; // virtually passed
+
+      ahead.add(AheadTruckStop(
+        poi: poi,
+        routeMilesAhead: routeMilesAhead,
+        nearestRouteIndex: poiIdx,
+      ));
+    }
+
+    ahead.sort((a, b) => a.routeMilesAhead.compareTo(b.routeMilesAhead));
+    return ahead.take(2).toList();
+  }
+
+  /// Refreshes [_closestTruckStopsAhead] using the current driver position,
+  /// active route polyline, and truck stop list.
+  ///
+  /// No-ops (and clears the list) when not navigating, when there is no
+  /// driver position, or when route / stop data is unavailable.
+  void _refreshClosestTruckStopsAhead() {
+    if (!_isNavigating ||
+        _truckPosition == null ||
+        _routePoints.isEmpty ||
+        _truckStops.isEmpty) {
+      if (_closestTruckStopsAhead.isNotEmpty) {
+        setState(() => _closestTruckStopsAhead = const []);
+      }
+      return;
+    }
+
+    // Convert existing LatLng route to RoutePoint list.
+    final routePts = _routePoints
+        .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
+        .toList(growable: false);
+
+    // Convert TruckStop list to TruckStopPoi list, deriving logoName from
+    // the assetLogo path (e.g. 'assets/logos/pilot.png' → 'pilot').
+    final pois = _truckStops.map((s) {
+      String logoName;
+      if (s.assetLogo != null) {
+        final path = s.assetLogo!;
+        final slashIdx = path.lastIndexOf('/');
+        final dotIdx = path.lastIndexOf('.');
+        final start = slashIdx >= 0 ? slashIdx + 1 : 0;
+        final end = dotIdx > start ? dotIdx : path.length;
+        logoName = start < end ? path.substring(start, end) : s.brand;
+      } else {
+        logoName = s.icon ?? s.brand.toLowerCase();
+      }
+      return TruckStopPoi(
+        id: s.id,
+        brand: s.brand,
+        logoName: logoName,
+        latitude: s.position.latitude,
+        longitude: s.position.longitude,
+        locationName: s.address,
+      );
+    }).toList(growable: false);
+
+    final updated = _getClosestTruckStopsAheadOnRoute(
+      driverLat: _truckPosition!.latitude,
+      driverLng: _truckPosition!.longitude,
+      routePoints: routePts,
+      truckStops: pois,
+    );
+    setState(() => _closestTruckStopsAhead = updated);
   }
 
   // ── Restricted-zone dataset for truck routing ─────────────────────────────
@@ -6107,6 +6286,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
+  /// Builds the 2-closest-ahead truck stops row shown during active navigation.
+  ///
+  /// Returns [SizedBox.shrink] when not navigating or when the list is empty.
+  /// Positioned above the main alert card so it never overlaps critical alerts.
+  Widget _buildClosestTruckStopsRow() {
+    if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 192,
+      child: ClosestTruckStopsRow(stops: _closestTruckStopsAhead),
+    );
+  }
+
   /// Builds a GPS-style road name + distance info card shown during active
   /// navigation.  The card floats below the [RoadGuidanceBanner] and displays:
   ///   • An up-arrow icon for visual context.
@@ -6834,6 +7029,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Compact horizontal chips showing nearby alerts (wind,
                 // fuel, restriction) during active navigation.
                 if (_isNavigating) _buildMiniAlertRow(),
+                // ── Closest 2 truck stops ahead row ───────────────────────
+                // Compact GPS-style chips showing the 2 nearest truck stops
+                // ahead on the active route.  Only visible during navigation.
+                _buildClosestTruckStopsRow(),
                 // ── Main alert card ────────────────────────────────────────
                 // Primary expandable alert card with trip summary strip.
                 // Floats above the Stop Navigation button during navigation.
@@ -7184,6 +7383,154 @@ class _NavStep {
   /// Road name for this step, e.g. "US-95" or "Wells Ave", from the Mapbox
   /// Directions API `name` field.
   final String name;
+}
+
+// ── Closest-truck-stops-ahead models ──────────────────────────────────────────
+
+/// A single geographic point along a route polyline.
+class RoutePoint {
+  final double lat;
+  final double lng;
+
+  const RoutePoint({required this.lat, required this.lng});
+}
+
+/// A truck-stop point of interest used by the closest-stops-ahead system.
+///
+/// [logoName] matches the filename stem under `assets/logos/` so the chip
+/// widget can load it as `assets/logos/{logoName}.png`.
+class TruckStopPoi {
+  final String id;
+  final String brand;
+  final String logoName;
+  final double latitude;
+  final double longitude;
+  final String? locationName;
+
+  const TruckStopPoi({
+    required this.id,
+    required this.brand,
+    required this.logoName,
+    required this.latitude,
+    required this.longitude,
+    this.locationName,
+  });
+}
+
+/// A truck stop that is ahead of the driver on the active route, together
+/// with the route-polyline distance to it (in miles) and the index of its
+/// nearest route point.
+class AheadTruckStop {
+  final TruckStopPoi poi;
+  final double routeMilesAhead;
+  final int nearestRouteIndex;
+
+  const AheadTruckStop({
+    required this.poi,
+    required this.routeMilesAhead,
+    required this.nearestRouteIndex,
+  });
+}
+
+// ── Closest-truck-stops-ahead widgets ─────────────────────────────────────────
+
+/// A compact GPS-style chip displaying a truck stop's brand logo, distance
+/// ahead, and optional brand name.  Styled as a white rounded card with a
+/// subtle shadow, matching production trucking-GPS aesthetics.
+class ClosestTruckStopChip extends StatelessWidget {
+  final String logoAsset;
+  final String distanceText;
+  final String? brand;
+
+  const ClosestTruckStopChip({
+    super.key,
+    required this.logoAsset,
+    required this.distanceText,
+    this.brand,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            logoAsset,
+            height: 30,
+            width: 30,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.local_gas_station, size: 24),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            distanceText,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+            ),
+          ),
+          if (brand != null && brand!.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Text(
+              brand!,
+              style: TextStyle(
+                fontWeight: FontWeight.w400,
+                fontSize: 13,
+                color: Colors.grey[700],
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A horizontally scrollable row of up to 2 [ClosestTruckStopChip] widgets,
+/// displayed during active navigation to show the nearest truck stops ahead.
+class ClosestTruckStopsRow extends StatelessWidget {
+  final List<AheadTruckStop> stops;
+
+  const ClosestTruckStopsRow({super.key, required this.stops});
+
+  @override
+  Widget build(BuildContext context) {
+    if (stops.isEmpty) return const SizedBox.shrink();
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: stops.map((stop) {
+          final miles = stop.routeMilesAhead;
+          final distText = miles < 10
+              ? '${miles.toStringAsFixed(1)} mi'
+              : '${miles.round()} mi';
+          return ClosestTruckStopChip(
+            logoAsset: 'assets/logos/${stop.poi.logoName}.png',
+            distanceText: distText,
+            brand: stop.poi.brand,
+          );
+        }).toList(),
+      ),
+    );
+  }
 }
 
 /// A truck-friendly point of interest along the route.

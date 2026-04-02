@@ -14,6 +14,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -46,6 +47,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Distance threshold below which the banner turns yellow (medium alert).
   static const double _mediumColorThresholdMeters = 150.0;
+
+  /// Approximate pixel height of the turn-by-turn [_buildNavBanner] widget.
+  /// Used to offset the [RoadGuidanceBanner] downward when both banners are
+  /// visible simultaneously, preventing them from overlapping.
+  static const double _kNavBannerHeight = 90.0;
 
   // ── Arrival detection threshold ───────────────────────────────────────────
   /// Radius in metres within which the driver is considered to have arrived at
@@ -155,6 +161,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // AppBar, bottom nav bar) is hidden; only the map + navigation components
   // remain visible.
   bool _isNavigating = false;
+
+  // ── Road guidance banner state ─────────────────────────────────────────────
+  // Holds the current maneuver shown in [RoadGuidanceBanner] while navigating.
+  // Initialised with sample data; updated as the route progresses.
+  ManeuverInfo _currentManeuverInfo = const ManeuverInfo(
+    instruction: 'Keep right to merge onto I-75 N',
+    maneuverType: ManeuverType.keepRight,
+    distanceMeters: 1931,
+    exitNumber: '352B',
+    laneHint: 'Use right 2 lanes',
+    currentRoad: RoadInfo(
+      routeNumber: '10',
+      routeType: RouteType.interstate,
+      direction: 'W',
+    ),
+    nextRoad: RoadInfo(
+      routeNumber: '75',
+      routeType: RouteType.interstate,
+      direction: 'N',
+    ),
+    thenRoad: RoadInfo(
+      routeNumber: '41',
+      routeType: RouteType.usHighway,
+      direction: 'N',
+    ),
+    towardText: 'toward Atlanta',
+  );
 
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
@@ -5876,17 +5909,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Road guidance banner ──────────────────────────────────
+                // Shown during active navigation (_isNavigating == true).
+                // Displays structured road/highway guidance: maneuver icon,
+                // instruction, distance, road chips, lane hints, and then-road
+                // preview.  Respects safe area so it never overlaps the status
+                // bar.  Hidden when the driver is in route-planning mode so the
+                // search bar and route-preview panel remain accessible.
+                if (_isNavigating)
+                  Positioned(
+                    top: (_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty
+                        ? _kNavBannerHeight
+                        : 0,
+                    left: 0,
+                    right: 0,
+                    child: RoadGuidanceBanner(maneuver: _currentManeuverInfo),
+                  ),
                 // ── Inline search bar ─────────────────────────────────────
                 // Hidden during active turn-by-turn navigation so it does not
                 // overlap the navigation banner.  Visible at all other times
                 // so the driver can search a destination without opening a
                 // modal sheet.
-                if (!_hasActiveDestination && !_isArrived) _buildSearchBar(),
+                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
+                  _buildSearchBar(),
                 // ── Search results overlay ────────────────────────────────
                 // _buildSearchResults returns SizedBox.shrink() when there is
                 // nothing to show, so the condition here is simply the same
                 // guard used for the search bar itself.
-                if (!_hasActiveDestination && !_isArrived) _buildSearchResults(),
+                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
+                  _buildSearchResults(),
                 // ── Destination hint banner ───────────────────────────────
                 // Shown when no destination is selected and no route is loaded,
                 // prompting the driver to pick a destination to start navigation.

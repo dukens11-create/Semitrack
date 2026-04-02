@@ -7,6 +7,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -4975,6 +4976,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           style: const TextStyle(fontSize: 11, color: Colors.black87),
         ),
       ],
+    );
+  }
+
+  // ── Production Mapbox map widget ──────────────────────────────────────────
+
+  /// Called by [MapWidget] once the native Mapbox map is fully initialised.
+  void _onMapCreated(MapboxMap mapboxMap) {
+    // Production map setup (camera, overlays, etc.) goes here.
+  }
+
+  /// Returns a full-screen [MapWidget] using the Mapbox Maps Flutter SDK.
+  Widget _buildMap() {
+    return Positioned.fill(
+      child: MapWidget(
+        key: const ValueKey("mapWidget"),
+        styleUri: MapboxStyles.MAPBOX_STREETS,
+        onMapCreated: _onMapCreated,
+      ),
     );
   }
 

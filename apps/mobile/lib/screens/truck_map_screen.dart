@@ -6531,7 +6531,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // time, average speed) at the bottom of the map.  Only shown
                 // once navigation has started with an active destination so the
                 // panel never appears in plain GPS-tracking mode.
-                if (_hasActiveDestination && _tripStartTime != null)
+                // Hidden during active navigation so the map is unobstructed.
+                if (!_isNavigating && _hasActiveDestination && _tripStartTime != null)
                   _buildTripStatsPanel(),
                 // ── Speed / speed-limit panel (PositionPanel) ─────────────
                 // Visible during active navigation with a destination.
@@ -6589,7 +6590,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
 
           // ── Route info + Phase 5 intelligence ────────────────────────────
-          if ((_hasActiveDestination || _isArrived) && _routeData != null)
+          // Hidden during active navigation (_isNavigating) so Route Summary,
+          // Drive Intelligence, and other planning cards do not block the map.
+          if (!_isNavigating && (_hasActiveDestination || _isArrived) && _routeData != null)
             Expanded(
               flex: 1,
               child: _buildRouteInfo(_routeData!),

@@ -449,10 +449,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // In production, replace [warningSigns] with API-loaded data for the
     // active route corridor.
     _warningManager = WarningManager(signs: warningSigns);
-    // Load all brand icon PNGs as raw bytes once at startup so that
-    // _buildTruckStopMarkers() can render them via Image.memory() without
-    // needing a BuildContext — the flutter_map equivalent of registering images
-    // with Mapbox style.addImage() before adding a SymbolLayer.
+    // Show all truck stop POIs immediately on map load — each stop has an
+    // assetLogo that is registered as a map icon via _preloadBrandIcons(),
+    // the flutter_map equivalent of Mapbox style.addImage() + SymbolLayer.
+    _truckStops = _mockTruckStops;
+    // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
+    // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
   }
 
@@ -481,22 +483,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // To add or change an icon, add entries to [_brandIcons] and place the
   // corresponding PNG assets in the project, then re-register them in pubspec.yaml.
 
-  /// No-op when [_brandIcons] is empty. Kept for forward compatibility so
-  /// adding entries to [_brandIcons] will automatically load their assets.
+  /// Loads all brand logo PNGs from [_brandIcons] and any unique [assetLogo]
+  /// paths found in [_mockTruckStops] into [_brandIconBytes].
+  ///
+  /// This is the flutter_map equivalent of calling Mapbox `style.addImage(id, bytes)`
+  /// for each icon before adding a SymbolLayer with `iconImage: ["get", "icon"]`.
   /// Assets that cannot be loaded are silently skipped; the marker builder
   /// falls back to a generic icon widget.
   Future<void> _preloadBrandIcons() async {
     final loaded = <String, Uint8List>{};
 
-    // Load all registered logos — equivalent to calling style.addImage() for
-    // each entry.  Keys match PNG filenames without .png, mirroring the Mapbox
-    // GeoJSON property { "brand": "<key>" } + SymbolLayer iconImage:["get","brand"].
+    // Load all registered logos keyed by brand icon name — equivalent to
+    // calling style.addImage() for each entry.  Keys match PNG filenames
+    // without .png, mirroring the Mapbox GeoJSON property { "brand": "<key>" }
+    // + SymbolLayer iconImage:["get","brand"].
     for (final entry in _brandIcons.entries) {
       try {
         final data = await rootBundle.load(entry.value);
         loaded[entry.key] = data.buffer.asUint8List();
       } catch (_) {
         // Asset missing — skip; marker builder will use fallback Icon widget.
+      }
+    }
+
+    // Also register any assetLogo paths declared directly on each TruckStop so
+    // that POIs with a logo not yet in _brandIcons are covered.  The asset path
+    // itself is used as the lookup key so _buildTruckStopMarkers() can find it.
+    for (final stop in _mockTruckStops) {
+      final path = stop.assetLogo;
+      if (path != null && !loaded.containsKey(path)) {
+        try {
+          final data = await rootBundle.load(path);
+          loaded[path] = data.buffer.asUint8List();
+        } catch (_) {
+          // Asset missing — skip; marker builder falls back to icon widget.
+        }
       }
     }
 
@@ -650,6 +671,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Portland, OR',
       dieselPrice: 4.25,
       icon: 'pilot',
+      assetLogo: 'assets/logos/pilot.png',
       description: 'Large Pilot with 24/7 fuel, truck parking, showers, and Subway restaurant.',
     ),
     TruckStop(
@@ -660,6 +682,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Eugene, OR',
       dieselPrice: 4.19,
       icon: 'loves',
+      assetLogo: 'assets/logos/loves.png',
       description: "Love's with CAT scale, showers, Hardee's, and tire care center.",
     ),
     TruckStop(
@@ -670,6 +693,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Medford, OR',
       dieselPrice: 4.35,
       icon: 'ta',
+      assetLogo: 'assets/logos/ta.png',
       description: 'TA with full truck service shop, Iron Skillet, showers, and CAT scale.',
     ),
     TruckStop(
@@ -680,6 +704,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Yreka, CA',
       dieselPrice: 4.45,
       icon: 'petro',
+      assetLogo: 'assets/logos/petro.png',
       description: 'Petro with certified truck lube, CAT scale, Iron Skillet, and 24/7 fuel.',
     ),
     TruckStop(
@@ -690,6 +715,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Redding, CA',
       dieselPrice: 4.29,
       icon: 'flyingj',
+      assetLogo: 'assets/logos/flying j.png',
       description: 'Flying J with myPilot rewards, truck parking for 150 rigs, and Denny\'s.',
     ),
     TruckStop(
@@ -700,6 +726,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Chico, CA',
       dieselPrice: 4.32,
       icon: 'pilot',
+      assetLogo: 'assets/logos/pilot.png',
       description: 'Pilot with 24/7 diesel, DEF dispensers, showers, and convenience store.',
     ),
     TruckStop(
@@ -709,6 +736,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(43.210, -122.990),
       address: 'I-5 Northbound, OR',
       icon: 'rest',
+      assetLogo: 'assets/logos/rest la area.png',
       description: 'Oregon DOT rest area with parking, restrooms, picnic tables, and dog walk area.',
     ),
     TruckStop(
@@ -718,6 +746,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(40.210, -121.500),
       address: 'I-80 Eastbound, CA',
       icon: 'rest',
+      assetLogo: 'assets/logos/rest la area.png',
       description: 'Caltrans rest area with truck-specific parking bays and vending machines.',
     ),
     TruckStop(
@@ -728,6 +757,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Weed, CA',
       dieselPrice: 4.38,
       icon: 'mobil',
+      assetLogo: 'assets/logos/mobil.png',
       description: 'Mobil with high-flow diesel pumps, DEF, and 24-hour convenience store.',
     ),
     TruckStop(
@@ -748,6 +778,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Orland, CA',
       dieselPrice: 4.33,
       icon: 'chevron',
+      assetLogo: 'assets/logos/chevron.png',
       description: 'Chevron with Techron diesel, DEF, truck parking, and 24/7 service.',
     ),
     TruckStop(
@@ -758,6 +789,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Williams, CA',
       dieselPrice: 4.30,
       icon: 'shell',
+      assetLogo: 'assets/logos/shell.png',
       description: 'Shell with V-Power diesel, car wash, and large-format truck canopy.',
     ),
     TruckStop(
@@ -768,6 +800,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Cottonwood, CA',
       dieselPrice: 4.27,
       icon: 'bp',
+      assetLogo: 'assets/logos/bp.png',
       description: 'BP with Amoco Ultimate diesel, DEF, and convenience store with hot food.',
     ),
     TruckStop(
@@ -778,6 +811,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Corning, CA',
       dieselPrice: 4.22,
       icon: 'circlek',
+      assetLogo: 'assets/logos/circle k.png',
       description: 'Convenience store with diesel lanes and a quick DEF fill-up station.',
     ),
     // ── New stops ────────────────────────────────────────────────────────────
@@ -789,6 +823,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Missoula, MT',
       dieselPrice: 4.18,
       icon: 'loves',
+      assetLogo: 'assets/logos/loves.png',
       description: 'Full-service Love\'s with showers, laundry, CAT scale, and Subway restaurant on-site.',
     ),
     TruckStop(
@@ -799,6 +834,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Boise, ID',
       dieselPrice: 4.31,
       icon: 'ta',
+      assetLogo: 'assets/logos/ta.png',
       description: 'TravelCenters of America — diesel, DEF, parking for 200+ trucks, Iron Skillet restaurant.',
     ),
     TruckStop(
@@ -809,6 +845,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Spokane, WA',
       dieselPrice: 4.24,
       icon: 'pilot',
+      assetLogo: 'assets/logos/pilot.png',
       description: 'Pilot Flying J with myPilot rewards, 24/7 fuel, truck parking, and Denny\'s inside.',
     ),
     TruckStop(
@@ -819,6 +856,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Omaha, NE',
       dieselPrice: 4.12,
       icon: 'petro',
+      assetLogo: 'assets/logos/petro.png',
       description: 'Petro truck stop with Iron Skillet diner, CAT scale, and full truck service center.',
     ),
     TruckStop(
@@ -829,6 +867,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Las Vegas, NV',
       dieselPrice: 4.47,
       icon: 'flyingj',
+      assetLogo: 'assets/logos/flying j.png',
       description: 'Flying J with myPilot loyalty perks, diesel exhaust fluid, showers, and Wi-Fi lounge.',
     ),
     TruckStop(
@@ -839,6 +878,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Salt Lake City, UT',
       dieselPrice: 4.09,
       icon: 'maverik',
+      assetLogo: 'assets/logos/adventure s first stop.png',
       description: 'Maverik BonFire grill, diesel, DEF, and adventure-themed convenience store.',
     ),
     TruckStop(
@@ -858,6 +898,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(44.940, -123.022),
       address: 'Salem, OR – I-5 SB',
       icon: 'weigh',
+      assetLogo: 'assets/logos/weight station .png',
       description: 'Oregon DOT portable scale site. All vehicles over 26,001 lbs must stop when open.',
     ),
     TruckStop(
@@ -867,6 +908,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       position: const LatLng(41.120, -112.017),
       address: 'Ogden, UT – I-80 WB',
       icon: 'weigh',
+      assetLogo: 'assets/logos/weight station .png',
       description: 'Utah DOT permanent weigh station. WIM sensors active 24/7; booths open Mon–Fri.',
     ),
     TruckStop(
@@ -887,6 +929,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       address: 'Chicago, IL',
       dieselPrice: 4.55,
       icon: 'roadranger',
+      assetLogo: 'assets/logos/road ranger.png',
       description: 'Road Ranger high-volume diesel lanes with cardlock access and reefer plug-ins.',
     ),
   ];
@@ -1031,33 +1074,61 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return 'default';
   }
 
-  static const Map<String, String> _brandIcons = {};
+  /// Maps each brand icon key to its asset path in the project.
+  ///
+  /// Keys match the [TruckStop.icon] field and GeoJSON `properties["icon"]`.
+  /// Values are Flutter asset paths registered in `pubspec.yaml`.
+  ///
+  /// This is the flutter_map equivalent of calling `style.addImage(key, bytes)`
+  /// for each entry before adding a Mapbox SymbolLayer with
+  /// `iconImage: ["get", "icon"]`.
+  static const Map<String, String> _brandIcons = {
+    'pilot':      'assets/logos/pilot.png',
+    'loves':      'assets/logos/loves.png',
+    'ta':         'assets/logos/ta.png',
+    'petro':      'assets/logos/petro.png',
+    'flyingj':    'assets/logos/flying j.png',
+    'mobil':      'assets/logos/mobil.png',
+    'chevron':    'assets/logos/chevron.png',
+    'shell':      'assets/logos/shell.png',
+    'bp':         'assets/logos/bp.png',
+    'circlek':    'assets/logos/circle k.png',
+    'weigh':      'assets/logos/weight station .png',
+    'rest':       'assets/logos/rest la area.png',
+    'roadranger': 'assets/logos/road ranger.png',
+    'ambest':     'assets/logos/ambest.png',
+    'quicktrip':  'assets/logos/quicktrip.png',
+  };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
   ///
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Each marker renders the brand logo as a clean icon using the pre-registered
-  /// bytes from [_brandIconBytes] — the flutter_map equivalent of a Mapbox
-  /// SymbolLayer with `iconImage: ["get", "icon"]`.  The icon key is resolved
-  /// via [TruckStop.icon] (explicit) or by normalising the stop name via
-  /// [_normalizeTruckStopBrand] (fallback).  Stops whose key has no registered
-  /// bytes fall back to the 'default' entry or an icon widget.
+  /// Each marker renders the brand logo using its [TruckStop.assetLogo] path
+  /// (the flutter_map equivalent of Mapbox `style.addImage` + `iconImage`).
+  /// Resolution order for the logo bytes:
+  ///   1. `stop.assetLogo` path key in [_brandIconBytes] (direct asset path)
+  ///   2. `stop.icon` brand-key in [_brandIconBytes]
+  ///   3. Normalised name/brand key fallback
+  ///   4. Generic icon widget
   /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     return _truckStops.map((stop) {
-      // Resolve the icon key: prefer the explicit TruckStop.icon field, then
-      // normalise from the stop name, then from the brand — mirrors
-      // iconImage: ["get", "icon"].  Falls back to 'default' (red T icon) for
-      // any stop whose name AND brand are not specifically recognised.
+      // Resolution order mirrors Mapbox iconImage: ["get", "icon"]:
+      // 1. assetLogo path key (registered in _preloadBrandIcons by path)
+      // 2. explicit icon brand key
+      // 3. normalised name key
+      // 4. normalised brand key
       final nameKey = _normalizeTruckStopBrand(stop.name);
       final String iconKey = stop.icon ??
           (nameKey != 'default' ? nameKey : _normalizeTruckStopBrand(stop.brand));
       final Uint8List? bytes =
-          _brandIconBytes[iconKey] ?? _brandIconBytes['default'];
+          (stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null) ??
+          _brandIconBytes[iconKey] ??
+          _brandIconBytes['default'];
 
       return Marker(
         point: stop.position,
@@ -6850,6 +6921,7 @@ class TruckStop {
     this.address,
     this.dieselPrice,
     this.icon,
+    this.assetLogo,
     this.description,
   });
 
@@ -6878,6 +6950,12 @@ class TruckStop {
   /// When null, [_TruckMapScreenState._normalizeTruckStopBrand] is used as
   /// a fallback so legacy or API-sourced stops still resolve correctly.
   final String? icon;
+
+  /// Asset path to the brand logo PNG, e.g. 'assets/logos/pilot.png'.
+  /// Used as the `iconImage` when registering the marker on the map —
+  /// the flutter_map equivalent of Mapbox `style.addImage(id, bytes)`.
+  /// When non-null, this path takes priority over [icon] for logo loading.
+  final String? assetLogo;
 
   /// Short description shown in the info window / bottom sheet snippet,
   /// e.g. "Full-service truck stop with scales, showers & restaurant."

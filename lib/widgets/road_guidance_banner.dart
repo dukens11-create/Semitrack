@@ -2,6 +2,20 @@ import 'package:flutter/material.dart';
 
 // ── Enums ──────────────────────────────────────────────────────────────────
 
+/// The direction an individual lane arrow can point.
+///
+/// Used by [LaneGuidanceItem] to describe each lane's allowed movements.
+enum LaneArrowType {
+  straight,
+  slightLeft,
+  slightRight,
+  left,
+  right,
+  uTurn,
+  straightLeft,
+  straightRight,
+}
+
 enum RouteType {
   interstate,
   usHighway,
@@ -22,6 +36,47 @@ enum ManeuverType {
   forkRight,
   uTurn,
   ramp,
+}
+
+// ── Lane guidance model ────────────────────────────────────────────────────
+
+/// Holds the data for a single lane in the GPS-style lane guidance panel.
+///
+/// [type] describes the arrow direction for this lane.
+/// [isRecommended] is true when the driver should use this lane to follow
+/// the route; recommended lanes receive a highlighted background.
+class LaneGuidanceItem {
+  const LaneGuidanceItem({
+    required this.type,
+    required this.isRecommended,
+  });
+
+  final LaneArrowType type;
+  final bool isRecommended;
+}
+
+// ── Lane arrow helper ──────────────────────────────────────────────────────
+
+/// Returns the [IconData] that best represents a [LaneArrowType].
+IconData laneArrowIcon(LaneArrowType type) {
+  switch (type) {
+    case LaneArrowType.straight:
+      return Icons.straight;
+    case LaneArrowType.slightLeft:
+      return Icons.turn_slight_left;
+    case LaneArrowType.slightRight:
+      return Icons.turn_slight_right;
+    case LaneArrowType.left:
+      return Icons.turn_left;
+    case LaneArrowType.right:
+      return Icons.turn_right;
+    case LaneArrowType.uTurn:
+      return Icons.u_turn_left;
+    case LaneArrowType.straightLeft:
+      return Icons.fork_left;
+    case LaneArrowType.straightRight:
+      return Icons.fork_right;
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -227,6 +282,95 @@ class ExitChip extends StatelessWidget {
           color: Colors.white,
           fontWeight: FontWeight.bold,
           fontSize: 13,
+        ),
+      ),
+    );
+  }
+}
+
+/// A single lane tile: blue rounded rectangle with a white arrow icon.
+///
+/// When [item.isRecommended] is true the background turns a brighter blue and
+/// a thin white border is drawn so recommended lanes are immediately visible.
+class LaneArrowIcon extends StatelessWidget {
+  const LaneArrowIcon({super.key, required this.item});
+
+  final LaneGuidanceItem item;
+
+  /// Background colour for a recommended lane tile.
+  static const Color _recommendedColor = Color(0xFF1565C0); // blue 800
+
+  /// Background colour for a non-recommended lane tile.
+  static const Color _normalColor = Color(0xFF37474F); // blue-grey 800
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: 40,
+      height: 44,
+      decoration: BoxDecoration(
+        color: item.isRecommended ? _recommendedColor : _normalColor,
+        borderRadius: BorderRadius.circular(8),
+        border: item.isRecommended
+            ? Border.all(color: Colors.white, width: 2)
+            : Border.all(color: Colors.white24, width: 1),
+        boxShadow: item.isRecommended
+            ? [
+                BoxShadow(
+                  color: Colors.blue.withOpacity(0.45),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+      child: Icon(
+        laneArrowIcon(item.type),
+        color: item.isRecommended ? Colors.white : Colors.white60,
+        size: 26,
+      ),
+    );
+  }
+}
+
+/// A compact row of [LaneArrowIcon] tiles, one per lane.
+///
+/// Rendered as a pill-shaped dark card with a slight shadow, designed to sit
+/// directly below the navigation instruction banner without blocking the map.
+/// Wrapped in a [SingleChildScrollView] so the row scrolls horizontally when
+/// there are more lanes than fit on screen (uncommon but handled gracefully).
+class LaneGuidancePanel extends StatelessWidget {
+  const LaneGuidancePanel({super.key, required this.lanes});
+
+  final List<LaneGuidanceItem> lanes;
+
+  @override
+  Widget build(BuildContext context) {
+    if (lanes.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.82),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.28),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int i = 0; i < lanes.length; i++) ...[
+              LaneArrowIcon(item: lanes[i]),
+              if (i < lanes.length - 1) const SizedBox(width: 6),
+            ],
+          ],
         ),
       ),
     );

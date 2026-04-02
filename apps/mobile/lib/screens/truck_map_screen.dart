@@ -7584,12 +7584,30 @@ class AheadTruckStop {
 
 // ── Closest-truck-stops-ahead widgets ─────────────────────────────────────────
 
-/// A compact GPS-style chip displaying a truck stop's brand logo, distance
-/// ahead, and optional brand name.  Styled as a white rounded card with a
-/// subtle shadow, matching production trucking-GPS aesthetics.
+/// A compact, logo-first chip showing a truck stop ahead on the active route.
+///
+/// Design principles:
+/// • **No card/pill background** — the logo and text float directly over the
+///   map so the chip is visually lightweight and never obscures road detail.
+/// • **Unified logo size** (28 × 28 px) — all brand logos render at the same
+///   dimensions for a consistent row regardless of the source PNG's intrinsic
+///   size.  Use transparent PNGs in `assets/logos/` so no white square appears
+///   behind the graphic.
+/// • **High-contrast text with shadow** — white text + subtle black shadow
+///   keeps the label readable over both light and dark map tiles.
+/// • **Graceful fallback** — if the logo asset is missing, a standard
+///   [Icons.local_gas_station] icon is shown at the same size.
+///
+/// Best practice: keep logo PNGs trimmed to edge-to-edge artwork with a
+/// transparent background so `fit: BoxFit.contain` shows the full graphic.
 class ClosestTruckStopChip extends StatelessWidget {
+  /// Path to the brand logo asset, e.g. `'assets/logos/pilot.png'`.
   final String logoAsset;
+
+  /// Formatted distance string, e.g. `'12 mi'` or `'3.4 mi'`.
   final String distanceText;
+
+  /// Optional brand name shown after the distance label.
   final String? brand;
 
   const ClosestTruckStopChip({
@@ -7601,47 +7619,55 @@ class ClosestTruckStopChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          ),
-        ],
-      ),
+    // Shared text shadow for legibility over any map tile colour.
+    const textShadow = Shadow(
+      color: Colors.black54,
+      blurRadius: 3,
+      offset: Offset(0, 1),
+    );
+
+    return Padding(
+      // Horizontal spacing between consecutive chips in the row.
+      padding: const EdgeInsets.symmetric(horizontal: 4.0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── Brand logo ───────────────────────────────────────────────────
+          // 28 × 28 px with BoxFit.contain so the full graphic is visible.
+          // Transparent PNGs render cleanly with no white background halo.
           Image.asset(
             logoAsset,
-            height: 30,
-            width: 30,
+            width: 28,
+            height: 28,
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) =>
-                const Icon(Icons.local_gas_station, size: 24),
+            // Fall back to a standard icon if the asset file is missing.
+            errorBuilder: (_, __, ___) => const Icon(
+              Icons.local_gas_station,
+              size: 24,
+              color: Colors.white,
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          // ── Distance label ───────────────────────────────────────────────
           Text(
             distanceText,
             style: const TextStyle(
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
               fontSize: 15,
+              color: Colors.white,
+              shadows: [textShadow],
             ),
           ),
+          // ── Optional brand name ──────────────────────────────────────────
           if (brand != null && brand!.isNotEmpty) ...[
-            const SizedBox(width: 6),
+            const SizedBox(width: 5),
             Text(
               brand!,
-              style: TextStyle(
-                fontWeight: FontWeight.w400,
+              style: const TextStyle(
+                fontWeight: FontWeight.w500,
                 fontSize: 13,
-                color: Colors.grey[700],
+                color: Colors.white,
+                shadows: [textShadow],
               ),
               overflow: TextOverflow.ellipsis,
             ),
@@ -9522,9 +9548,13 @@ class AheadWeighStation {
 
 /// A compact navigation chip displaying a single weigh station ahead on route.
 ///
-/// Shows the station's logo (from `assets/logos/{logoName}.png`), its short
-/// name, and the remaining route miles.  Styled as a dark rounded card so it
-/// blends with the navigation overlay without obscuring the map.
+/// Design principles (matches [ClosestTruckStopChip] for visual consistency):
+/// • **No card/pill background** — logo and text float directly over the map.
+/// • **Unified logo size** (28 × 28 px, [BoxFit.contain]) — consistent with
+///   all other POI chips.  Use transparent PNGs so no white square appears.
+/// • **High-contrast text with shadow** — white text + subtle drop-shadow for
+///   legibility over both light and dark map tiles.
+/// • **Graceful fallback** — [Icons.scale] shown when logo asset is missing.
 ///
 /// **Usage:**
 /// ```dart
@@ -9540,45 +9570,42 @@ class ClosestWeighStationChip extends StatelessWidget {
     final poi = station.poi;
     final miles = station.milesAhead;
 
-    // Format distance: show one decimal place below 10 miles, zero above.
+    // Format distance: one decimal below 10 mi, rounded above.
     final String distLabel =
         miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.82),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    // Shared text shadow for legibility over any map tile colour.
+    const textShadow = Shadow(
+      color: Colors.black54,
+      blurRadius: 3,
+      offset: Offset(0, 1),
+    );
+
+    return Padding(
+      // Horizontal spacing between consecutive chips in the row.
+      padding: const EdgeInsets.symmetric(horizontal: 4.0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           // ── Station logo ──────────────────────────────────────────────────
-          // Loads `assets/logos/{logoName}.png`; falls back to a scale icon
-          // when the file is missing so the chip is always renderable.
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Image.asset(
-              'assets/logos/${poi.logoName}.png',
-              width: 26,
-              height: 26,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.scale,
-                color: Colors.white70,
-                size: 22,
-              ),
+          // Loads `assets/logos/{logoName}.png` at 28 × 28 px with
+          // BoxFit.contain so the full graphic is visible.  Transparent PNGs
+          // render without a white background halo.  Falls back to a scale
+          // icon when the asset file is missing.
+          Image.asset(
+            'assets/logos/${poi.logoName}.png',
+            width: 28,
+            height: 28,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(
+              Icons.scale,
+              color: Colors.white,
+              size: 24,
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           // ── Name + distance ───────────────────────────────────────────────
+          // Name and distance are stacked to keep the chip narrow.
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -9588,8 +9615,9 @@ class ClosestWeighStationChip extends StatelessWidget {
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   height: 1.2,
+                  shadows: [textShadow],
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -9598,8 +9626,10 @@ class ClosestWeighStationChip extends StatelessWidget {
                 distLabel,
                 style: const TextStyle(
                   color: Colors.orangeAccent,
-                  fontSize: 11,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
                   height: 1.2,
+                  shadows: [textShadow],
                 ),
               ),
             ],

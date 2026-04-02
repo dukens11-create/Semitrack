@@ -5635,6 +5635,94 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Road Guidance Banner ───────────────────────────────────────────────────
+
+  /// Maps a Mapbox maneuver modifier string to the nearest [ManeuverType].
+  ManeuverType _maneuverTypeFromModifier(String modifier) {
+    switch (modifier.toLowerCase()) {
+      case 'left':
+      case 'turn-left':
+        return ManeuverType.turnLeft;
+      case 'slight left':
+        return ManeuverType.keepLeft;
+      case 'sharp left':
+        return ManeuverType.turnLeft;
+      case 'right':
+      case 'turn-right':
+        return ManeuverType.turnRight;
+      case 'slight right':
+        return ManeuverType.keepRight;
+      case 'sharp right':
+        return ManeuverType.turnRight;
+      case 'uturn':
+      case 'u-turn':
+        return ManeuverType.uTurn;
+      case 'merge':
+        return ManeuverType.merge;
+      case 'fork left':
+        return ManeuverType.forkLeft;
+      case 'fork right':
+        return ManeuverType.forkRight;
+      case 'ramp':
+        return ManeuverType.ramp;
+      case 'exit right':
+        return ManeuverType.exitRight;
+      case 'exit left':
+        return ManeuverType.exitLeft;
+      case 'keep left':
+        return ManeuverType.keepLeft;
+      case 'keep right':
+        return ManeuverType.keepRight;
+      case 'straight':
+      case 'continue':
+      default:
+        return ManeuverType.continueStraight;
+    }
+  }
+
+  /// Builds a [ManeuverInfo] from the current navigation state so the
+  /// [RoadGuidanceBanner] can be rendered with live data.
+  ///
+  /// Road chip data (current/next road) is derived from the destination name
+  /// when available; lane hint and exit number are not yet provided by the
+  /// backend and default to null.
+  ManeuverInfo _buildCurrentManeuverInfo() {
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+    final distance = _distanceToNextStep();
+
+    // The Mapbox Directions API response as currently parsed does not expose
+    // structured road-number data per step.  We use the destination name as
+    // the best available label for the current-road chip.  Future work can
+    // parse the step's `ref` field from the raw Directions JSON to populate
+    // an actual route number (e.g. "I-10") and RouteType.
+    final destName = _selectedDestinationName ?? '';
+    final currentRoad = RoadInfo(
+      routeNumber: destName.isNotEmpty ? destName : 'En Route',
+      routeType: RouteType.localRoad,
+    );
+
+    return ManeuverInfo(
+      instruction: _formatInstruction(step.instruction),
+      maneuverType: _maneuverTypeFromModifier(step.maneuver),
+      distanceMeters: distance,
+      currentRoad: currentRoad,
+    );
+  }
+
+  /// Builds the [RoadGuidanceBanner] overlay shown when [_isNavigating] is
+  /// true.  The banner floats at the top of the map with safe-area padding so
+  /// it never overlaps the device status bar.
+  Widget _buildRoadGuidanceBanner() {
+    if (_navSteps.isEmpty) return const SizedBox.shrink();
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: RoadGuidanceBanner(maneuver: _buildCurrentManeuverInfo()),
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   /// Builds the navigation controls overlay shown only while [_isNavigating].
@@ -5930,7 +6018,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // instruction is always visible during active navigation,
                 // independent of the scrollable info panel below the map.
                 // Also shown on arrival so the driver sees the arrival message.
-                if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
+                // While _isNavigating is true, the richer RoadGuidanceBanner
+                // (with road chips, lane guidance and look-ahead preview)
+                // replaces the simpler urgency-coloured banner.
+                if (_isNavigating && _navSteps.isNotEmpty)
+                  _buildRoadGuidanceBanner()
+                else if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -6028,7 +6121,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Only rendered during an active navigation session.
                 if (_hasActiveDestination && _restrictionAhead != null)
                   Positioned(
-                    top: _navSteps.isNotEmpty ? 90 : 68,
+                    // RoadGuidanceBanner is taller (~170 px) when navigating;
+                    // the original nav banner is ~90 px.
+                    top: _isNavigating ? 170 : (_navSteps.isNotEmpty ? 90 : 68),
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
@@ -6052,7 +6147,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 if (_hasActiveDestination && _warningAhead != null)
                   Positioned(
                     top: () {
-                      int offset = _navSteps.isNotEmpty ? 90 : 68;
+                      int offset = _isNavigating
+                          ? 170
+                          : (_navSteps.isNotEmpty ? 90 : 68);
                       if (_restrictionAhead != null) offset += 64;
                       return offset.toDouble();
                     }(),

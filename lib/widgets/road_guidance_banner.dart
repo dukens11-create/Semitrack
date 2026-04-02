@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-// ── Enums ─────────────────────────────────────────────────────────────────────
+// ── Enums ──────────────────────────────────────────────────────────────────
 
 enum RouteType {
   interstate,
@@ -24,8 +24,9 @@ enum ManeuverType {
   ramp,
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
+/// Returns the conventional prefix for a road type, e.g. "I-" for interstates.
 String roadTypePrefix(RouteType type) {
   switch (type) {
     case RouteType.interstate:
@@ -39,6 +40,11 @@ String roadTypePrefix(RouteType type) {
   }
 }
 
+/// Returns a human-readable distance string from raw metres.
+///
+/// Below 50 m the driver is essentially at the maneuver, so "Now" is shown.
+/// Below 1 000 m the distance is shown in whole metres.
+/// At or above 1 000 m a one-decimal-place km value is used.
 String formatDistanceMeters(double meters) {
   if (meters < 50) return 'Now';
   if (meters < 1000) return '${meters.toInt()} m';
@@ -46,6 +52,7 @@ String formatDistanceMeters(double meters) {
   return '${km.toStringAsFixed(1)} km';
 }
 
+/// Returns the background chip color for each [RouteType].
 Color routeChipColor(RouteType type) {
   switch (type) {
     case RouteType.interstate:
@@ -59,6 +66,7 @@ Color routeChipColor(RouteType type) {
   }
 }
 
+/// Returns the [IconData] that best represents a [ManeuverType].
 IconData maneuverIcon(ManeuverType type) {
   switch (type) {
     case ManeuverType.continueStraight:
@@ -88,14 +96,14 @@ IconData maneuverIcon(ManeuverType type) {
   }
 }
 
-// ── Models ────────────────────────────────────────────────────────────────────
+/// Builds the display label for a [RoadInfo], including type prefix and
+/// optional direction suffix.
+String buildRoadLabel(RoadInfo road) => road.fullLabel;
 
+// ── Models ─────────────────────────────────────────────────────────────────
+
+/// Identifies a specific road segment by number, name, type, and direction.
 class RoadInfo {
-  final String routeNumber;
-  final String? routeName;
-  final RouteType routeType;
-  final String? direction;
-
   const RoadInfo({
     required this.routeNumber,
     this.routeName,
@@ -103,6 +111,19 @@ class RoadInfo {
     this.direction,
   });
 
+  /// Route shield number, e.g. "10", "75", "41".
+  final String routeNumber;
+
+  /// Optional full name of the road, e.g. "Santa Monica Freeway".
+  final String? routeName;
+
+  /// Road classification used for shield colour and prefix.
+  final RouteType routeType;
+
+  /// Cardinal or compass direction, e.g. "N", "W", "NE".
+  final String? direction;
+
+  /// Full label shown on chips and previews, e.g. "I-10 W".
   String get fullLabel {
     final prefix = roadTypePrefix(routeType);
     final dir = (direction == null || direction!.isEmpty) ? '' : ' $direction';
@@ -113,17 +134,8 @@ class RoadInfo {
   }
 }
 
+/// All information required to render a single guidance banner frame.
 class ManeuverInfo {
-  final String instruction;
-  final ManeuverType maneuverType;
-  final double distanceMeters;
-  final String? exitNumber;
-  final String? laneHint;
-  final RoadInfo currentRoad;
-  final RoadInfo? nextRoad;
-  final RoadInfo? thenRoad;
-  final String? towardText;
-
   const ManeuverInfo({
     required this.instruction,
     required this.maneuverType,
@@ -135,15 +147,45 @@ class ManeuverInfo {
     this.thenRoad,
     this.towardText,
   });
+
+  /// Primary instruction shown in bold, e.g. "Keep right to merge onto I-75 N".
+  final String instruction;
+
+  /// Maneuver category used to select the icon.
+  final ManeuverType maneuverType;
+
+  /// Distance to the upcoming maneuver in metres.
+  final double distanceMeters;
+
+  /// Exit number, e.g. "352B".  Null when there is no exit.
+  final String? exitNumber;
+
+  /// Lane recommendation, e.g. "Use right 2 lanes".
+  final String? laneHint;
+
+  /// Road the driver is currently on.
+  final RoadInfo currentRoad;
+
+  /// Road the driver will be on after the upcoming maneuver.
+  final RoadInfo? nextRoad;
+
+  /// Road that follows the [nextRoad], shown as a look-ahead preview.
+  final RoadInfo? thenRoad;
+
+  /// Toward text, e.g. "toward Atlanta".
+  final String? towardText;
 }
 
-// ── Widgets ───────────────────────────────────────────────────────────────────
+// ── Widgets ────────────────────────────────────────────────────────────────
 
-/// Displays a road-shield chip (e.g. "I-10 W") styled by [RouteType].
+/// Coloured pill chip that shows a road shield number and direction.
+///
+/// Color is determined by [RouteType] (blue=interstate, black=US highway,
+/// green=state route, grey=local road).
 class RoadChip extends StatelessWidget {
-  final RoadInfo road;
-
   const RoadChip({super.key, required this.road});
+
+  final RoadInfo road;
 
   @override
   Widget build(BuildContext context) {
@@ -165,11 +207,11 @@ class RoadChip extends StatelessWidget {
   }
 }
 
-/// Displays a green highway-exit chip (e.g. "Exit 352B").
+/// Green pill chip showing the upcoming exit number.
 class ExitChip extends StatelessWidget {
-  final String exitNumber;
-
   const ExitChip({super.key, required this.exitNumber});
+
+  final String exitNumber;
 
   @override
   Widget build(BuildContext context) {
@@ -191,11 +233,11 @@ class ExitChip extends StatelessWidget {
   }
 }
 
-/// Shows a lane-guidance hint with a stream icon.
+/// A single row showing a lane-guidance hint with a lanes icon.
 class LaneGuidanceRow extends StatelessWidget {
-  final String laneHint;
-
   const LaneGuidanceRow({super.key, required this.laneHint});
+
+  final String laneHint;
 
   @override
   Widget build(BuildContext context) {
@@ -218,11 +260,11 @@ class LaneGuidanceRow extends StatelessWidget {
   }
 }
 
-/// "Then → [road chip]" preview of the road after next.
+/// "Then → [RoadChip]" look-ahead row shown at the bottom of the banner.
 class ThenRoadPreview extends StatelessWidget {
-  final RoadInfo road;
-
   const ThenRoadPreview({super.key, required this.road});
+
+  final RoadInfo road;
 
   @override
   Widget build(BuildContext context) {
@@ -243,20 +285,31 @@ class ThenRoadPreview extends StatelessWidget {
   }
 }
 
-/// Full GPS-style road/highway guidance banner.
+/// Full-featured road/highway guidance banner for truck navigation.
 ///
-/// Floats over the map (inside a [Stack]) when [_isNavigating] is `true`.
-/// Includes the maneuver icon, instruction text, distance, road chips,
-/// lane guidance, and then-road preview.  Wraps itself in [SafeArea] so
-/// the card never overlaps the system status bar.
+/// Layout (top → bottom):
+/// ```
+/// ┌─────────────────────────────────────────────────────┐
+/// │ [icon]  instruction text              distance       │
+/// │         toward text (optional)                       │
+/// ├─────────────────────────────────────────────────────┤
+/// │ [CurrentRoad] [NextRoad] [Exit chip]                 │
+/// │ 🛣 lane hint (optional)                              │
+/// │ Then [ThenRoad chip] (optional)                      │
+/// └─────────────────────────────────────────────────────┘
+/// ```
+///
+/// Wrap in a [Positioned] or place inside a [Stack] at the top of the map
+/// to float it over the map widget.  [SafeArea] padding is applied
+/// internally so the banner never overlaps the status-bar on notched phones.
 class RoadGuidanceBanner extends StatelessWidget {
-  final ManeuverInfo maneuver;
-
   const RoadGuidanceBanner({super.key, required this.maneuver});
+
+  final ManeuverInfo maneuver;
 
   @override
   Widget build(BuildContext context) {
-    final secondaryText =
+    final towardText =
         (maneuver.towardText == null || maneuver.towardText!.trim().isEmpty)
             ? null
             : maneuver.towardText;
@@ -282,11 +335,10 @@ class RoadGuidanceBanner extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ── Top row: icon | instruction | distance ───────────────────
+              // ── Top row: icon | instruction | distance ──────────────────
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Maneuver icon
                   Container(
                     width: 54,
                     height: 54,
@@ -301,7 +353,6 @@ class RoadGuidanceBanner extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // Instruction + toward text
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -314,22 +365,26 @@ class RoadGuidanceBanner extends StatelessWidget {
                             fontWeight: FontWeight.bold,
                             height: 1.15,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        if (secondaryText != null) ...[
+                        if (towardText != null) ...[
                           const SizedBox(height: 4),
                           Text(
-                            secondaryText,
+                            towardText,
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 13,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ],
                     ),
                   ),
                   const SizedBox(width: 10),
-                  // Distance to maneuver
+                  // Distance badge (right-aligned).
                   Text(
                     formatDistanceMeters(maneuver.distanceMeters),
                     style: const TextStyle(
@@ -340,8 +395,8 @@ class RoadGuidanceBanner extends StatelessWidget {
                   ),
                 ],
               ),
-              // ── Road + exit chips ─────────────────────────────────────────
               const SizedBox(height: 12),
+              // ── Road + exit chips ────────────────────────────────────────
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -353,13 +408,13 @@ class RoadGuidanceBanner extends StatelessWidget {
                     ExitChip(exitNumber: maneuver.exitNumber!),
                 ],
               ),
-              // ── Lane guidance ─────────────────────────────────────────────
+              // ── Lane guidance ────────────────────────────────────────────
               if (maneuver.laneHint != null &&
                   maneuver.laneHint!.trim().isNotEmpty) ...[
                 const SizedBox(height: 10),
                 LaneGuidanceRow(laneHint: maneuver.laneHint!),
               ],
-              // ── Then-road preview ─────────────────────────────────────────
+              // ── Then-road look-ahead ──────────────────────────────────────
               if (maneuver.thenRoad != null) ...[
                 const SizedBox(height: 10),
                 ThenRoadPreview(road: maneuver.thenRoad!),
@@ -367,6 +422,70 @@ class RoadGuidanceBanner extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Demo Page ──────────────────────────────────────────────────────────────
+
+/// Standalone demo page that renders [RoadGuidanceBanner] with realistic
+/// sample data.  Use this screen to preview the banner in isolation or as a
+/// quick integration test.
+///
+/// To display the demo from anywhere in the app:
+/// ```dart
+/// Navigator.push(
+///   context,
+///   MaterialPageRoute(builder: (_) => const RoadGuidanceDemoPage()),
+/// );
+/// ```
+class RoadGuidanceDemoPage extends StatelessWidget {
+  const RoadGuidanceDemoPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // ── Sample data matching the spec ──────────────────────────────────────
+    const currentRoad = RoadInfo(
+      routeNumber: '10',
+      routeType: RouteType.interstate,
+      direction: 'W',
+    );
+    const nextRoad = RoadInfo(
+      routeNumber: '75',
+      routeType: RouteType.interstate,
+      direction: 'N',
+    );
+    const thenRoad = RoadInfo(
+      routeNumber: '41',
+      routeType: RouteType.usHighway,
+      direction: 'N',
+    );
+    const maneuver = ManeuverInfo(
+      instruction: 'Keep right to merge onto I-75 N toward Atlanta',
+      maneuverType: ManeuverType.keepRight,
+      distanceMeters: 1931,
+      exitNumber: '352B',
+      laneHint: 'Use right 2 lanes',
+      currentRoad: currentRoad,
+      nextRoad: nextRoad,
+      thenRoad: thenRoad,
+      towardText: 'toward Atlanta',
+    );
+
+    return Scaffold(
+      backgroundColor: Colors.grey.shade700,
+      appBar: AppBar(
+        title: const Text('Road Guidance Banner – Demo'),
+        backgroundColor: Colors.black87,
+        foregroundColor: Colors.white,
+      ),
+      body: Stack(
+        children: [
+          // Placeholder map background.
+          Container(color: Colors.grey.shade600),
+          const RoadGuidanceBanner(maneuver: maneuver),
+        ],
       ),
     );
   }

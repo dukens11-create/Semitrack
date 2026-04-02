@@ -501,8 +501,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       try {
         final data = await rootBundle.load(entry.value);
         loaded[entry.key] = data.buffer.asUint8List();
-      } catch (_) {
+      } catch (e) {
         // Asset missing — skip; marker builder will use fallback Icon widget.
+        debugPrint('[POI] Warning: failed to load brand icon "${entry.key}" '
+            'from "${entry.value}": $e');
       }
     }
 
@@ -515,8 +517,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         try {
           final data = await rootBundle.load(path);
           loaded[path] = data.buffer.asUint8List();
-        } catch (_) {
+        } catch (e) {
           // Asset missing — skip; marker builder falls back to icon widget.
+          debugPrint('[POI] Warning: failed to load assetLogo "$path": $e');
         }
       }
     }
@@ -932,6 +935,100 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       assetLogo: 'assets/logos/road ranger.png',
       description: 'Road Ranger high-volume diesel lanes with cardlock access and reefer plug-ins.',
     ),
+    TruckStop(
+      id: '26',
+      name: 'Esso Truck Stop',
+      brand: 'Esso',
+      position: const LatLng(43.650, -79.380),
+      address: 'Toronto, ON',
+      dieselPrice: 1.62,
+      icon: 'esso',
+      assetLogo: 'assets/logos/esso.png',
+      description: 'Esso truck stop with diesel, DEF, and convenience store.',
+    ),
+    TruckStop(
+      id: '27',
+      name: 'Petro-Canada Truck Stop',
+      brand: 'Petro-Canada',
+      position: const LatLng(45.421, -75.697),
+      address: 'Ottawa, ON',
+      dieselPrice: 1.58,
+      icon: 'petro-canada',
+      assetLogo: 'assets/logos/petro-canada.png',
+      description: 'Petro-Canada with high-flow diesel, DEF, and full-service amenities.',
+    ),
+    TruckStop(
+      id: '28',
+      name: 'Walmart Supercenter',
+      brand: 'Walmart',
+      position: const LatLng(36.174, -86.768),
+      address: 'Nashville, TN',
+      icon: 'walmart',
+      assetLogo: 'assets/logos/walmart.png',
+      description: 'Walmart with overnight truck parking. Groceries, pharmacy, and supplies available.',
+    ),
+    TruckStop(
+      id: '29',
+      name: 'Truck Stop Gym',
+      brand: 'Gym',
+      position: const LatLng(35.227, -80.843),
+      address: 'Charlotte, NC',
+      icon: 'gym',
+      assetLogo: 'assets/logos/gym.png',
+      description: 'On-site fitness center with showers, lockers, and cardio equipment for drivers.',
+    ),
+    TruckStop(
+      id: '30',
+      name: 'Trucker Hotel',
+      brand: 'Hotel',
+      position: const LatLng(33.749, -84.388),
+      address: 'Atlanta, GA',
+      icon: 'hotel',
+      assetLogo: 'assets/logos/hotel.png',
+      description: 'Budget-friendly hotel adjacent to the truck stop — free parking for rigs.',
+    ),
+    TruckStop(
+      id: '31',
+      name: 'Trucker Restaurant',
+      brand: 'Restaurant',
+      position: const LatLng(30.332, -81.656),
+      address: 'Jacksonville, FL',
+      icon: 'restaurant',
+      assetLogo: 'assets/logos/restaurant .png',
+      description: 'Full-service diner with trucker specials, breakfast all day, and free Wi-Fi.',
+    ),
+    TruckStop(
+      id: '32',
+      name: 'Semi Truck Wash',
+      brand: 'Semi Truck Wash',
+      position: const LatLng(29.760, -95.370),
+      address: 'Houston, TX',
+      icon: 'semiwash',
+      assetLogo: 'assets/logos/semi truck wash.png',
+      description: 'Full-service semi truck wash with exterior, under-carriage, and cab cleaning.',
+    ),
+    TruckStop(
+      id: '33',
+      name: 'QuickTrip Travel Center',
+      brand: 'QuickTrip',
+      position: const LatLng(33.448, -112.074),
+      address: 'Phoenix, AZ',
+      dieselPrice: 4.15,
+      icon: 'qt',
+      assetLogo: 'assets/logos/quicktrip.png',
+      description: 'QuickTrip with clean facilities, diesel lanes, and QT Kitchen hot food.',
+    ),
+    TruckStop(
+      id: '34',
+      name: 'Am Best Travel Center',
+      brand: 'Am Best',
+      position: const LatLng(32.779, -96.808),
+      address: 'Dallas, TX',
+      dieselPrice: 4.08,
+      icon: 'ambest',
+      assetLogo: 'assets/logos/ambest.png',
+      description: 'Am Best certified truck stop with scales, showers, and independent restaurant.',
+    ),
   ];
 
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
@@ -1056,6 +1153,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (n.contains('bp') || n.contains('british petroleum')) return 'bp';
     if (n.contains('circle k') || n.contains('circlek')) return 'circlek';
 
+    // POI category logos
+    if (n.contains('walmart') || n.contains('wal-mart')) return 'walmart';
+    if (n.contains('gym') || n.contains('fitness') || n.contains('exercise')) return 'gym';
+    if (n.contains('hotel') || n.contains('motel') || n.contains('inn') || n.contains('lodging')) return 'hotel';
+    if (n.contains('restaurant') || n.contains('diner') || n.contains('food')) return 'restaurant';
+    if (n.contains('truck wash') || n.contains('semi wash') || n.contains('semiwash')) return 'semiwash';
+
     // Independent
     if (n.contains('independent') || n == 'indie') return 'independent';
 
@@ -1083,21 +1187,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// for each entry before adding a Mapbox SymbolLayer with
   /// `iconImage: ["get", "icon"]`.
   static const Map<String, String> _brandIcons = {
-    'pilot':      'assets/logos/pilot.png',
-    'loves':      'assets/logos/loves.png',
-    'ta':         'assets/logos/ta.png',
-    'petro':      'assets/logos/petro.png',
-    'flyingj':    'assets/logos/flying j.png',
-    'mobil':      'assets/logos/mobil.png',
-    'chevron':    'assets/logos/chevron.png',
-    'shell':      'assets/logos/shell.png',
-    'bp':         'assets/logos/bp.png',
-    'circlek':    'assets/logos/circle k.png',
-    'weigh':      'assets/logos/weight station .png',
-    'rest':       'assets/logos/rest la area.png',
-    'roadranger': 'assets/logos/road ranger.png',
-    'ambest':     'assets/logos/ambest.png',
-    'quicktrip':  'assets/logos/quicktrip.png',
+    // National chains
+    'pilot':        'assets/logos/pilot.png',
+    'loves':        'assets/logos/loves.png',
+    'ta':           'assets/logos/ta.png',
+    'petro':        'assets/logos/petro.png',
+    'flyingj':      'assets/logos/flying j.png',
+    'ambest':       'assets/logos/ambest.png',
+    'roadranger':   'assets/logos/road ranger.png',
+    // Key matches _normalizeTruckStopBrand return value 'qt' for QuikTrip/QuickTrip
+    'qt':           'assets/logos/quicktrip.png',
+    'maverik':      'assets/logos/adventure s first stop.png',
+    // Canadian brands
+    'esso':         'assets/logos/esso.png',
+    'petro-canada': 'assets/logos/petro-canada.png',
+    // Major fuel brands
+    'mobil':        'assets/logos/mobil.png',
+    'chevron':      'assets/logos/chevron.png',
+    'shell':        'assets/logos/shell.png',
+    'bp':           'assets/logos/bp.png',
+    'circlek':      'assets/logos/circle k.png',
+    // POI categories
+    'weigh':        'assets/logos/weight station .png',
+    'rest':         'assets/logos/rest la area.png',
+    'gym':          'assets/logos/gym.png',
+    'hotel':        'assets/logos/hotel.png',
+    'restaurant':   'assets/logos/restaurant .png',
+    'semiwash':     'assets/logos/semi truck wash.png',
+    'walmart':      'assets/logos/walmart.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].

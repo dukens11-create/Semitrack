@@ -6285,35 +6285,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Builds the navigation controls overlay shown only while [_isNavigating].
+  /// Builds the "Stop Navigation" button overlay shown only while [_isNavigating].
   ///
-  /// Provides a "Stop Navigation" button so the driver can end the active
-  /// trip and return to the planning UI.  Positioned at the bottom-left so
-  /// it does not overlap the recenter FAB (bottom-right) or speed panel.
-  Widget _buildNavigationControls() {
+  /// Provides a full-width "Stop Navigation" button so the driver can end the
+  /// active trip and return to the planning UI.  Positioned at the bottom
+  /// center of the screen with SafeArea padding to remain accessible on all
+  /// devices.
+  Widget _buildStopNavigationButton() {
     return Positioned(
       bottom: 24,
       left: 20,
       right: 20,
       child: SafeArea(
         top: false,
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red.shade700,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          height: 60,
+          child: ElevatedButton.icon(
+            onPressed: _stopNavigation,
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: const Text(
+              'Stop Navigation',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            elevation: 6,
+            style: ElevatedButton.styleFrom(
+              elevation: 8,
+              shadowColor: Colors.black45,
+              backgroundColor: const Color(0xFFD32F2F),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
           ),
-          icon: const Icon(Icons.stop_circle_outlined),
-          label: const Text(
-            'Stop Navigation',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-          ),
-          // _stopNavigation resets all trip state and restores planning UI.
-          onPressed: _stopNavigation,
         ),
       ),
     );
@@ -6844,7 +6850,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Stop Navigation button: only visible while _isNavigating.
                 // Tapping calls _stopNavigation to end the trip and restore
                 // planning UI.
-                if (_isNavigating) _buildNavigationControls(),
+                if (_isNavigating) _buildStopNavigationButton(),
               ],
             ),
           ),

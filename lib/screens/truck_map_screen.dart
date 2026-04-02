@@ -483,41 +483,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // To add or change an icon, add entries to [_brandIcons] and place the
   // corresponding PNG assets in the project, then re-register them in pubspec.yaml.
 
-  /// Loads all brand logo PNGs from [_brandIcons] and any unique [assetLogo]
-  /// paths found in [_mockTruckStops] into [_brandIconBytes].
+  /// Discovers and loads every PNG in `assets/logos/` into [_brandIconBytes].
   ///
-  /// This is the flutter_map equivalent of calling Mapbox `style.addImage(id, bytes)`
-  /// for each icon before adding a SymbolLayer with `iconImage: ["get", "icon"]`.
-  /// Assets that cannot be loaded are silently skipped; the marker builder
-  /// falls back to a generic icon widget.
+  /// Uses [AssetManifest] to iterate all registered assets at runtime, then
+  /// loads each matching PNG via [rootBundle].  This is the flutter_map
+  /// equivalent of calling Mapbox `style.addImage(id, bytes)` for every icon
+  /// before adding a SymbolLayer with `iconImage: ["get", "icon"]`.
+  ///
+  /// Each PNG is stored under its full asset path (e.g.
+  /// `'assets/logos/pilot.png'`) so [_buildTruckStopMarkers] can look it up
+  /// directly from [TruckStop.assetLogo].  Assets that cannot be loaded are
+  /// silently skipped — the marker builder omits the marker entirely rather
+  /// than falling back to a generic icon.
   Future<void> _preloadBrandIcons() async {
     final loaded = <String, Uint8List>{};
 
-    // Load all registered logos keyed by brand icon name — equivalent to
-    // calling style.addImage() for each entry.  Keys match PNG filenames
-    // without .png, mirroring the Mapbox GeoJSON property { "brand": "<key>" }
-    // + SymbolLayer iconImage:["get","brand"].
-    for (final entry in _brandIcons.entries) {
-      try {
-        final data = await rootBundle.load(entry.value);
-        loaded[entry.key] = data.buffer.asUint8List();
-      } catch (_) {
-        // Asset missing — skip; marker builder will use fallback Icon widget.
-      }
-    }
+    // Discover all PNG assets registered under assets/logos/ via the asset
+    // manifest so the loader automatically picks up any new logo files added
+    // to the folder without requiring code changes.
+    final AssetManifest manifest =
+        await AssetManifest.loadFromAssetBundle(rootBundle);
+    final List<String> logoPaths = manifest
+        .listAssets()
+        .where(
+          (s) => s.startsWith('assets/logos/') && s.endsWith('.png'),
+        )
+        .toList();
 
-    // Also register any assetLogo paths declared directly on each TruckStop so
-    // that POIs with a logo not yet in _brandIcons are covered.  The asset path
-    // itself is used as the lookup key so _buildTruckStopMarkers() can find it.
-    for (final stop in _mockTruckStops) {
-      final path = stop.assetLogo;
-      if (path != null && !loaded.containsKey(path)) {
-        try {
-          final data = await rootBundle.load(path);
-          loaded[path] = data.buffer.asUint8List();
-        } catch (_) {
-          // Asset missing — skip; marker builder falls back to icon widget.
-        }
+    for (final path in logoPaths) {
+      try {
+        final data = await rootBundle.load(path);
+        loaded[path] = data.buffer.asUint8List();
+      } catch (_) {
+        // Asset unreadable — skip silently.
       }
     }
 
@@ -762,13 +760,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ),
     TruckStop(
       id: '10',
-      name: 'Exxon Travel Plaza',
-      brand: 'Exxon',
+      name: 'Esso Travel Plaza',
+      brand: 'Esso',
       position: const LatLng(40.400, -122.250),
       address: 'Red Bluff, CA',
       dieselPrice: 4.41,
-      icon: 'exxon',
-      description: 'Exxon travel plaza with Speedpass+, truck diesel lanes, and quick mart.',
+      icon: 'esso',
+      assetLogo: 'assets/logos/esso.png',
+      description: 'Esso travel plaza with high-flow diesel lanes, DEF dispensers, and 24/7 convenience store.',
     ),
     TruckStop(
       id: '11',
@@ -881,15 +880,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       assetLogo: 'assets/logos/adventure s first stop.png',
       description: 'Maverik BonFire grill, diesel, DEF, and adventure-themed convenience store.',
     ),
+    // ── Stops for remaining logos ────────────────────────────────────────────
     TruckStop(
       id: '21',
-      name: 'Kwik Trip Travel Center',
-      brand: 'Kwik Trip',
-      position: const LatLng(43.787, -88.787),
-      address: 'Fond du Lac, WI',
+      name: 'QuikTrip Travel Center',
+      brand: 'QuikTrip',
+      position: const LatLng(33.749, -84.388),
+      address: 'Atlanta, GA',
       dieselPrice: 4.05,
-      icon: 'kwiktrip',
-      description: 'Kwik Trip with fresh bakery, hot food, truck lanes, and loyalty card savings.',
+      icon: 'quicktrip',
+      assetLogo: 'assets/logos/quicktrip.png',
+      description: 'QuikTrip with high-flow diesel pumps, fresh food kitchen, truck parking, and 24/7 service.',
     ),
     TruckStop(
       id: '22',
@@ -913,13 +914,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ),
     TruckStop(
       id: '24',
-      name: 'Sapp Bros Travel Center',
-      brand: 'Sapp Bros',
-      position: const LatLng(40.869, -97.598),
-      address: 'York, NE',
-      dieselPrice: 4.10,
-      icon: 'sappbros',
-      description: 'Family-owned Sapp Bros with apple logo, showers, scales, and home-cooked meals.',
+      name: 'AmBest Travel Center',
+      brand: 'AmBest',
+      position: const LatLng(35.227, -80.843),
+      address: 'Charlotte, NC',
+      dieselPrice: 4.08,
+      icon: 'ambest',
+      assetLogo: 'assets/logos/ambest.png',
+      description: 'AmBest certified truck stop with showers, CAT scale, full restaurant, and truck repair.',
     ),
     TruckStop(
       id: '25',
@@ -931,6 +933,67 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'roadranger',
       assetLogo: 'assets/logos/road ranger.png',
       description: 'Road Ranger high-volume diesel lanes with cardlock access and reefer plug-ins.',
+    ),
+    TruckStop(
+      id: '26',
+      name: 'Petro-Canada Truck Stop',
+      brand: 'Petro-Canada',
+      position: const LatLng(49.895, -97.138),
+      address: 'Winnipeg, MB',
+      dieselPrice: 4.60,
+      icon: 'petrocanada',
+      assetLogo: 'assets/logos/petro-canada.png',
+      description: 'Petro-Canada with high-volume diesel, DEF, driver lounge, and full parking.',
+    ),
+    TruckStop(
+      id: '27',
+      name: 'Walmart Supercenter',
+      brand: 'Walmart',
+      position: const LatLng(36.362, -94.209),
+      address: 'Bentonville, AR',
+      icon: 'walmart',
+      assetLogo: 'assets/logos/walmart.png',
+      description: 'Walmart Supercenter with designated truck parking, overnight stays, and full shopping access.',
+    ),
+    TruckStop(
+      id: '28',
+      name: 'Trucker Hotel & Lodging',
+      brand: 'Hotel',
+      position: const LatLng(32.785, -96.800),
+      address: 'Dallas, TX',
+      icon: 'hotel',
+      assetLogo: 'assets/logos/hotel.png',
+      description: 'Truck-friendly hotel with extra-long parking stalls, complimentary breakfast, and Wi-Fi.',
+    ),
+    TruckStop(
+      id: '29',
+      name: 'Truck Stop Restaurant',
+      brand: 'Restaurant',
+      position: const LatLng(36.174, -86.767),
+      address: 'Nashville, TN',
+      icon: 'restaurant',
+      assetLogo: 'assets/logos/restaurant .png',
+      description: 'Full-service truck-stop restaurant with hot meals, salad bar, and 24/7 coffee service.',
+    ),
+    TruckStop(
+      id: '30',
+      name: 'Semi Truck Wash',
+      brand: 'Truck Wash',
+      position: const LatLng(38.871, -97.622),
+      address: 'Salina, KS',
+      icon: 'truckwash',
+      assetLogo: 'assets/logos/semi truck wash.png',
+      description: 'High-pressure semi truck wash with hand-dry service and fleet discount programs.',
+    ),
+    TruckStop(
+      id: '31',
+      name: 'Truck Stop Fitness Center',
+      brand: 'Gym',
+      position: const LatLng(39.099, -94.578),
+      address: 'Kansas City, MO',
+      icon: 'gym',
+      assetLogo: 'assets/logos/gym.png',
+      description: 'On-site gym with showers, locker rooms, and 24/7 access for professional truck drivers.',
     ),
   ];
 
@@ -1082,22 +1145,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// This is the flutter_map equivalent of calling `style.addImage(key, bytes)`
   /// for each entry before adding a Mapbox SymbolLayer with
   /// `iconImage: ["get", "icon"]`.
+  /// Full map of brand key → asset path for every PNG in `assets/logos/`.
+  ///
+  /// This is kept in sync with the actual files in `assets/logos/` so that
+  /// the legacy [_brandIcons] lookup path still works alongside the dynamic
+  /// [AssetManifest] loading in [_preloadBrandIcons].
   static const Map<String, String> _brandIcons = {
-    'pilot':      'assets/logos/pilot.png',
-    'loves':      'assets/logos/loves.png',
-    'ta':         'assets/logos/ta.png',
-    'petro':      'assets/logos/petro.png',
-    'flyingj':    'assets/logos/flying j.png',
-    'mobil':      'assets/logos/mobil.png',
-    'chevron':    'assets/logos/chevron.png',
-    'shell':      'assets/logos/shell.png',
-    'bp':         'assets/logos/bp.png',
-    'circlek':    'assets/logos/circle k.png',
-    'weigh':      'assets/logos/weight station .png',
-    'rest':       'assets/logos/rest la area.png',
-    'roadranger': 'assets/logos/road ranger.png',
-    'ambest':     'assets/logos/ambest.png',
-    'quicktrip':  'assets/logos/quicktrip.png',
+    'pilot':        'assets/logos/pilot.png',
+    'loves':        'assets/logos/loves.png',
+    'ta':           'assets/logos/ta.png',
+    'petro':        'assets/logos/petro.png',
+    'flyingj':      'assets/logos/flying j.png',
+    'mobil':        'assets/logos/mobil.png',
+    'chevron':      'assets/logos/chevron.png',
+    'shell':        'assets/logos/shell.png',
+    'bp':           'assets/logos/bp.png',
+    'circlek':      'assets/logos/circle k.png',
+    'weigh':        'assets/logos/weight station .png',
+    'rest':         'assets/logos/rest la area.png',
+    'roadranger':   'assets/logos/road ranger.png',
+    'ambest':       'assets/logos/ambest.png',
+    'quicktrip':    'assets/logos/quicktrip.png',
+    'esso':         'assets/logos/esso.png',
+    'petrocanada':  'assets/logos/petro-canada.png',
+    'walmart':      'assets/logos/walmart.png',
+    'hotel':        'assets/logos/hotel.png',
+    'restaurant':   'assets/logos/restaurant .png',
+    'truckwash':    'assets/logos/semi truck wash.png',
+    'gym':          'assets/logos/gym.png',
+    'maverik':      'assets/logos/adventure s first stop.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -1105,121 +1181,40 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Each marker renders the brand logo using its [TruckStop.assetLogo] path
-  /// (the flutter_map equivalent of Mapbox `style.addImage` + `iconImage`).
-  /// Resolution order for the logo bytes:
-  ///   1. `stop.assetLogo` path key in [_brandIconBytes] (direct asset path)
-  ///   2. `stop.icon` brand-key in [_brandIconBytes]
-  ///   3. Normalised name/brand key fallback
-  ///   4. Generic icon widget
-  /// Tapping a marker calls [_showTruckStopSheet] with the stop's full details.
+  /// Only stops whose [TruckStop.assetLogo] has been successfully loaded into
+  /// [_brandIconBytes] are rendered — this ensures that **every visible marker
+  /// uses a logo image from `assets/logos/`** and no generic fallback icons
+  /// appear on the map.  Tapping a marker calls [_showTruckStopSheet].
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
-    return _truckStops.map((stop) {
-      // Resolution order mirrors Mapbox iconImage: ["get", "icon"]:
-      // 1. assetLogo path key (registered in _preloadBrandIcons by path)
-      // 2. explicit icon brand key
-      // 3. normalised name key
-      // 4. normalised brand key
-      final nameKey = _normalizeTruckStopBrand(stop.name);
-      final String iconKey = stop.icon ??
-          (nameKey != 'default' ? nameKey : _normalizeTruckStopBrand(stop.brand));
+    final markers = <Marker>[];
+    for (final stop in _truckStops) {
+      // Only render markers whose logo has been loaded — no fallback icons.
       final Uint8List? bytes =
-          (stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null) ??
-          _brandIconBytes[iconKey] ??
-          _brandIconBytes['default'];
+          stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
+      if (bytes == null) continue;
 
-      return Marker(
+      markers.add(Marker(
         point: stop.position,
         width: 40,
         height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
-          child: bytes != null
-              ? ClipOval(
-                  child: Image.memory(
-                    bytes,
-                    width: 40,
-                    height: 40,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                  ),
-                )
-              : const Icon(
-                  Icons.local_gas_station,
-                  color: Colors.blue,
-                  size: 32,
-                ),
-        ),
-      );
-    }).toList();
-  }
-
-  /// Builds map [Marker]s for all [MapPoi] entries in [_mapPois].
-  ///
-  /// Weigh stations fall back to an Icon widget since no logo images are
-  /// registered.  Police and ports of entry retain coloured icon markers for
-  /// instant type recognition.  Tapping a marker shows a brief info sheet via
-  /// [_showPoiAlert].
-  List<Marker> _buildPoiMarkers() {
-    return _mapPois.map((poi) {
-      // Weigh stations use an Icon widget (no logo assets registered).
-      if (poi.type == PoiType.weighStation) {
-        return Marker(
-          point: poi.position,
-          width: 40,
-          height: 40,
-          alignment: Alignment.center,
-          child: GestureDetector(
-            onTap: () => _showPoiAlert(poi),
-            child: Icon(Icons.scale,
-                    color: Colors.orange.shade700, size: 32),
-          ),
-        );
-      }
-
-      final Color color;
-      final IconData icon;
-      switch (poi.type) {
-        case PoiType.weighStation:
-          color = Colors.orange.shade700;
-          icon = Icons.scale;
-          break;
-        case PoiType.police:
-          color = Colors.deepPurple.shade700;
-          icon = Icons.local_police;
-          break;
-        case PoiType.portOfEntry:
-          color = Colors.indigo.shade700;
-          icon = Icons.border_all;
-          break;
-      }
-      return Marker(
-        point: poi.position,
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () => _showPoiAlert(poi),
-          child: Container(
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+          child: ClipOval(
+            child: Image.memory(
+              bytes,
+              width: 40,
+              height: 40,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
             ),
-            child: Icon(icon, color: Colors.white, size: 20),
           ),
         ),
-      );
-    }).toList();
+      ));
+    }
+    return markers;
   }
 
   /// Checks whether the driver is within 500 m of any [MapPoi] and triggers
@@ -1322,17 +1317,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
   /// truck position, destination pin (when selected or arrived), visible truck
-  /// stop POIs, map POIs (weigh stations, police checkpoints, ports of entry),
-  /// and truck restriction markers (low bridges, weight/length limits, etc.).
+  /// stop POIs (logo-backed only), and truck restriction / warning markers.
   ///
-  /// Centralises marker assembly so [build] stays clean and future POI types
-  /// can be merged here in one place.
+  /// POI markers are sourced exclusively from [_buildTruckStopMarkers], which
+  /// only renders stops whose logo image has been loaded from `assets/logos/`.
+  /// The previous icon-only [MapPoi] markers have been removed so that no
+  /// generic icon markers appear alongside the logo-based ones.
   List<Marker> _buildMarkers() {
     return [
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
-      ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
       ..._buildWarningMarkers(),
     ];

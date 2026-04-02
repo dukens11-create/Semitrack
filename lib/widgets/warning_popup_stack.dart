@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../models/warning_sign.dart';
 import '../services/warning_manager.dart';
 import 'warning_popup_card.dart';
 
@@ -88,13 +87,12 @@ class _WarningPopupStackState extends State<WarningPopupStack>
   }
 
   /// Starts (or resets) the auto-dismiss timer for a non-high-severity card.
-  void _scheduleDismiss(String id, WarningSeverity severity) {
-    if (severity == WarningSeverity.high) return; // high = pinned
+  void _scheduleDismiss(String id, String severity) {
+    if (severity == 'high') return; // high = pinned until driver dismisses
     if (_dismissTimers.containsKey(id)) return; // already scheduled
 
-    final Duration delay = severity == WarningSeverity.medium
-        ? _kMediumAutoDismiss
-        : _kLowAutoDismiss;
+    final Duration delay =
+        severity == 'medium' ? _kMediumAutoDismiss : _kLowAutoDismiss;
 
     _dismissTimers[id] = Timer(delay, () => _dismiss(id));
   }

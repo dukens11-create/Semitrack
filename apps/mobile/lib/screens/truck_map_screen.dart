@@ -7429,6 +7429,7 @@ class _StopEntry {
 // ── Navigation alert system ────────────────────────────────────────────────────
 
 enum AlertType {
+  /// Issued advisory warning about wind conditions along the route.
   windAdvisory,
   fuelDistance,
   restrictionDistance,
@@ -7438,6 +7439,7 @@ enum AlertType {
   accident,
   roadClosure,
   hazmat,
+  /// A designated high-wind geographic area (e.g. a canyon or pass).
   highWind,
   steepGrade,
 }
@@ -7526,6 +7528,12 @@ String _fmtDuration(Duration duration) {
   return '${m}m';
 }
 
+/// Formats [dt] as a 12-hour AM/PM clock string.
+///
+/// [dt] is expected to already be in the device's local timezone (use
+/// [DateTime.now] or [DateTime.toLocal] before passing in).
+/// The [TripProgressInfo.timezoneLabel] field is used as the display-only
+/// timezone hint shown alongside this value in [TripSummaryStrip].
 String _fmtEta(DateTime dt) {
   final hour = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
   final minute = dt.minute.toString().padLeft(2, '0');

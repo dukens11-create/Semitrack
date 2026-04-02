@@ -7833,8 +7833,7 @@ class MainNavigationAlertCard extends StatelessWidget {
             const SizedBox(height: 6),
           ],
           if (alert.suggestedAction != null)
-            _moreRow(
-                Icons.directions, 'Action', alert.suggestedAction!),
+            _moreRow(Icons.directions, 'Action', alert.suggestedAction!),
         ],
       ),
     );

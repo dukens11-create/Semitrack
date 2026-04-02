@@ -11,8 +11,13 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
+import 'package:semitrack_mobile/models/warning_config.dart';
+import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
+import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
 
 /// Full-featured truck navigation screen.
 ///
@@ -279,7 +284,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final Set<String> _restrictionAlertShown = {};
   TruckRestriction? _restrictionAhead;
 
-  // ── Smart restriction rerouting state ─────────────────────────────────────
+  // ── Warning popup manager ──────────────────────────────────────────────────
+  //
+  // _warningManager evaluates proximity to each [WarningSign] on every GPS
+  // fix and exposes [activePopups] for the [WarningPopupStack] overlay.
+  // It is seeded from the static [warningSigns] list; in production this list
+  // would be replaced by API-loaded data matching the active route corridor.
+  late final WarningManager _warningManager;
+
+
   // _isRestrictionRerouting is true while an automatic avoid-restriction
   // reroute is in progress so the UI can show the rerouting banner.
   // _restrictionRerouteAttempts counts how many avoid-point retries have been
@@ -287,6 +300,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _isRestrictionRerouting = false;
   int _restrictionRerouteAttempts = 0;
   static const int _maxRestrictionReroutes = 3;
+
+  // ── Warning sign state ────────────────────────────────────────────────────
+  //
+  // _warningSigns is the list of truck safety warning signs shown as coloured
+  // map markers and used for route-proximity detection.
+  // _warningAlertShown deduplicates proximity banners within a session.
+  // _warningAhead holds the highest-priority warning currently ahead on the
+  // route so the alert banner can display it.
+  final List<WarningSign> _warningSigns =
+      List<WarningSign>.from(_sampleWarningSigns);
+  final Set<String> _warningAlertShown = {};
+  WarningSign? _warningAhead;
+
+  /// Radius in metres within which a warning sign is considered "on the route"
+  /// for route-proximity detection.
+  static const double _warningProximityMeters = 200.0;
+
+  /// Radius in metres within which an ahead-on-route warning triggers the
+  /// top alert banner (and TTS) for the driver.
+  static const double _warningAlertRadiusMeters = 1000.0;
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -397,6 +430,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     super.initState();
     _initTts();
     _startGps();
+    // Initialise the warning manager with the pre-seeded sign list.
+    // In production, replace [warningSigns] with API-loaded data for the
+    // active route corridor.
+    _warningManager = WarningManager(signs: warningSigns);
     // Load all brand icon PNGs as raw bytes once at startup so that
     // _buildTruckStopMarkers() can render them via Image.memory() without
     // needing a BuildContext — the flutter_map equivalent of registering images
@@ -412,6 +449,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _tts.stop();
     _searchController.dispose();
     _searchDebounce?.cancel();
+    _warningManager.dispose();
     super.dispose();
   }
 
@@ -1210,6 +1248,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ..._buildTruckStopMarkers(),
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
+      ..._buildWarningMarkers(),
     ];
   }
 
@@ -1500,6 +1539,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Restriction proximity alerts: warn about upcoming violations.
       _checkRestrictionAheadAlert(gpsPoint);
 
+      // Warning sign proximity: update the WarningManager so popup cards
+      // are added / updated / evicted based on the truck's distance to each
+      // sign along the active route.
+      _warningManager.update(
+        truckPosition: gpsPoint,
+        routePoints: _routePoints,
+      );
+
+      // Warning sign proximity alerts: single-banner alert for safety hazards.
+      _checkWarningAheadAlert(gpsPoint);
+
       // Trip statistics: update mileage and stopped time from live GPS.
       _updateTripStats(position);
     }
@@ -1687,6 +1737,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _isRerouting = false;
       _isRestrictionRerouting = false;
       _restrictionRerouteAttempts = 0;
+      _warningAhead = null;
       _routeOptions = const [];
       _selectedRouteOptionIndex = 0;
       _tripStartTime = null;
@@ -1702,6 +1753,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
+    // Reset warning manager so the next navigation session starts clean.
+    _warningManager.reset();
+    _warningAlertShown.clear();
     // Notify other widgets (e.g. AppShell) that navigation has ended so the
     // bottom navigation bar and other planning UI are restored.
     TruckMapScreen.isNavigatingNotifier.value = false;
@@ -1929,6 +1983,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Notify AppShell (and any other listeners) that navigation is now active
     // so the bottom navigation bar is hidden during the driving session.
     TruckMapScreen.isNavigatingNotifier.value = true;
+    // Start the warning manager so it evaluates proximity on each GPS fix.
+    _warningManager.startNavigation();
     _startRouteAnimation();
   }
 
@@ -2988,9 +3044,258 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Fetches a driving route from the Mapbox Directions API and updates all
-  /// relevant state fields, including the decoded polyline6 coordinates used
-  /// to draw the route on the map.
+  // ── Warning sign methods ──────────────────────────────────────────────────
+
+  /// Returns `true` when [sign] is within [_warningProximityMeters] of any
+  /// segment of [routePoints].
+  ///
+  /// Uses the spherical cross-track distance formula (via [_crossTrackDistance])
+  /// so that the check is accurate anywhere on the globe.  Falls back to a
+  /// simple point-to-point check for route polylines shorter than 2 points.
+  bool _isWarningNearRoute(WarningSign sign, List<LatLng> routePoints) {
+    if (routePoints.isEmpty) return false;
+    final signPoint = LatLng(sign.lat, sign.lng);
+    if (routePoints.length == 1) {
+      return _distanceBetween(signPoint, routePoints.first) <=
+          _warningProximityMeters;
+    }
+    for (int i = 0; i < routePoints.length - 1; i++) {
+      final d = _crossTrackDistance(signPoint, routePoints[i], routePoints[i + 1]);
+      if (d <= _warningProximityMeters) return true;
+    }
+    return false;
+  }
+
+  /// Checks whether the truck is within [_warningAlertRadiusMeters] of any
+  /// [WarningSign] on the active route and updates [_warningAhead].
+  ///
+  /// High-severity warnings are prioritised over medium/low ones.  The first
+  /// unshown warning within range fires a TTS announcement; each sign id is
+  /// added to [_warningAlertShown] after the first announcement to prevent
+  /// repeated alerts for the same sign.  Only one banner is shown at a time.
+  void _checkWarningAheadAlert(LatLng currentPosition) {
+    WarningSign? best;
+    double bestDist = double.infinity;
+
+    for (final sign in _warningSigns) {
+      // Only show warnings that are actually close to the current route.
+      if (_routePoints.isNotEmpty &&
+          !_isWarningNearRoute(sign, _routePoints)) {
+        continue;
+      }
+      final double dist =
+          _distanceBetween(currentPosition, LatLng(sign.lat, sign.lng));
+      if (dist > _warningAlertRadiusMeters) continue;
+
+      // Prefer high severity, then nearest.
+      final bool isBetter = best == null ||
+          (_severityRank(sign.severity) > _severityRank(best.severity)) ||
+          (_severityRank(sign.severity) == _severityRank(best.severity) &&
+              dist < bestDist);
+      if (isBetter) {
+        best = sign;
+        bestDist = dist;
+      }
+    }
+
+    if (best != null) {
+      // Fire TTS only once per sign per session.
+      if (!_warningAlertShown.contains(best.id)) {
+        _warningAlertShown.add(best.id);
+        _speak('Warning: ${best.title} ahead. ${best.message ?? ''}');
+      }
+      if (mounted && _warningAhead?.id != best.id) {
+        setState(() => _warningAhead = best);
+      }
+    } else {
+      if (mounted && _warningAhead != null) {
+        setState(() => _warningAhead = null);
+      }
+    }
+  }
+
+  /// Returns a numeric rank for [severity] so signs can be prioritised.
+  int _severityRank(String severity) {
+    switch (severity) {
+      case 'high':
+        return 2;
+      case 'medium':
+        return 1;
+      default:
+        return 0;
+    }
+  }
+
+  /// Builds coloured [Marker]s for all [_warningSigns].
+  ///
+  /// Markers are colour-coded by severity (high=red, medium=orange, low=blue)
+  /// using [WarningConfig.colorForSeverity], overriding the type colour for
+  /// immediate severity recognition at a glance.  The type icon from
+  /// [WarningConfig.styleFor] is always shown inside the badge.  Tapping a
+  /// marker shows a brief info dialog via [_showWarningInfoDialog].
+  List<Marker> _buildWarningMarkers() {
+    return _warningSigns.map((sign) {
+      final style = WarningConfig.styleFor(sign.type);
+      final Color badgeColor = WarningConfig.colorForSeverity(sign.severity);
+
+      return Marker(
+        point: LatLng(sign.lat, sign.lng),
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showWarningInfoDialog(sign),
+          child: Container(
+            decoration: BoxDecoration(
+              color: badgeColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(style.icon, color: Colors.white, size: 20),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Shows an [AlertDialog] with the details of a tapped [sign].
+  void _showWarningInfoDialog(WarningSign sign) {
+    if (!mounted) return;
+    final style = WarningConfig.styleFor(sign.type);
+    final Color badgeColor = WarningConfig.colorForSeverity(sign.severity);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(style.icon, color: badgeColor, size: 22),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                sign.title,
+                style:
+                    const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (sign.message != null)
+              Text(sign.message!,
+                  style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: badgeColor,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    sign.severity.toUpperCase(),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(style.label,
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.grey)),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the top alert banner shown when [_warningAhead] is non-null.
+  ///
+  /// Colour is determined by severity (high=red, medium=orange, low=blue)
+  /// so the driver can assess urgency at a glance.  A dismiss button clears
+  /// [_warningAhead] so the banner hides until the next proximity trigger.
+  Widget _buildWarningAlertBanner() {
+    final sign = _warningAhead!;
+    final style = WarningConfig.styleFor(sign.type);
+    final Color bannerColor = WarningConfig.colorForSeverity(sign.severity);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: bannerColor,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(style.icon, color: Colors.white, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    sign.title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      height: 1.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    '${style.label} · Ahead',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _warningAhead = null),
+              child: const Icon(Icons.close, color: Colors.white70, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
@@ -5803,6 +6108,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildRestrictionAlertCard(),
                   ),
+                // ── Warning popup stack ───────────────────────────────────
+                // Stacked top-right cards for road-hazard warning signs along
+                // the active route.  Only visible during active navigation.
+                // High severity cards are pinned until dismissed; medium/low
+                // cards auto-dismiss after a short interval.  Positioned below
+                // the nav banner so it never overlaps the turn instruction.
+                if (_isNavigating)
+                  Positioned(
+                    top: _navSteps.isNotEmpty ? 96 : 74,
+                    right: 8,
+                    child: WarningPopupStack(manager: _warningManager),
+                  ),
+                // ── Warning sign alert banner ─────────────────────────────
+                // Shown when a truck safety warning sign is within
+                // _warningAlertRadiusMeters of the truck's position on the
+                // active route.  Colour-coded by severity (red/orange/blue).
+                if (_hasActiveDestination && _warningAhead != null)
+                  Positioned(
+                    top: () {
+                      int offset = _navSteps.isNotEmpty ? 90 : 68;
+                      if (_restrictionAhead != null) offset += 64;
+                      return offset.toDouble();
+                    }(),
+                    left: 0,
+                    right: 0,
+                    child: _buildWarningAlertBanner(),
+                  ),
                 // ── Active leg card ───────────────────────────────────────
                 // Shows the current leg (from → to, miles, duration,
                 // restriction count) when navigating a multi-stop trip.
@@ -6656,3 +6988,212 @@ class _StopEntry {
   /// Geographic coordinate of the stop.
   final LatLng position;
 }
+
+// ── Sample truck safety warning sign data ─────────────────────────────────────
+
+/// Sample [WarningSign] objects covering all 18 required truck safety warning
+/// types along the Portland OR → Winnemucca NV corridor.
+///
+/// Coordinates are placed at realistic points on the I-5 / US-97 / I-80
+/// corridor so drivers see real-world-style warnings immediately after launch.
+/// Replace or augment this list with live API or backend data as the app matures.
+const List<WarningSign> _sampleWarningSigns = [
+  // ── Low bridge ────────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_low_bridge_portland',
+    type: WarningTypes.lowBridge,
+    title: 'Low Bridge',
+    lat: 45.518,
+    lng: -122.680,
+    severity: 'high',
+    message: 'Clearance 12 ft 6 in — oversized loads prohibited.',
+    icon: WarningTypes.lowBridge,
+  ),
+  // ── Weight restriction ────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_weight_ashland',
+    type: WarningTypes.weightRestriction,
+    title: 'Weight Restriction',
+    lat: 42.198,
+    lng: -122.703,
+    severity: 'high',
+    message: 'Maximum 36 tons — seasonal restriction in effect.',
+    icon: WarningTypes.weightRestriction,
+  ),
+  // ── No trucks allowed ─────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_no_trucks_redding',
+    type: WarningTypes.noTrucksAllowed,
+    title: 'No Trucks Allowed',
+    lat: 40.590,
+    lng: -122.395,
+    severity: 'high',
+    message: 'Commercial vehicles prohibited. Use alternate route.',
+    icon: WarningTypes.noTrucksAllowed,
+  ),
+  // ── Hazmat restriction ────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_hazmat_grants_pass',
+    type: WarningTypes.hazmatRestriction,
+    title: 'Hazmat Restriction',
+    lat: 42.442,
+    lng: -123.332,
+    severity: 'high',
+    message: 'Hazardous materials prohibited through this corridor.',
+    icon: WarningTypes.hazmatRestriction,
+  ),
+  // ── Steep grade ───────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_steep_grade_siskiyou',
+    type: WarningTypes.steepGrade,
+    title: 'Steep Grade',
+    lat: 42.068,
+    lng: -122.550,
+    severity: 'medium',
+    message: '6% grade for 4 miles — use lower gear.',
+    icon: WarningTypes.steepGrade,
+  ),
+  // ── Sharp curve ───────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_sharp_curve_yreka',
+    type: WarningTypes.sharpCurve,
+    title: 'Sharp Curve',
+    lat: 41.743,
+    lng: -122.638,
+    severity: 'medium',
+    message: 'Recommended speed 35 mph for oversized loads.',
+    icon: WarningTypes.sharpCurve,
+  ),
+  // ── Runaway truck ramp ────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_runaway_ramp_i5',
+    type: WarningTypes.runawayTruckRamp,
+    title: 'Runaway Truck Ramp',
+    lat: 42.050,
+    lng: -122.540,
+    severity: 'medium',
+    message: 'Runaway ramp 1 mile ahead on right.',
+    icon: WarningTypes.runawayTruckRamp,
+  ),
+  // ── Chain requirement ─────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_chains_cascade',
+    type: WarningTypes.chainRequirement,
+    title: 'Chain Requirement',
+    lat: 44.980,
+    lng: -121.710,
+    severity: 'medium',
+    message: 'Chains required on all vehicles during winter conditions.',
+    icon: WarningTypes.chainRequirement,
+  ),
+  // ── High wind area ────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_high_wind_OR_desert',
+    type: WarningTypes.highWindArea,
+    title: 'High Wind Area',
+    lat: 43.045,
+    lng: -119.030,
+    severity: 'medium',
+    message: 'High winds possible — high-profile vehicles use caution.',
+    icon: WarningTypes.highWindArea,
+  ),
+  // ── Construction zone ─────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_construction_medford',
+    type: WarningTypes.constructionZone,
+    title: 'Construction Zone',
+    lat: 42.330,
+    lng: -122.876,
+    severity: 'medium',
+    message: 'Active construction — reduced lane width. Fines doubled.',
+    icon: WarningTypes.constructionZone,
+  ),
+  // ── Accident ahead ────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_accident_i5_or',
+    type: WarningTypes.accidentAhead,
+    title: 'Accident Ahead',
+    lat: 44.056,
+    lng: -123.096,
+    severity: 'high',
+    message: 'Multi-vehicle accident — expect delays. Right lane closed.',
+    icon: WarningTypes.accidentAhead,
+  ),
+  // ── Lane closure ─────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_lane_closure_woodburn',
+    type: WarningTypes.laneClosure,
+    title: 'Lane Closure',
+    lat: 45.157,
+    lng: -122.858,
+    severity: 'medium',
+    message: 'Right lane closed 2 miles ahead — merge left.',
+    icon: WarningTypes.laneClosure,
+  ),
+  // ── Road closed ───────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_road_closed_lovelock',
+    type: WarningTypes.roadClosed,
+    title: 'Road Closed',
+    lat: 40.182,
+    lng: -118.476,
+    severity: 'high',
+    message: 'Road closed due to flooding. Detour via US-95.',
+    icon: WarningTypes.roadClosed,
+  ),
+  // ── Detour ────────────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_detour_winnemucca',
+    type: WarningTypes.detour,
+    title: 'Detour',
+    lat: 40.975,
+    lng: -117.737,
+    severity: 'low',
+    message: 'Follow detour signs — bridge repair underway.',
+    icon: WarningTypes.detour,
+  ),
+  // ── Weigh station ─────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_weigh_station_woodburn',
+    type: WarningTypes.weighStation,
+    title: 'Weigh Station',
+    lat: 45.154,
+    lng: -122.854,
+    severity: 'low',
+    message: 'Weigh station ahead — all trucks must stop.',
+    icon: WarningTypes.weighStation,
+  ),
+  // ── Brake check area ──────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_brake_check_siskiyou',
+    type: WarningTypes.brakeCheckArea,
+    title: 'Brake Check Area',
+    lat: 42.060,
+    lng: -122.543,
+    severity: 'medium',
+    message: 'Mandatory brake check before steep descent.',
+    icon: WarningTypes.brakeCheckArea,
+  ),
+  // ── Rest area ─────────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_rest_area_i80_nv',
+    type: WarningTypes.restArea,
+    title: 'Rest Area',
+    lat: 40.460,
+    lng: -118.780,
+    severity: 'low',
+    message: 'Rest area 1 mile ahead — truck parking available.',
+    icon: WarningTypes.restArea,
+  ),
+  // ── Animal crossing ───────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_animal_crossing_or',
+    type: WarningTypes.animalCrossing,
+    title: 'Animal Crossing',
+    lat: 43.600,
+    lng: -121.190,
+    severity: 'low',
+    message: 'Deer and elk crossing zone — reduce speed at night.',
+    icon: WarningTypes.animalCrossing,
+  ),
+];

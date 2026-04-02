@@ -13,8 +13,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  // Open on Map tab by default
-  int _currentIndex = 1;
+  int _currentIndex = 1; // Open on Map tab by default
 
   final List<Widget> _screens = const [
     DriverDashboardScreen(),

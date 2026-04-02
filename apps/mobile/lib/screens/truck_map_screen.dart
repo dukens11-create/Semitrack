@@ -165,6 +165,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // the HOS/fuel summary cards and quick-action chips are also visible.
   bool _panelExpanded = false;
 
+  // ── Lane guidance sample data ──────────────────────────────────────────────
+  // Sample lane data displayed when _isNavigating is true.  In a production
+  // build these would be populated from the live Mapbox Directions step data.
+  final List<LaneGuidanceItem> _laneGuidanceItems = const [
+    LaneGuidanceItem(type: LaneArrowType.left,     isRecommended: false),
+    LaneGuidanceItem(type: LaneArrowType.straight,  isRecommended: true),
+    LaneGuidanceItem(type: LaneArrowType.straight,  isRecommended: true),
+    LaneGuidanceItem(type: LaneArrowType.slightRight, isRecommended: false),
+  ];
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -5696,6 +5706,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds the GPS-style lane guidance panel shown during active navigation.
+  ///
+  /// The panel is a compact row of [LaneArrowIcon] tiles (one per lane) wrapped
+  /// in a [LaneGuidancePanel].  It is centred just below the navigation
+  /// instruction banner (approximately 170 px from the top, after the
+  /// [RoadGuidanceBanner] which is ~160 px tall).
+  ///
+  /// Returns [SizedBox.shrink] when [_isNavigating] is false or the sample
+  /// lane data list is empty, so it has zero impact outside navigation mode.
+  Widget _buildLaneGuidance() {
+    if (!_isNavigating || _laneGuidanceItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 172,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: SafeArea(
+          bottom: false,
+          child: LaneGuidancePanel(lanes: _laneGuidanceItems),
+        ),
+      ),
+    );
+  }
+
   // ── Floating Dashboard Panel ───────────────────────────────────────────────
 
   /// Builds the collapsible floating dashboard panel shown in the idle/planning
@@ -6227,6 +6263,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     right: 0,
                     child: _buildNavBanner(),
                   ),
+                // ── Lane guidance panel ───────────────────────────────────
+                // GPS-style lane indicator tiles shown below the navigation
+                // banner during active navigation.  Returns SizedBox.shrink()
+                // when not navigating, so it is zero-cost outside nav mode.
+                _buildLaneGuidance(),
                 // ── Inline search bar ─────────────────────────────────────
                 // Hidden during active turn-by-turn navigation so it does not
                 // overlap the navigation banner.  Visible at all other times

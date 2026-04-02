@@ -8,11 +8,9 @@ class NavigationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final routePoints = const [
-      LatLng(45.5231, -122.6765),
-      LatLng(45.60, -122.80),
-      LatLng(45.70, -123.00),
-    ];
+    // Route points are populated from live GPS once navigation is active.
+    // A static preview polyline is not shown here to avoid hardcoding a location.
+    const List<LatLng> routePoints = [];
 
     return ListView(
       children: [
@@ -20,7 +18,9 @@ class NavigationScreen extends StatelessWidget {
           height: 320,
           child: FlutterMap(
             options: const MapOptions(
-              initialCenter: LatLng(45.5231, -122.6765),
+              // Use a neutral US center; the map will follow the device
+              // GPS location once navigation begins in TruckMapScreen.
+              initialCenter: LatLng(39.5, -98.35),
               initialZoom: 8,
             ),
             children: [

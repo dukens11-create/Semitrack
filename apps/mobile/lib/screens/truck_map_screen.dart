@@ -363,13 +363,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // weather data is available and the Weather Risk row will be hidden.
   String? _weatherRisk;
 
-  // ── Default route endpoints (Portland, OR → Winnemucca, NV) ───────────────
-  static const _originLat = 45.5231;
-  static const _originLng = -122.6765;
+  // ── Default destination (Winnemucca, NV) – used only when no destination ──
+  // is selected by the user.  The origin is ALWAYS the device's live GPS
+  // position; there is no hardcoded origin fallback.
   static const _destLat = 39.5296;
   static const _destLng = -119.8138;
 
-  static const _origin = LatLng(_originLat, _originLng);
   static const _destination = LatLng(_destLat, _destLng);
 
   // Navigation-mode zoom level (12.5–15) — close enough for street detail
@@ -485,7 +484,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Marker _buildTruckMarker() {
     return Marker(
       point: _truckPosition ??
-          (_routePoints.isNotEmpty ? _routePoints.first : _origin),
+          (_routePoints.isNotEmpty ? _routePoints.first : const LatLng(0, 0)),
       // Bounding box matches the rendered icon size: 26 × 26 logical px.
       width: 26,
       height: 26,
@@ -1205,7 +1204,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// can be merged here in one place.
   List<Marker> _buildMarkers() {
     return [
-      _buildTruckMarker(),
+      if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
       ..._buildPoiMarkers(),
@@ -2426,7 +2425,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _restrictionRerouteAttempts = 0;
     });
 
-    final origin = _truckPosition ?? _origin;
+    if (_truckPosition == null) {
+      setState(() => _isRestrictionRerouting = false);
+      return;
+    }
+    final origin = _truckPosition!;
     final dest = _selectedDestination ?? _destination;
 
     List<LatLng> candidatePoints = _routePoints;
@@ -3016,11 +3019,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
 
     try {
-      // Use the live GPS position for rerouting when provided; otherwise fall
-      // back to the fixed default origin (Portland, OR → Winnemucca, NV).
-      final from = fromPosition ?? _origin;
+      // Use the live GPS position as origin; fall back to the provided
+      // fromPosition (e.g. during rerouting).  If neither is available,
+      // abort and show an error — never fall back to a hardcoded location.
+      final from = fromPosition ?? _truckPosition;
+      if (from == null) {
+        setState(() {
+          _isLoading = false;
+          _error = 'GPS location unavailable. Please wait for a location fix.';
+        });
+        _isLoadingRoute = false;
+        return;
+      }
       // Use the user-selected destination when available; fall back to the
-      // hard-coded default (Winnemucca, NV) for the legacy demo route.
+      // default destination (Winnemucca, NV) for the demo route.
       final dest = _selectedDestination ?? _destination;
       final url =
           "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/"
@@ -4613,11 +4625,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<_NavStep> _extractAllSteps(Map<String, dynamic> route) {
     final legs = route['legs'] as List?;
     if (legs == null || legs.isEmpty) {
-      return [_NavStep('Follow mapped route', _origin)];
+      // No leg data; return empty so the caller handles missing steps gracefully.
+      return [];
     }
     final steps = legs[0]['steps'] as List?;
     if (steps == null || steps.isEmpty) {
-      return [_NavStep('Follow mapped route', _origin)];
+      // No step data; return empty so the caller handles missing steps gracefully.
+      return [];
     }
     return steps.map<_NavStep>((dynamic s) {
       final step = s as Map<String, dynamic>;
@@ -4627,10 +4641,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final loc = maneuver?['location'] as List?;
       final lat = loc != null && loc.length >= 2
           ? (loc[1] as num).toDouble()
-          : _originLat;
+          : _truckPosition?.latitude ?? 0.0;
       final lng = loc != null && loc.length >= 2
           ? (loc[0] as num).toDouble()
-          : _originLng;
+          : _truckPosition?.longitude ?? 0.0;
       // 'modifier' encodes turn direction: 'left', 'right', 'straight', etc.
       final modifier = maneuver?['modifier'] as String? ?? 'straight';
       // Step distance in metres from the Mapbox response.
@@ -5493,10 +5507,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCenter: LatLng(
-                      (_originLat + _destLat) / 2,
-                      (_originLng + _destLng) / 2,
-                    ),
+                    initialCenter: _truckPosition ?? const LatLng(39.5, -98.35),
                     initialZoom: 6,
                     onMapReady: () {
                       _mapReady = true;

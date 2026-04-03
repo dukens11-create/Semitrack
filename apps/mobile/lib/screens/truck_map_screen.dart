@@ -437,6 +437,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _isNavigating is true via _refreshClosestWeighStationsAhead().
   List<AheadWeighStation> _closestWeighStationsAhead = const [];
 
+  // ── Upcoming route alert chips (top-right overlay) ────────────────────────
+  //
+  // Holds up to 3 UpcomingAlertItem entries representing the nearest upcoming
+  // alerts (truck stops, weigh stations, wind advisories, restrictions, fuel,
+  // rest areas) ahead on the active route.  Refreshed on every GPS fix while
+  // _isNavigating == true via _refreshUpcomingAlerts().  Empty when not
+  // navigating.  Disable this feature by removing the _refreshUpcomingAlerts()
+  // call from _onGpsPosition and the _buildRightSideUpcomingAlerts() call from
+  // the Stack overlay.
+  List<UpcomingAlertItem> _upcomingAlerts = const [];
+
   // ── Truck profile (height / weight / length / hazmat) ─────────────────────
   //
   // These defaults represent a standard 5-axle semi.  In a production build
@@ -2045,6 +2056,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // active navigation so the UI stays in sync with the driver's position.
     if (_isNavigating) {
       _refreshClosestTruckStopsAhead();
+      // Refresh upcoming route alert chips (top-right overlay).
+      // Remove the call below to disable the upcoming-alerts feature.
+      _refreshUpcomingAlerts();
     }
   }
 
@@ -2184,6 +2198,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _tripLegs = const [];
       _activeLegIndex = 0;
       _closestTruckStopsAhead = const [];
+      _upcomingAlerts = const [];
       _topInstructionData = null;
     });
     _restrictionAlertShown.clear();
@@ -4023,6 +4038,121 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return;
     }
     setState(() => _closestWeighStationsAhead = next);
+  }
+
+  /// Builds and stores the list of [UpcomingAlertItem]s shown in the
+  /// top-right overlay chips during active navigation.
+  ///
+  /// Sources alerts from:
+  ///   - [_closestTruckStopsAhead] → [UpcomingAlertType.truckStop]
+  ///   - [_closestWeighStationsAhead] → [UpcomingAlertType.weighStation]
+  ///   - [_navAlerts] wind/advisory entries → [UpcomingAlertType.wind]
+  ///   - [_navAlerts] restriction entries → [UpcomingAlertType.restriction]
+  ///
+  /// Filters to only include alerts with a known positive distance ahead,
+  /// sorts by ascending distance, and caps the list at 3 entries so the
+  /// overlay stays compact.  Passed alerts (distance ≤ 0) are excluded so
+  /// chips disappear naturally as the driver moves past them.
+  ///
+  /// Call [_refreshUpcomingAlerts] on every GPS fix while navigating.
+  /// To disable this feature entirely, remove the call site in
+  /// [_onGpsPosition] and the widget reference in the Stack overlay.
+  void _refreshUpcomingAlerts() {
+    if (!_isNavigating) {
+      if (_upcomingAlerts.isNotEmpty) {
+        setState(() => _upcomingAlerts = const []);
+      }
+      return;
+    }
+
+    final List<UpcomingAlertItem> fresh = [];
+
+    // ── Truck stops ahead ────────────────────────────────────────────────────
+    for (final s in _closestTruckStopsAhead) {
+      if (s.routeMilesAhead > 0) {
+        fresh.add(UpcomingAlertItem(
+          type: UpcomingAlertType.truckStop,
+          label: s.poi.brand,
+          distanceMiles: s.routeMilesAhead,
+        ));
+      }
+    }
+
+    // ── Weigh stations ahead ─────────────────────────────────────────────────
+    for (final w in _closestWeighStationsAhead) {
+      if (w.milesAhead > 0) {
+        fresh.add(UpcomingAlertItem(
+          type: UpcomingAlertType.weighStation,
+          label: w.poi.name,
+          distanceMiles: w.milesAhead,
+        ));
+      }
+    }
+
+    // ── Wind / weather advisories from _navAlerts ────────────────────────────
+    for (final a in _navAlerts) {
+      if (a.isDismissed) continue;
+      if (a.type == AlertType.windAdvisory ||
+          a.type == AlertType.highWind ||
+          a.type == AlertType.weather) {
+        final dist = a.distanceMiles ?? 0.0;
+        if (dist > 0) {
+          fresh.add(UpcomingAlertItem(
+            type: UpcomingAlertType.wind,
+            label: a.title,
+            distanceMiles: dist,
+          ));
+        }
+      }
+    }
+
+    // ── Restriction advisories from _navAlerts ───────────────────────────────
+    for (final a in _navAlerts) {
+      if (a.isDismissed) continue;
+      if (a.type == AlertType.restrictionDistance ||
+          a.type == AlertType.lowBridge ||
+          a.type == AlertType.hazmat) {
+        final dist = a.distanceMiles ?? 0.0;
+        if (dist > 0) {
+          fresh.add(UpcomingAlertItem(
+            type: UpcomingAlertType.restriction,
+            label: a.title,
+            distanceMiles: dist,
+          ));
+        }
+      }
+    }
+
+    // Sort by ascending distance so the closest alert appears first.
+    fresh.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+
+    // Cap at 3 to keep the overlay compact and readable.
+    final capped = fresh.take(3).toList();
+
+    // Skip redundant rebuilds when content hasn't changed.
+    if (capped.length == _upcomingAlerts.length &&
+        _listsEqualUpcomingAlerts(capped, _upcomingAlerts)) {
+      return;
+    }
+
+    setState(() => _upcomingAlerts = capped);
+  }
+
+  /// Returns true when [a] and [b] contain identical [UpcomingAlertItem]s in
+  /// the same order.  Used by [_refreshUpcomingAlerts] to skip needless rebuilds.
+  bool _listsEqualUpcomingAlerts(
+      List<UpcomingAlertItem> a, List<UpcomingAlertItem> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i].type != b[i].type ||
+          a[i].label != b[i].label ||
+          // 0.05 mi (~264 ft) threshold: small enough to catch meaningful
+          // position changes, large enough to suppress spurious rebuilds.
+          (a[i].distanceMiles - b[i].distanceMiles).abs() >= 0.05) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Builds the compact row of [ClosestWeighStationChip] widgets displayed
@@ -8097,6 +8227,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // starting at top:120 so they never overlap the top card or
                 // the compass button.
                 _buildRightSideAlertStack(),
+                // ── Zone 3a (top-right): upcoming route alert chips ─────────
+                // Shows up to 3 upcoming alerts (truck stop, weigh station,
+                // wind, restriction) sorted by distance.  Chips disappear as
+                // the driver passes each alert.  Positioned at top:118,
+                // right:16 so they share the right column with Zone 3 but only
+                // appear when _upcomingAlerts is populated.
+                // Remove _buildRightSideUpcomingAlerts() here and
+                // _refreshUpcomingAlerts() in _onGpsPosition to disable.
+                _buildRightSideUpcomingAlerts(),
                 // ── Zone 4 (bottom right): speed / speed-limit box ─────────
                 // Compact speed indicator; turns red when over the limit.
                 _buildCompactSpeedBox(),
@@ -8804,6 +8943,143 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── Upcoming route alert chips (top-right overlay) ────────────────────────
+  //
+  // The three methods below implement the upcoming-alerts feature.  They are
+  // self-contained; removing _buildRightSideUpcomingAlerts() from the Stack
+  // overlay and _refreshUpcomingAlerts() from _onGpsPosition disables the
+  // feature entirely without touching any other overlay.
+
+  /// Returns the Material icon for an [UpcomingAlertType].
+  IconData _upcomingAlertIcon(UpcomingAlertType type) {
+    switch (type) {
+      case UpcomingAlertType.wind:
+        return Icons.air;
+      case UpcomingAlertType.truckStop:
+        return Icons.local_gas_station_outlined;
+      case UpcomingAlertType.weighStation:
+        return Icons.monitor_weight_outlined;
+      case UpcomingAlertType.restriction:
+        return Icons.do_not_disturb_on_outlined;
+      case UpcomingAlertType.fuel:
+        // Fuel-only stop: use a distinct icon from the full-service truckStop.
+        return Icons.local_gas_station;
+      case UpcomingAlertType.restArea:
+        return Icons.hotel_outlined;
+    }
+  }
+
+  /// Returns the accent colour for an [UpcomingAlertType].
+  Color _upcomingAlertAccent(UpcomingAlertType type) {
+    switch (type) {
+      case UpcomingAlertType.wind:
+        return const Color(0xFF0288D1); // blue
+      case UpcomingAlertType.truckStop:
+        return const Color(0xFF43A047); // green
+      case UpcomingAlertType.weighStation:
+        return const Color(0xFFF57C00); // amber
+      case UpcomingAlertType.restriction:
+        return const Color(0xFFD32F2F); // red
+      case UpcomingAlertType.fuel:
+        return const Color(0xFF43A047); // green
+      case UpcomingAlertType.restArea:
+        return const Color(0xFF6C52A6); // brand purple
+    }
+  }
+
+  /// Builds a single upcoming-alert chip used in [_buildRightSideUpcomingAlerts].
+  ///
+  /// Each chip shows a colour-coded icon on the left and the formatted distance
+  /// on the right, in a compact dark pill with a coloured border that matches
+  /// the alert accent colour.
+  Widget _buildUpcomingAlertChip(UpcomingAlertItem item) {
+    final Color accent = _upcomingAlertAccent(item.type);
+    final IconData icon = _upcomingAlertIcon(item.type);
+    final double miles = item.distanceMiles;
+    final String distText =
+        // Below 10 mi: show one decimal for precision; 10+ mi: round to integer.
+        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 110),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.80),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: accent.withOpacity(0.85), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: accent, size: 15),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              distText,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Displays up to three upcoming-alert chips stacked vertically at the
+  /// top-right of the map overlay during active navigation.
+  ///
+  /// Chips are right-aligned, sorted by ascending distance (closest first),
+  /// and spaced 8 px apart for a compact yet readable display.  Passes through
+  /// as [SizedBox.shrink] when navigation is inactive or no alerts are present.
+  ///
+  /// Positioned at top: 118, right: 16 so it sits just below the compass
+  /// button and does not conflict with the top instruction card on the left.
+  ///
+  /// To disable this overlay: remove the [_buildRightSideUpcomingAlerts] call
+  /// from the Stack in build() and the [_refreshUpcomingAlerts] call in
+  /// [_onGpsPosition].
+  Widget _buildRightSideUpcomingAlerts() {
+    // Guard: only render during active navigation with alerts available.
+    if (!_isNavigating || _upcomingAlerts.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    // Show at most 3 chips (already capped by _refreshUpcomingAlerts).
+    final visible = _upcomingAlerts.take(3).toList();
+
+    return Positioned(
+      // top: 118 aligns with the compass button bottom edge + gap, ensuring
+      // chips never overlap the instruction card at the top-left.
+      top: 118,
+      // right: 16 matches the standard horizontal screen margin.
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (int i = 0; i < visible.length; i++) ...[
+              _buildUpcomingAlertChip(visible[i]),
+              // 8 px gap between consecutive chips for compact display.
+              if (i < visible.length - 1) const SizedBox(height: 8),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -10769,4 +11045,50 @@ class ClosestWeighStationsRow extends StatelessWidget {
       ],
     );
   }
+}
+
+// ── Upcoming alert models ─────────────────────────────────────────────────────
+
+/// The category of an upcoming route alert displayed as a chip in the
+/// top-right overlay during active navigation.
+///
+/// Add new cases here to support additional alert types; update
+/// [_TruckMapScreenState._upcomingAlertIcon] and
+/// [_TruckMapScreenState._upcomingAlertAccent] to provide an icon and colour.
+enum UpcomingAlertType {
+  /// Strong wind or weather advisory along the route.
+  wind,
+  /// Truck-stop / fuel + services ahead.
+  truckStop,
+  /// Weigh station ahead on the current route.
+  weighStation,
+  /// Height, weight, or hazmat restriction ahead.
+  restriction,
+  /// Fuel-only stop ahead (no full services).
+  fuel,
+  /// Rest area / travel plaza ahead.
+  restArea,
+}
+
+/// A single upcoming alert item shown as a chip in the top-right overlay.
+///
+/// Created and sorted by [_TruckMapScreenState._refreshUpcomingAlerts];
+/// consumed by [_TruckMapScreenState._buildUpcomingAlertChip].
+class UpcomingAlertItem {
+  /// The category of this alert, used to select the icon and accent colour.
+  final UpcomingAlertType type;
+
+  /// Short human-readable label (e.g. brand name or alert title).
+  /// Not displayed directly in the chip but available for accessibility.
+  final String label;
+
+  /// Approximate route miles from the truck's current position to this alert.
+  /// Alerts with [distanceMiles] ≤ 0 are excluded by [_refreshUpcomingAlerts].
+  final double distanceMiles;
+
+  const UpcomingAlertItem({
+    required this.type,
+    required this.label,
+    required this.distanceMiles,
+  });
 }

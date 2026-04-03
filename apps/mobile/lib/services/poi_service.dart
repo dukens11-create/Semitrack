@@ -191,7 +191,7 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
   debugPrint(
     '[POI Icons] Registration complete: '
     '${registered.length} of ${pngAssets.length} icon(s) registered. '
-    'Registered IDs: ${registered.toList()..sort()}',
+    'Registered IDs: ${(registered.toList()..sort())}',
   );
 
   return registered;

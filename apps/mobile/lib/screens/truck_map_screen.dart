@@ -5624,6 +5624,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       //      trailing space before .png in some bundled filenames).
       //   3. If not, add or rename the PNG, then rebuild.
       //
+      // Note: this loop logs one line per POI entry, which may produce many
+      // lines for large datasets — it is intentional for a full audit pass.
       // TODO(production): Remove this per-POI loop before releasing.
       debugPrint('[POI Audit] ${pois.length} POI(s) loaded from locations.json:');
       for (var i = 0; i < pois.length; i++) {

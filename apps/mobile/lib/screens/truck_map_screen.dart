@@ -201,6 +201,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Route progress and step advancement are frozen below this threshold.
   static const double _minMovingSpeedMph = 1.5;
 
+  // ── GPS drift-filter constants ─────────────────────────────────────────────
+  /// Speed threshold below which the vehicle is considered stopped (mph).
+  /// Aliases [_minMovingSpeedMph]; provided for clarity in filter code.
+  static const double _stoppedSpeedMph = _minMovingSpeedMph;
+
+  /// Minimum speed (mph) required before the camera rotates to the heading.
+  static const double _noRotateSpeedMph = 3.0;
+
+  /// Minimum distance (metres) a stopped vehicle must move before the GPS
+  /// fix is accepted — prevents drift from being recorded as real movement.
+  static const double _minStoppedDriftMeters = 15.0;
+
+  /// GPS accuracy threshold (metres) above which small position jumps are
+  /// ignored to suppress noise from low-quality satellites.
+  static const double _poorAccuracyMeters = 25.0;
+
   // ── Route restriction constants ────────────────────────────────────────────
   /// Radius in metres around each restricted zone within which a route point
   /// is considered to violate the restriction.  Used by
@@ -391,6 +407,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Timestamp of the most recent fetchRoute invocation from GPS position
   /// updates.  Null until the first qualifying call is made.
   DateTime? _lastApiCallTime;
+
+  // ── GPS drift-filter state ─────────────────────────────────────────────────
+  /// The last GPS position that passed the acceptance filter.  Used as the
+  /// reference point for stop-drift, jump, and route-progress checks.
+  geo.Position? _lastAcceptedPosition;
+
+  /// Candidate position being evaluated for stable confirmation before
+  /// acceptance when the vehicle is slow but not clearly stopped.
+  geo.Position? _candidatePosition;
+
+  /// Number of consecutive GPS fixes near [_candidatePosition].  When this
+  /// reaches 3 the candidate is accepted as a real position shift.
+  int _stableCandidateCount = 0;
+
+  /// True when the most recent accepted GPS fix shows speed < [_stoppedSpeedMph].
+  bool _isStopped = false;
+
+  /// Timestamp of the most recent reroute call made via [_canCallDirections].
+  /// Separate from [_lastApiCallTime] so directions throttling does not
+  /// interfere with other route-fetch operations.
+  DateTime? _lastDirectionsCallAt;
 
   // ── Route alternatives (pre-navigation selection) ─────────────────────────
   //
@@ -1949,6 +1986,122 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return false;
   }
 
+  // ── GPS drift-filter helpers ───────────────────────────────────────────────
+
+  /// Converts a speed value in metres per second to miles per hour.
+  /// Returns 0.0 for NaN or negative inputs (e.g. unavailable GPS speed).
+  double _speedMphFromMps(double mps) {
+    if (mps.isNaN || mps < 0) return 0.0;
+    return mps * _mpsToMph;
+  }
+
+  /// Returns the haversine distance in metres between two [geo.Position] fixes.
+  double _distanceMetersBetween(geo.Position a, geo.Position b) {
+    return geo.Geolocator.distanceBetween(
+      a.latitude,
+      a.longitude,
+      b.latitude,
+      b.longitude,
+    );
+  }
+
+  /// Returns `true` when at least 5 seconds have elapsed since the last
+  /// directions API reroute call, guarding against rapid repeated requests.
+  /// Uses [_lastDirectionsCallAt] independently of [_lastApiCallTime].
+  bool _canCallDirections() {
+    final now = DateTime.now();
+    if (_lastDirectionsCallAt == null) {
+      _lastDirectionsCallAt = now;
+      return true;
+    }
+    if (now.difference(_lastDirectionsCallAt!).inSeconds >= 5) {
+      _lastDirectionsCallAt = now;
+      return true;
+    }
+    return false;
+  }
+
+  /// Decides whether [newPos] should be accepted as a new truck location.
+  ///
+  /// Rules applied in order:
+  ///   1. First fix is always accepted.
+  ///   2. Ignore drift < [_minStoppedDriftMeters] when speed is below
+  ///      [_stoppedSpeedMph] (vehicle is stopped).
+  ///   3. Ignore jumps < 25 m when GPS accuracy exceeds [_poorAccuracyMeters].
+  ///   4. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance ≥ 20 m.
+  ///   5. Require 3 consistent candidate fixes for a low-speed position shift.
+  bool _shouldAcceptPosition(geo.Position newPos) {
+    final speedMph = _speedMphFromMps(newPos.speed);
+
+    if (_lastAcceptedPosition == null) {
+      _candidatePosition = null;
+      _stableCandidateCount = 0;
+      return true;
+    }
+
+    final distanceMeters =
+        _distanceMetersBetween(_lastAcceptedPosition!, newPos);
+    final poorAccuracy = newPos.accuracy > _poorAccuracyMeters;
+    final stopped = speedMph < _stoppedSpeedMph;
+
+    // Ignore tiny drift when the vehicle is stopped.
+    if (stopped && distanceMeters < _minStoppedDriftMeters) return false;
+
+    // Ignore small jumps when GPS accuracy is poor.
+    if (poorAccuracy && distanceMeters < 25) return false;
+
+    // Accept immediately when clearly moving or significantly displaced.
+    if (speedMph >= _stoppedSpeedMph || distanceMeters >= 20) {
+      _candidatePosition = null;
+      _stableCandidateCount = 0;
+      return true;
+    }
+
+    // Candidate confirmation: require 3 consistent slow-movement fixes.
+    if (_candidatePosition == null) {
+      _candidatePosition = newPos;
+      _stableCandidateCount = 1;
+      return false;
+    }
+
+    final candidateDistance =
+        _distanceMetersBetween(_candidatePosition!, newPos);
+    if (candidateDistance < 10) {
+      _stableCandidateCount++;
+    } else {
+      _candidatePosition = newPos;
+      _stableCandidateCount = 1;
+    }
+
+    if (_stableCandidateCount >= 3) {
+      _candidatePosition = null;
+      _stableCandidateCount = 0;
+      return true;
+    }
+
+    return false;
+  }
+
+  /// Returns `true` when route progress (nearest-point snapping) should
+  /// advance for [pos].  Always returns `true` in [_isSimulationMode].
+  bool _shouldAdvanceRouteProgress(geo.Position pos) {
+    if (_isSimulationMode) return true;
+    if (_speedMphFromMps(pos.speed) < _stoppedSpeedMph) return false;
+    if (_lastAcceptedPosition == null) return false;
+    return _distanceMetersBetween(_lastAcceptedPosition!, pos) >= 10;
+  }
+
+  /// Advances [_truckIndex] to [nearestRouteIndex] only when movement is
+  /// real and the jump is not spuriously large (GPS noise guard).
+  void _tryAdvanceRouteIndex(int nearestRouteIndex, geo.Position pos) {
+    if (!_shouldAdvanceRouteProgress(pos)) return;
+    if (nearestRouteIndex <= _truckIndex) return;
+    final jump = nearestRouteIndex - _truckIndex;
+    // Cap index jumps to 3 points per fix to suppress GPS noise teleports.
+    if (jump > 3 && !_isSimulationMode) return;
+    _truckIndex = nearestRouteIndex;
+  }
+
   /// Requests location permission and subscribes to the device GPS stream.
   ///
   /// Each position update snaps the truck marker to the nearest route point
@@ -1997,9 +2150,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_isArrived) return;
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
-    // Accuracy filter: discard fixes with horizontal accuracy worse than 20 m
-    // to avoid route jitter and spurious API calls from poor GPS signals.
-    if (position.accuracy > 20) return;
+
+    // ── GPS drift / noise filter ───────────────────────────────────────────
+    // Apply the position acceptance filter: ignores stopped drift, poor-
+    // accuracy jitter, and low-speed fluctuations until confirmed stable.
+    // This replaces the old hard 20 m accuracy cut-off with a richer logic
+    // that handles all cases described in the GPS-drift spec.
+    if (!_shouldAcceptPosition(position)) return;
+
+    // Mark whether the vehicle is currently stopped for all downstream logic.
+    _isStopped = _speedMphFromMps(position.speed) < _stoppedSpeedMph;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
 
@@ -2021,7 +2181,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _checkStepAdvancement(gpsPoint);
 
       // Off-route detection: reroute when >30 m from the route line.
-      _checkOffRoute(gpsPoint);
+      // Guard: do not reroute while stopped — GPS noise while parked can push
+      // the position outside the route corridor and trigger spurious reroutes.
+      if (!_isStopped) _checkOffRoute(gpsPoint);
 
       // POI proximity alerts: warn driver when within 500 m of a POI.
       _checkPoiAlerts(gpsPoint);
@@ -2051,20 +2213,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Update truck position and heading (tracking + navigation) ─────────
     // Snap to the nearest ahead-of-index route point for step/off-route logic
     // only when a route exists; otherwise keep the raw GPS fix for display.
-    // Only advance the route index when the vehicle is actually moving —
-    // GPS drift while stopped can shift the nearest index forward by several
-    // points and falsely trigger step advances or off-route reroutes.
-    final bool isVehicleMoving = position.speed > 0 &&
-        position.speed * _mpsToMph >= _minMovingSpeedMph;
+    // Use _tryAdvanceRouteIndex instead of direct assignment to prevent GPS
+    // noise teleports and fake progress while stopped.
     int nearest = _truckIndex;
-    if (_routePoints.isNotEmpty && isVehicleMoving) {
-      nearest = _nearestRouteIndex(gpsPoint);
+    if (_routePoints.isNotEmpty) {
+      final candidate = _nearestRouteIndex(gpsPoint);
+      _tryAdvanceRouteIndex(candidate, position);
+      nearest = _truckIndex;
     }
 
     // Prefer the true device heading from GPS (heading ≥ 0 = valid fix).
     // Fall back to route-computed bearing when heading is unavailable (−1).
+    // Suppress rotation when speed is below _noRotateSpeedMph to keep the
+    // camera stable while the truck is slow or stopped.
     final double trueBearing;
-    if (position.heading >= 0) {
+    final double speedMph = _speedMphFromMps(position.speed);
+    if (position.heading >= 0 && speedMph >= _noRotateSpeedMph) {
       // Real device compass heading — use directly for marker rotation.
       trueBearing = position.heading;
     } else if (_routePoints.isNotEmpty && nearest != _truckIndex) {
@@ -2074,11 +2238,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _routePoints[nearest.clamp(0, _routePoints.length - 1)],
       );
     } else {
-      // No GPS heading and no index change: keep current bearing.
+      // Low speed, no GPS heading, or no index change: keep current bearing.
       trueBearing = _truckBearing;
     }
-
-    _truckIndex = nearest;
 
     // ── Speed update: read GPS speed and compute new speed limit estimate ────
     // pos.speed is in m/s; negative values mean the speed is unavailable.
@@ -2096,11 +2258,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _speedLimitMph = newSpeedLimit;
     });
 
+    // Record this fix as the last accepted position for the next filter cycle.
+    _lastAcceptedPosition = position;
+
     // ── Over-speed announcement (navigation only, throttled) ──────────────
     // Only announce during active navigation and when speed data is available.
     if (_hasActiveDestination && _navigationMode && newSpeedMps >= 0) {
-      final double speedMph = newSpeedMps * _mpsToMph;
-      if (speedMph > newSpeedLimit) {
+      final double currentSpeedMph = newSpeedMps * _mpsToMph;
+      if (currentSpeedMph > newSpeedLimit) {
         final now = DateTime.now();
         // Throttle: announce at most once every [_slowDownThrottleSeconds] s.
         if (_lastSlowDownAnnouncementTime == null ||
@@ -2138,8 +2303,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Do not advance steps unless the vehicle is actually moving.  GPS noise
     // while the truck is stationary can put the position within the threshold
     // of the next step even though the driver has not moved.
-    if (_currentSpeedMps < 0 ||
-        _currentSpeedMps * _mpsToMph < _minMovingSpeedMph) return;
+    // Use _shouldAdvanceRouteProgress for consistent movement gate logic.
+    if (_lastAcceptedPosition == null ||
+        !_shouldAdvanceRouteProgress(_lastAcceptedPosition!)) return;
     final nextIdx = _currentStepIndex + 1;
     if (nextIdx >= _navSteps.length) return;
     final nextStep = _navSteps[nextIdx];
@@ -2166,8 +2332,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Uses [geo.Geolocator.distanceBetween] for GPS-grade distance measurement and
   /// throttles reroutes to at most one every [_rerouteThrottleSeconds] seconds
   /// to prevent rapid repeated API calls in areas with poor GPS accuracy.
+  /// Only reroutes when the vehicle is moving (_isStopped == false).
   void _checkOffRoute(LatLng current) {
     if (_routePoints.length < 2 || _isRerouting) return;
+
+    // Never reroute while stopped — GPS noise while parked can shift the
+    // position outside the route corridor and trigger spurious reroutes.
+    if (_isStopped) return;
 
     // Throttle: skip if a reroute was triggered within the last 8 seconds.
     if (_lastRerouteTime != null &&
@@ -2192,8 +2363,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (minDist > _offRouteThresholdMeters) {
       // Only trigger a reroute when the API debounce window has elapsed AND
       // the truck has moved significantly, preventing flood of redundant calls.
-      // _canCallApi is checked first because it has no position-state side
-      // effects when it returns false, keeping _lastRouteCheckLat/Lng stable.
+      // _canCallDirections is checked first (5 s per-directions throttle), then
+      // _canCallApi for the broader route-fetch guard, then _shouldUpdateRoute
+      // to confirm meaningful position change before updating the reference.
+      if (!_canCallDirections()) return;
       if (!_canCallApi()) return;
       if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
       _isRerouting = true;

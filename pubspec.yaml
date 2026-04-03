@@ -41,3 +41,4 @@ flutter:
   assets:
     - assets/icons/truck_top.png
     - assets/poi/
+    - assets/logo_brand_markers/

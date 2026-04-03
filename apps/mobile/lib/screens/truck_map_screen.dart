@@ -4059,6 +4059,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     for (int i = 0; i < a.length; i++) {
       if (a[i].type != b[i].type ||
           a[i].label != b[i].label ||
+          // 0.05 mi (~264 ft) threshold: small enough to catch meaningful
+          // position changes, large enough to suppress spurious rebuilds.
           (a[i].distanceMiles - b[i].distanceMiles).abs() >= 0.05) {
         return false;
       }
@@ -8631,7 +8633,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case UpcomingAlertType.restriction:
         return Icons.do_not_disturb_on_outlined;
       case UpcomingAlertType.fuel:
-        return Icons.local_gas_station_outlined;
+        // Fuel-only stop: use a distinct icon from the full-service truckStop.
+        return Icons.local_gas_station;
       case UpcomingAlertType.restArea:
         return Icons.hotel_outlined;
     }
@@ -8665,6 +8668,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final IconData icon = _upcomingAlertIcon(item.type);
     final double miles = item.distanceMiles;
     final String distText =
+        // Below 10 mi: show one decimal for precision; 10+ mi: round to integer.
         miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
 
     return Container(

@@ -696,11 +696,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // without losing surrounding road context.
   static const _navigationZoomLevel = 14.0;
 
-  // Minimum speed (mph) required before the camera rotates with the truck's
-  // heading.  Below this threshold the camera bearing is held steady so the
-  // map does not spin from GPS heading noise while stopped or creeping.
-  static const double _noRotateSpeedMph = 3.0;
-
   // Latitude offset applied to the camera target so that more road *ahead* of
   // the truck is visible on screen.  A negative value shifts the target south
   // (down-screen), revealing the upcoming road — identical to the Google Maps

@@ -5530,27 +5530,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // 1. Load every POI from locations.json and register all PNG icons.
       final List<PoiItem> pois = await loadAllPois();
+
+      // ── Diagnostic logging — verify dataset coverage ──────────────────────
+      // Expected coordinate ranges for full USA / Canada coverage:
+      //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
+      //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
+      //
+      // Browse mode: ALL POIs are passed to the GeoJSON source so every entry
+      //   appears on the clustered map with no distance filtering applied.
+      // Navigation mode: _getClosestTruckStopsAheadOnRoute handles route-aware
+      //   proximity filtering for the ahead-strip; the POI layer still shows
+      //   all POIs for spatial context.
+      //   // Navigation-only distance filter (retained for reference):
+      //   //   pois = pois.where((p) {
+      //   //     final distMeters = geo.Geolocator.distanceBetween(
+      //   //       driverLat, driverLng, p.lat, p.lng);
+      //   //     return distMeters / 1609.34 <= 50.0;
+      //   //   }).toList();
+      debugPrint('POI dataset loaded: ${pois.length} total entries.');
+      if (pois.isNotEmpty) {
+        final int previewCount = math.min(20, pois.length);
+        for (var i = 0; i < previewCount; i++) {
+          final p = pois[i];
+          debugPrint('  POI[$i] ${p.name}  (${p.lat}, ${p.lng})');
+        }
+        final double minLat = pois.map((p) => p.lat).reduce(math.min);
+        final double maxLat = pois.map((p) => p.lat).reduce(math.max);
+        final double minLng = pois.map((p) => p.lng).reduce(math.min);
+        final double maxLng = pois.map((p) => p.lng).reduce(math.max);
+        debugPrint(
+          'Coordinate spread — '
+          'lat: ${minLat.toStringAsFixed(4)} – ${maxLat.toStringAsFixed(4)}, '
+          'lng: ${minLng.toStringAsFixed(4)} – ${maxLng.toStringAsFixed(4)}',
+        );
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       await registerPoiIcons(map.style);
-
-      // Diagnostic: log the first 20 entries and coordinate spread so that
-      // data coverage issues are visible in the debug console.
-      for (final poi in pois.take(20)) {
-        debugPrint('POI: ${poi.name} | lat=${poi.lat}, lng=${poi.lng}');
-      }
-      debugPrint('Total POIs loaded: ${pois.length}');
-
-      double minLat = double.infinity,
-          maxLat = double.negativeInfinity,
-          minLng = double.infinity,
-          maxLng = double.negativeInfinity;
-      for (final poi in pois) {
-        if (poi.lat < minLat) minLat = poi.lat;
-        if (poi.lat > maxLat) maxLat = poi.lat;
-        if (poi.lng < minLng) minLng = poi.lng;
-        if (poi.lng > maxLng) maxLng = poi.lng;
-      }
-      debugPrint('Lat range: $minLat to $maxLat');
-      debugPrint('Lng range: $minLng to $maxLng');
 
       // 2. Add the clustered GeoJSON source (inline FeatureCollection).
       final Map<String, dynamic> geoJson = poisToGeoJson(pois);

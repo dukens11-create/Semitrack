@@ -9059,6 +9059,9 @@ IconData _alertTypeIcon(AlertType type) {
       return Icons.block;
     case AlertType.steepGrade:
       return Icons.trending_down;
+    // Weigh station: use the scale icon to represent a compliance checkpoint.
+    case AlertType.weighStation:
+      return Icons.scale;
   }
 }
 

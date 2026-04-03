@@ -1,0 +1,178 @@
+[
+  {
+    "id": "poi_001",
+    "name": "Pilot Travel Center - Portland",
+    "category": "fuel_stop",
+    "icon": "pilot",
+    "lat": 45.5051,
+    "lng": -122.6750,
+    "country": "US",
+    "stateOrProvince": "OR",
+    "city": "Portland"
+  },
+  {
+    "id": "poi_002",
+    "name": "Love's Travel Stop - Eugene",
+    "category": "fuel_stop",
+    "icon": "loves",
+    "lat": 44.0521,
+    "lng": -123.0868,
+    "country": "US",
+    "stateOrProvince": "OR",
+    "city": "Eugene"
+  },
+  {
+    "id": "poi_003",
+    "name": "TA Travel Center - Medford",
+    "category": "fuel_stop",
+    "icon": "ta_truck_stop",
+    "lat": 42.3265,
+    "lng": -122.8756,
+    "country": "US",
+    "stateOrProvince": "OR",
+    "city": "Medford"
+  },
+  {
+    "id": "poi_004",
+    "name": "Petro Stopping Center - Yreka",
+    "category": "fuel_stop",
+    "icon": "petro_truck_stop",
+    "lat": 41.7352,
+    "lng": -122.6322,
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": "Yreka"
+  },
+  {
+    "id": "poi_005",
+    "name": "Flying J Travel Center - Redding",
+    "category": "fuel_stop",
+    "icon": "flying_j_truck_stop",
+    "lat": 40.5865,
+    "lng": -122.3917,
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": "Redding"
+  },
+  {
+    "id": "poi_006",
+    "name": "Shell Truck Stop - Sacramento",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 38.5816,
+    "lng": -121.4944,
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": "Sacramento"
+  },
+  {
+    "id": "poi_007",
+    "name": "Chevron Truck Stop - Fresno",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 36.7378,
+    "lng": -119.7871,
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": "Fresno"
+  },
+  {
+    "id": "poi_008",
+    "name": "BP Truck Stop - Los Angeles",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 34.0522,
+    "lng": -118.2437,
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": "Los Angeles"
+  },
+  {
+    "id": "poi_009",
+    "name": "Mobil Truck Stop - Las Vegas",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 36.1699,
+    "lng": -115.1398,
+    "country": "US",
+    "stateOrProvince": "NV",
+    "city": "Las Vegas"
+  },
+  {
+    "id": "poi_010",
+    "name": "Esso Truck Stop - Phoenix",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 33.4484,
+    "lng": -112.0740,
+    "country": "US",
+    "stateOrProvince": "AZ",
+    "city": "Phoenix"
+  },
+  {
+    "id": "poi_011",
+    "name": "Road Ranger Truck Stop - Albuquerque",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 35.0844,
+    "lng": -106.6504,
+    "country": "US",
+    "stateOrProvince": "NM",
+    "city": "Albuquerque"
+  },
+  {
+    "id": "poi_012",
+    "name": "QuikTrip Truck Stop - Oklahoma City",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 35.4676,
+    "lng": -97.5164,
+    "country": "US",
+    "stateOrProvince": "OK",
+    "city": "Oklahoma City"
+  },
+  {
+    "id": "poi_013",
+    "name": "Ambest Truck Stop - Dallas",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 32.7767,
+    "lng": -96.7970,
+    "country": "US",
+    "stateOrProvince": "TX",
+    "city": "Dallas"
+  },
+  {
+    "id": "poi_014",
+    "name": "Adventure First Stop - Houston",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 29.7604,
+    "lng": -95.3698,
+    "country": "US",
+    "stateOrProvince": "TX",
+    "city": "Houston"
+  },
+  {
+    "id": "poi_015",
+    "name": "Circle K Truck Stop - Memphis",
+    "category": "fuel_stop",
+    "icon": "truck_parking",
+    "lat": 35.1495,
+    "lng": -90.0490,
+    "country": "US",
+    "stateOrProvince": "TN",
+    "city": "Memphis"
+  },
+  {
+    "id": "poi_016",
+    "name": "Petro-Canada Truck Stop - Toronto",
+    "category": "fuel_stop",
+    "icon": "petro_canada_truck_stop",
+    "lat": 43.6532,
+    "lng": -79.3832,
+    "country": "CA",
+    "stateOrProvince": "ON",
+    "city": "Toronto"
+  }
+]

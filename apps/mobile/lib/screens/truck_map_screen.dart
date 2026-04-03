@@ -14,9 +14,10 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
-import 'package:semitrack_mobile/models/truck_stop_poi.dart';
+import 'package:semitrack_mobile/models/poi_item.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/services/poi_service.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
@@ -268,8 +269,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
-  // POI entries loaded from assets/truck_stop_poi/locations.json.
-  List<TruckStopPOI> _poiLocations = const [];
+  // POI entries are now rendered via the Mapbox GeoJSON cluster source
+  // (poi-source) and associated style layers set up in _setupPoiCluster().
+  // The legacy flutter_map widget-based markers have been removed.
 
   // ── Closest truck stops ahead (navigation mode) ───────────────────────────
   //
@@ -532,8 +534,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
-    // Load truck stop POI entries from assets/truck_stop_poi/locations.json.
-    _loadTruckStopPOIs();
   }
 
   @override
@@ -601,23 +601,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (mounted) setState(() => _brandIconBytes = loaded);
-  }
-
-  /// Loads truck stop POI entries from `assets/truck_stop_poi/locations.json`
-  /// and stores them in [_poiLocations].
-  ///
-  /// Each entry is parsed using [TruckStopPOI.fromJson].  The [icon] field
-  /// maps to a PNG filename under `assets/truck_stop_poi/` and is resolved to
-  /// a full asset path when building markers in [_buildTruckStopPOIMarkers].
-  Future<void> _loadTruckStopPOIs() async {
-    try {
-      final String jsonString =
-          await rootBundle.loadString('assets/truck_stop_poi/locations.json');
-      final List<TruckStopPOI> pois = TruckStopPOI.listFromJson(jsonString);
-      if (mounted) setState(() => _poiLocations = pois);
-    } catch (_) {
-      // Locations file unreadable — POI markers simply won't be shown.
-    }
   }
 
   // ── Truck marker builders ─────────────────────────────────────────────────
@@ -1378,77 +1361,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return markers;
   }
 
-  /// Builds [Marker]s for every [TruckStopPOI] loaded from
-  /// `assets/truck_stop_poi/locations.json`.
-  ///
-  /// Each POI's [TruckStopPOI.icon] field is resolved to the full asset path
-  /// `assets/truck_stop_poi/{icon}`.  When a POI's specific icon has not been
-  /// loaded and the POI is located in the USA or Canada, the default truck stop
-  /// icon (`assets/truck_stop_poi/truck stop default.png`) is used as a
-  /// fallback so that every North American POI always appears on the map.
-  /// Default-fallback markers are rendered with an orange border to make them
-  /// visually distinct from brand-specific markers.
-  /// Hidden when [_showTruckStops] is false.
-  static const String _defaultTruckStopAsset =
-      'assets/truck_stop_poi/truck stop default.png';
-  static const Set<String> _northAmericaCountries = {'US', 'CA'};
-
-  List<Marker> _buildTruckStopPOIMarkers() {
-    if (!_showTruckStops || _poiLocations.isEmpty) return const [];
-
-    final Uint8List? defaultBytes = _brandIconBytes[_defaultTruckStopAsset];
-    final markers = <Marker>[];
-    for (final poi in _poiLocations) {
-      final String assetKey = 'assets/truck_stop_poi/${poi.icon}';
-      final Uint8List? bytes = _brandIconBytes[assetKey];
-
-      if (bytes != null) {
-        // Brand-specific icon available — render it directly.
-        markers.add(Marker(
-          point: LatLng(poi.lat, poi.lng),
-          width: 40,
-          height: 40,
-          alignment: Alignment.center,
-          child: Image.memory(
-            bytes,
-            width: 40,
-            height: 40,
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-          ),
-        ));
-      } else if (_northAmericaCountries.contains(poi.country) &&
-          defaultBytes != null) {
-        // No brand icon for this US/CA POI — fall back to the default truck
-        // stop icon with an orange border to distinguish it from custom icons.
-        markers.add(Marker(
-          point: LatLng(poi.lat, poi.lng),
-          width: 44,
-          height: 44,
-          alignment: Alignment.center,
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.orange, width: 2),
-              borderRadius: BorderRadius.circular(6),
-              color: Colors.white.withOpacity(0.85),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: Image.memory(
-                defaultBytes,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-              ),
-            ),
-          ),
-        ));
-      }
-    }
-    return markers;
-  }
-
   /// Builds logo-only [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
   /// Each weigh-station POI is rendered as its PNG logo from `assets/logos/`
@@ -1603,8 +1515,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  [_buildTruckStopPOIMarkers] renders markers
-  /// for POIs loaded from `assets/truck_stop_poi/locations.json`.
+  /// loaded from `assets/logos/`.  Clustered POIs from `assets/poi/poi_data.json`
+  /// are rendered via the Mapbox style layers set up in [_setupPoiCluster].
   /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
   /// using the same asset-existence guard — no generic fallback icons appear
   /// on the map for either category.
@@ -1613,8 +1525,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
-      // Markers from assets/truck_stop_poi/locations.json POI data.
-      ..._buildTruckStopPOIMarkers(),
       // Logo-only markers for MapPoi weigh stations (no background/fallback).
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
@@ -5573,9 +5483,136 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Production Mapbox map widget ──────────────────────────────────────────
 
+  /// Holds a reference to the Mapbox map once [_onMapCreated] fires.
+  /// Used by [_setupPoiCluster] to add sources and layers after the style loads.
+  mbx.MapboxMap? _mapboxMap;
+
   /// Called by [MapWidget] once the native Mapbox map is fully initialised.
+  ///
+  /// Stores the [mapboxMap] reference so that [_onStyleLoaded] can use it to
+  /// add POI sources and layers once the style finishes loading.
   void _onMapCreated(mbx.MapboxMap mapboxMap) {
-    // Production map setup (camera, overlays, etc.) goes here.
+    _mapboxMap = mapboxMap;
+  }
+
+  /// Called by [MapWidget] once the Mapbox style has finished loading.
+  ///
+  /// Triggers [_setupPoiCluster] to register icons and add the clustered POI
+  /// source and layers to the map style.
+  void _onStyleLoaded(mbx.StyleLoadedEventData _) {
+    _setupPoiCluster();
+  }
+
+  /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
+  ///
+  /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
+  /// Loads [PoiItem]s from `assets/poi/poi_data.json`, converts them to
+  /// GeoJSON, registers all PNG icons from `assets/truck_stop_poi/`, then
+  /// adds four objects to the Mapbox style:
+  ///
+  ///   - `poi-source`       — clustered GeoJSON source
+  ///   - `poi-clusters`     — circle layer for grouped cluster rings
+  ///   - `poi-cluster-count`— symbol layer with `{point_count}` text labels
+  ///   - `poi-unclustered`  — symbol layer using each POI's icon image
+  ///
+  /// All rendering is done via Mapbox style layers — no Flutter widget markers
+  /// are created, keeping performance O(1) regardless of POI count.
+  Future<void> _setupPoiCluster() async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+    try {
+      // Guard against duplicate setup when the style reloads.
+      if (await map.style.styleSourceExists('poi-source')) return;
+
+      // 1. Load POIs and register all PNG icons from assets/truck_stop_poi/.
+      final List<PoiItem> pois = await loadAllPois();
+      await registerPoiIcons(map.style);
+
+      // 2. Add the clustered GeoJSON source (inline FeatureCollection).
+      final Map<String, dynamic> geoJson = poisToGeoJson(pois);
+      await map.style.addStyleSource(
+        'poi-source',
+        jsonEncode({
+          'type': 'geojson',
+          'data': geoJson,
+          'cluster': true,
+          'clusterMaxZoom': 14,
+          'clusterRadius': 50,
+        }),
+      );
+
+      // 3. Cluster circle layer — colour steps by group size.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-clusters',
+          'type': 'circle',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'paint': {
+            'circle-color': [
+              'step',
+              ['get', 'point_count'],
+              '#3B82F6', // blue  — small clusters (< 10)
+              10,
+              '#F59E0B', // amber — medium clusters (10–29)
+              30,
+              '#EF4444', // red   — large clusters (≥ 30)
+            ],
+            'circle-radius': [
+              'step',
+              ['get', 'point_count'],
+              18,
+              10,
+              24,
+              30,
+              30,
+            ],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 4. Cluster count text label layer.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-cluster-count',
+          'type': 'symbol',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'layout': {
+            'text-field': '{point_count_abbreviated}',
+            'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+            'text-size': 13,
+          },
+          'paint': {
+            'text-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 5. Unclustered individual POI icon layer.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-unclustered',
+          'type': 'symbol',
+          'source': 'poi-source',
+          'filter': ['!', ['has', 'point_count']],
+          'layout': {
+            'icon-image': ['get', 'icon'],
+            'icon-size': 0.6,
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+        }),
+        null,
+      );
+    } catch (e) {
+      // POI cluster setup failed — map remains usable without the POI overlay.
+      debugPrint('TruckMapScreen: _setupPoiCluster failed: $e');
+    }
   }
 
   /// Returns a full-screen [MapWidget] using the Mapbox Maps Flutter SDK.
@@ -5585,6 +5622,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         key: const ValueKey("mapWidget"),
         styleUri: mbx.MapboxStyles.MAPBOX_STREETS,
         onMapCreated: _onMapCreated,
+        onStyleLoadedListener: _onStyleLoaded,
       ),
     );
   }

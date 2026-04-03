@@ -36,19 +36,8 @@ flutter:
   #   To replace: overwrite the PNG (recommended: 64×64 px RGBA), then
   #   run `flutter pub get` and hot-reload or rebuild the app.
   #
-  # assets/truck_stop_poi/
-  #   Contains PNG marker icons for each truck-stop POI category and the
-  #   locations.json dataset.  All PNGs in this folder are automatically
-  #   registered with Mapbox at runtime by registerPoiIcons() in
-  #   lib/services/poi_service.dart using normalised image IDs (lowercase,
-  #   underscores, no extension).  The fallback icon for any POI whose icon
-  #   PNG is absent is truck_parking.png.
-  #   To add a new icon: drop the PNG here, update locations.json "icon" field
-  #   to match, run `flutter pub get`, and rebuild.
-  #
   # assets/poi/
   #   Additional POI data (e.g. poi_data.json) used for supplementary datasets.
   assets:
     - assets/icons/truck_top.png
-    - assets/truck_stop_poi/
     - assets/poi/

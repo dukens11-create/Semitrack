@@ -217,6 +217,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// ignored to suppress noise from low-quality satellites.
   static const double _poorAccuracyMeters = 25.0;
 
+  /// Maximum distance (metres) a position jump can be when GPS accuracy is
+  /// poor before the fix is discarded as noise.
+  static const double _minPoorAccuracyJumpMeters = 25.0;
+
+  /// Minimum displacement (metres) from the last accepted fix that triggers
+  /// immediate position acceptance regardless of speed.
+  static const double _immediateAcceptDistanceMeters = 20.0;
+
+  /// Stability radius (metres) within which consecutive slow-speed fixes are
+  /// considered the same candidate location during the confirmation window.
+  static const double _candidateStabilityRadiusMeters = 10.0;
+
+  /// Minimum distance (metres) the vehicle must have moved since the last
+  /// accepted fix for route-progress (nearest-point) advancement to occur.
+  static const double _minRouteProgressDistanceMeters = 10.0;
+
+  /// Number of consecutive GPS fixes near the candidate position required
+  /// before a slow-speed position shift is accepted.
+  static const int _requiredCandidateFixCount = 3;
+
+  /// Maximum number of route-index points the truck can jump in a single GPS
+  /// fix.  Larger jumps are suppressed as GPS noise in real-device mode.
+  static const int _maxRouteIndexJump = 3;
+
+  /// Minimum seconds that must elapse between automatic directions (reroute)
+  /// API calls.  Separate from [_rerouteThrottleSeconds] so the per-directions
+  /// 5 s window is independent of the broader route-fetch guard.
+  static const int _directionsThrottleSeconds = 5;
+
   // ── Route restriction constants ────────────────────────────────────────────
   /// Radius in metres around each restricted zone within which a route point
   /// is considered to violate the restriction.  Used by
@@ -2005,8 +2034,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns `true` when at least 5 seconds have elapsed since the last
-  /// directions API reroute call, guarding against rapid repeated requests.
+  /// Returns `true` when at least [_directionsThrottleSeconds] seconds have
+  /// elapsed since the last directions API reroute call, guarding against
+  /// rapid repeated requests.
   /// Uses [_lastDirectionsCallAt] independently of [_lastApiCallTime].
   bool _canCallDirections() {
     final now = DateTime.now();
@@ -2014,7 +2044,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _lastDirectionsCallAt = now;
       return true;
     }
-    if (now.difference(_lastDirectionsCallAt!).inSeconds >= 5) {
+    if (now.difference(_lastDirectionsCallAt!).inSeconds >=
+        _directionsThrottleSeconds) {
       _lastDirectionsCallAt = now;
       return true;
     }
@@ -2027,9 +2058,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   1. First fix is always accepted.
   ///   2. Ignore drift < [_minStoppedDriftMeters] when speed is below
   ///      [_stoppedSpeedMph] (vehicle is stopped).
-  ///   3. Ignore jumps < 25 m when GPS accuracy exceeds [_poorAccuracyMeters].
-  ///   4. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance ≥ 20 m.
-  ///   5. Require 3 consistent candidate fixes for a low-speed position shift.
+  ///   3. Ignore jumps < [_minPoorAccuracyJumpMeters] when GPS accuracy
+  ///      exceeds [_poorAccuracyMeters].
+  ///   4. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
+  ///      ≥ [_immediateAcceptDistanceMeters].
+  ///   5. Require [_requiredCandidateFixCount] consistent candidate fixes
+  ///      for a low-speed position shift.
   bool _shouldAcceptPosition(geo.Position newPos) {
     final speedMph = _speedMphFromMps(newPos.speed);
 
@@ -2048,16 +2082,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (stopped && distanceMeters < _minStoppedDriftMeters) return false;
 
     // Ignore small jumps when GPS accuracy is poor.
-    if (poorAccuracy && distanceMeters < 25) return false;
+    if (poorAccuracy && distanceMeters < _minPoorAccuracyJumpMeters) {
+      return false;
+    }
 
     // Accept immediately when clearly moving or significantly displaced.
-    if (speedMph >= _stoppedSpeedMph || distanceMeters >= 20) {
+    if (speedMph >= _stoppedSpeedMph ||
+        distanceMeters >= _immediateAcceptDistanceMeters) {
       _candidatePosition = null;
       _stableCandidateCount = 0;
       return true;
     }
 
-    // Candidate confirmation: require 3 consistent slow-movement fixes.
+    // Candidate confirmation: require _requiredCandidateFixCount consistent
+    // slow-movement fixes before accepting the new position.
     if (_candidatePosition == null) {
       _candidatePosition = newPos;
       _stableCandidateCount = 1;
@@ -2066,14 +2104,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final candidateDistance =
         _distanceMetersBetween(_candidatePosition!, newPos);
-    if (candidateDistance < 10) {
+    if (candidateDistance < _candidateStabilityRadiusMeters) {
       _stableCandidateCount++;
     } else {
       _candidatePosition = newPos;
       _stableCandidateCount = 1;
     }
 
-    if (_stableCandidateCount >= 3) {
+    if (_stableCandidateCount >= _requiredCandidateFixCount) {
       _candidatePosition = null;
       _stableCandidateCount = 0;
       return true;
@@ -2088,7 +2126,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_isSimulationMode) return true;
     if (_speedMphFromMps(pos.speed) < _stoppedSpeedMph) return false;
     if (_lastAcceptedPosition == null) return false;
-    return _distanceMetersBetween(_lastAcceptedPosition!, pos) >= 10;
+    return _distanceMetersBetween(_lastAcceptedPosition!, pos) >=
+        _minRouteProgressDistanceMeters;
   }
 
   /// Advances [_truckIndex] to [nearestRouteIndex] only when movement is
@@ -2097,8 +2136,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!_shouldAdvanceRouteProgress(pos)) return;
     if (nearestRouteIndex <= _truckIndex) return;
     final jump = nearestRouteIndex - _truckIndex;
-    // Cap index jumps to 3 points per fix to suppress GPS noise teleports.
-    if (jump > 3 && !_isSimulationMode) return;
+    // Cap index jumps to _maxRouteIndexJump points per fix to suppress
+    // GPS noise teleports in real-device mode.
+    if (jump > _maxRouteIndexJump && !_isSimulationMode) return;
     _truckIndex = nearestRouteIndex;
   }
 

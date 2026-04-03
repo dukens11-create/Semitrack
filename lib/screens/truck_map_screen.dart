@@ -8926,6 +8926,8 @@ enum AlertType {
   /// A designated high-wind geographic area (e.g. a canyon or pass).
   highWind,
   steepGrade,
+  /// A weigh station along or near the route requiring compliance stop.
+  weighStation,
 }
 
 enum AlertSeverity {

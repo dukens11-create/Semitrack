@@ -1942,7 +1942,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return true;
     }
     final elapsed = DateTime.now().difference(_lastApiCallTime!).inSeconds;
-    if (elapsed > 5) {
+    if (elapsed >= 5) {
       _lastApiCallTime = DateTime.now();
       return true;
     }
@@ -2190,10 +2190,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (minDist > _offRouteThresholdMeters) {
-      // Only trigger a reroute when the truck has moved significantly AND the
-      // API debounce window has elapsed, preventing flood of redundant calls.
-      if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
+      // Only trigger a reroute when the API debounce window has elapsed AND
+      // the truck has moved significantly, preventing flood of redundant calls.
+      // _canCallApi is checked first because it has no position-state side
+      // effects when it returns false, keeping _lastRouteCheckLat/Lng stable.
       if (!_canCallApi()) return;
+      if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
       _isRerouting = true;
       _lastRerouteTime = DateTime.now();
       // Show rerouting status indicator and announce the change via TTS.

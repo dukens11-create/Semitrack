@@ -6499,9 +6499,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const SizedBox.shrink();
     }
     return Positioned(
-      // Position just below the compact next-step card (~90 px tall with
-      // SafeArea) so lane guidance never overlaps the top navigation card.
-      top: 110,
+      // top: 118 positions lane guidance below the compact next-step card
+      // (~90 px tall) with a small gap, keeping it clear of the top nav card.
+      top: 118,
       left: 16,
       right: 16,
       child: Center(
@@ -6958,12 +6958,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final Color alertColor = _alertSeverityColor(weatherAlert.severity);
 
     return Positioned(
-      bottom: 85,
-      left: 12,
-      // Leave right:90 so the speed box at bottom-right stays fully visible.
-      right: 90,
+      // bottom: 95 gives a clear gap above the stop button (bottom: 20 + height: 54 = 74 px top edge).
+      bottom: 95,
+      // left: 16 matches standard horizontal screen margin.
+      left: 16,
+      // right: 120 keeps the wind card clear of the speed box (right: 16, ~64 px wide) plus margin.
+      right: 120,
       child: SizedBox(
-        height: 90,
+        // height: 95 is compact enough to leave a visible gap above the stop button
+        // (stop button top edge ≈ 74 px from bottom; wind card top edge ≈ 190 px from bottom).
+        height: 95,
         child: Card(
           margin: EdgeInsets.zero,
           color: Colors.black.withOpacity(0.82),
@@ -7051,7 +7055,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 55,
+          // height: 54 is compact but touch-friendly, per Material spec minimum.
+          height: 54,
           child: ElevatedButton.icon(
             onPressed: _stopNavigation,
             icon: const Icon(Icons.stop_circle_outlined),
@@ -7943,13 +7948,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         : '${(distMeters * 0.000621371).toStringAsFixed(1)} mi';
 
     return Positioned(
-      top: 0,
-      left: 12,
-      right: 80, // leave room for the compass button on the right
+      // top: 16 gives a comfortable gap from the status-bar SafeArea edge.
+      top: 16,
+      // left: 16 matches standard horizontal screen margin.
+      left: 16,
+      // right: 90 leaves room for the 48 px compass button + 16 px margin + gap.
+      right: 90,
       child: SafeArea(
         bottom: false,
         child: Container(
-          margin: const EdgeInsets.only(top: 8),
+          margin: EdgeInsets.zero, // top offset handled by Positioned.top
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             // Dark translucent background for GPS-navigation aesthetics.
@@ -8020,12 +8028,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!_isNavigating) return const SizedBox.shrink();
 
     return Positioned(
-      top: 0,
-      right: 12,
+      // top: 18 vertically aligns the compass button with the top nav card.
+      top: 18,
+      // right: 16 matches standard horizontal screen margin.
+      right: 16,
       child: SafeArea(
         bottom: false,
         child: Container(
-          margin: const EdgeInsets.only(top: 8),
+          margin: EdgeInsets.zero, // top offset handled by Positioned.top
           width: 48,
           height: 48,
           decoration: BoxDecoration(
@@ -8081,10 +8091,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final visibleAlerts = _navAlerts.take(3).toList();
 
     return Positioned(
-      right: 12,
-      // Start below the compass button (≈48 px) and top card zone so
-      // alerts never overlap the top navigation card.
-      top: 120,
+      // right: 16 matches standard horizontal screen margin.
+      right: 16,
+      // top: 118 aligns with lane guidance row so alerts start at the same
+      // vertical level, but won't overlap because the alert stack is right-anchored
+      // and lane guidance is center-anchored (no right-side content conflict).
+      top: 118,
       child: SafeArea(
         bottom: false,
         child: Column(
@@ -8092,7 +8104,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           children: [
             for (final alert in visibleAlerts) ...[
               _smallRightAlert(alert),
-              const SizedBox(height: 6),
+              // 10 px gap keeps chips visually separated without crowding.
+              const SizedBox(height: 10),
             ],
           ],
         ),
@@ -8487,9 +8500,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return Positioned(
       right: 16,
-      // Float well above the wind alert card (bottom:85 + ~90 px) so the
-      // speed box is always fully visible in the bottom-right corner.
-      bottom: 140,
+      // bottom: 170 keeps the speed box clearly above the wind advisory card
+      // (bottom: 95 + height: ~95) and the stop button (bottom: 20 + height: 54).
+      bottom: 170,
       child: SafeArea(
         top: false,
         child: Container(

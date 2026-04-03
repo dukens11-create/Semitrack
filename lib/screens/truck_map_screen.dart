@@ -22,6 +22,70 @@ import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
 
+// ── Lane guidance models ───────────────────────────────────────────────────
+
+/// The direction an individual lane arrow can point.
+///
+/// Used by [LaneInfo] to describe each lane's allowed movements.
+enum LaneDirection {
+  left,
+  slightLeft,
+  straight,
+  slightRight,
+  right,
+  uTurn,
+}
+
+/// Data for a single lane in the dynamic lane guidance panel.
+///
+/// [directions] lists the arrows shown on the lane marking.  Most lanes carry
+/// a single direction, but shared lanes (e.g. straight-or-right) may carry
+/// two.  [isRecommended] is true when the driver should use this lane to
+/// follow the current route; recommended lanes are highlighted blue.
+class LaneInfo {
+  const LaneInfo({
+    required this.directions,
+    required this.isRecommended,
+  });
+
+  final List<LaneDirection> directions;
+  final bool isRecommended;
+}
+
+/// Snapshot of the upcoming navigation maneuver that drives the lane guidance
+/// panel.
+///
+/// Created by [_TruckMapScreenState._updateUpcomingManeuver] from live SDK
+/// data (or sample data when the SDK does not yet provide lane information)
+/// and stored in [_TruckMapScreenState._upcomingManeuverStep].
+class UpcomingManeuverStep {
+  const UpcomingManeuverStep({
+    required this.maneuverType,
+    required this.distanceMiles,
+    required this.isHighwayManeuver,
+    required this.roadName,
+    required this.lanes,
+  });
+
+  /// Mapbox maneuver type string, e.g. "turn", "exit", "fork".
+  /// Null when no step is available.
+  final String? maneuverType;
+
+  /// Distance in miles from the current position to this maneuver.
+  final double distanceMiles;
+
+  /// True when the maneuver occurs on a highway-class road (exit, on-ramp,
+  /// off-ramp), warranting a wider 1.2-mile show threshold.
+  final bool isHighwayManeuver;
+
+  /// Human-readable name of the road at the maneuver point (may be null).
+  final String? roadName;
+
+  /// Per-lane data for the dynamic lane guidance panel.  Falls back to a
+  /// sample four-lane array when the SDK does not provide lane data.
+  final List<LaneInfo> lanes;
+}
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -172,18 +236,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // the HOS/fuel summary cards and quick-action chips are also visible.
   bool _panelExpanded = false;
 
-  // ── Lane guidance sample data ──────────────────────────────────────────────
-  // Sample lane data displayed when _isNavigating is true.  In a production
-  // build these would be populated from the live Mapbox Directions step data.
-  final List<LaneGuidanceItem> _laneGuidanceItems = const [
-    LaneGuidanceItem(type: LaneArrowType.left,     isRecommended: false),
-    LaneGuidanceItem(type: LaneArrowType.straight,  isRecommended: true),
-    LaneGuidanceItem(type: LaneArrowType.straight,  isRecommended: true),
-    LaneGuidanceItem(type: LaneArrowType.slightRight, isRecommended: false),
-  ];
-
   // ── Lane-guidance visibility state ────────────────────────────────────────
-  // These three fields drive _shouldShowLaneGuidance().  They are updated by
+  // These fields drive _shouldShowLaneGuidance().  They are updated by
   // _updateUpcomingManeuver() whenever the navigation engine advances to a new
   // route step or reports fresh distance-to-maneuver data.
   //
@@ -202,6 +256,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// on-ramp, off-ramp), which uses a wider 1.2-mile show threshold instead
   /// of the 0.8-mile city default.
   bool _isHighwayManeuver = false;
+
+  /// Full snapshot of the upcoming maneuver, including per-lane data.
+  /// Null until [_updateUpcomingManeuver] is first called.
+  /// Drives both [_shouldShowLaneGuidance] and [_buildDynamicLaneAssist].
+  UpcomingManeuverStep? _upcomingManeuverStep;
 
   // ── Navigation alert state ─────────────────────────────────────────────────
   // Sample alerts shown during active navigation.  In production these would
@@ -6533,51 +6592,145 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns true when lane guidance should be visible to the driver.
   ///
   /// Two conditions must both be satisfied:
-  ///  1. The upcoming [maneuverType] is one that needs lane guidance
-  ///     (delegated to [_maneuverNeedsLaneGuidance]).
+  ///  1. [step] is non-null and its [maneuverType] is one that needs lane
+  ///     guidance (delegated to [_maneuverNeedsLaneGuidance]).
   ///  2. The driver is close enough to the maneuver:
   ///     - Highway maneuvers (exits, ramps): show within 1.2 miles so the
   ///       driver has extra time to change lanes on a multi-lane road.
   ///     - City / surface-road maneuvers: show within 0.8 miles to avoid
   ///       cluttering the display during normal urban driving.
-  bool _shouldShowLaneGuidance({
-    required String? maneuverType,
-    required double distanceMiles,
-    bool isHighwayManeuver = false,
-  }) {
-    if (!_maneuverNeedsLaneGuidance(maneuverType)) return false;
-
+  bool _shouldShowLaneGuidance(UpcomingManeuverStep? step) {
+    if (step == null || !_maneuverNeedsLaneGuidance(step.maneuverType)) {
+      return false;
+    }
     // Use a wider look-ahead threshold on highways so the driver has more
     // time to position correctly before a high-speed exit or merge.
-    final double threshold = isHighwayManeuver ? 1.2 : 0.8;
-    return distanceMiles <= threshold;
+    final double threshold = step.isHighwayManeuver ? 1.2 : 0.8;
+    return step.distanceMiles <= threshold;
   }
 
-  /// Updates the upcoming-maneuver state fields and triggers a UI rebuild.
+  /// Updates the upcoming-maneuver state and triggers a UI rebuild.
   ///
   /// Call this whenever the navigation engine advances to a new route step or
   /// reports a fresh distance-to-maneuver measurement so that
   /// [_shouldShowLaneGuidance] always operates on current data.
+  ///
+  /// [lanes] may be supplied directly from the route SDK; when omitted or
+  /// empty the method falls back to a four-lane sample array so the panel
+  /// always has data to display.
   void _updateUpcomingManeuver({
     required String? maneuverType,
     required double distanceMiles,
     bool isHighwayManeuver = false,
+    String? roadName,
+    List<LaneInfo>? lanes,
   }) {
+    // Fall back to sample lane data when the SDK does not provide lane info.
+    final List<LaneInfo> resolvedLanes =
+        (lanes != null && lanes.isNotEmpty)
+            ? lanes
+            : const [
+                LaneInfo(directions: [LaneDirection.left],       isRecommended: false),
+                LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
+                LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
+                LaneInfo(directions: [LaneDirection.right],      isRecommended: false),
+              ];
     setState(() {
-      _nextManeuverType = maneuverType;
-      _distanceToNextManeuverMiles = distanceMiles;
-      _isHighwayManeuver = isHighwayManeuver;
+      _nextManeuverType              = maneuverType;
+      _distanceToNextManeuverMiles   = distanceMiles;
+      _isHighwayManeuver             = isHighwayManeuver;
+      _upcomingManeuverStep = UpcomingManeuverStep(
+        maneuverType:       maneuverType,
+        distanceMiles:      distanceMiles,
+        isHighwayManeuver:  isHighwayManeuver,
+        roadName:           roadName,
+        lanes:              resolvedLanes,
+      );
     });
+  }
+
+  // ── Dynamic lane guidance helpers ─────────────────────────────────────────
+
+  /// Maps a [LaneDirection] value to the [IconData] that best represents it.
+  IconData _laneDirectionIcon(LaneDirection direction) {
+    switch (direction) {
+      case LaneDirection.left:        return Icons.turn_left;
+      case LaneDirection.slightLeft:  return Icons.turn_slight_left;
+      case LaneDirection.straight:    return Icons.straight;
+      case LaneDirection.slightRight: return Icons.turn_slight_right;
+      case LaneDirection.right:       return Icons.turn_right;
+      case LaneDirection.uTurn:       return Icons.u_turn_left;
+    }
+  }
+
+  /// Builds a single lane tile for the dynamic lane guidance panel.
+  ///
+  /// Recommended lanes ([LaneInfo.isRecommended] == true) receive a blue
+  /// background and a white border so they stand out immediately; non-
+  /// recommended lanes use a dark-grey background.
+  Widget _buildLaneBox(LaneInfo lane) {
+    const Color recommendedColor = Color(0xFF1565C0); // blue 800
+    const Color normalColor      = Color(0xFF37474F); // blue-grey 800
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: lane.isRecommended ? recommendedColor : normalColor,
+        borderRadius: BorderRadius.circular(10),
+        border: lane.isRecommended
+            ? Border.all(color: Colors.blueAccent, width: 2)
+            : Border.all(color: Colors.white24, width: 1),
+        boxShadow: lane.isRecommended
+            ? [
+                BoxShadow(
+                  color: Colors.blue.withOpacity(0.4),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: lane.directions
+            .map((d) => Icon(_laneDirectionIcon(d), color: Colors.white, size: 26))
+            .toList(),
+      ),
+    );
+  }
+
+  /// Builds the complete dynamic lane guidance panel for [step].
+  ///
+  /// Renders one [_buildLaneBox] per lane inside a pill-shaped dark container.
+  /// Returns [SizedBox.shrink] when the step carries no lane data.
+  Widget _buildDynamicLaneAssist(UpcomingManeuverStep step) {
+    if (step.lanes.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black45,
+            blurRadius: 10,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: step.lanes.map(_buildLaneBox).toList(),
+      ),
+    );
   }
 
   // ── Lane guidance panel ────────────────────────────────────────────────────
 
   /// Builds the GPS-style lane guidance panel shown during active navigation.
   ///
-  /// The panel is a compact row of [LaneArrowIcon] tiles (one per lane) wrapped
-  /// in a [LaneGuidancePanel].  It is centred just below the compact next-step
-  /// card (top: 118) and is wrapped in an [AnimatedSwitcher] so it fades in
-  /// and out smoothly rather than popping on/off abruptly.
+  /// The panel is centred just below the compact next-step card (top: 118)
+  /// and wrapped in an [AnimatedSwitcher] so it fades in and out smoothly.
   ///
   /// Visibility is controlled entirely by [_shouldShowLaneGuidance]: lane
   /// guidance is shown only when:
@@ -6585,18 +6738,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///  - The upcoming maneuver type requires lane awareness.
   ///  - The driver is within the distance threshold for that maneuver type.
   ///
-  /// Returns [SizedBox.shrink] at zero cost when not navigating, when the lane
-  /// list is empty, or when the maneuver/distance conditions are not met.
+  /// Returns [SizedBox.shrink] at zero cost when not navigating or when the
+  /// maneuver/distance conditions are not met.
   Widget _buildLaneGuidance() {
-    if (!_isNavigating || _laneGuidanceItems.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    if (!_isNavigating) return const SizedBox.shrink();
 
-    final bool visible = _shouldShowLaneGuidance(
-      maneuverType: _nextManeuverType,
-      distanceMiles: _distanceToNextManeuverMiles,
-      isHighwayManeuver: _isHighwayManeuver,
-    );
+    final bool visible = _shouldShowLaneGuidance(_upcomingManeuverStep);
 
     return Positioned(
       // top: 118 positions lane guidance below the compact next-step card
@@ -6610,11 +6757,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           // Use a fade transition for a polished appearance/disappearance.
           transitionBuilder: (child, animation) =>
               FadeTransition(opacity: animation, child: child),
-          child: visible
-              ? SafeArea(
-                  bottom: false,
+          child: (visible && _upcomingManeuverStep != null)
+              ? KeyedSubtree(
                   key: const ValueKey('laneGuidanceOn'),
-                  child: LaneGuidancePanel(lanes: _laneGuidanceItems),
+                  child: _buildDynamicLaneAssist(_upcomingManeuverStep!),
                 )
               : const SizedBox.shrink(key: ValueKey('laneGuidanceOff')),
         ),

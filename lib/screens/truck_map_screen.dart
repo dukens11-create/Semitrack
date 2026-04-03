@@ -630,11 +630,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // without losing surrounding road context.
   static const _navigationZoomLevel = 14.0;
 
-  // Camera-follow zoom level for GPS navigation mode.
-  // Zoom 17 keeps the truck close and road detail visible at a true
-  // street-level view; mirrors CameraPosition(zoom: 17) in Google Maps
-  // navigation.  Adjust to 16 or 18 if surrounding road context is needed.
-  static const _followCameraZoomLevel = 17.0;
+  // Minimum speed (mph) required before the camera rotates with the truck's
+  // heading.  Below this threshold the camera bearing is held steady so the
+  // map does not spin from GPS heading noise while stopped or creeping.
+  static const double _noRotateSpeedMph = 3.0;
 
   // Latitude offset applied to the camera target so that more road *ahead* of
   // the truck is visible on screen.  A negative value shifts the target south
@@ -1886,12 +1885,85 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _truckPosition!.latitude - _cameraLeadLatitude,
       _truckPosition!.longitude,
     );
-    // Rotate the map to the truck's current heading and zoom to street level.
-    _mapController.moveAndRotate(
-      cameraTarget,
-      _followCameraZoomLevel,
-      _truckBearing,
+    final double speedMph = _currentSpeedMps > 0
+        ? _currentSpeedMps * _mpsToMph
+        : 0.0;
+    final double zoom = _navigationZoomForSpeed(speedMph);
+    // Rotate map with heading only when truck is moving fast enough to produce
+    // a stable heading from GPS.  Below _noRotateSpeedMph hold the bearing
+    // steady to prevent the map from spinning from heading noise.
+    final double bearing =
+        speedMph >= _noRotateSpeedMph ? _truckBearing : _mapController.camera.rotation;
+    _mapController.moveAndRotate(cameraTarget, zoom, bearing);
+  }
+
+  /// Returns the appropriate navigation zoom level for [speedMph].
+  ///
+  /// Zoom bands mirror a real truck GPS:
+  /// - 0–10 mph  → 16.5–17.2  (urban / stopped, very close)
+  /// - 10–30 mph → 15.5–16.3  (city/suburban)
+  /// - 30–55 mph → 14.5–15.3  (highway approach)
+  /// - 55+ mph   → 13.8–14.5  (open highway)
+  ///
+  /// Within each band the zoom is linearly interpolated so transitions are
+  /// gradual rather than stepped.
+  double _navigationZoomForSpeed(double speedMph) {
+    if (speedMph <= 0) return 17.2;
+    if (speedMph < 10) {
+      // 0–10 mph: 17.2 → 16.5
+      final t = speedMph / 10.0;
+      return 17.2 - t * (17.2 - 16.5);
+    }
+    if (speedMph < 30) {
+      // 10–30 mph: 16.3 → 15.5
+      final t = (speedMph - 10.0) / 20.0;
+      return 16.3 - t * (16.3 - 15.5);
+    }
+    if (speedMph < 55) {
+      // 30–55 mph: 15.3 → 14.5
+      final t = (speedMph - 30.0) / 25.0;
+      return 15.3 - t * (15.3 - 14.5);
+    }
+    // 55+ mph: 14.5 → 13.8 (clamps at 13.8 for very high speeds)
+    final t = ((speedMph - 55.0) / 30.0).clamp(0.0, 1.0);
+    return 14.5 - t * (14.5 - 13.8);
+  }
+
+  /// Updates the camera for a moving truck: rotates with heading when speed is
+  /// high enough and zooms dynamically based on [pos] speed.
+  ///
+  /// Positions the camera target slightly ahead of the truck using
+  /// [_cameraLeadLatitude] so the road ahead is visible (lower-third effect).
+  void _updateNavigationCamera(geo.Position pos) {
+    if (!_mapReady || _truckPosition == null || _isArrived) return;
+    if (!_followTruck) return;
+    final double speedMph = pos.speed > 0 ? pos.speed * _mpsToMph : 0.0;
+    final double zoom = _navigationZoomForSpeed(speedMph);
+    // Shift target ahead of the truck so it sits in the lower third of screen.
+    final cameraTarget = LatLng(
+      pos.latitude - _cameraLeadLatitude,
+      pos.longitude,
     );
+    final double bearing = speedMph >= _noRotateSpeedMph
+        ? _truckBearing
+        : _mapController.camera.rotation;
+    _mapController.moveAndRotate(cameraTarget, zoom, bearing);
+  }
+
+  /// Updates the camera when the truck is stopped or moving very slowly.
+  ///
+  /// Keeps the map stable — no bearing changes — and zooms in slightly to
+  /// show the immediate surroundings clearly.
+  void _updateStoppedCamera(geo.Position pos) {
+    if (!_mapReady || _truckPosition == null || _isArrived) return;
+    if (!_followTruck) return;
+    // Use a fixed close-in zoom when stopped (top of the 0–10 mph band).
+    const double stoppedZoom = 17.2;
+    // Do not shift target ahead when stopped — centre the truck on screen.
+    final cameraTarget = LatLng(pos.latitude, pos.longitude);
+    // Hold the current bearing so the map does not spin from heading noise.
+    final double bearing = _mapController.camera.rotation;
+    _mapController.moveAndRotate(cameraTarget, stoppedZoom, bearing);
   }
 
   // ── TTS initialisation ────────────────────────────────────────────────────
@@ -2115,10 +2187,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     // Keep the camera centred on the truck while in navigation mode.
-    // _followTruckCamera() itself guards on _hasActiveDestination so this
-    // call is safe in both tracking and navigation modes.
-    if (_navigationMode) {
-      _followTruckCamera();
+    // Use _updateNavigationCamera when moving and _updateStoppedCamera when
+    // stopped so zoom, bearing, and target position are appropriate for speed.
+    if (_navigationMode && _hasActiveDestination) {
+      final double speedMph = newSpeedMps > 0 ? newSpeedMps * _mpsToMph : 0.0;
+      if (speedMph >= _minMovingSpeedMph) {
+        _updateNavigationCamera(position);
+      } else {
+        _updateStoppedCamera(position);
+      }
     }
 
     // Refresh the 2-closest-ahead truck stops row on every GPS fix during

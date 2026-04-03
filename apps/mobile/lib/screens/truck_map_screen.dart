@@ -182,6 +182,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     LaneGuidanceItem(type: LaneArrowType.slightRight, isRecommended: false),
   ];
 
+  // ── Lane-guidance visibility state ────────────────────────────────────────
+  // These three fields drive _shouldShowLaneGuidance().  They are updated by
+  // _updateUpcomingManeuver() whenever the navigation engine advances to a new
+  // route step or reports fresh distance-to-maneuver data.
+  //
+  // Default values ensure lane guidance is hidden until the engine provides
+  // real step data (large sentinel distance + null maneuver type).
+
+  /// The maneuver type string for the next upcoming step (e.g. "turn", "exit").
+  /// Null when no step is available or navigation is idle.
+  String? _nextManeuverType;
+
+  /// Distance in miles to the next upcoming maneuver.
+  /// Initialized to a large sentinel so the threshold check fails by default.
+  double _distanceToNextManeuverMiles = 999.0;
+
+  /// True when the upcoming maneuver is a highway-type event (exit, ramp,
+  /// on-ramp, off-ramp), which uses a wider 1.2-mile show threshold instead
+  /// of the 0.8-mile city default.
+  bool _isHighwayManeuver = false;
+
   // ── Navigation alert state ─────────────────────────────────────────────────
   // Sample alerts shown during active navigation.  In production these would
   // be populated from live weather/traffic/restriction APIs.
@@ -6485,29 +6506,117 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Lane-guidance visibility helpers ──────────────────────────────────────
+
+  /// Returns true when [maneuverType] is one of the maneuver categories that
+  /// benefit from lane guidance (turns, ramps, merges, forks, exits, and
+  /// roundabouts).  Returns false for straight driving and for null input so
+  /// that the guidance panel stays hidden during normal cruise mode.
+  bool _maneuverNeedsLaneGuidance(String? maneuverType) {
+    if (maneuverType == null) return false;
+
+    // Canonical set of maneuver types that require driver lane awareness.
+    const supported = {
+      'turn',
+      'exit',
+      'fork',
+      'merge',
+      'ramp',
+      'roundabout',
+      'off ramp',
+      'on ramp',
+    };
+
+    return supported.contains(maneuverType.toLowerCase());
+  }
+
+  /// Returns true when lane guidance should be visible to the driver.
+  ///
+  /// Two conditions must both be satisfied:
+  ///  1. The upcoming [maneuverType] is one that needs lane guidance
+  ///     (delegated to [_maneuverNeedsLaneGuidance]).
+  ///  2. The driver is close enough to the maneuver:
+  ///     - Highway maneuvers (exits, ramps): show within 1.2 miles so the
+  ///       driver has extra time to change lanes on a multi-lane road.
+  ///     - City / surface-road maneuvers: show within 0.8 miles to avoid
+  ///       cluttering the display during normal urban driving.
+  bool _shouldShowLaneGuidance({
+    required String? maneuverType,
+    required double distanceMiles,
+    bool isHighwayManeuver = false,
+  }) {
+    if (!_maneuverNeedsLaneGuidance(maneuverType)) return false;
+
+    // Use a wider look-ahead threshold on highways so the driver has more
+    // time to position correctly before a high-speed exit or merge.
+    final double threshold = isHighwayManeuver ? 1.2 : 0.8;
+    return distanceMiles <= threshold;
+  }
+
+  /// Updates the upcoming-maneuver state fields and triggers a UI rebuild.
+  ///
+  /// Call this whenever the navigation engine advances to a new route step or
+  /// reports a fresh distance-to-maneuver measurement so that
+  /// [_shouldShowLaneGuidance] always operates on current data.
+  void _updateUpcomingManeuver({
+    required String? maneuverType,
+    required double distanceMiles,
+    bool isHighwayManeuver = false,
+  }) {
+    setState(() {
+      _nextManeuverType = maneuverType;
+      _distanceToNextManeuverMiles = distanceMiles;
+      _isHighwayManeuver = isHighwayManeuver;
+    });
+  }
+
+  // ── Lane guidance panel ────────────────────────────────────────────────────
+
   /// Builds the GPS-style lane guidance panel shown during active navigation.
   ///
   /// The panel is a compact row of [LaneArrowIcon] tiles (one per lane) wrapped
-  /// in a [LaneGuidancePanel].  It is centred just below the navigation
-  /// instruction banner (approximately 170 px from the top, after the
-  /// [RoadGuidanceBanner] which is ~160 px tall).
+  /// in a [LaneGuidancePanel].  It is centred just below the compact next-step
+  /// card (top: 118) and is wrapped in an [AnimatedSwitcher] so it fades in
+  /// and out smoothly rather than popping on/off abruptly.
   ///
-  /// Returns [SizedBox.shrink] when [_isNavigating] is false or the sample
-  /// lane data list is empty, so it has zero impact outside navigation mode.
+  /// Visibility is controlled entirely by [_shouldShowLaneGuidance]: lane
+  /// guidance is shown only when:
+  ///  - Navigation is active ([_isNavigating] == true).
+  ///  - The upcoming maneuver type requires lane awareness.
+  ///  - The driver is within the distance threshold for that maneuver type.
+  ///
+  /// Returns [SizedBox.shrink] at zero cost when not navigating, when the lane
+  /// list is empty, or when the maneuver/distance conditions are not met.
   Widget _buildLaneGuidance() {
     if (!_isNavigating || _laneGuidanceItems.isEmpty) {
       return const SizedBox.shrink();
     }
+
+    final bool visible = _shouldShowLaneGuidance(
+      maneuverType: _nextManeuverType,
+      distanceMiles: _distanceToNextManeuverMiles,
+      isHighwayManeuver: _isHighwayManeuver,
+    );
+
     return Positioned(
       // top: 118 positions lane guidance below the compact next-step card
       // (~90 px tall) with a small gap, keeping it clear of the top nav card.
       top: 118,
-      left: 16,
-      right: 16,
+      left: 0,
+      right: 0,
       child: Center(
-        child: SafeArea(
-          bottom: false,
-          child: LaneGuidancePanel(lanes: _laneGuidanceItems),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          // Use a fade transition for a polished appearance/disappearance.
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: visible
+              ? SafeArea(
+                  bottom: false,
+                  key: const ValueKey('laneGuidanceOn'),
+                  child: LaneGuidancePanel(lanes: _laneGuidanceItems),
+                )
+              : const SizedBox.shrink(key: ValueKey('laneGuidanceOff')),
         ),
       ),
     );

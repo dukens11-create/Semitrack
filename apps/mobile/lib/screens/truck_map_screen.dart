@@ -14,9 +14,10 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
-import 'package:semitrack_mobile/models/truck_stop_poi.dart';
+import 'package:semitrack_mobile/models/poi_item.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/services/poi_service.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
@@ -268,8 +269,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
 
-  // POI entries loaded from assets/truck_stop_poi/locations.json.
-  List<TruckStopPOI> _poiLocations = const [];
+  // POI entries are now rendered via the Mapbox GeoJSON cluster source
+  // (poi-source) and associated style layers set up in _setupPoiCluster().
+  // The legacy flutter_map widget-based markers have been removed.
 
   // ── Closest truck stops ahead (navigation mode) ───────────────────────────
   //
@@ -532,8 +534,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
-    // Load truck stop POI entries from assets/truck_stop_poi/locations.json.
-    _loadTruckStopPOIs();
   }
 
   @override
@@ -601,50 +601,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (mounted) setState(() => _brandIconBytes = loaded);
-  }
-
-  /// Loads truck stop POI entries from `assets/truck_stop_poi/locations.json`
-  /// and stores them in [_poiLocations].
-  ///
-  /// Each entry is parsed using [TruckStopPOI.fromJson].  The [icon] field
-  /// maps to a PNG filename under `assets/truck_stop_poi/` and is resolved to
-  /// a full asset path when building markers in [_buildTruckStopPOIMarkers].
-  Future<void> _loadTruckStopPOIs() async {
-    try {
-      final String jsonString =
-          await rootBundle.loadString('assets/truck_stop_poi/locations.json');
-      final List<TruckStopPOI> pois = TruckStopPOI.listFromJson(jsonString);
-      if (mounted) setState(() => _poiLocations = pois);
-
-      // ── Diagnostic logging — verify dataset coverage ──────────────────────
-      // Expected coordinate ranges for full USA / Canada coverage:
-      //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
-      //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
-      debugPrint('POI dataset loaded: ${pois.length} total entries.');
-      if (pois.isNotEmpty) {
-        final int previewCount = math.min(20, pois.length);
-        for (var i = 0; i < previewCount; i++) {
-          final p = pois[i];
-          debugPrint('  POI[$i] ${p.name}  (${p.lat}, ${p.lng})');
-        }
-        final double minLat =
-            pois.map((p) => p.lat).reduce(math.min);
-        final double maxLat =
-            pois.map((p) => p.lat).reduce(math.max);
-        final double minLng =
-            pois.map((p) => p.lng).reduce(math.min);
-        final double maxLng =
-            pois.map((p) => p.lng).reduce(math.max);
-        debugPrint(
-          'Coordinate spread — '
-          'lat: ${minLat.toStringAsFixed(4)} – ${maxLat.toStringAsFixed(4)}, '
-          'lng: ${minLng.toStringAsFixed(4)} – ${maxLng.toStringAsFixed(4)}',
-        );
-      }
-      // ─────────────────────────────────────────────────────────────────────
-    } catch (_) {
-      // Locations file unreadable — POI markers simply won't be shown.
-    }
   }
 
   // ── Truck marker builders ─────────────────────────────────────────────────
@@ -1405,103 +1361,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return markers;
   }
 
-  /// Builds [Marker]s for truck stop POIs loaded from
-  /// `assets/truck_stop_poi/locations.json`.
-  ///
-  /// **Mode behaviour:**
-  ///
-  /// (a) Browse mode (`_isNavigating == false`) — ALL POIs in [_poiLocations]
-  ///     are rendered as clustered markers so the driver can explore the full
-  ///     dataset on the map with no distance filtering applied.
-  ///
-  /// (b) Navigation mode (`_isNavigating == true`) — POIs can be filtered by
-  ///     proximity to the driver or along the active route.  The
-  ///     [_getClosestTruckStopsAheadOnRoute] helper already handles route-aware
-  ///     filtering for the "ahead" strip; the marker layer continues to render
-  ///     all POIs so drivers retain full spatial context while navigating.
-  ///     // Navigation-only distance filter (retained for reference):
-  ///     //   if (_isNavigating && _truckPosition != null) {
-  ///     //     const maxVisibleMiles = 50.0;
-  ///     //     pois = pois.where((p) {
-  ///     //       final distMeters = geo.Geolocator.distanceBetween(
-  ///     //         _truckPosition!.latitude, _truckPosition!.longitude,
-  ///     //         p.lat, p.lng,
-  ///     //       );
-  ///     //       return distMeters / 1609.34 <= maxVisibleMiles;
-  ///     //     }).toList();
-  ///     //   }
-  ///
-  /// Each POI's [TruckStopPOI.icon] field is resolved to the full asset path
-  /// `assets/truck_stop_poi/{icon}`.  When a POI's specific icon has not been
-  /// loaded and the POI is located in the USA or Canada, the default truck stop
-  /// icon (`assets/truck_stop_poi/truck stop default.png`) is used as a
-  /// fallback so that every North American POI always appears on the map.
-  /// Default-fallback markers are rendered with an orange border to make them
-  /// visually distinct from brand-specific markers.
-  /// Hidden when [_showTruckStops] is false.
-  static const String _defaultTruckStopAsset =
-      'assets/truck_stop_poi/truck stop default.png';
-  static const Set<String> _northAmericaCountries = {'US', 'CA'};
-
-  List<Marker> _buildTruckStopPOIMarkers() {
-    if (!_showTruckStops || _poiLocations.isEmpty) return const [];
-
-    final Uint8List? defaultBytes = _brandIconBytes[_defaultTruckStopAsset];
-    final markers = <Marker>[];
-    // Browse mode: iterate ALL POIs — no distance filtering applied here.
-    // Navigation mode: the ahead-strip uses _getClosestTruckStopsAheadOnRoute
-    // for route-proximity filtering; the marker layer still renders all POIs.
-    for (final poi in _poiLocations) {
-      final String assetKey = 'assets/truck_stop_poi/${poi.icon}';
-      final Uint8List? bytes = _brandIconBytes[assetKey];
-
-      if (bytes != null) {
-        // Brand-specific icon available — render it directly.
-        markers.add(Marker(
-          point: LatLng(poi.lat, poi.lng),
-          width: 40,
-          height: 40,
-          alignment: Alignment.center,
-          child: Image.memory(
-            bytes,
-            width: 40,
-            height: 40,
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-          ),
-        ));
-      } else if (_northAmericaCountries.contains(poi.country) &&
-          defaultBytes != null) {
-        // No brand icon for this US/CA POI — fall back to the default truck
-        // stop icon with an orange border to distinguish it from custom icons.
-        markers.add(Marker(
-          point: LatLng(poi.lat, poi.lng),
-          width: 44,
-          height: 44,
-          alignment: Alignment.center,
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.orange, width: 2),
-              borderRadius: BorderRadius.circular(6),
-              color: Colors.white.withOpacity(0.85),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: Image.memory(
-                defaultBytes,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-              ),
-            ),
-          ),
-        ));
-      }
-    }
-    return markers;
-  }
-
   /// Builds logo-only [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
   /// Each weigh-station POI is rendered as its PNG logo from `assets/logos/`
@@ -1656,8 +1515,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  [_buildTruckStopPOIMarkers] renders markers
-  /// for POIs loaded from `assets/truck_stop_poi/locations.json`.
+  /// loaded from `assets/logos/`.  Clustered POIs from `assets/poi/poi_data.json`
+  /// are rendered via the Mapbox style layers set up in [_setupPoiCluster].
   /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
   /// using the same asset-existence guard — no generic fallback icons appear
   /// on the map for either category.
@@ -1666,8 +1525,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
-      // Markers from assets/truck_stop_poi/locations.json POI data.
-      ..._buildTruckStopPOIMarkers(),
       // Logo-only markers for MapPoi weigh stations (no background/fallback).
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
@@ -5626,9 +5483,173 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Production Mapbox map widget ──────────────────────────────────────────
 
+  /// Holds a reference to the Mapbox map once [_onMapCreated] fires.
+  /// Used by [_setupPoiCluster] to add sources and layers after the style loads.
+  mbx.MapboxMap? _mapboxMap;
+
   /// Called by [MapWidget] once the native Mapbox map is fully initialised.
+  ///
+  /// Stores the [mapboxMap] reference so that [_onStyleLoaded] can use it to
+  /// add POI sources and layers once the style finishes loading.
   void _onMapCreated(mbx.MapboxMap mapboxMap) {
-    // Production map setup (camera, overlays, etc.) goes here.
+    _mapboxMap = mapboxMap;
+  }
+
+  /// Called by [MapWidget] once the Mapbox style has finished loading.
+  ///
+  /// Triggers [_setupPoiCluster] to register icons and add the clustered POI
+  /// source and layers to the map style.
+  void _onStyleLoaded(mbx.StyleLoadedEventData _) {
+    _setupPoiCluster();
+  }
+
+  /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
+  ///
+  /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
+  /// Loads [PoiItem]s from `assets/poi/poi_data.json`, converts them to
+  /// GeoJSON, registers all PNG icons from `assets/truck_stop_poi/`, then
+  /// adds four objects to the Mapbox style:
+  ///
+  ///   - `poi-source`       — clustered GeoJSON source
+  ///   - `poi-clusters`     — circle layer for grouped cluster rings
+  ///   - `poi-cluster-count`— symbol layer with `{point_count}` text labels
+  ///   - `poi-unclustered`  — symbol layer using each POI's icon image
+  ///
+  /// All rendering is done via Mapbox style layers — no Flutter widget markers
+  /// are created, keeping performance O(1) regardless of POI count.
+  Future<void> _setupPoiCluster() async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+    try {
+      // Guard against duplicate setup when the style reloads.
+      if (await map.style.styleSourceExists('poi-source')) return;
+
+      // 1. Load POIs and register all PNG icons from assets/truck_stop_poi/.
+      // 1. Load POIs and register all PNG icons from assets/truck_stop_poi/.
+      final List<PoiItem> pois = await loadAllPois();
+
+      // ── Diagnostic logging — verify dataset coverage ──────────────────────
+      // Expected coordinate ranges for full USA / Canada coverage:
+      //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
+      //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
+      //
+      // Browse mode: ALL POIs are passed to the GeoJSON source so every entry
+      //   appears on the clustered map with no distance filtering applied.
+      // Navigation mode: _getClosestTruckStopsAheadOnRoute handles route-aware
+      //   proximity filtering for the ahead-strip; the POI layer still shows
+      //   all POIs for spatial context.
+      //   // Navigation-only distance filter (retained for reference):
+      //   //   pois = pois.where((p) {
+      //   //     final distMeters = geo.Geolocator.distanceBetween(
+      //   //       driverLat, driverLng, p.lat, p.lng);
+      //   //     return distMeters / 1609.34 <= 50.0;
+      //   //   }).toList();
+      debugPrint('POI dataset loaded: ${pois.length} total entries.');
+      if (pois.isNotEmpty) {
+        final int previewCount = math.min(20, pois.length);
+        for (var i = 0; i < previewCount; i++) {
+          final p = pois[i];
+          debugPrint('  POI[$i] ${p.name}  (${p.lat}, ${p.lng})');
+        }
+        final double minLat = pois.map((p) => p.lat).reduce(math.min);
+        final double maxLat = pois.map((p) => p.lat).reduce(math.max);
+        final double minLng = pois.map((p) => p.lng).reduce(math.min);
+        final double maxLng = pois.map((p) => p.lng).reduce(math.max);
+        debugPrint(
+          'Coordinate spread — '
+          'lat: ${minLat.toStringAsFixed(4)} – ${maxLat.toStringAsFixed(4)}, '
+          'lng: ${minLng.toStringAsFixed(4)} – ${maxLng.toStringAsFixed(4)}',
+        );
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      await registerPoiIcons(map.style);
+
+      // 2. Add the clustered GeoJSON source (inline FeatureCollection).
+      final Map<String, dynamic> geoJson = poisToGeoJson(pois);
+      await map.style.addStyleSource(
+        'poi-source',
+        jsonEncode({
+          'type': 'geojson',
+          'data': geoJson,
+          'cluster': true,
+          'clusterMaxZoom': 14,
+          'clusterRadius': 50,
+        }),
+      );
+
+      // 3. Cluster circle layer — colour steps by group size.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-clusters',
+          'type': 'circle',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'paint': {
+            'circle-color': [
+              'step',
+              ['get', 'point_count'],
+              '#3B82F6', // blue  — small clusters (< 10)
+              10,
+              '#F59E0B', // amber — medium clusters (10–29)
+              30,
+              '#EF4444', // red   — large clusters (≥ 30)
+            ],
+            'circle-radius': [
+              'step',
+              ['get', 'point_count'],
+              18,
+              10,
+              24,
+              30,
+              30,
+            ],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 4. Cluster count text label layer.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-cluster-count',
+          'type': 'symbol',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'layout': {
+            'text-field': '{point_count_abbreviated}',
+            'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+            'text-size': 13,
+          },
+          'paint': {
+            'text-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 5. Unclustered individual POI icon layer.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-unclustered',
+          'type': 'symbol',
+          'source': 'poi-source',
+          'filter': ['!', ['has', 'point_count']],
+          'layout': {
+            'icon-image': ['get', 'icon'],
+            'icon-size': 0.6,
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+        }),
+        null,
+      );
+    } catch (e) {
+      // POI cluster setup failed — map remains usable without the POI overlay.
+      debugPrint('TruckMapScreen: _setupPoiCluster failed: $e');
+    }
   }
 
   /// Returns a full-screen [MapWidget] using the Mapbox Maps Flutter SDK.
@@ -5638,6 +5659,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         key: const ValueKey("mapWidget"),
         styleUri: mbx.MapboxStyles.MAPBOX_STREETS,
         onMapCreated: _onMapCreated,
+        onStyleLoadedListener: _onStyleLoaded,
       ),
     );
   }
@@ -6467,7 +6489,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const SizedBox.shrink();
     }
     return Positioned(
-      top: 165,
+      // Position just below the compact next-step card (~90 px tall with
+      // SafeArea) so lane guidance never overlaps the top navigation card.
+      top: 110,
       left: 16,
       right: 16,
       child: Center(
@@ -6906,6 +6930,103 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds a compact wind/weather alert card shown at the bottom center-left
+  /// of the map during active navigation.
+  ///
+  /// Displays the first active weather-type [NavigationAlert] in a compact
+  /// card (~90 px tall).  Returns [SizedBox.shrink] when there are no active
+  /// weather alerts so the zone stays empty without affecting layout.
+  Widget _buildWindAlert() {
+    // Find the first undismissed weather/wind alert from the active alert list.
+    final Iterable<NavigationAlert> weatherAlerts = _navAlerts.where(
+      (a) => !a.isDismissed && (a.type == AlertType.weather ||
+          a.type == AlertType.windAdvisory || a.type == AlertType.highWind),
+    );
+    if (weatherAlerts.isEmpty) return const SizedBox.shrink();
+    final NavigationAlert weatherAlert = weatherAlerts.first;
+
+    final Color alertColor = _alertSeverityColor(weatherAlert.severity);
+
+    return Positioned(
+      bottom: 85,
+      left: 12,
+      // Leave right:90 so the speed box at bottom-right stays fully visible.
+      right: 90,
+      child: SizedBox(
+        height: 90,
+        child: Card(
+          margin: EdgeInsets.zero,
+          color: Colors.black.withOpacity(0.82),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: alertColor.withOpacity(0.7), width: 1.2),
+          ),
+          elevation: 4,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.air, color: alertColor, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        weatherAlert.title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: alertColor,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (weatherAlert.subtitle != null)
+                        Text(
+                          weatherAlert.subtitle!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.white70,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      if (weatherAlert.distanceMiles != null)
+                        Text(
+                          _fmtMiles(weatherAlert.distanceMiles!),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: alertColor.withOpacity(0.85),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      final idx = _navAlerts
+                          .indexWhere((a) => a.id == weatherAlert.id);
+                      if (idx != -1) {
+                        _navAlerts[idx] =
+                            _navAlerts[idx].copyWith(isDismissed: true);
+                      }
+                    });
+                  },
+                  child: const Icon(Icons.close,
+                      size: 16, color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Builds the "Stop Navigation" button overlay shown only while [_isNavigating].
   ///
   /// Provides a full-width "Stop Navigation" button so the driver can end the
@@ -6914,13 +7035,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// devices.
   Widget _buildStopNavigationButton() {
     return Positioned(
-      bottom: 24,
-      left: 20,
-      right: 20,
+      bottom: 20,
+      left: 16,
+      right: 16,
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 60,
+          height: 55,
           child: ElevatedButton.icon(
             onPressed: _stopNavigation,
             icon: const Icon(Icons.stop_circle_outlined),
@@ -7205,16 +7326,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
                 // ── Navigation banner ─────────────────────────────────────
-                // Floats at the top of the map so the current maneuver
-                // instruction is always visible during active navigation,
-                // independent of the scrollable info panel below the map.
-                // Also shown on arrival so the driver sees the arrival message.
-                // While _isNavigating is true, the richer RoadGuidanceBanner
-                // (with road chips, lane guidance and look-ahead preview)
-                // replaces the simpler urgency-coloured banner.
-                if (_isNavigating && _navSteps.isNotEmpty)
-                  _buildRoadGuidanceBanner()
-                else if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
+                // Shown in route-preview / arrival state (not during active
+                // turn-by-turn navigation – the compact next-step card takes
+                // that role to keep the top zone minimal).
+                if (!_isNavigating && (_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -7312,9 +7427,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Only rendered during an active navigation session.
                 if (_hasActiveDestination && _restrictionAhead != null)
                   Positioned(
-                    // RoadGuidanceBanner is taller (~170 px) when navigating;
-                    // the original nav banner is ~90 px.
-                    top: _isNavigating ? 170 : (_navSteps.isNotEmpty ? 90 : 68),
+                    // Compact top nav card is ~90 px; use a consistent offset
+                    // whether navigating or in preview mode.
+                    top: _isNavigating ? 100 : (_navSteps.isNotEmpty ? 90 : 68),
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
@@ -7322,12 +7437,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Warning popup stack ───────────────────────────────────
                 // Stacked top-right cards for road-hazard warning signs along
                 // the active route.  Only visible during active navigation.
-                // High severity cards are pinned until dismissed; medium/low
-                // cards auto-dismiss after a short interval.  Positioned below
-                // the nav banner so it never overlaps the turn instruction.
+                // Positioned at top:220 on the right so it does not conflict
+                // with the compact right-side alert stack (top:120).
                 if (_isNavigating)
                   Positioned(
-                    top: _navSteps.isNotEmpty ? 96 : 74,
+                    top: 220,
                     right: 8,
                     child: WarningPopupStack(manager: _warningManager),
                   ),
@@ -7339,7 +7453,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   Positioned(
                     top: () {
                       int offset = _isNavigating
-                          ? 170
+                          ? 100
                           : (_navSteps.isNotEmpty ? 90 : 68);
                       if (_restrictionAhead != null) offset += 64;
                       return offset.toDouble();
@@ -7423,16 +7537,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Hidden during active navigation so the map is unobstructed.
                 if (!_isNavigating && _hasActiveDestination && _tripStartTime != null)
                   _buildTripStatsPanel(),
-                // ── Speed / speed-limit panel (PositionPanel) ─────────────
-                // Visible during active navigation with a destination.
-                // Positioned at the bottom-right corner of the map so it never
-                // obscures the navigation banner or the rerouting indicator.
-                if (_navigationMode && _hasActiveDestination)
-                  Positioned(
-                    bottom: 140,
-                    right: 16,
-                    child: _buildSpeedPanel(),
-                  ),
                 // ── POI toggle FAB ────────────────────────────────────────
                 // Hidden during navigation so the Stop Navigation button can
                 // occupy the same bottom-left slot without overlap.
@@ -7459,49 +7563,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
-                // ── Compact next-step card ─────────────────────────────────
-                // GPS-style banner showing the upcoming maneuver icon, road
-                // name, and distance.  Only visible during active navigation.
+                // ── Zone 1 (top): compact next-step navigation card ────────
+                // Single GPS-style card: maneuver icon + road name + distance.
+                // Uses SafeArea + Positioned inside the card; no duplicate
+                // banner coexists with this during active navigation.
                 _buildCompactNextStepCard(),
-                // ── Compass / re-centre button ────────────────────────────
-                // Round dark button at the top-right.  Taps re-engage camera
-                // follow and snap to the truck's live position.
+                // ── Zone 1a (top-right): compass / re-centre button ────────
+                // Round dark button at the top-right corner.
                 _buildSmallCompassButton(),
-                // ── Right-side alert stack ────────────────────────────────
-                // Up to three compact alert chips stacked on the right edge.
+                // ── Zone 3 (right side): compact vertical alert stack ──────
+                // Up to three compact alert chips stacked on the right edge,
+                // starting at top:120 so they never overlap the top card or
+                // the compass button.
                 _buildRightSideAlertStack(),
-                // ── Bottom service chips ──────────────────────────────────
-                // Horizontally-scrollable row of nearest truck-stop chips.
-                _buildBottomServiceChips(),
-                // ── Compact trip strip ────────────────────────────────────
-                // Full-width bottom strip: miles left, drive time, ETA.
-                _buildCompactTripStrip(),
-                // ── Compact speed box ─────────────────────────────────────
-                // Small card at bottom-left showing current speed and limit.
-                // Turns red when the driver exceeds the speed limit.
+                // ── Zone 4 (bottom right): speed / speed-limit box ─────────
+                // Compact speed indicator; turns red when over the limit.
                 _buildCompactSpeedBox(),
-                // ── Mini alert row ─────────────────────────────────────────
-                // Compact horizontal chips showing nearby alerts (wind,
-                // fuel, restriction) during active navigation.
-                if (_isNavigating) _buildMiniAlertRow(),
-                // ── Closest 2 truck stops ahead row ───────────────────────
-                // Compact GPS-style chips showing the 2 nearest truck stops
-                // ahead on the active route.  Only visible during navigation.
-                _buildClosestTruckStopsRow(),
-                // ── Main alert card ────────────────────────────────────────
-                // Primary expandable alert card with trip summary strip.
-                // Floats above the Stop Navigation button during navigation.
-                if (_isNavigating) _buildMainAlertCard(),
-                // ── Navigation controls ───────────────────────────────────
-                // Stop Navigation button: only visible while _isNavigating.
-                // Tapping calls _stopNavigation to end the trip and restore
-                // planning UI.
+                // ── Zone 5 (bottom center/left): compact wind alert card ───
+                // Shows the primary active weather/wind alert in a compact card
+                // (~90 px tall) that sits above the stop button.
+                if (_isNavigating) _buildWindAlert(),
+                // ── Zone 6 (very bottom): stop navigation button ──────────
+                // Full-width "Stop Navigation" button with SafeArea padding.
                 if (_isNavigating) _buildStopNavigationButton(),
-                // ── Closest weigh stations ahead row ─────────────────────
-                // Compact chip row showing the next 1–2 weigh stations on the
-                // active route with distance and logo.  Only visible while
-                // navigating and when at least one station lies ahead.
-                _buildClosestWeighStationsRow(),
               ],
             ),
           ),
@@ -7988,8 +8072,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return Positioned(
       right: 12,
-      // Position below the compass button (48 px button + 8 top margin + 8 gap).
-      top: 74,
+      // Start below the compass button (≈48 px) and top card zone so
+      // alerts never overlap the top navigation card.
+      top: 120,
       child: SafeArea(
         bottom: false,
         child: Column(
@@ -8391,9 +8476,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         overLimit ? Colors.red : Colors.transparent;
 
     return Positioned(
-      left: 12,
-      // Float above the compact trip strip (assumed ~80 px tall + safe-area).
-      bottom: 92,
+      right: 16,
+      // Float well above the wind alert card (bottom:85 + ~90 px) so the
+      // speed box is always fully visible in the bottom-right corner.
+      bottom: 140,
       child: SafeArea(
         top: false,
         child: Container(

@@ -6758,7 +6758,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           transitionBuilder: (child, animation) =>
               FadeTransition(opacity: animation, child: child),
           child: (visible && _upcomingManeuverStep != null)
-              ? KeyedSubtree(
+              ? SafeArea(
+                  bottom: false,
                   key: const ValueKey('laneGuidanceOn'),
                   child: _buildDynamicLaneAssist(_upcomingManeuverStep!),
                 )

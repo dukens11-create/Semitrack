@@ -8801,8 +8801,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // _refreshUpcomingAlerts() in _onGpsPosition to disable.
                 _buildRightSideUpcomingAlerts(),
                 // ── Zone 4 (bottom right): speed / speed-limit box ─────────
-                // Compact speed indicator; turns red when over the limit.
-                _buildCompactSpeedBox(),
+                // Prominent speed indicator; turns red when over the limit.
+                Positioned(
+                  right: 16,
+                  bottom: 170,
+                  child: _buildSpeedLimitBox(),
+                ),
                 // ── Zone 5 (bottom center/left): compact wind alert card ───
                 // Shows the primary active weather/wind alert in a compact card
                 // (~90 px tall) that sits above the stop button.
@@ -9918,103 +9922,90 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Compact speed-indicator card showing the current speed and the estimated
-  /// speed limit, positioned at the bottom-left corner of the map.
-  ///
-  /// Visual behaviour:
-  ///   • Normal driving: white card with speed in black and limit badge below.
-  ///   • Over the speed limit: red border + red speed text to alert the driver.
-  ///
-  /// Only visible during active navigation.
+  /// Speed limit display box showing current speed and the active speed limit.
   ///
   /// [_currentSpeedMps] and [_speedLimitMph] are updated from the GPS stream
-  /// via [_onGpsPosition].  No changes required here once the GPS subscription
-  /// is active; just ensure [_buildCompactSpeedBox] is placed inside the map
-  /// Stack (see build()).
-  Widget _buildCompactSpeedBox() {
+  /// via [_onGpsPosition].  The speed text turns red when the driver exceeds
+  /// the limit.  Returns an empty widget when not navigating.
+  Widget _buildSpeedLimitBox() {
     if (!_isNavigating) return const SizedBox.shrink();
 
-    // Convert raw GPS m/s → mph; clamp to 0 when no fix available yet.
     final double speedMph =
         _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
     final int speedInt = speedMph.round();
     final int limitInt = _speedLimitMph.round();
+    final bool isOverSpeed = _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
 
-    // Over-speed flag: only raise when a valid GPS fix has been received.
-    final bool overLimit =
-        _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
-
-    // Colour tokens for normal vs over-speed states.
-    final Color speedColor = overLimit ? Colors.red : Colors.black87;
-    final Color borderColor =
-        overLimit ? Colors.red : Colors.transparent;
-
-    return Positioned(
-      right: 16,
-      // bottom: 170 keeps the speed box clearly above the wind advisory card
-      // (bottom: 95 + height: ~95) and the stop button (bottom: 20 + height: 54).
-      bottom: 170,
-      child: SafeArea(
-        top: false,
-        child: Container(
-          width: 64,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: borderColor, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
+    return Container(
+      width: 92,
+      height: 250,
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.9),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // ── Current speed (large, prominent) ────────────────────
-              Text(
-                '$speedInt',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  color: speedColor,
-                  height: 1.0,
-                ),
-              ),
-              // ── Unit label ───────────────────────────────────────────
-              Text(
-                'mph',
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                  color: speedColor.withOpacity(0.75),
-                ),
-              ),
-              const SizedBox(height: 4),
-              // ── Speed-limit badge ────────────────────────────────────
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD32F2F), // MUTCD red
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  '$limitInt',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 10),
+          Text(
+            '$speedInt',
+            style: TextStyle(
+              color: isOverSpeed ? Colors.red : Colors.white,
+              fontSize: 54,
+              fontWeight: FontWeight.w800,
+              height: 1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'mph',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const Spacer(),
+          Container(
+            width: 72,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            margin: const EdgeInsets.only(bottom: 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'LIMIT',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
                   ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 6),
+                Text(
+                  '$limitInt',
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 44,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

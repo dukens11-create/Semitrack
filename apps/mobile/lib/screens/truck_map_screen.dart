@@ -615,6 +615,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           await rootBundle.loadString('assets/truck_stop_poi/locations.json');
       final List<TruckStopPOI> pois = TruckStopPOI.listFromJson(jsonString);
       if (mounted) setState(() => _poiLocations = pois);
+
+      // ── Diagnostic logging — verify dataset coverage ──────────────────────
+      // Expected coordinate ranges for full USA / Canada coverage:
+      //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
+      //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
+      debugPrint('POI dataset loaded: ${pois.length} total entries.');
+      if (pois.isNotEmpty) {
+        final int previewCount = math.min(20, pois.length);
+        for (var i = 0; i < previewCount; i++) {
+          final p = pois[i];
+          debugPrint('  POI[$i] ${p.name}  (${p.lat}, ${p.lng})');
+        }
+        final double minLat =
+            pois.map((p) => p.lat).reduce(math.min);
+        final double maxLat =
+            pois.map((p) => p.lat).reduce(math.max);
+        final double minLng =
+            pois.map((p) => p.lng).reduce(math.min);
+        final double maxLng =
+            pois.map((p) => p.lng).reduce(math.max);
+        debugPrint(
+          'Coordinate spread — '
+          'lat: ${minLat.toStringAsFixed(4)} – ${maxLat.toStringAsFixed(4)}, '
+          'lng: ${minLng.toStringAsFixed(4)} – ${maxLng.toStringAsFixed(4)}',
+        );
+      }
+      // ─────────────────────────────────────────────────────────────────────
     } catch (_) {
       // Locations file unreadable — POI markers simply won't be shown.
     }
@@ -1378,8 +1405,31 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return markers;
   }
 
-  /// Builds [Marker]s for every [TruckStopPOI] loaded from
+  /// Builds [Marker]s for truck stop POIs loaded from
   /// `assets/truck_stop_poi/locations.json`.
+  ///
+  /// **Mode behaviour:**
+  ///
+  /// (a) Browse mode (`_isNavigating == false`) — ALL POIs in [_poiLocations]
+  ///     are rendered as clustered markers so the driver can explore the full
+  ///     dataset on the map with no distance filtering applied.
+  ///
+  /// (b) Navigation mode (`_isNavigating == true`) — POIs can be filtered by
+  ///     proximity to the driver or along the active route.  The
+  ///     [_getClosestTruckStopsAheadOnRoute] helper already handles route-aware
+  ///     filtering for the "ahead" strip; the marker layer continues to render
+  ///     all POIs so drivers retain full spatial context while navigating.
+  ///     // Navigation-only distance filter (retained for reference):
+  ///     //   if (_isNavigating && _truckPosition != null) {
+  ///     //     const maxVisibleMiles = 50.0;
+  ///     //     pois = pois.where((p) {
+  ///     //       final distMeters = geo.Geolocator.distanceBetween(
+  ///     //         _truckPosition!.latitude, _truckPosition!.longitude,
+  ///     //         p.lat, p.lng,
+  ///     //       );
+  ///     //       return distMeters / 1609.34 <= maxVisibleMiles;
+  ///     //     }).toList();
+  ///     //   }
   ///
   /// Each POI's [TruckStopPOI.icon] field is resolved to the full asset path
   /// `assets/truck_stop_poi/{icon}`.  When a POI's specific icon has not been
@@ -1398,6 +1448,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final Uint8List? defaultBytes = _brandIconBytes[_defaultTruckStopAsset];
     final markers = <Marker>[];
+    // Browse mode: iterate ALL POIs — no distance filtering applied here.
+    // Navigation mode: the ahead-strip uses _getClosestTruckStopsAheadOnRoute
+    // for route-proximity filtering; the marker layer still renders all POIs.
     for (final poi in _poiLocations) {
       final String assetKey = 'assets/truck_stop_poi/${poi.icon}';
       final Uint8List? bytes = _brandIconBytes[assetKey];

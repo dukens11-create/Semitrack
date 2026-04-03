@@ -1317,7 +1317,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// background, border, or container — the asset image is the full marker.
   /// If the PNG asset for a stop has not been loaded, that stop is silently
   /// omitted rather than falling back to a generic icon.
-  List<Marker> _buildTruckStopMarkers() {
+  ///
+  /// ───────────────────────────────────────────────────────────────────────
+  /// CHECKLIST — PNG asset & marker requirements (prevents "box look")
+  /// ───────────────────────────────────────────────────────────────────────
+  /// 1. ✅ ALL PNG assets MUST have a transparent background (RGBA, not RGB).
+  ///    A solid white/coloured background produces a visible "box look".
+  /// 2. ✅ [TruckStop.assetLogo] (the key into [_brandIconBytes]) MUST match
+  ///    the exact asset path registered in `pubspec.yaml` and in
+  ///    `image_utils.dart` → `addTruckStopImages` (case-sensitive).
+  ///    For Mapbox native SDK usage the [TruckStop.icon] key MUST match the
+  ///    name passed to `style.addImage` exactly (e.g. `"loves"` not `"Loves"`).
+  /// 3. ✅ Each [Marker] uses [alignment: Alignment.center] — the flutter_map
+  ///    equivalent of Mapbox `iconAnchor: IconAnchor.CENTER`.
+  /// 4. ✅ [Image.memory] renders the PNG at full opacity with no wrapping
+  ///    [Container], [DecoratedBox], [ClipOval], or background color.
+  ///    This is the flutter_map equivalent of setting Mapbox SymbolOptions:
+  ///      iconOpacity: 1.0, iconAllowOverlap: true, iconIgnorePlacement: true
+  ///    and NOT setting iconColor / iconHaloColor / iconHaloWidth.
+  /// ───────────────────────────────────────────────────────────────────────
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     final markers = <Marker>[];

@@ -1,10 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-// dart:io is used only for desktop file-existence auditing (see auditPoiIconAssets).
-// It is safe to import here — on Android/iOS/Web the Platform and File APIs
-// referenced below are guarded by kIsWeb / Platform checks so they are never
-// called on unsupported targets.
-import 'dart:io' show File, Platform;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -215,9 +210,6 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
 /// normalises to that ID — either the file is absent or the filename does not
 /// match the JSON value after normalisation.
 ///
-/// On desktop platforms (macOS, Linux, Windows) a secondary check also
-/// attempts to verify file paths directly via `dart:io`.
-///
 /// **How to match POI JSON values to filenames:**
 ///   • The JSON `"icon"` field (e.g. `"flying j truck stop.png"`) is
 ///     normalised by [poiIconId] before being stored in [PoiItem.icon].
@@ -236,12 +228,12 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
     '[POI Audit] ${sortedIcons.length} unique icon ID(s) referenced by POIs:',
   );
   for (final id in sortedIcons) {
-    debugPrint('  icon id: "$id"');
+    debugPrint('[POI Audit]   icon id: "$id"');
   }
 
   // Build the set of icon IDs that are actually bundled in assets/truck_stop_poi/
   // by scanning the asset manifest and normalising each PNG filename.
-  // This works on all platforms (Android, iOS, web, desktop).
+  // This works on all platforms (Android, iOS, web, desktop) without dart:io.
   // TODO(production): Remove this block before releasing.
   final AssetManifest manifest =
       await AssetManifest.loadFromAssetBundle(rootBundle);
@@ -267,37 +259,5 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
               'normalises to this ID. '
               'Check the filename in the folder matches the JSON icon value.',
     );
-  }
-
-  // On desktop, also attempt a secondary file-system check using dart:io.
-  // Note: the normalised ID (e.g. "flying_j_truck_stop") will not match the
-  // original filename ("flying j truck stop.png") directly, so this check
-  // is only informational — use the manifest check above for accuracy.
-  // TODO(production): Remove this block before releasing.
-  if (!kIsWeb) {
-    bool isDesktop = false;
-    try {
-      isDesktop =
-          Platform.isMacOS || Platform.isLinux || Platform.isWindows;
-    } catch (_) {
-      // Platform not available on this target — skip silently.
-    }
-    if (isDesktop) {
-      debugPrint(
-        '[POI Audit] Desktop file-system check '
-        '(note: normalised IDs differ from original filenames — '
-        'use the manifest check above for authoritative results):',
-      );
-      for (final id in sortedIcons) {
-        final String candidate = 'assets/truck_stop_poi/$id.png';
-        final bool exists = File(candidate).existsSync();
-        debugPrint(
-          exists
-              ? '[POI Audit]   [FOUND on disk]   $candidate'
-              : '[POI Audit]   [NOT FOUND on disk] $candidate  '
-                  '(original filename likely differs — see manifest check above)',
-        );
-      }
-    }
   }
 }

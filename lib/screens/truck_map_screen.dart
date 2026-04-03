@@ -5619,8 +5619,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       //
       // To match a missing icon:
       //   1. Find the icon ID printed here (e.g. "hotel_default").
-      //   2. Check that a PNG named "hotel default .png" (spaces, exact case)
-      //      exists in assets/truck_stop_poi/.
+      //   2. Check that a PNG matching the original JSON icon value exists in
+      //      assets/truck_stop_poi/ (e.g. "hotel default .png" — note the
+      //      trailing space before .png in some bundled filenames).
       //   3. If not, add or rename the PNG, then rebuild.
       //
       // TODO(production): Remove this per-POI loop before releasing.

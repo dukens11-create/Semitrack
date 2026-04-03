@@ -105,6 +105,15 @@ enum ManeuverVisualType {
   roundabout,
 }
 
+/// Camera behaviour mode for the truck navigation screen.
+///
+/// - [follow]   : camera locks onto the truck (lower-third framing, rotates
+///               with heading, dynamic speed-based zoom).
+/// - [overview] : shows the full route, north-up, low zoom.
+/// - [free]     : user is manually panning/zooming; follow is paused and
+///               automatically resumes after 8 s of idle.
+enum NavigationCameraMode { follow, overview, free }
+
 /// Immutable snapshot of the next navigation step shown in the compact top
 /// instruction card.
 ///
@@ -638,13 +647,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // When false the camera shows the full-route overview.
   bool _navigationMode = false;
 
-  // ── Camera follow state ────────────────────────────────────────────────────
-  // When true the camera continuously follows the truck (GPS navigation mode).
-  // Set to false automatically when the user manually pans/zooms the map so
-  // they can freely explore without forced camera snaps.  Tapping the recenter
-  // FAB resets this to true and immediately re-centres the camera.
-  // Default is false: camera follow is only enabled once an active route begins.
-  bool _followTruck = false;
+  // ── Navigation camera mode ─────────────────────────────────────────────────
+  // Primary mode driver for the GPS camera system.  All camera behaviour
+  // (follow, overview, free/gesture) is derived from this field.
+  NavigationCameraMode _cameraMode = NavigationCameraMode.follow;
+
+  // Convenience getter: true while the camera actively locks onto the truck.
+  bool get _followTruck => _cameraMode == NavigationCameraMode.follow;
+
+  // Last bearing accepted for camera rotation (smoothed to avoid jitter).
+  double _lastKnownBearing = 0.0;
+
+  // Timestamp of the most recent map gesture so the 8-second idle window
+  // can be measured precisely.
+  DateTime? _lastManualMapInteractionAt;
+
+  // True while a user gesture (pan / pinch / rotate) is in progress.
+  bool _isUserInteractingWithMap = false;
+
+  // Timer that fires after 8 s of idle to return from free → follow mode.
+  Timer? _gestureReturnTimer;
 
   // ── Navigation session guard ───────────────────────────────────────────────
   /// True when a destination has been selected **and** the navigation session
@@ -768,6 +790,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void dispose() {
     _gpsSubscription?.cancel();
     _animTimer?.cancel();
+    _gestureReturnTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _tts.stop();
     _searchController.dispose();
@@ -1939,7 +1962,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Only follow the truck when actively navigating to a destination.
     if (!_hasActiveDestination) return;
     // Skip camera follow if user is freely exploring the map.
-    if (!_followTruck) return;
+    if (_cameraMode != NavigationCameraMode.follow) return;
     // Shift the camera target slightly ahead of the truck (−_cameraLeadLatitude°)
     // so the road in front is always visible, matching Google Maps navigation.
     final cameraTarget = LatLng(
@@ -1949,12 +1972,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final double speedMph = _currentSpeedMps > 0
         ? _currentSpeedMps * _mpsToMph
         : 0.0;
-    final double zoom = _navigationZoomForSpeed(speedMph);
+
+    // Compute next-step distance in miles for turn-zoom boost.
+    double? nextStepMiles;
+    if (_navSteps.isNotEmpty) {
+      nextStepMiles = _distanceToNextStep() / _metersPerMile;
+    }
+
+    final double zoom = _navigationZoomForStep(speedMph, nextStepMiles);
     // Rotate map with heading only when truck is moving fast enough to produce
     // a stable heading from GPS.  Below _noRotateSpeedMph hold the bearing
     // steady to prevent the map from spinning from heading noise.
-    final double bearing =
-        speedMph >= _noRotateSpeedMph ? _truckBearing : _mapController.camera.rotation;
+    double bearing;
+    if (speedMph >= _noRotateSpeedMph) {
+      bearing = _truckBearing;
+      _lastKnownBearing = bearing;
+    } else {
+      bearing = _lastKnownBearing;
+    }
     _mapController.moveAndRotate(cameraTarget, zoom, bearing);
   }
 
@@ -1993,22 +2028,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Updates the camera for a moving truck: rotates with heading when speed is
   /// high enough and zooms dynamically based on [pos] speed.
   ///
-  /// Positions the camera target slightly ahead of the truck using
-  /// [_cameraLeadLatitude] so the road ahead is visible (lower-third effect).
+  /// Delegates to [_setFollowCamera] which applies turn-zoom, bearing
+  /// filtering, and lower-third framing in one place.
   void _updateNavigationCamera(geo.Position pos) {
     if (!_mapReady || _truckPosition == null || _isArrived) return;
-    if (!_followTruck) return;
-    final double speedMph = pos.speed > 0 ? pos.speed * _mpsToMph : 0.0;
-    final double zoom = _navigationZoomForSpeed(speedMph);
-    // Shift target ahead of the truck so it sits in the lower third of screen.
-    final cameraTarget = LatLng(
-      pos.latitude - _cameraLeadLatitude,
-      pos.longitude,
-    );
-    final double bearing = speedMph >= _noRotateSpeedMph
-        ? _truckBearing
-        : _mapController.camera.rotation;
-    _mapController.moveAndRotate(cameraTarget, zoom, bearing);
+    if (_cameraMode != NavigationCameraMode.follow) return;
+    _setFollowCamera(pos);
   }
 
   /// Updates the camera when the truck is stopped or moving very slowly.
@@ -2017,14 +2042,171 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// show the immediate surroundings clearly.
   void _updateStoppedCamera(geo.Position pos) {
     if (!_mapReady || _truckPosition == null || _isArrived) return;
-    if (!_followTruck) return;
+    if (_cameraMode != NavigationCameraMode.follow) return;
     // Use a fixed close-in zoom when stopped (top of the 0–10 mph band).
     const double stoppedZoom = 17.2;
     // Do not shift target ahead when stopped — centre the truck on screen.
     final cameraTarget = LatLng(pos.latitude, pos.longitude);
-    // Hold the current bearing so the map does not spin from heading noise.
-    final double bearing = _mapController.camera.rotation;
-    _mapController.moveAndRotate(cameraTarget, stoppedZoom, bearing);
+    // Hold the last known bearing so the map does not spin from heading noise.
+    _mapController.moveAndRotate(cameraTarget, stoppedZoom, _lastKnownBearing);
+  }
+
+  /// Returns the appropriate navigation zoom level for [speedMph] with an
+  /// optional turn-approach boost.
+  ///
+  /// When [nextStepMiles] is provided and the maneuver is close, the camera
+  /// zooms in slightly beyond the speed-based level so the intersection is
+  /// clearly visible before the turn:
+  ///   - under 0.5 mi  → +0.5 zoom  (mild approach zoom)
+  ///   - under 0.2 mi  → +1.0 zoom  (close approach zoom)
+  /// After the maneuver the boost is removed and the map returns to the
+  /// normal speed-based level on the next GPS cycle.
+  double _navigationZoomForStep(double speedMph, double? nextStepMiles) {
+    final double base = _navigationZoomForSpeed(speedMph);
+    if (nextStepMiles == null) return base;
+    if (nextStepMiles < 0.2) return (base + 1.0).clamp(0.0, 18.0);
+    if (nextStepMiles < 0.5) return (base + 0.5).clamp(0.0, 18.0);
+    return base;
+  }
+
+  /// Activates **follow mode**: locks the camera onto the truck with
+  /// heading-based rotation, speed-adaptive zoom, and lower-third framing.
+  ///
+  /// Safe to call at any time; no-ops when the map is not ready.
+  void _setFollowCamera(geo.Position pos) {
+    if (!_mapReady || _isArrived) return;
+    _gestureReturnTimer?.cancel();
+    _gestureReturnTimer = null;
+    _cameraMode = NavigationCameraMode.follow;
+
+    final double speedMph = pos.speed > 0 ? pos.speed * _mpsToMph : 0.0;
+
+    // Compute next-step distance in miles for the turn-zoom boost.
+    double? nextStepMiles;
+    if (_navSteps.isNotEmpty) {
+      final double distM = _distanceToNextStep();
+      nextStepMiles = distM / _metersPerMile;
+    }
+
+    final double zoom = _navigationZoomForStep(speedMph, nextStepMiles);
+
+    // Shift target ahead of truck so it sits in the lower third of screen.
+    final cameraTarget = LatLng(
+      pos.latitude - _cameraLeadLatitude,
+      pos.longitude,
+    );
+
+    // Rotate map with heading only when truck is moving fast enough to give
+    // a stable heading; hold steady below the threshold to prevent jitter.
+    double bearing;
+    if (speedMph >= _noRotateSpeedMph) {
+      bearing = _truckBearing;
+      _lastKnownBearing = bearing;
+    } else {
+      // Stopped / very slow: keep the last accepted bearing.
+      bearing = _lastKnownBearing;
+    }
+
+    _mapController.moveAndRotate(cameraTarget, zoom, bearing);
+  }
+
+  /// Activates **overview mode**: fits the full route on screen, north-up.
+  ///
+  /// When no route is loaded the camera simply centres on the truck.
+  void _setOverviewCamera() {
+    if (!_mapReady) return;
+    _gestureReturnTimer?.cancel();
+    _gestureReturnTimer = null;
+    setState(() => _cameraMode = NavigationCameraMode.overview);
+
+    if (_routePoints.isNotEmpty) {
+      _fitCameraToRoute(_routePoints);
+    } else if (_truckPosition != null) {
+      _mapController.moveAndRotate(_truckPosition!, 10.0, 0.0);
+    }
+  }
+
+  /// Activates **free mode**: pauses camera follow so the user can pan/zoom
+  /// without forced camera snaps.
+  ///
+  /// Schedules an automatic return to follow mode after 8 s of idle when
+  /// navigation is active.
+  void _setFreeCamera() {
+    _gestureReturnTimer?.cancel();
+    setState(() {
+      _cameraMode = NavigationCameraMode.free;
+      _lastManualMapInteractionAt = DateTime.now();
+    });
+
+    // Auto-return to follow mode after 8 s if navigating.
+    if (_hasActiveDestination) {
+      _gestureReturnTimer = Timer(const Duration(seconds: 8), () {
+        _maybeReturnToFollowMode();
+      });
+    }
+  }
+
+  /// Called when the user starts a map gesture (pan / pinch / rotate).
+  ///
+  /// Switches to free mode so the camera does not fight the user's input.
+  void _onMapGestureStarted() {
+    if (_cameraMode == NavigationCameraMode.follow ||
+        _cameraMode == NavigationCameraMode.overview) {
+      _setFreeCamera();
+    } else if (_cameraMode == NavigationCameraMode.free) {
+      // Reset the idle timer while the user is still interacting.
+      _gestureReturnTimer?.cancel();
+      setState(() {
+        _isUserInteractingWithMap = true;
+        _lastManualMapInteractionAt = DateTime.now();
+      });
+    }
+  }
+
+  /// Called when the user ends a map gesture.
+  ///
+  /// Starts (or restarts) the 8-second idle countdown for auto-return to
+  /// follow mode.
+  void _onMapGestureEnded() {
+    setState(() {
+      _isUserInteractingWithMap = false;
+      _lastManualMapInteractionAt = DateTime.now();
+    });
+
+    if (!_hasActiveDestination) return;
+    _gestureReturnTimer?.cancel();
+    _gestureReturnTimer = Timer(const Duration(seconds: 8), () {
+      _maybeReturnToFollowMode();
+    });
+  }
+
+  /// Returns to follow mode if enough idle time has elapsed and navigation
+  /// is still active.
+  ///
+  /// Called by [_gestureReturnTimer] after 8 seconds.
+  void _maybeReturnToFollowMode() {
+    if (!mounted) return;
+    if (!_hasActiveDestination) return;
+    if (_isUserInteractingWithMap) return;
+    final last = _lastManualMapInteractionAt;
+    if (last != null &&
+        DateTime.now().difference(last).inSeconds < 8) {
+      return; // user interacted very recently; wait longer
+    }
+    setState(() => _cameraMode = NavigationCameraMode.follow);
+    _followTruckCamera();
+  }
+
+  /// Handles the recenter button tap.
+  ///
+  /// - If in **free** mode: returns to follow mode and snaps camera to truck.
+  /// - If already in **follow** mode: refreshes/snaps camera to truck.
+  /// - If in **overview** mode: returns to follow mode.
+  void _onRecenterPressed() {
+    _gestureReturnTimer?.cancel();
+    _gestureReturnTimer = null;
+    setState(() => _cameraMode = NavigationCameraMode.follow);
+    _followTruckCamera();
   }
 
   // ── TTS initialisation ────────────────────────────────────────────────────
@@ -2537,7 +2719,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _navigationMode = false;
       _isNavigating = false;
       _isArrived = false;
-      _followTruck = false;
+      _cameraMode = NavigationCameraMode.free; // no active destination to follow
       _routePoints = const [];
       _navSteps = const [];
       _currentStepIndex = 0;
@@ -2766,12 +2948,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
     // _navigationActive is set true here so _followTruckCamera and step checks
     // are enabled for the duration of the trip.
-    // _followTruck is re-enabled so the camera automatically centres on the
+    // Camera is set to follow mode so it automatically centres on the
     // truck at route start (user may have panned away during destination search).
     setState(() {
       _navigationMode = true;
       _navigationActive = true;
-      _followTruck = true;
+      _cameraMode = NavigationCameraMode.follow;
     });
     if (_mapReady && _truckPosition != null) {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
@@ -8232,11 +8414,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 : () {
                     setState(() => _navigationMode = !_navigationMode);
                     if (_navigationMode && _truckPosition != null && _mapReady) {
-                      // Switch to navigation mode: zoom close to truck.
-                      _mapController.move(_truckPosition!, _navigationZoomLevel);
+                      // Switch to navigation mode: zoom close to truck and
+                      // re-engage camera follow.
+                      _onRecenterPressed();
                     } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
                       // Switch to overview mode: fit the full route.
-                      _fitCameraToRoute(_routePoints);
+                      _setOverviewCamera();
                     }
                   },
           ),
@@ -8269,14 +8452,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     onLongPress: (tapPosition, point) {
                       _onMapLongPress(point);
                     },
-                    // Disable camera follow when the user manually interacts
-                    // with the map (drag / pinch / scroll) so they can freely
-                    // explore without forced camera snaps back to the truck.
+                    // Gesture detection: switch to free mode when the user
+                    // manually interacts with the map (drag / pinch / rotate).
+                    // Auto-return to follow mode after 8 s of idle.
                     onMapEvent: (MapEvent event) {
-                      if (event is MapEventMoveStart &&
-                          event.source != MapEventSource.mapController &&
-                          _followTruck) {
-                        setState(() => _followTruck = false);
+                      if (event.source != MapEventSource.mapController) {
+                        if (event is MapEventMoveStart) {
+                          _onMapGestureStarted();
+                        } else if (event is MapEventMoveEnd) {
+                          _onMapGestureEnded();
+                        } else if (event is MapEventScrollWheelZoom) {
+                          // Scroll wheel has no separate start event, so
+                          // switch to free mode and reset the idle timer.
+                          _onMapGestureStarted();
+                          _onMapGestureEnded();
+                        }
                       }
                     },
                   ),
@@ -8491,20 +8681,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Icon and tooltip change based on follow state:
                 //   navigation  = camera is actively following the truck
                 //   my_location = user has panned away; tap to re-centre
-                // Tapping re-enables camera follow and immediately snaps the
-                // camera back to the live truck position/bearing.
+                // Tapping re-enables camera follow (recenter).
+                // Long-pressing switches to overview mode (full-route view).
                 Positioned(
                   bottom: 16,
                   right: 16,
-                  child: FloatingActionButton.small(
-                    tooltip: _followTruck ? 'Following truck' : 'Recenter on truck',
-                    onPressed: () {
-                      // Re-enable follow and snap camera to truck immediately.
-                      setState(() => _followTruck = true);
-                      _followTruckCamera();
-                    },
-                    child: Icon(
-                      _followTruck ? Icons.navigation : Icons.my_location,
+                  child: GestureDetector(
+                    onLongPress: _setOverviewCamera,
+                    child: FloatingActionButton.small(
+                      tooltip: _followTruck ? 'Following truck' : 'Recenter on truck',
+                      onPressed: _onRecenterPressed,
+                      child: Icon(
+                        _cameraMode == NavigationCameraMode.overview
+                            ? Icons.map_outlined
+                            : _followTruck
+                                ? Icons.navigation
+                                : Icons.my_location,
+                      ),
                     ),
                   ),
                 ),
@@ -9181,14 +9374,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(24),
-              // Re-engage camera follow and snap back to north-up heading.
-              onTap: () {
-                setState(() => _followTruck = true);
-                if (_truckPosition != null) {
-                  // Use flutter_map MapController.move (not Google Maps API).
-                  _mapController.move(_truckPosition!, 15);
-                }
-              },
+              // Re-engage camera follow and snap back to truck position.
+              onTap: _onRecenterPressed,
               child: const Center(
                 child: Icon(
                   Icons.explore_outlined, // compass rose icon

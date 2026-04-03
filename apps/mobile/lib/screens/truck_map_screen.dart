@@ -521,10 +521,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // In production, replace [warningSigns] with API-loaded data for the
     // active route corridor.
     _warningManager = WarningManager(signs: warningSigns);
-    // Show all truck stop POIs immediately on map load — each stop has an
-    // assetLogo that is registered as a map icon via _preloadBrandIcons(),
-    // the flutter_map equivalent of Mapbox style.addImage() + SymbolLayer.
-    _truckStops = _mockTruckStops;
+    // On initial load there is no active route yet, so show all stops so the
+    // map is useful before the driver sets a destination.  Once a route is
+    // fetched, _truckStops is replaced by the filtered list.
+    _truckStops = _filterStopsNearRoute(_mockTruckStops, _routePoints);
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
@@ -1080,13 +1080,68 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
   /// With the current mock dataset (≤ 10 stops) this is negligible.  When
   /// switching to a real data source with thousands of entries, replace this
+  /// Returns only the [TruckStop]s that lie within [maxDistanceMeters] of the
+  /// active route polyline, sorted by proximity to the current truck position,
+  /// and capped at [maxPOIs] entries for rendering performance.
+  ///
+  /// For each stop, we iterate the decoded route points and use
+  /// [geo.Geolocator.distanceBetween] (haversine) for accuracy.  The inner
+  /// loop exits as soon as one qualifying point is found (early-exit) so the
+  /// overall complexity is O(stops × route_points) in the worst case but
+  /// typically much faster.
+  ///
+  /// When [routePoints] is empty (no active route) every stop is returned so
+  /// that the map is never blank before the driver sets a destination.
+  ///
+  /// Production note: for very long routes consider sub-sampling [routePoints]
   /// with a spatial index (e.g. R-tree or bounding-box pre-filter) to avoid
   /// scanning every stop against every route point.
   List<TruckStop> _filterStopsNearRoute(
     List<TruckStop> allStops,
-    List<LatLng> routePoints,
-  ) {
-    return allStops;
+    List<LatLng> routePoints, {
+    double maxDistanceMeters = 10000, // 10 km corridor around the route
+    int maxPOIs = 50, // rendering cap for performance
+  }) {
+    // No active route – show all stops so the map is useful before navigation.
+    if (routePoints.isEmpty) return allStops;
+
+    // Step 1: keep only stops within [maxDistanceMeters] of any route point.
+    final List<TruckStop> nearRoute = [];
+    for (final stop in allStops) {
+      for (final point in routePoints) {
+        final double d = geo.Geolocator.distanceBetween(
+          stop.position.latitude,
+          stop.position.longitude,
+          point.latitude,
+          point.longitude,
+        );
+        if (d <= maxDistanceMeters) {
+          // At least one route point is close enough – include and move on.
+          nearRoute.add(stop);
+          break;
+        }
+      }
+    }
+
+    // Step 2: sort by distance from the current truck position so the closest
+    // stops appear first in the list (used by the "ahead" chip strip).
+    // Pre-compute each distance once to avoid O(n²) haversine calls inside the
+    // comparator (each comparison would otherwise call distanceBetween twice).
+    final LatLng userPos =
+        _truckPosition ?? (routePoints.isNotEmpty ? routePoints.first : const LatLng(0, 0));
+    final Map<TruckStop, double> distToUser = {
+      for (final stop in nearRoute)
+        stop: geo.Geolocator.distanceBetween(
+          stop.position.latitude,
+          stop.position.longitude,
+          userPos.latitude,
+          userPos.longitude,
+        ),
+    };
+    nearRoute.sort((a, b) => distToUser[a]!.compareTo(distToUser[b]!));
+
+    // Step 3: cap at [maxPOIs] to keep the marker layer performant.
+    return nearRoute.length > maxPOIs ? nearRoute.sublist(0, maxPOIs) : nearRoute;
   }
 
   /// Returns the number of fuel stops (non-rest-area truck stops) within
@@ -3880,8 +3935,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _speak(selectedOpt.steps.first.instruction);
         }
 
-        // Show all truck stops on the map regardless of route proximity.
-        setState(() => _truckStops = _mockTruckStops);
+        // Filter POIs to only those within 10 km of the previewed route so
+        // the map isn't cluttered with globally-distant stops.
+        setState(() => _truckStops =
+            _filterStopsNearRoute(_mockTruckStops, newPoints));
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
         // Smart rerouting is skipped in pre-navigation mode — the driver can
@@ -3984,11 +4041,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _speak(allSteps.first.instruction);
       }
 
-      // ── Show all truck stop POIs ───────────────────────────────────────────
-      // Display every stop in the dataset so drivers can explore all nearby
-      // options, not just those within 5 km of the route.
+      // ── Filter truck stop POIs near the active route ──────────────────────
+      // Re-filter dynamically whenever the route changes (reroute, alternative
+      // selected, etc.) so only stops within 10 km of the new polyline are
+      // shown.  The list is sorted by proximity to the driver and capped at 50
+      // for rendering performance.
       setState(() {
-        _truckStops = _mockTruckStops;
+        _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
       });
 
       // ── Evaluate truck restrictions along the new route ────────────────────
@@ -4051,13 +4110,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _applyRouteOption(int index) {
     if (index < 0 || index >= _routeOptions.length) return;
     final opt = _routeOptions[index];
+    final List<LatLng> newPoints = opt.points.toSet().toList();
     setState(() {
       _selectedRouteOptionIndex = index;
-      _routePoints = opt.points.toSet().toList();
+      _routePoints = newPoints;
       _navSteps = opt.steps;
       _currentStepIndex = 0;
       _routeData = opt.routeData;
-      _truckStops = _mockTruckStops;
+      // Re-filter POIs for the newly selected route alternative so only stops
+      // within 10 km of this specific polyline are displayed.
+      _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
     });
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();

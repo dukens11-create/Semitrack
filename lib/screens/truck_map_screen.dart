@@ -1312,12 +1312,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_brandIconBytes] are rendered — this ensures that **every visible marker
   /// uses a logo image from `assets/logos/`** and no generic fallback icons
   /// appear on the map.  Tapping a marker calls [_showTruckStopSheet].
+  ///
+  /// Rest Area and Weigh Station markers display the raw PNG logo with no
+  /// background, border, or container — the asset image is the full marker.
+  /// If the PNG asset for a stop has not been loaded, that stop is silently
+  /// omitted rather than falling back to a generic icon.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     final markers = <Marker>[];
     for (final stop in _truckStops) {
       // Only render markers whose logo has been loaded — no fallback icons.
+      // For Rest Area and Weigh Station brands this guarantees the marker is
+      // always the branded PNG from assets/logos/ with nothing else behind it.
       final Uint8List? bytes =
           stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
       if (bytes == null) continue;
@@ -1329,19 +1336,69 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
-          child: ClipOval(
-            child: Image.memory(
-              bytes,
-              width: 40,
-              height: 40,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-            ),
+          // Display the PNG logo directly — no ClipOval, no Container, no
+          // background color.  The image fills the marker bounds exactly so
+          // drivers see only the brand asset on the map.
+          child: Image.memory(
+            bytes,
+            width: 40,
+            height: 40,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
           ),
         ),
       ));
     }
     return markers;
+  }
+
+  /// Builds logo-only [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
+  ///
+  /// Each weigh-station POI is rendered as its PNG logo from `assets/logos/`
+  /// with no background, border, or container — the asset image is the full
+  /// marker.  If the logo asset has not been loaded into [_brandIconBytes] the
+  /// POI is silently skipped (no fallback icon is shown).
+  ///
+  /// The fixed asset key used for all weigh-station POIs is
+  /// `'assets/logos/weight station .png'`.  Update this constant if the logo
+  /// file is renamed in `assets/logos/`.
+  ///
+  /// Tapping a weigh-station marker shows the proximity alert dialog via
+  /// [_showPoiAlert] so drivers receive the same actionable status information
+  /// they would get from the auto-proximity check.
+  List<Marker> _buildPoiMarkers() {
+    // Asset key for the weigh-station logo — must match the file registered in
+    // pubspec.yaml and present under assets/logos/.
+    const String weighStationAsset = 'assets/logos/weight station .png';
+
+    // Guard: if the weigh-station logo was not loaded, omit all POI markers
+    // rather than showing a fallback icon.
+    final Uint8List? weighBytes = _brandIconBytes[weighStationAsset];
+    if (weighBytes == null) return const [];
+
+    return _mapPois
+        .where((poi) => poi.type == PoiType.weighStation)
+        .map((poi) {
+          return Marker(
+            point: poi.position,
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: () => _showPoiAlert(poi),
+              // Logo-only marker: no background, border, or container wrapping.
+              // The PNG from assets/logos/ is the entire visible marker.
+              child: Image.memory(
+                weighBytes,
+                width: 40,
+                height: 40,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+              ),
+            ),
+          );
+        })
+        .toList();
   }
 
   /// Checks whether the driver is within 500 m of any [MapPoi] and triggers
@@ -1444,17 +1501,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the complete list of [Marker]s for the [MarkerLayer]:
   /// truck position, destination pin (when selected or arrived), visible truck
-  /// stop POIs (logo-backed only), and truck restriction / warning markers.
+  /// stop POIs (logo-backed only), weigh-station [MapPoi] logo markers, and
+  /// truck restriction / warning markers.
   ///
-  /// POI markers are sourced exclusively from [_buildTruckStopMarkers], which
-  /// only renders stops whose logo image has been loaded from `assets/logos/`.
-  /// The previous icon-only [MapPoi] markers have been removed so that no
-  /// generic icon markers appear alongside the logo-based ones.
+  /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
+  /// entries (including Rest Area and Weigh Station brands) whose PNG has been
+  /// loaded from `assets/logos/`.  [_buildPoiMarkers] adds logo-only markers
+  /// for [MapPoi] weigh stations using the same asset-existence guard — no
+  /// generic fallback icons appear on the map for either category.
   List<Marker> _buildMarkers() {
     return [
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      // Logo-only markers for MapPoi weigh stations (no background/fallback).
+      ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
       ..._buildWarningMarkers(),
     ];

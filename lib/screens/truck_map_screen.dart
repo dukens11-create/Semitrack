@@ -197,6 +197,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
 
+  /// Minimum GPS speed (mph) that counts as real vehicle movement.
+  /// Route progress and step advancement are frozen below this threshold.
+  static const double _minMovingSpeedMph = 1.5;
+
   // ── Route restriction constants ────────────────────────────────────────────
   /// Radius in metres around each restricted zone within which a route point
   /// is considered to violate the restriction.  Used by
@@ -247,6 +251,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
+
+  // When true the smooth route-animation loop is allowed to auto-advance the
+  // truck along the route without real GPS movement (useful for demo/testing).
+  // When false (the default) the animation loop is suppressed and route
+  // progress only advances from real GPS fixes whose speed ≥ _minMovingSpeedMph.
+  bool _isSimulationMode = false;
 
   // ── Turn-by-turn navigation steps (from Mapbox route) ─────────────────────
   //
@@ -1987,8 +1997,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Update truck position and heading (tracking + navigation) ─────────
     // Snap to the nearest ahead-of-index route point for step/off-route logic
     // only when a route exists; otherwise keep the raw GPS fix for display.
+    // Only advance the route index when the vehicle is actually moving —
+    // GPS drift while stopped can shift the nearest index forward by several
+    // points and falsely trigger step advances or off-route reroutes.
+    final bool isVehicleMoving = position.speed > 0 &&
+        position.speed * _mpsToMph >= _minMovingSpeedMph;
     int nearest = _truckIndex;
-    if (_routePoints.isNotEmpty) {
+    if (_routePoints.isNotEmpty && isVehicleMoving) {
       nearest = _nearestRouteIndex(gpsPoint);
     }
 
@@ -2066,6 +2081,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// upcoming maneuver point, then speaks the new instruction aloud.
   void _checkStepAdvancement(LatLng current) {
     if (_navSteps.isEmpty) return;
+    // Do not advance steps unless the vehicle is actually moving.  GPS noise
+    // while the truck is stationary can put the position within the threshold
+    // of the next step even though the driver has not moved.
+    if (_currentSpeedMps < 0 ||
+        _currentSpeedMps * _mpsToMph < _minMovingSpeedMph) return;
     final nextIdx = _currentStepIndex + 1;
     if (nextIdx >= _navSteps.length) return;
     final nextStep = _navSteps[nextIdx];
@@ -2412,12 +2432,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _mapController.move(_truckPosition!, _navigationZoomLevel);
     }
 
-    // Launch smooth async animation; pass the current generation so the
-    // loop can self-cancel if _startRouteAnimation is called again.
-    // Initialize trip statistics so the stats panel shows live data from the
-    // moment navigation begins.
+    // Launch smooth async animation only in simulation mode.  In real-GPS mode
+    // the animation loop is intentionally suppressed — route progress is driven
+    // exclusively by _onGpsPosition() so that the truck never advances without
+    // genuine vehicle movement.
     _startTripStats();
-    _runSmoothRouteAnimation(_animGeneration);
+    if (_isSimulationMode) {
+      _runSmoothRouteAnimation(_animGeneration);
+    }
   }
 
   /// Called when the user taps the "Start Navigation" button after previewing

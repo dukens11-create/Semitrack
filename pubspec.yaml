@@ -41,3 +41,4 @@ flutter:
   #   3. Hot-reload or rebuild the app.
   assets:
     - assets/icons/truck_top.png
+    - assets/truck_stop_poi/

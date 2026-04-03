@@ -1382,31 +1382,69 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// `assets/truck_stop_poi/locations.json`.
   ///
   /// Each POI's [TruckStopPOI.icon] field is resolved to the full asset path
-  /// `assets/truck_stop_poi/{icon}`.  Only POIs whose icon PNG has been
-  /// successfully loaded into [_brandIconBytes] are rendered — no fallback
-  /// icon is shown for missing assets.  Hidden when [_showTruckStops] is false.
+  /// `assets/truck_stop_poi/{icon}`.  When a POI's specific icon has not been
+  /// loaded and the POI is located in the USA or Canada, the default truck stop
+  /// icon (`assets/truck_stop_poi/truck stop default.png`) is used as a
+  /// fallback so that every North American POI always appears on the map.
+  /// Default-fallback markers are rendered with an orange border to make them
+  /// visually distinct from brand-specific markers.
+  /// Hidden when [_showTruckStops] is false.
+  static const String _defaultTruckStopAsset =
+      'assets/truck_stop_poi/truck stop default.png';
+  static const Set<String> _northAmericaCountries = {'US', 'CA'};
+
   List<Marker> _buildTruckStopPOIMarkers() {
     if (!_showTruckStops || _poiLocations.isEmpty) return const [];
 
+    final Uint8List? defaultBytes = _brandIconBytes[_defaultTruckStopAsset];
     final markers = <Marker>[];
     for (final poi in _poiLocations) {
       final String assetKey = 'assets/truck_stop_poi/${poi.icon}';
       final Uint8List? bytes = _brandIconBytes[assetKey];
-      if (bytes == null) continue;
 
-      markers.add(Marker(
-        point: LatLng(poi.lat, poi.lng),
-        width: 40,
-        height: 40,
-        alignment: Alignment.center,
-        child: Image.memory(
-          bytes,
+      if (bytes != null) {
+        // Brand-specific icon available — render it directly.
+        markers.add(Marker(
+          point: LatLng(poi.lat, poi.lng),
           width: 40,
           height: 40,
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-        ),
-      ));
+          alignment: Alignment.center,
+          child: Image.memory(
+            bytes,
+            width: 40,
+            height: 40,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+          ),
+        ));
+      } else if (_northAmericaCountries.contains(poi.country) &&
+          defaultBytes != null) {
+        // No brand icon for this US/CA POI — fall back to the default truck
+        // stop icon with an orange border to distinguish it from custom icons.
+        markers.add(Marker(
+          point: LatLng(poi.lat, poi.lng),
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.orange, width: 2),
+              borderRadius: BorderRadius.circular(6),
+              color: Colors.white.withOpacity(0.85),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(2),
+              child: Image.memory(
+                defaultBytes,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+              ),
+            ),
+          ),
+        ));
+      }
     }
     return markers;
   }

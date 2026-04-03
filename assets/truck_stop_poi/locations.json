@@ -19,7 +19,7 @@
   },
   {
     "name": "TA Travel Center - Medford",
-    "icon": "ta.png",
+    "icon": "ta truck stop.png",
     "lat": 42.3265,
     "lng": -122.8756,
     "country": "US",
@@ -28,7 +28,7 @@
   },
   {
     "name": "Petro Stopping Center - Yreka",
-    "icon": "petro_truck_stop.png",
+    "icon": "petro truck stop.png",
     "lat": 41.7352,
     "lng": -122.6322,
     "country": "US",
@@ -37,7 +37,7 @@
   },
   {
     "name": "Flying J Travel Center - Redding",
-    "icon": "flying  j truck stop.png",
+    "icon": "flying j truck stop.png",
     "lat": 40.5865,
     "lng": -122.3917,
     "country": "US",
@@ -136,7 +136,7 @@
   },
   {
     "name": "Petro-Canada Truck Stop - Toronto",
-    "icon": "petro-canada_truck_stop.png",
+    "icon": "petro-canada truck stop.png",
     "lat": 43.6532,
     "lng": -79.3832,
     "country": "CA",

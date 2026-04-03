@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
+import 'package:semitrack_mobile/models/truck_stop_poi.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
@@ -266,6 +267,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Expand this section later to support real API data, weigh stations, etc.
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
+
+  // POI entries loaded from assets/truck_stop_poi/locations.json.
+  List<TruckStopPOI> _poiLocations = const [];
 
   // ── Closest truck stops ahead (navigation mode) ───────────────────────────
   //
@@ -528,6 +532,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
+    // Load truck stop POI entries from assets/truck_stop_poi/locations.json.
+    _loadTruckStopPOIs();
   }
 
   @override
@@ -575,10 +581,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // to the folder without requiring code changes.
     final AssetManifest manifest =
         await AssetManifest.loadFromAssetBundle(rootBundle);
-    final List<String> logoPaths = manifest
-        .listAssets()
+    final List<String> allPaths = manifest.listAssets();
+    final List<String> logoPaths = allPaths
         .where(
-          (s) => s.startsWith('assets/logos/') && s.endsWith('.png'),
+          (s) =>
+              (s.startsWith('assets/logos/') ||
+                  s.startsWith('assets/truck_stop_poi/')) &&
+              s.endsWith('.png'),
         )
         .toList();
 
@@ -592,6 +601,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (mounted) setState(() => _brandIconBytes = loaded);
+  }
+
+  /// Loads truck stop POI entries from `assets/truck_stop_poi/locations.json`
+  /// and stores them in [_poiLocations].
+  ///
+  /// Each entry is parsed using [TruckStopPOI.fromJson].  The [icon] field
+  /// maps to a PNG filename under `assets/truck_stop_poi/` and is resolved to
+  /// a full asset path when building markers in [_buildTruckStopPOIMarkers].
+  Future<void> _loadTruckStopPOIs() async {
+    try {
+      final String jsonString =
+          await rootBundle.loadString('assets/truck_stop_poi/locations.json');
+      final List<TruckStopPOI> pois = TruckStopPOI.listFromJson(jsonString);
+      if (mounted) setState(() => _poiLocations = pois);
+    } catch (_) {
+      // Locations file unreadable — POI markers simply won't be shown.
+    }
   }
 
   // ── Truck marker builders ─────────────────────────────────────────────────
@@ -1352,6 +1378,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return markers;
   }
 
+  /// Builds [Marker]s for every [TruckStopPOI] loaded from
+  /// `assets/truck_stop_poi/locations.json`.
+  ///
+  /// Each POI's [TruckStopPOI.icon] field is resolved to the full asset path
+  /// `assets/truck_stop_poi/{icon}`.  Only POIs whose icon PNG has been
+  /// successfully loaded into [_brandIconBytes] are rendered — no fallback
+  /// icon is shown for missing assets.  Hidden when [_showTruckStops] is false.
+  List<Marker> _buildTruckStopPOIMarkers() {
+    if (!_showTruckStops || _poiLocations.isEmpty) return const [];
+
+    final markers = <Marker>[];
+    for (final poi in _poiLocations) {
+      final String assetKey = 'assets/truck_stop_poi/${poi.icon}';
+      final Uint8List? bytes = _brandIconBytes[assetKey];
+      if (bytes == null) continue;
+
+      markers.add(Marker(
+        point: LatLng(poi.lat, poi.lng),
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        child: Image.memory(
+          bytes,
+          width: 40,
+          height: 40,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+        ),
+      ));
+    }
+    return markers;
+  }
+
   /// Builds logo-only [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
   /// Each weigh-station POI is rendered as its PNG logo from `assets/logos/`
@@ -1506,14 +1565,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  [_buildPoiMarkers] adds logo-only markers
-  /// for [MapPoi] weigh stations using the same asset-existence guard — no
-  /// generic fallback icons appear on the map for either category.
+  /// loaded from `assets/logos/`.  [_buildTruckStopPOIMarkers] renders markers
+  /// for POIs loaded from `assets/truck_stop_poi/locations.json`.
+  /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
+  /// using the same asset-existence guard — no generic fallback icons appear
+  /// on the map for either category.
   List<Marker> _buildMarkers() {
     return [
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       ..._buildTruckStopMarkers(),
+      // Markers from assets/truck_stop_poi/locations.json POI data.
+      ..._buildTruckStopPOIMarkers(),
       // Logo-only markers for MapPoi weigh stations (no background/fallback).
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),

@@ -5611,6 +5611,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // 1. Load every POI from locations.json and register all PNG icons.
       final List<PoiItem> pois = await loadAllPois();
 
+      // ── Audit: name + icon for every POI ─────────────────────────────────
+      // Prints every loaded POI's name and normalised Mapbox icon ID so you can
+      // cross-check the JSON `"icon"` field against the files bundled in
+      // assets/truck_stop_poi/.  If a marker is missing, its icon ID will not
+      // appear in the [registerPoiIcons] success log.
+      //
+      // To match a missing icon:
+      //   1. Find the icon ID printed here (e.g. "hotel_default").
+      //   2. Check that a PNG named "hotel default .png" (spaces, exact case)
+      //      exists in assets/truck_stop_poi/.
+      //   3. If not, add or rename the PNG, then rebuild.
+      //
+      // TODO(production): Remove this per-POI loop before releasing.
+      debugPrint('[POI Audit] ${pois.length} POI(s) loaded from locations.json:');
+      for (var i = 0; i < pois.length; i++) {
+        final p = pois[i];
+        debugPrint('[POI Audit]   [$i] name="${p.name}"  icon="${p.icon}"');
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
       // Expected coordinate ranges for full USA / Canada coverage:
       //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
@@ -5644,6 +5664,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'lng: ${minLng.toStringAsFixed(4)} – ${maxLng.toStringAsFixed(4)}',
         );
       }
+      // ─────────────────────────────────────────────────────────────────────
+
+      // ── Audit: unique icon IDs + file-existence check ─────────────────────
+      // TODO(production): Remove this call before releasing.
+      await auditPoiIconAssets(pois);
       // ─────────────────────────────────────────────────────────────────────
 
       await registerPoiIcons(map.style);

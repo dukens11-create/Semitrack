@@ -28,24 +28,25 @@ String poiIconId(String filename) {
 }
 
 /// The Mapbox image ID used as the fallback icon for POIs whose PNG asset is
-/// not found in `assets/truck_stop_poi/`.  Must match a filename that exists
+/// not found in `assets/logo_brand_markers/`.  Must match a filename that exists
 /// in the folder so it is registered by [registerPoiIcons].
 const String _kPoiFallbackIcon = 'truck_parking';
 
-/// Loads every [PoiItem] from `assets/truck_stop_poi/locations.json`.
+/// Loads every [PoiItem] from `assets/locations.json`.
 ///
 /// The JSON entries in that file use a simplified schema — they carry `name`,
-/// `icon` (a `.png` filename), `lat`, `lng`, `country`, `stateOrProvince`,
-/// and `city`, but do **not** include `id` or `category`.  This function
-/// synthesises the missing fields:
+/// `icon` (a filename stem, e.g. `"pilot"`), `lat`, `lng`, `country`,
+/// `stateOrProvince`, and `city`, but do **not** include `id` or `category`.
+/// This function synthesises the missing fields:
 ///   - `id`       — `"ts_NNNNN"` where NNNNN is the zero-padded list index.
 ///   - `category` — always `"truck_stop"` for this dataset.
 ///   - `icon`     — normalised via [poiIconId] so that it matches the Mapbox
 ///                  image ID registered by [registerPoiIcons]
-///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`).
+///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`,
+///                   or a plain stem `"pilot"` → `"pilot"`).
 ///
 /// **Icon validation:** the normalised icon ID is cross-checked against the
-/// set of PNG assets actually bundled in `assets/truck_stop_poi/`.  If no
+/// set of PNG assets actually bundled in `assets/logo_brand_markers/`.  If no
 /// matching PNG is found, an error is logged and the icon falls back to
 /// [_kPoiFallbackIcon] so the POI is still rendered as a visible marker.
 ///
@@ -53,10 +54,10 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// returned so that all truck stops appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
-      await rootBundle.loadString('assets/truck_stop_poi/locations.json');
+      await rootBundle.loadString('assets/locations.json');
   final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
 
-  // Build the set of icon IDs that are actually bundled in assets/truck_stop_poi/
+  // Build the set of icon IDs that are actually bundled in assets/logo_brand_markers/
   // by scanning the asset manifest and normalising each PNG filename.
   // This works on all platforms (Android, iOS, web, desktop) without dart:io.
   // Note: AssetManifest.loadFromAssetBundle is called once here because
@@ -68,7 +69,7 @@ Future<List<PoiItem>> loadAllPois() async {
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/truck_stop_poi/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
       )
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
@@ -87,11 +88,11 @@ Future<List<PoiItem>> loadAllPois() async {
       resolvedIcon = normalizedId;
     } else {
       // TODO(production): Keep this error log — it identifies JSON icon values
-      // that have no matching PNG in assets/truck_stop_poi/.
+      // that have no matching PNG in assets/logo_brand_markers/.
       debugPrint(
         '[POI Load] ✗ Icon not found for "${json['name'] as String}": '
         '"$rawIcon" → "$normalizedId" has no matching PNG in '
-        'assets/truck_stop_poi/. Using fallback icon "$_kPoiFallbackIcon".',
+        'assets/logo_brand_markers/. Using fallback icon "$_kPoiFallbackIcon".',
       );
       resolvedIcon = _kPoiFallbackIcon;
     }
@@ -146,7 +147,7 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
   };
 }
 
-/// Registers every unique PNG in `assets/truck_stop_poi/` as a named image
+/// Registers every unique PNG in `assets/logo_brand_markers/` as a named image
 /// in the Mapbox [style].
 ///
 /// Image IDs are derived from filenames via [poiIconId], so callers can
@@ -171,13 +172,13 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/truck_stop_poi/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
       )
       .toList();
 
   // TODO(production): Remove this log line before releasing.
   debugPrint(
-    '[POI Icons] Found ${pngAssets.length} PNG(s) in assets/truck_stop_poi/ '
+    '[POI Icons] Found ${pngAssets.length} PNG(s) in assets/logo_brand_markers/ '
     'to register with Mapbox.',
   );
 
@@ -247,17 +248,17 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
 ///
 /// Compiles the set of unique icon IDs referenced by [pois] and prints each
 /// one so developers can match JSON `"icon"` values to actual PNG filenames
-/// in `assets/truck_stop_poi/`.
+/// in `assets/logo_brand_markers/`.
 ///
 /// Uses the Flutter [AssetManifest] to discover which PNGs are actually
 /// bundled, computes their normalised Mapbox image IDs via [poiIconId], and
 /// cross-checks each POI icon ID against that set.  An icon ID that is
-/// `[MISSING]` in this output means no PNG in `assets/truck_stop_poi/`
+/// `[MISSING]` in this output means no PNG in `assets/logo_brand_markers/`
 /// normalises to that ID — either the file is absent or the filename does not
 /// match the JSON value after normalisation.
 ///
 /// **How to match POI JSON values to filenames:**
-///   • The JSON `"icon"` field (e.g. `"flying j truck stop.png"`) is
+///   • The JSON `"icon"` field (e.g. `"flying_j_truck_stop"`) is
 ///     normalised by [poiIconId] before being stored in [PoiItem.icon].
 ///   • [registerPoiIcons] registers each PNG under the same normalised ID.
 ///   • If a POI icon ID printed here does NOT appear in the registration log
@@ -277,7 +278,7 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
     debugPrint('[POI Audit]   icon id: "$id"');
   }
 
-  // Build the set of icon IDs that are actually bundled in assets/truck_stop_poi/
+  // Build the set of icon IDs that are actually bundled in assets/logo_brand_markers/
   // by scanning the asset manifest and normalising each PNG filename.
   // This works on all platforms (Android, iOS, web, desktop) without dart:io.
   // TODO(production): Remove this block before releasing.
@@ -287,21 +288,21 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/truck_stop_poi/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
       )
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
 
   debugPrint(
     '[POI Audit] Cross-checking POI icon IDs against bundled PNGs '
-    '(${bundledIds.length} PNG(s) found in assets/truck_stop_poi/):',
+    '(${bundledIds.length} PNG(s) found in assets/logo_brand_markers/):',
   );
   for (final id in sortedIcons) {
     final bool found = bundledIds.contains(id);
     debugPrint(
       found
           ? '[POI Audit]   [FOUND]   "$id" — PNG is bundled and will be registered.'
-          : '[POI Audit]   [MISSING] "$id" — No PNG in assets/truck_stop_poi/ '
+          : '[POI Audit]   [MISSING] "$id" — No PNG in assets/logo_brand_markers/ '
               'normalises to this ID. '
               'Check the filename in the folder matches the JSON icon value.',
     );

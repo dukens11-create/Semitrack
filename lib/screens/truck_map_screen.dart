@@ -732,9 +732,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> _preloadBrandIcons() async {
     final loaded = <String, Uint8List>{};
 
-    // Discover all PNG assets registered under assets/logos/ via the asset
-    // manifest so the loader automatically picks up any new logo files added
-    // to the folder without requiring code changes.
+    // Discover all PNG assets registered under assets/logos/ and
+    // assets/logo_brand_markers/ via the asset manifest so the loader
+    // automatically picks up any new logo files added to the folders
+    // without requiring code changes.
     final AssetManifest manifest =
         await AssetManifest.loadFromAssetBundle(rootBundle);
     final List<String> allPaths = manifest.listAssets();
@@ -742,7 +743,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .where(
           (s) =>
               (s.startsWith('assets/logos/') ||
-                  s.startsWith('assets/truck_stop_poi/')) &&
+                  s.startsWith('assets/logo_brand_markers/')) &&
               s.endsWith('.png'),
         )
         .toList();
@@ -1671,7 +1672,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  Clustered POIs from `assets/poi/poi_data.json`
+  /// loaded from `assets/logos/`.  Clustered POIs from `assets/locations.json`
   /// are rendered via the Mapbox style layers set up in [_setupPoiCluster].
   /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
   /// using the same asset-existence guard — no generic fallback icons appear
@@ -5825,9 +5826,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
   ///
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
-  /// Loads [PoiItem]s from `assets/truck_stop_poi/locations.json`, converts
-  /// them to GeoJSON, registers all PNG icons from `assets/truck_stop_poi/`,
-  /// then adds four objects to the Mapbox style:
+  /// Loads [PoiItem]s from `assets/locations.json`, converts them to GeoJSON,
+  /// registers all PNG icons from `assets/logo_brand_markers/`, then adds four
+  /// objects to the Mapbox style:
   ///
   ///   - `poi-source`       — clustered GeoJSON source
   ///   - `poi-clusters`     — circle layer for grouped cluster rings
@@ -5853,14 +5854,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // ── Audit: name + icon for every POI ─────────────────────────────────
       // Prints every loaded POI's name and normalised Mapbox icon ID so you can
       // cross-check the JSON `"icon"` field against the files bundled in
-      // assets/truck_stop_poi/.  If a marker is missing, its icon ID will not
-      // appear in the [registerPoiIcons] success log.
+      // assets/logo_brand_markers/.  If a marker is missing, its icon ID will
+      // not appear in the [registerPoiIcons] success log.
       //
       // To match a missing icon:
       //   1. Find the icon ID printed here (e.g. "hotel_default").
       //   2. Check that a PNG matching the original JSON icon value exists in
-      //      assets/truck_stop_poi/ (e.g. "hotel default .png" — note the
-      //      trailing space before .png in some bundled filenames).
+      //      assets/logo_brand_markers/ (e.g. "hotel_default.png").
       //   3. If not, add or rename the PNG, then rebuild.
       //
       // Note: this loop logs one line per POI entry, which may produce many
@@ -5982,7 +5982,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // 5. Unclustered individual POI icon layer.
       //    Use a coalesce expression so that POIs whose icon was not bundled
-      //    as a PNG in assets/truck_stop_poi/ still render with the generic
+      //    as a PNG in assets/logo_brand_markers/ still render with the generic
       //    truck_parking fallback icon instead of silently disappearing.
       await map.style.addStyleLayer(
         jsonEncode({

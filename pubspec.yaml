@@ -36,9 +36,13 @@ flutter:
   #   To replace: overwrite the PNG (recommended: 64×64 px RGBA), then
   #   run `flutter pub get` and hot-reload or rebuild the app.
   #
-  # assets/poi/
-  #   Additional POI data (e.g. poi_data.json) used for supplementary datasets.
+  # assets/logo_brand_markers/
+  #   PNG marker icons for POI types (e.g. pilot.png, loves.png).
+  #   Loaded via rootBundle.load('assets/logo_brand_markers/<filename>').
+  #
+  # assets/locations.json
+  #   POI dataset used to populate truck-stop markers on the map.
   assets:
     - assets/icons/truck_top.png
-    - assets/poi/
     - assets/logo_brand_markers/
+    - assets/locations.json

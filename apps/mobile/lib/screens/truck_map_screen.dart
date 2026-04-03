@@ -86,6 +86,55 @@ class UpcomingManeuverStep {
   final List<LaneInfo> lanes;
 }
 
+// ── Top navigation instruction card models ────────────────────────────────
+
+/// Visual maneuver type used by [TopInstructionData] to select the correct
+/// direction icon in the compact top navigation instruction card.
+enum ManeuverVisualType {
+  straight,
+  left,
+  slightLeft,
+  right,
+  slightRight,
+  uTurnLeft,
+  uTurnRight,
+  merge,
+  exit,
+  forkLeft,
+  forkRight,
+  roundabout,
+}
+
+/// Immutable snapshot of the next navigation step shown in the compact top
+/// instruction card.
+///
+/// Updated by [_TruckMapScreenState._updateTopInstructionFromNavigationStep]
+/// whenever the route advances to a new step.
+class TopInstructionData {
+  const TopInstructionData({
+    required this.visualType,
+    required this.primaryText,
+    required this.roadName,
+    required this.distanceMiles,
+    this.bottomChipText,
+  });
+
+  /// Icon category derived from maneuver type + modifier.
+  final ManeuverVisualType visualType;
+
+  /// Short action verb phrase, e.g. "Turn left onto" or "Continue on".
+  final String primaryText;
+
+  /// Name of the road at the upcoming maneuver point.
+  final String roadName;
+
+  /// Distance in miles from the current position to the maneuver.
+  final double distanceMiles;
+
+  /// Optional label shown in the bottom chip (defaults to [roadName]).
+  final String? bottomChipText;
+}
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -261,6 +310,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Null until [_updateUpcomingManeuver] is first called.
   /// Drives both [_shouldShowLaneGuidance] and [_buildDynamicLaneAssist].
   UpcomingManeuverStep? _upcomingManeuverStep;
+
+  // ── Top instruction card state ─────────────────────────────────────────────
+  /// Current data for the compact top navigation instruction card.
+  /// Null until the first call to [_updateTopInstructionFromNavigationStep].
+  /// Drives [_buildCompactTopInstructionCard].
+  TopInstructionData? _topInstructionData;
 
   // ── Navigation alert state ─────────────────────────────────────────────────
   // Sample alerts shown during active navigation.  In production these would
@@ -2019,6 +2074,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (dist <= 20.0) {
       setState(() => _currentStepIndex = nextIdx);
       _speak(nextStep.instruction);
+      // Sync the top instruction card with the newly active step.
+      _updateTopInstructionFromNavigationStep(
+        maneuverType:  nextStep.type,
+        modifier:      nextStep.maneuver,
+        roadName:      nextStep.name,
+        distanceMiles: nextStep.distanceMeters * 0.000621371,
+        bottomChipText: nextStep.name.isNotEmpty ? nextStep.name : null,
+      );
     }
   }
 
@@ -2136,6 +2199,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _activeLegIndex = 0;
       _closestTruckStopsAhead = const [];
       _upcomingAlerts = const [];
+      _topInstructionData = null;
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
@@ -2372,6 +2436,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Start the warning manager so it evaluates proximity on each GPS fix.
     _warningManager.startNavigation();
     _startRouteAnimation();
+
+    // Seed the top instruction card with the first navigation step so the
+    // card is visible immediately when the driver starts.  Falls back to
+    // sample data when no steps have been loaded yet (dev/testing mode).
+    if (_navSteps.isNotEmpty) {
+      final first = _navSteps[0];
+      _updateTopInstructionFromNavigationStep(
+        maneuverType:   first.type,
+        modifier:       first.maneuver,
+        roadName:       first.name,
+        distanceMiles:  first.distanceMeters * 0.000621371,
+        bottomChipText: first.name.isNotEmpty ? first.name : null,
+      );
+    } else {
+      // Sample data — replace with real SDK values in production.
+      _updateTopInstructionFromNavigationStep(
+        maneuverType:   'continue',
+        modifier:       null,
+        roadName:       'Allegrini Drive',
+        distanceMiles:  16.9,
+        bottomChipText: 'Allegrini Drive',
+      );
+    }
   }
 
   /// Stops the active navigation session and returns to planning/idle UI.
@@ -5973,6 +6060,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           : _truckPosition?.longitude ?? 0.0;
       // 'modifier' encodes turn direction: 'left', 'right', 'straight', etc.
       final modifier = maneuver?['modifier'] as String? ?? 'straight';
+      // 'type' encodes maneuver category: 'turn', 'merge', 'fork', etc.
+      final maneuverType = maneuver?['type'] as String? ?? '';
       // Step distance in metres from the Mapbox response.
       final distanceMeters = (step['distance'] as num?)?.toDouble() ?? 0.0;
       // Road name for this step (e.g. "US-95", "Wells Ave").
@@ -5981,6 +6070,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         instruction,
         LatLng(lat, lng),
         maneuver: modifier,
+        type: maneuverType,
         distanceMeters: distanceMeters,
         name: stepName,
       );
@@ -6808,6 +6898,128 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   // ── Dynamic lane guidance helpers ─────────────────────────────────────────
+
+  // ── Top instruction card helpers ─────────────────────────────────────────
+
+  /// Maps a [ManeuverVisualType] to the best matching [IconData].
+  ///
+  /// Used by [_buildCompactTopInstructionCard] to render the maneuver icon.
+  IconData _maneuverVisualIcon(ManeuverVisualType type) {
+    switch (type) {
+      case ManeuverVisualType.straight:    return Icons.arrow_upward;
+      case ManeuverVisualType.left:        return Icons.turn_left;
+      case ManeuverVisualType.slightLeft:  return Icons.turn_slight_left;
+      case ManeuverVisualType.right:       return Icons.turn_right;
+      case ManeuverVisualType.slightRight: return Icons.turn_slight_right;
+      case ManeuverVisualType.uTurnLeft:   return Icons.u_turn_left;
+      case ManeuverVisualType.uTurnRight:  return Icons.u_turn_right;
+      case ManeuverVisualType.merge:       return Icons.merge;
+      case ManeuverVisualType.exit:        return Icons.exit_to_app;
+      case ManeuverVisualType.forkLeft:
+        // call_split is used for both fork directions; the left/right
+        // distinction is communicated by the primary text label.
+        return Icons.call_split;
+      case ManeuverVisualType.forkRight:
+        return Icons.call_split;
+      case ManeuverVisualType.roundabout:  return Icons.roundabout_left;
+    }
+  }
+
+  /// Formats [miles] into a human-readable distance string for the top card.
+  ///
+  /// Distances below 1 mile are shown in feet; all others in miles with one
+  /// decimal place.  (This differs from [_formatDistanceMiles] which accepts
+  /// metres.)
+  String _formatMilesDisplay(double miles) {
+    if (miles >= 1) return '${miles.toStringAsFixed(1)} mi';
+    final feet = miles * 5280;
+    return '${feet.round()} ft';
+  }
+
+  /// Returns the short action-verb phrase for [maneuverType] + [modifier].
+  ///
+  /// For example: ("turn", "left") → "Turn left onto",
+  ///              ("merge", null) → "Merge onto".
+  String _buildPrimaryInstructionText(String? maneuverType, String? modifier) {
+    final type = (maneuverType ?? '').toLowerCase();
+    final mod  = (modifier   ?? '').toLowerCase();
+
+    if (type == 'depart') return 'Head out on';
+    if (type == 'continue' || type == 'new name') return 'Continue on';
+    if (type == 'merge') return 'Merge onto';
+    if (type == 'fork') {
+      return mod.contains('left') ? 'Keep left for' : 'Keep right for';
+    }
+    if (type == 'off ramp' || type == 'exit') return 'Take exit to';
+    if (type == 'on ramp'  || type == 'ramp') return 'Take ramp to';
+    if (type == 'roundabout') return 'Enter roundabout for';
+    if (type == 'turn') {
+      if (mod.contains('slight left'))  return 'Bear left onto';
+      if (mod.contains('slight right')) return 'Bear right onto';
+      if (mod.contains('left'))         return 'Turn left onto';
+      if (mod.contains('right'))        return 'Turn right onto';
+    }
+    return 'Stay on';
+  }
+
+  /// Maps a Mapbox maneuver type + modifier pair to a [ManeuverVisualType].
+  ///
+  /// Covers all common Mapbox maneuver type strings and falls back to
+  /// [ManeuverVisualType.straight] for unknown combinations.
+  ManeuverVisualType _mapStepToVisualType(
+      String? maneuverType, String? modifier) {
+    final type = (maneuverType ?? '').toLowerCase();
+    final mod  = (modifier     ?? '').toLowerCase();
+
+    if (type == 'merge') return ManeuverVisualType.merge;
+    if (type == 'exit' || type == 'off ramp') return ManeuverVisualType.exit;
+    if (type == 'roundabout') return ManeuverVisualType.roundabout;
+    if (type == 'fork') {
+      return mod.contains('left')
+          ? ManeuverVisualType.forkLeft
+          : ManeuverVisualType.forkRight;
+    }
+    if (type == 'turn') {
+      if (mod.contains('uturn') && mod.contains('left'))  return ManeuverVisualType.uTurnLeft;
+      if (mod.contains('uturn') && mod.contains('right')) return ManeuverVisualType.uTurnRight;
+      if (mod.contains('slight left'))  return ManeuverVisualType.slightLeft;
+      if (mod.contains('slight right')) return ManeuverVisualType.slightRight;
+      if (mod.contains('left'))         return ManeuverVisualType.left;
+      if (mod.contains('right'))        return ManeuverVisualType.right;
+    }
+    return ManeuverVisualType.straight;
+  }
+
+  /// Updates [_topInstructionData] from the current navigation step values
+  /// and triggers a UI rebuild.
+  ///
+  /// Call this whenever the route advances to a new step (see
+  /// [_checkStepAdvancement]) or navigation starts so the top card always
+  /// reflects the upcoming maneuver.
+  ///
+  /// Supply real SDK values for [maneuverType], [modifier], [roadName], and
+  /// [distanceMiles]; [bottomChipText] defaults to [roadName] when omitted.
+  void _updateTopInstructionFromNavigationStep({
+    required String? maneuverType,
+    required String? modifier,
+    required String? roadName,
+    required double distanceMiles,
+    String? bottomChipText,
+  }) {
+    final resolvedRoad = (roadName == null || roadName.trim().isEmpty)
+        ? 'Unnamed road'
+        : roadName.trim();
+
+    setState(() {
+      _topInstructionData = TopInstructionData(
+        visualType:     _mapStepToVisualType(maneuverType, modifier),
+        primaryText:    _buildPrimaryInstructionText(maneuverType, modifier),
+        roadName:       resolvedRoad,
+        distanceMiles:  distanceMiles,
+        bottomChipText: bottomChipText ?? resolvedRoad,
+      );
+    });
+  }
 
   /// Maps a [LaneDirection] value to the [IconData] that best represents it.
   IconData _laneDirectionIcon(LaneDirection direction) {
@@ -7992,11 +8204,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
-                // ── Zone 1 (top): compact next-step navigation card ────────
-                // Single GPS-style card: maneuver icon + road name + distance.
-                // Uses SafeArea + Positioned inside the card; no duplicate
-                // banner coexists with this during active navigation.
-                _buildCompactNextStepCard(),
+                // ── Zone 1 (top): compact top instruction card ────────────
+                // Data-driven card: maneuver icon + primary text + road name
+                // + distance + bottom chip.  Replaces the old static card and
+                // stays synced via _updateTopInstructionFromNavigationStep().
+                if (_isNavigating && _topInstructionData != null)
+                  Positioned(
+                    top: 16,
+                    left: 16,
+                    right: 90,
+                    child: SafeArea(
+                      bottom: false,
+                      child: _buildCompactTopInstructionCard(
+                          _topInstructionData!),
+                    ),
+                  ),
                 // ── Zone 1a (top-right): compass / re-centre button ────────
                 // Round dark button at the top-right corner.
                 _buildSmallCompassButton(),
@@ -8344,6 +8566,117 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //     • Speed limit         → read _speedLimitMph
   //     • Service chips list  → populate from _closestTruckStopsAhead
   //     • Alert list          → populate from _navAlerts
+
+  // ── Top instruction card UI ───────────────────────────────────────────────
+
+  /// Compact, data-driven top navigation instruction card.
+  ///
+  /// Displays:
+  ///  • A rounded icon tile with the maneuver direction icon.
+  ///  • A short primary action label (e.g. "Turn left onto").
+  ///  • The upcoming road name in large bold text.
+  ///  • The distance to the maneuver ("in 1.2 mi" / "in 350 ft").
+  ///  • An optional bottom chip (defaults to the road name).
+  ///
+  /// Only called when [_topInstructionData] is non-null and
+  /// [_isNavigating] is true (see the overlay in [build]).
+  Widget _buildCompactTopInstructionCard(TopInstructionData data) {
+    return Container(
+      width: 290,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Maneuver icon tile ─────────────────────────────────────────
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              _maneuverVisualIcon(data.visualType),
+              color: Colors.white,
+              size: 30,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // ── Text column ─────────────────────────────────────────────────
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Short action label, e.g. "Turn left onto"
+                Text(
+                  data.primaryText,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                // Upcoming road name — large and bold for at-a-glance reading
+                Text(
+                  data.roadName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // Distance countdown to maneuver
+                Text(
+                  'in ${_formatMilesDisplay(data.distanceMiles)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                // Optional bottom chip (road label / exit number / etc.)
+                if (data.bottomChipText != null &&
+                    data.bottomChipText!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white12,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      data.bottomChipText!,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Compact GPS-style "next step" card positioned at the top-left of the map.
   ///
@@ -9132,16 +9465,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
 /// A single turn-by-turn navigation step, holding the driver instruction text,
 /// the geographic location of the maneuver, the maneuver modifier (e.g.
-/// 'left', 'right', 'straight'), and the step distance in metres.
+/// 'left', 'right', 'straight'), the maneuver type (e.g. 'turn', 'merge'),
+/// and the step distance in metres.
 ///
 /// [maneuver] is the Mapbox `maneuver.modifier` value and drives the icon
 /// displayed in the navigation banner.  [distanceMeters] is summed across
 /// remaining steps to derive the remaining-distance label.
+/// [type] is the Mapbox `maneuver.type` value (e.g. "turn", "merge", "fork")
+/// and is used by [_mapStepToVisualType] to select the correct visual icon.
 class _NavStep {
   const _NavStep(
     this.instruction,
     this.location, {
     this.maneuver = 'straight',
+    this.type = '',
     this.distanceMeters = 0.0,
     this.name = '',
   });
@@ -9155,6 +9492,10 @@ class _NavStep {
   /// Mapbox maneuver modifier: 'left', 'right', 'straight', 'slight left',
   /// 'sharp right', etc.  Used to select the icon shown in the nav banner.
   final String maneuver;
+
+  /// Mapbox maneuver type: 'turn', 'merge', 'fork', 'exit', 'roundabout',
+  /// 'depart', 'arrive', etc.  Used by [_mapStepToVisualType].
+  final String type;
 
   /// Length of this step in metres, as reported by the Mapbox Directions API.
   final double distanceMeters;

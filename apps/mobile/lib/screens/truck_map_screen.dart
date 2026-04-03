@@ -902,9 +902,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Marker(
       point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : const LatLng(0, 0)),
-      // Bounding box matches the rendered icon size: 26 × 26 logical px.
-      width: 26,
-      height: 26,
+      // Bounding box matches the rendered icon size: 34 × 34 logical px.
+      width: 34,
+      height: 34,
       // Anchor slightly below centre (≡ Offset(0.5, 0.62)) so the cab nose
       // sits on the GPS coordinate rather than the trailer centre.
       alignment: const Alignment(0.0, 0.24),
@@ -915,8 +915,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Top-down truck sprite (assets/icons/truck_top.png, 64 × 64 px).
         child: Image.asset(
           'assets/icons/truck_top.png',
-          width: 26,
-          height: 26,
+          width: 34,
+          height: 34,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.local_shipping,
             size: 32,
@@ -2030,25 +2030,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Within each band the zoom is linearly interpolated so transitions are
   /// gradual rather than stepped.
   double _navigationZoomForSpeed(double speedMph) {
-    if (speedMph <= 0) return 17.2;
-    if (speedMph < 10) {
-      // 0–10 mph: 17.2 → 16.5
-      final t = speedMph / 10.0;
-      return 17.2 - t * (17.2 - 16.5);
-    }
-    if (speedMph < 30) {
-      // 10–30 mph: 16.3 → 15.5
-      final t = (speedMph - 10.0) / 20.0;
-      return 16.3 - t * (16.3 - 15.5);
-    }
-    if (speedMph < 55) {
-      // 30–55 mph: 15.3 → 14.5
-      final t = (speedMph - 30.0) / 25.0;
-      return 15.3 - t * (15.3 - 14.5);
-    }
-    // 55+ mph: 14.5 → 13.8 (clamps at 13.8 for very high speeds)
-    final t = ((speedMph - 55.0) / 30.0).clamp(0.0, 1.0);
-    return 14.5 - t * (14.5 - 13.8);
+    if (speedMph <= 10) return 17.2;
+    if (speedMph <= 30) return 16.3;
+    if (speedMph <= 55) return 15.3;
+    return 14.7;
   }
 
   /// Updates the camera for a moving truck: rotates with heading when speed is
@@ -2106,32 +2091,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _cameraMode = NavigationCameraMode.follow;
 
     final double speedMph = pos.speed > 0 ? pos.speed * _mpsToMph : 0.0;
+    final double zoom = _navigationZoomForSpeed(speedMph);
 
-    // Compute next-step distance in miles for the turn-zoom boost.
-    double? nextStepMiles;
-    if (_navSteps.isNotEmpty) {
-      final double distM = _distanceToNextStep();
-      nextStepMiles = distM / _metersPerMile;
+    // Use pos.heading when moving fast enough for a stable heading;
+    // hold the last known bearing when stopped to prevent jitter.
+    final double bearing =
+        speedMph >= _noRotateSpeedMph ? pos.heading : _lastKnownBearing;
+    if (speedMph >= _noRotateSpeedMph && pos.heading >= 0) {
+      _lastKnownBearing = pos.heading;
     }
-
-    final double zoom = _navigationZoomForStep(speedMph, nextStepMiles);
 
     // Shift target ahead of truck so it sits in the lower third of screen.
     final cameraTarget = LatLng(
       pos.latitude - _cameraLeadLatitude,
       pos.longitude,
     );
-
-    // Rotate map with heading only when truck is moving fast enough to give
-    // a stable heading; hold steady below the threshold to prevent jitter.
-    double bearing;
-    if (speedMph >= _noRotateSpeedMph) {
-      bearing = _truckBearing;
-      _lastKnownBearing = bearing;
-    } else {
-      // Stopped / very slow: keep the last accepted bearing.
-      bearing = _lastKnownBearing;
-    }
 
     _mapController.moveAndRotate(cameraTarget, zoom, bearing);
   }
@@ -8163,16 +8137,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final Color alertColor = _alertSeverityColor(weatherAlert.severity);
 
     return Positioned(
-      // bottom: 95 gives a clear gap above the stop button (bottom: 20 + height: 54 = 74 px top edge).
-      bottom: 95,
+      // bottom: 92 gives a clear gap above the stop button (bottom: 20 + height: 54 = 74 px top edge).
+      bottom: 92,
       // left: 16 matches standard horizontal screen margin.
       left: 16,
-      // right: 120 keeps the wind card clear of the speed box (right: 16, ~64 px wide) plus margin.
-      right: 120,
+      // right: 110 keeps the wind card clear of the speed box (right: 16, ~82 px wide) plus margin.
+      right: 110,
       child: SizedBox(
-        // height: 95 is compact enough to leave a visible gap above the stop button
-        // (stop button top edge ≈ 74 px from bottom; wind card top edge ≈ 190 px from bottom).
-        height: 95,
+        // height: 88 is compact enough to leave a visible gap above the stop button.
+        height: 88,
         child: Card(
           margin: EdgeInsets.zero,
           color: Colors.black.withOpacity(0.82),
@@ -8525,7 +8498,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         if (_routePoints.isNotEmpty)
                           Polyline(
                             points: _routePoints,
-                            strokeWidth: 5,
+                            strokeWidth: 7,
                             color: Colors.blue,
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
@@ -8802,7 +8775,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   Positioned(
                     top: 16,
                     left: 16,
-                    right: 90,
                     child: SafeArea(
                       bottom: false,
                       child: _buildCompactTopInstructionCard(
@@ -8830,7 +8802,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Prominent speed indicator; turns red when over the limit.
                 Positioned(
                   right: 16,
-                  bottom: 170,
+                  bottom: 165,
                   child: _buildSpeedLimitBox(),
                 ),
                 // ── Zone 5 (bottom center/left): compact wind alert card ───
@@ -9176,37 +9148,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_isNavigating] is true (see the overlay in [build]).
   Widget _buildCompactTopInstructionCard(TopInstructionData data) {
     return Container(
-      width: 290,
-      padding: const EdgeInsets.all(14),
+      width: 270,
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.72),
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // ── Maneuver icon tile ─────────────────────────────────────────
           Container(
-            width: 52,
-            height: 52,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
               color: Colors.white12,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
               _maneuverVisualIcon(data.visualType),
               color: Colors.white,
-              size: 30,
+              size: 26,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           // ── Text column ─────────────────────────────────────────────────
           Expanded(
             child: Column(
@@ -9217,11 +9182,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   data.primaryText,
                   style: const TextStyle(
                     color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 12,
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 // Upcoming road name — large and bold for at-a-glance reading
                 Text(
                   data.roadName,
@@ -9229,41 +9193,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 22,
+                    fontSize: 18,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 // Distance countdown to maneuver
                 Text(
                   'in ${_formatMilesDisplay(data.distanceMiles)}',
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                // Optional bottom chip (road label / exit number / etc.)
-                if (data.bottomChipText != null &&
-                    data.bottomChipText!.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      data.bottomChipText!,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -9651,9 +9594,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final visible = _upcomingAlerts.take(3).toList();
 
     return Positioned(
-      // top: 118 aligns with the compass button bottom edge + gap, ensuring
+      // top: 120 aligns with the compass button bottom edge + gap, ensuring
       // chips never overlap the instruction card at the top-left.
-      top: 118,
+      top: 120,
       // right: 16 matches the standard horizontal screen margin.
       right: 16,
       child: SafeArea(
@@ -9963,15 +9906,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final bool isOverSpeed = _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
 
     return Container(
-      width: 92,
-      height: 250,
+      width: 82,
+      height: 200,
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 10,
+            color: Colors.black.withOpacity(0.22),
+            blurRadius: 8,
             offset: const Offset(0, 4),
           ),
         ],
@@ -9979,33 +9922,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           Text(
             '$speedInt',
             style: TextStyle(
               color: isOverSpeed ? Colors.red : Colors.white,
-              fontSize: 54,
+              fontSize: 42,
               fontWeight: FontWeight.w800,
               height: 1,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           const Text(
             'mph',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 22,
+              fontSize: 17,
               fontWeight: FontWeight.w500,
             ),
           ),
           const Spacer(),
           Container(
-            width: 72,
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            margin: const EdgeInsets.only(bottom: 18),
+            width: 64,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            margin: const EdgeInsets.only(bottom: 14),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
               children: [
@@ -10013,17 +9956,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   'LIMIT',
                   style: TextStyle(
                     color: Colors.black87,
-                    fontSize: 18,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text(
                   '$limitInt',
                   style: const TextStyle(
                     color: Colors.black,
-                    fontSize: 44,
+                    fontSize: 34,
                     fontWeight: FontWeight.w800,
                     height: 1,
                   ),

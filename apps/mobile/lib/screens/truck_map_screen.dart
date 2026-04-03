@@ -1989,7 +1989,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Only advance the route index when the vehicle is actually moving —
     // GPS drift while stopped can shift the nearest index forward by several
     // points and falsely trigger step advances or off-route reroutes.
-    final bool isVehicleMoving = position.speed >= 0 &&
+    final bool isVehicleMoving = position.speed > 0 &&
         position.speed * _mpsToMph >= _minMovingSpeedMph;
     int nearest = _truckIndex;
     if (_routePoints.isNotEmpty && isVehicleMoving) {

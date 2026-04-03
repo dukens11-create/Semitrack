@@ -27,11 +27,45 @@ String poiIconId(String filename) {
       .replaceAll(RegExp(r'[\s\-]+'), '_');
 }
 
-/// Loads all [PoiItem]s from `assets/poi/poi_data.json`.
+/// Loads every [PoiItem] from `assets/truck_stop_poi/locations.json`.
+///
+/// The JSON entries in that file use a simplified schema — they carry `name`,
+/// `icon` (a `.png` filename), `lat`, `lng`, `country`, `stateOrProvince`,
+/// and `city`, but do **not** include `id` or `category`.  This function
+/// synthesises the missing fields:
+///   - `id`       — `"ts_NNNNN"` where NNNNN is the zero-padded list index.
+///   - `category` — always `"truck_stop"` for this dataset.
+///   - `icon`     — normalised via [poiIconId] so that it matches the Mapbox
+///                  image ID registered by [registerPoiIcons]
+///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`).
+///
+/// No proximity or category filter is applied; every entry in the file is
+/// returned so that all truck stops appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
-      await rootBundle.loadString('assets/poi/poi_data.json');
-  return PoiItem.listFromJson(jsonString);
+      await rootBundle.loadString('assets/truck_stop_poi/locations.json');
+  final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
+
+  return data.asMap().entries.map((entry) {
+    final int index = entry.key;
+    final Map<String, dynamic> json = entry.value as Map<String, dynamic>;
+
+    return PoiItem(
+      // Synthesise a stable ID from the list position.
+      id: 'ts_${index.toString().padLeft(5, '0')}',
+      name: json['name'] as String,
+      // All entries in this file are truck stops.
+      category: 'truck_stop',
+      // Normalise "flying j truck stop.png" → "flying_j_truck_stop" so that
+      // the value matches the Mapbox image ID registered by registerPoiIcons.
+      icon: poiIconId(json['icon'] as String),
+      lat: (json['lat'] as num).toDouble(),
+      lng: (json['lng'] as num).toDouble(),
+      country: json['country'] as String,
+      stateOrProvince: json['stateOrProvince'] as String,
+      city: json['city'] as String,
+    );
+  }).toList();
 }
 
 /// Converts [pois] to a GeoJSON FeatureCollection map.

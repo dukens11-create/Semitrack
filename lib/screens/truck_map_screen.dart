@@ -5506,14 +5506,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
   ///
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
-  /// Loads [PoiItem]s from `assets/poi/poi_data.json`, converts them to
-  /// GeoJSON, registers all PNG icons from `assets/truck_stop_poi/`, then
-  /// adds four objects to the Mapbox style:
+  /// Loads [PoiItem]s from `assets/truck_stop_poi/locations.json`, converts
+  /// them to GeoJSON, registers all PNG icons from `assets/truck_stop_poi/`,
+  /// then adds four objects to the Mapbox style:
   ///
   ///   - `poi-source`       — clustered GeoJSON source
   ///   - `poi-clusters`     — circle layer for grouped cluster rings
   ///   - `poi-cluster-count`— symbol layer with `{point_count}` text labels
   ///   - `poi-unclustered`  — symbol layer using each POI's icon image
+  ///
+  /// Every entry in `locations.json` is converted to a GeoJSON feature
+  /// without any proximity or category filtering, so all truck stops appear
+  /// as markers wherever the user browses the map.
   ///
   /// All rendering is done via Mapbox style layers — no Flutter widget markers
   /// are created, keeping performance O(1) regardless of POI count.
@@ -5524,7 +5528,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Guard against duplicate setup when the style reloads.
       if (await map.style.styleSourceExists('poi-source')) return;
 
-      // 1. Load POIs and register all PNG icons from assets/truck_stop_poi/.
+      // 1. Load every POI from locations.json and register all PNG icons.
       final List<PoiItem> pois = await loadAllPois();
 
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
@@ -5630,6 +5634,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       );
 
       // 5. Unclustered individual POI icon layer.
+      //    Use a coalesce expression so that POIs whose icon was not bundled
+      //    as a PNG in assets/truck_stop_poi/ still render with the generic
+      //    truck_parking fallback icon instead of silently disappearing.
       await map.style.addStyleLayer(
         jsonEncode({
           'id': 'poi-unclustered',
@@ -5637,7 +5644,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'source': 'poi-source',
           'filter': ['!', ['has', 'point_count']],
           'layout': {
-            'icon-image': ['get', 'icon'],
+            'icon-image': [
+              'coalesce',
+              ['image', ['get', 'icon']],
+              ['image', 'truck_parking'],
+            ],
             'icon-size': 0.6,
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,

@@ -1,3 +1,5 @@
+// Utility function for loading and resizing image assets to PNG bytes.
+
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
@@ -18,6 +20,7 @@ Future<Uint8List> loadImage(String path) async {
   );
 
   final frame = await codec.getNextFrame();
+  codec.dispose();
 
   final byteData =
       await frame.image.toByteData(format: ui.ImageByteFormat.png);

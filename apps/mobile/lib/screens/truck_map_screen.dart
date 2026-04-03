@@ -6785,8 +6785,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case ManeuverVisualType.uTurnRight:  return Icons.u_turn_right;
       case ManeuverVisualType.merge:       return Icons.merge;
       case ManeuverVisualType.exit:        return Icons.exit_to_app;
-      case ManeuverVisualType.forkLeft:    return Icons.call_split;
-      case ManeuverVisualType.forkRight:   return Icons.call_split;
+      case ManeuverVisualType.forkLeft:
+        // call_split is used for both fork directions; the left/right
+        // distinction is communicated by the primary text label.
+        return Icons.call_split;
+      case ManeuverVisualType.forkRight:
+        return Icons.call_split;
       case ManeuverVisualType.roundabout:  return Icons.roundabout_left;
     }
   }
@@ -8507,7 +8511,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                 ),
                 // Optional bottom chip (road label / exit number / etc.)
-                if ((data.bottomChipText ?? '').isNotEmpty) ...[
+                if (data.bottomChipText != null &&
+                    data.bottomChipText!.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.symmetric(

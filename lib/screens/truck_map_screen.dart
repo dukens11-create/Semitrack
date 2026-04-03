@@ -6414,7 +6414,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const SizedBox.shrink();
     }
     return Positioned(
-      top: 165,
+      // Position just below the compact next-step card (~90 px tall with
+      // SafeArea) so lane guidance never overlaps the top navigation card.
+      top: 110,
       left: 16,
       right: 16,
       child: Center(
@@ -6853,6 +6855,103 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Builds a compact wind/weather alert card shown at the bottom center-left
+  /// of the map during active navigation.
+  ///
+  /// Displays the first active weather-type [NavigationAlert] in a compact
+  /// card (~90 px tall).  Returns [SizedBox.shrink] when there are no active
+  /// weather alerts so the zone stays empty without affecting layout.
+  Widget _buildWindAlert() {
+    // Find the first undismissed weather/wind alert from the active alert list.
+    final Iterable<NavigationAlert> weatherAlerts = _navAlerts.where(
+      (a) => !a.isDismissed && (a.type == AlertType.weather ||
+          a.type == AlertType.windAdvisory || a.type == AlertType.highWind),
+    );
+    if (weatherAlerts.isEmpty) return const SizedBox.shrink();
+    final NavigationAlert weatherAlert = weatherAlerts.first;
+
+    final Color alertColor = _alertSeverityColor(weatherAlert.severity);
+
+    return Positioned(
+      bottom: 85,
+      left: 12,
+      // Leave right:90 so the speed box at bottom-right stays fully visible.
+      right: 90,
+      child: SizedBox(
+        height: 90,
+        child: Card(
+          margin: EdgeInsets.zero,
+          color: Colors.black.withOpacity(0.82),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: alertColor.withOpacity(0.7), width: 1.2),
+          ),
+          elevation: 4,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.air, color: alertColor, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        weatherAlert.title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: alertColor,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (weatherAlert.subtitle != null)
+                        Text(
+                          weatherAlert.subtitle!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.white70,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      if (weatherAlert.distanceMiles != null)
+                        Text(
+                          _fmtMiles(weatherAlert.distanceMiles!),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: alertColor.withOpacity(0.85),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      final idx = _navAlerts
+                          .indexWhere((a) => a.id == weatherAlert.id);
+                      if (idx != -1) {
+                        _navAlerts[idx] =
+                            _navAlerts[idx].copyWith(isDismissed: true);
+                      }
+                    });
+                  },
+                  child: const Icon(Icons.close,
+                      size: 16, color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Builds the "Stop Navigation" button overlay shown only while [_isNavigating].
   ///
   /// Provides a full-width "Stop Navigation" button so the driver can end the
@@ -6861,13 +6960,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// devices.
   Widget _buildStopNavigationButton() {
     return Positioned(
-      bottom: 24,
-      left: 20,
-      right: 20,
+      bottom: 20,
+      left: 16,
+      right: 16,
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 60,
+          height: 55,
           child: ElevatedButton.icon(
             onPressed: _stopNavigation,
             icon: const Icon(Icons.stop_circle_outlined),
@@ -7152,16 +7251,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 if (_isLoading)
                   const Center(child: CircularProgressIndicator()),
                 // ── Navigation banner ─────────────────────────────────────
-                // Floats at the top of the map so the current maneuver
-                // instruction is always visible during active navigation,
-                // independent of the scrollable info panel below the map.
-                // Also shown on arrival so the driver sees the arrival message.
-                // While _isNavigating is true, the richer RoadGuidanceBanner
-                // (with road chips, lane guidance and look-ahead preview)
-                // replaces the simpler urgency-coloured banner.
-                if (_isNavigating && _navSteps.isNotEmpty)
-                  _buildRoadGuidanceBanner()
-                else if ((_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
+                // Shown in route-preview / arrival state (not during active
+                // turn-by-turn navigation – the compact next-step card takes
+                // that role to keep the top zone minimal).
+                if (!_isNavigating && (_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -7259,9 +7352,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Only rendered during an active navigation session.
                 if (_hasActiveDestination && _restrictionAhead != null)
                   Positioned(
-                    // RoadGuidanceBanner is taller (~170 px) when navigating;
-                    // the original nav banner is ~90 px.
-                    top: _isNavigating ? 170 : (_navSteps.isNotEmpty ? 90 : 68),
+                    // Compact top nav card is ~90 px; use a consistent offset
+                    // whether navigating or in preview mode.
+                    top: _isNavigating ? 100 : (_navSteps.isNotEmpty ? 90 : 68),
                     left: 0,
                     right: 0,
                     child: _buildRestrictionAlertCard(),
@@ -7269,12 +7362,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Warning popup stack ───────────────────────────────────
                 // Stacked top-right cards for road-hazard warning signs along
                 // the active route.  Only visible during active navigation.
-                // High severity cards are pinned until dismissed; medium/low
-                // cards auto-dismiss after a short interval.  Positioned below
-                // the nav banner so it never overlaps the turn instruction.
+                // Positioned at top:220 on the right so it does not conflict
+                // with the compact right-side alert stack (top:120).
                 if (_isNavigating)
                   Positioned(
-                    top: _navSteps.isNotEmpty ? 96 : 74,
+                    top: 220,
                     right: 8,
                     child: WarningPopupStack(manager: _warningManager),
                   ),
@@ -7286,7 +7378,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   Positioned(
                     top: () {
                       int offset = _isNavigating
-                          ? 170
+                          ? 100
                           : (_navSteps.isNotEmpty ? 90 : 68);
                       if (_restrictionAhead != null) offset += 64;
                       return offset.toDouble();
@@ -7370,16 +7462,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Hidden during active navigation so the map is unobstructed.
                 if (!_isNavigating && _hasActiveDestination && _tripStartTime != null)
                   _buildTripStatsPanel(),
-                // ── Speed / speed-limit panel (PositionPanel) ─────────────
-                // Visible during active navigation with a destination.
-                // Positioned at the bottom-right corner of the map so it never
-                // obscures the navigation banner or the rerouting indicator.
-                if (_navigationMode && _hasActiveDestination)
-                  Positioned(
-                    bottom: 140,
-                    right: 16,
-                    child: _buildSpeedPanel(),
-                  ),
                 // ── POI toggle FAB ────────────────────────────────────────
                 // Hidden during navigation so the Stop Navigation button can
                 // occupy the same bottom-left slot without overlap.
@@ -7406,49 +7488,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
-                // ── Compact next-step card ─────────────────────────────────
-                // GPS-style banner showing the upcoming maneuver icon, road
-                // name, and distance.  Only visible during active navigation.
+                // ── Zone 1 (top): compact next-step navigation card ────────
+                // Single GPS-style card: maneuver icon + road name + distance.
+                // Uses SafeArea + Positioned inside the card; no duplicate
+                // banner coexists with this during active navigation.
                 _buildCompactNextStepCard(),
-                // ── Compass / re-centre button ────────────────────────────
-                // Round dark button at the top-right.  Taps re-engage camera
-                // follow and snap to the truck's live position.
+                // ── Zone 1a (top-right): compass / re-centre button ────────
+                // Round dark button at the top-right corner.
                 _buildSmallCompassButton(),
-                // ── Right-side alert stack ────────────────────────────────
-                // Up to three compact alert chips stacked on the right edge.
+                // ── Zone 3 (right side): compact vertical alert stack ──────
+                // Up to three compact alert chips stacked on the right edge,
+                // starting at top:120 so they never overlap the top card or
+                // the compass button.
                 _buildRightSideAlertStack(),
-                // ── Bottom service chips ──────────────────────────────────
-                // Horizontally-scrollable row of nearest truck-stop chips.
-                _buildBottomServiceChips(),
-                // ── Compact trip strip ────────────────────────────────────
-                // Full-width bottom strip: miles left, drive time, ETA.
-                _buildCompactTripStrip(),
-                // ── Compact speed box ─────────────────────────────────────
-                // Small card at bottom-left showing current speed and limit.
-                // Turns red when the driver exceeds the speed limit.
+                // ── Zone 4 (bottom right): speed / speed-limit box ─────────
+                // Compact speed indicator; turns red when over the limit.
                 _buildCompactSpeedBox(),
-                // ── Mini alert row ─────────────────────────────────────────
-                // Compact horizontal chips showing nearby alerts (wind,
-                // fuel, restriction) during active navigation.
-                if (_isNavigating) _buildMiniAlertRow(),
-                // ── Closest 2 truck stops ahead row ───────────────────────
-                // Compact GPS-style chips showing the 2 nearest truck stops
-                // ahead on the active route.  Only visible during navigation.
-                _buildClosestTruckStopsRow(),
-                // ── Main alert card ────────────────────────────────────────
-                // Primary expandable alert card with trip summary strip.
-                // Floats above the Stop Navigation button during navigation.
-                if (_isNavigating) _buildMainAlertCard(),
-                // ── Navigation controls ───────────────────────────────────
-                // Stop Navigation button: only visible while _isNavigating.
-                // Tapping calls _stopNavigation to end the trip and restore
-                // planning UI.
+                // ── Zone 5 (bottom center/left): compact wind alert card ───
+                // Shows the primary active weather/wind alert in a compact card
+                // (~90 px tall) that sits above the stop button.
+                if (_isNavigating) _buildWindAlert(),
+                // ── Zone 6 (very bottom): stop navigation button ──────────
+                // Full-width "Stop Navigation" button with SafeArea padding.
                 if (_isNavigating) _buildStopNavigationButton(),
-                // ── Closest weigh stations ahead row ─────────────────────
-                // Compact chip row showing the next 1–2 weigh stations on the
-                // active route with distance and logo.  Only visible while
-                // navigating and when at least one station lies ahead.
-                _buildClosestWeighStationsRow(),
               ],
             ),
           ),
@@ -7935,8 +7997,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return Positioned(
       right: 12,
-      // Position below the compass button (48 px button + 8 top margin + 8 gap).
-      top: 74,
+      // Start below the compass button (≈48 px) and top card zone so
+      // alerts never overlap the top navigation card.
+      top: 120,
       child: SafeArea(
         bottom: false,
         child: Column(
@@ -8338,9 +8401,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         overLimit ? Colors.red : Colors.transparent;
 
     return Positioned(
-      left: 12,
-      // Float above the compact trip strip (assumed ~80 px tall + safe-area).
-      bottom: 92,
+      right: 16,
+      // Float well above the wind alert card (bottom:85 + ~90 px) so the
+      // speed box is always fully visible in the bottom-right corner.
+      bottom: 140,
       child: SafeArea(
         top: false,
         child: Container(

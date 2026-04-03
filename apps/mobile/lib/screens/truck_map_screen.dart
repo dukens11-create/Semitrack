@@ -380,6 +380,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  // ── Movement filter: track last position used for route checks ────────────
+  /// Latitude of the last GPS fix that triggered a route-update check.
+  double _lastRouteCheckLat = 0.0;
+
+  /// Longitude of the last GPS fix that triggered a route-update check.
+  double _lastRouteCheckLng = 0.0;
+
+  // ── API debounce: limits fetchRoute calls to at most once per 5 seconds ───
+  /// Timestamp of the most recent fetchRoute invocation from GPS position
+  /// updates.  Null until the first qualifying call is made.
+  DateTime? _lastApiCallTime;
+
   // ── Route alternatives (pre-navigation selection) ─────────────────────────
   //
   // _routeOptions holds the list of RouteOption cards built from the Mapbox
@@ -732,9 +744,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> _preloadBrandIcons() async {
     final loaded = <String, Uint8List>{};
 
-    // Discover all PNG assets registered under assets/logos/ via the asset
-    // manifest so the loader automatically picks up any new logo files added
-    // to the folder without requiring code changes.
+    // Discover all PNG assets registered under assets/logos/ and
+    // assets/logo_brand_markers/ via the asset manifest so the loader
+    // automatically picks up any new logo files added to the folders
+    // without requiring code changes.
     final AssetManifest manifest =
         await AssetManifest.loadFromAssetBundle(rootBundle);
     final List<String> allPaths = manifest.listAssets();
@@ -1671,7 +1684,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  Clustered POIs from `assets/poi/poi_data.json`
+  /// loaded from `assets/logos/`.  Clustered POIs from `assets/locations.json`
   /// are rendered via the Mapbox style layers set up in [_setupPoiCluster].
   /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
   /// using the same asset-existence guard — no generic fallback icons appear
@@ -1898,6 +1911,44 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── GPS tracking ──────────────────────────────────────────────────────────
 
+  /// Returns `true` when the new GPS fix is far enough from the last
+  /// route-check position to warrant a fresh API call.
+  ///
+  /// Ignores movements smaller than ~55 m (0.0005° ≈ 55 m at mid-latitudes)
+  /// to avoid hammering the Mapbox API while the truck is stationary or
+  /// creeping in traffic.  Updates [_lastRouteCheckLat] / [_lastRouteCheckLng]
+  /// only when movement is significant so the next check uses the correct
+  /// reference point.
+  bool _shouldUpdateRoute(double lat, double lng) {
+    final distanceMoved =
+        (lat - _lastRouteCheckLat).abs() + (lng - _lastRouteCheckLng).abs();
+    if (distanceMoved < 0.0005) {
+      return false; // ignore small movement
+    }
+    _lastRouteCheckLat = lat;
+    _lastRouteCheckLng = lng;
+    return true;
+  }
+
+  /// Returns `true` when at least 5 seconds have elapsed since the last
+  /// GPS-triggered [fetchRoute] call.
+  ///
+  /// Prevents the directions API from being called more than once every
+  /// 5 seconds regardless of how frequently GPS fixes arrive.  Updates
+  /// [_lastApiCallTime] only when the call is allowed.
+  bool _canCallApi() {
+    if (_lastApiCallTime == null) {
+      _lastApiCallTime = DateTime.now();
+      return true;
+    }
+    final elapsed = DateTime.now().difference(_lastApiCallTime!).inSeconds;
+    if (elapsed >= 5) {
+      _lastApiCallTime = DateTime.now();
+      return true;
+    }
+    return false;
+  }
+
   /// Requests location permission and subscribes to the device GPS stream.
   ///
   /// Each position update snaps the truck marker to the nearest route point
@@ -1946,6 +1997,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_isArrived) return;
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
+    // Accuracy filter: discard fixes with horizontal accuracy worse than 20 m
+    // to avoid route jitter and spurious API calls from poor GPS signals.
+    if (position.accuracy > 20) return;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
 
@@ -2136,6 +2190,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (minDist > _offRouteThresholdMeters) {
+      // Only trigger a reroute when the API debounce window has elapsed AND
+      // the truck has moved significantly, preventing flood of redundant calls.
+      // _canCallApi is checked first because it has no position-state side
+      // effects when it returns false, keeping _lastRouteCheckLat/Lng stable.
+      if (!_canCallApi()) return;
+      if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
       _isRerouting = true;
       _lastRerouteTime = DateTime.now();
       // Show rerouting status indicator and announce the change via TTS.
@@ -3105,7 +3165,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           '&exclude=ferry'
           '&access_token=$_mapboxToken';
 
-      final res = await http.get(Uri.parse(url));
+      final res = await http.get(Uri.parse(url)).timeout(
+        const Duration(seconds: 10),
+      );
       final data = jsonDecode(res.body);
       final routes = data['routes'] as List?;
       if (routes == null || routes.isEmpty) return null;
@@ -4251,7 +4313,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "&exclude=ferry"
           "&access_token=$_mapboxToken";
 
-      final res = await http.get(Uri.parse(url));
+      final res = await http.get(Uri.parse(url)).timeout(
+        const Duration(seconds: 10),
+      );
       print("MAPBOX RESPONSE: ${res.body}");
 
       final data = jsonDecode(res.body);
@@ -4467,6 +4531,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // panel (in addition to the TruckRestriction violation sheet above).
       _updateRouteViolationWarnings();
     } catch (e) {
+      print('Mapbox error: $e');
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -5825,9 +5890,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
   ///
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
-  /// Loads [PoiItem]s from `assets/logo_brand_markers/locations.json`, converts
-  /// them to GeoJSON, registers all PNG icons from `assets/logo_brand_markers/`,
-  /// then adds four objects to the Mapbox style:
+  /// Loads [PoiItem]s from `assets/locations.json`, converts them to GeoJSON,
+  /// registers all PNG icons from `assets/logo_brand_markers/`, then adds four
+  /// objects to the Mapbox style:
   ///
   ///   - `poi-source`       — clustered GeoJSON source
   ///   - `poi-clusters`     — circle layer for grouped cluster rings
@@ -5853,14 +5918,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // ── Audit: name + icon for every POI ─────────────────────────────────
       // Prints every loaded POI's name and normalised Mapbox icon ID so you can
       // cross-check the JSON `"icon"` field against the files bundled in
-      // assets/logo_brand_markers/.  If a marker is missing, its icon ID will not
-      // appear in the [registerPoiIcons] success log.
+      // assets/logo_brand_markers/.  If a marker is missing, its icon ID will
+      // not appear in the [registerPoiIcons] success log.
       //
       // To match a missing icon:
       //   1. Find the icon ID printed here (e.g. "hotel_default").
       //   2. Check that a PNG matching the original JSON icon value exists in
-      //      assets/logo_brand_markers/ (e.g. "hotel default .png" — note the
-      //      trailing space before .png in some bundled filenames).
+      //      assets/logo_brand_markers/ (e.g. "hotel_default.png").
       //   3. If not, add or rename the PNG, then rebuild.
       //
       // Note: this loop logs one line per POI entry, which may produce many

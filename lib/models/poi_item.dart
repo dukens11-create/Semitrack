@@ -1,11 +1,11 @@
 import 'dart:convert';
 
-/// A point of interest (POI) entry from `assets/poi/poi_data.json`.
+/// A point of interest (POI) entry from `assets/locations.json`.
 ///
 /// [icon] is the Mapbox image ID registered in the map style via
 /// [registerPoiIcons].  It corresponds to a PNG file under
-/// `assets/logo_brand_markers/` after filename normalisation (spaces replaced with
-/// underscores, lowercase, no extension).
+/// `assets/logo_brand_markers/` after filename normalisation (spaces replaced
+/// with underscores, lowercase, no extension).
 class PoiItem {
   final String id;
   final String name;

@@ -32,17 +32,18 @@ String poiIconId(String filename) {
 /// in the folder so it is registered by [registerPoiIcons].
 const String _kPoiFallbackIcon = 'truck_parking';
 
-/// Loads every [PoiItem] from `assets/logo_brand_markers/locations.json`.
+/// Loads every [PoiItem] from `assets/locations.json`.
 ///
 /// The JSON entries in that file use a simplified schema — they carry `name`,
-/// `icon` (a `.png` filename), `lat`, `lng`, `country`, `stateOrProvince`,
-/// and `city`, but do **not** include `id` or `category`.  This function
-/// synthesises the missing fields:
+/// `icon` (a filename stem, e.g. `"pilot"`), `lat`, `lng`, `country`,
+/// `stateOrProvince`, and `city`, but do **not** include `id` or `category`.
+/// This function synthesises the missing fields:
 ///   - `id`       — `"ts_NNNNN"` where NNNNN is the zero-padded list index.
 ///   - `category` — always `"truck_stop"` for this dataset.
 ///   - `icon`     — normalised via [poiIconId] so that it matches the Mapbox
 ///                  image ID registered by [registerPoiIcons]
-///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`).
+///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`,
+///                   or a plain stem `"pilot"` → `"pilot"`).
 ///
 /// **Icon validation:** the normalised icon ID is cross-checked against the
 /// set of PNG assets actually bundled in `assets/logo_brand_markers/`.  If no
@@ -53,7 +54,7 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// returned so that all truck stops appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
-      await rootBundle.loadString('assets/logo_brand_markers/locations.json');
+      await rootBundle.loadString('assets/locations.json');
   final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
 
   // Build the set of icon IDs that are actually bundled in assets/logo_brand_markers/
@@ -257,7 +258,7 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
 /// match the JSON value after normalisation.
 ///
 /// **How to match POI JSON values to filenames:**
-///   • The JSON `"icon"` field (e.g. `"flying j truck stop.png"`) is
+///   • The JSON `"icon"` field (e.g. `"flying_j_truck_stop"`) is
 ///     normalised by [poiIconId] before being stored in [PoiItem.icon].
 ///   • [registerPoiIcons] registers each PNG under the same normalised ID.
 ///   • If a POI icon ID printed here does NOT appear in the registration log

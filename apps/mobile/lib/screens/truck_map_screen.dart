@@ -2021,14 +2021,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the appropriate navigation zoom level for [speedMph].
   ///
-  /// Zoom bands mirror a real truck GPS:
-  /// - 0–10 mph  → 16.5–17.2  (urban / stopped, very close)
-  /// - 10–30 mph → 15.5–16.3  (city/suburban)
-  /// - 30–55 mph → 14.5–15.3  (highway approach)
-  /// - 55+ mph   → 13.8–14.5  (open highway)
-  ///
-  /// Within each band the zoom is linearly interpolated so transitions are
-  /// gradual rather than stepped.
+  /// Uses stepped thresholds based on speed range:
+  /// - 0–10 mph  → 17.2  (urban / stopped, very close)
+  /// - 10–30 mph → 16.3  (city/suburban)
+  /// - 30–55 mph → 15.3  (highway approach)
+  /// - 55+ mph   → 14.7  (open highway)
   double _navigationZoomForSpeed(double speedMph) {
     if (speedMph <= 10) return 17.2;
     if (speedMph <= 30) return 16.3;
@@ -2082,6 +2079,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Activates **follow mode**: locks the camera onto the truck with
   /// heading-based rotation, speed-adaptive zoom, and lower-third framing.
+  ///
+  /// Zoom is determined by [_navigationZoomForSpeed] using stepped thresholds.
+  /// Bearing uses [geo.Position.heading] directly when speed ≥ [_noRotateSpeedMph];
+  /// otherwise [_lastKnownBearing] is held to prevent jitter when stopped.
   ///
   /// Safe to call at any time; no-ops when the map is not ready.
   void _setFollowCamera(geo.Position pos) {

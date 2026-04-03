@@ -1,10 +1,10 @@
 import 'dart:convert';
 
-/// A truck stop point of interest loaded from `assets/truck_stop_poi/locations.json`.
+/// A truck stop point of interest loaded from `assets/logo_brand_markers/locations.json`.
 ///
-/// [icon] matches the PNG filename under `assets/truck_stop_poi/` (e.g.
+/// [icon] matches the PNG filename under `assets/logo_brand_markers/` (e.g.
 /// `'pilot.png'`).  The full asset path used to display the marker is
-/// `assets/truck_stop_poi/{icon}`.
+/// `assets/logo_brand_markers/{icon}`.
 class TruckStopPOI {
   final String name;
   final String icon;

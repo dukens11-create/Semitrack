@@ -4,7 +4,7 @@ import 'dart:convert';
 ///
 /// [icon] is the Mapbox image ID registered in the map style via
 /// [registerPoiIcons].  It corresponds to a PNG file under
-/// `assets/truck_stop_poi/` after filename normalisation (spaces replaced with
+/// `assets/logo_brand_markers/` after filename normalisation (spaces replaced with
 /// underscores, lowercase, no extension).
 class PoiItem {
   final String id;

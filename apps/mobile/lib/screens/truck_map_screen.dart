@@ -1139,6 +1139,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'pilot',
       assetLogo: 'assets/logo_brand_markers/pilot.png',
       description: 'Large Pilot with 24/7 fuel, truck parking, showers, and Subway restaurant.',
+      exitNumber: '309',
     ),
     TruckStop(
       id: '2',
@@ -1150,6 +1151,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'loves',
       assetLogo: 'assets/logo_brand_markers/loves.png',
       description: "Love's with CAT scale, showers, Hardee's, and tire care center.",
+      exitNumber: '194B',
     ),
     TruckStop(
       id: '3',
@@ -1161,6 +1163,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'ta',
       assetLogo: 'assets/logo_brand_markers/ta_truck_stop.png',
       description: 'TA with full truck service shop, Iron Skillet, showers, and CAT scale.',
+      exitNumber: '27',
     ),
     TruckStop(
       id: '4',
@@ -1172,6 +1175,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'petro',
       assetLogo: 'assets/logo_brand_markers/petro_truck_stop.png',
       description: 'Petro with certified truck lube, CAT scale, Iron Skillet, and 24/7 fuel.',
+      exitNumber: '775',
     ),
     TruckStop(
       id: '5',
@@ -1183,6 +1187,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'flyingj',
       assetLogo: 'assets/logo_brand_markers/flying_j_truck_stop.png',
       description: 'Flying J with myPilot rewards, truck parking for 150 rigs, and Denny\'s.',
+      exitNumber: '677',
     ),
     TruckStop(
       id: '6',
@@ -1194,6 +1199,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       icon: 'pilot',
       assetLogo: 'assets/logo_brand_markers/pilot.png',
       description: 'Pilot with 24/7 diesel, DEF dispensers, showers, and convenience store.',
+      exitNumber: '442',
     ),
     TruckStop(
       id: '7',
@@ -3814,6 +3820,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           latitude: s.position.latitude,
           longitude: s.position.longitude,
           locationName: s.address,
+          exitNumber: s.exitNumber,
         );
       }).toList(growable: false);
     }
@@ -11315,6 +11322,8 @@ class TruckStopPoi {
   final double latitude;
   final double longitude;
   final String? locationName;
+  /// Highway exit number nearest to this stop, e.g. "309".
+  final String? exitNumber;
 
   const TruckStopPoi({
     required this.id,
@@ -11324,6 +11333,7 @@ class TruckStopPoi {
     required this.latitude,
     required this.longitude,
     this.locationName,
+    this.exitNumber,
   });
 }
 
@@ -11344,139 +11354,182 @@ class AheadTruckStop {
 
 // ── Closest-truck-stops-ahead widgets ─────────────────────────────────────────
 
-/// A compact, logo-first chip showing a truck stop ahead on the active route.
+/// Derives a short brand abbreviation from a [logoName] stem for display
+/// inside the red-bordered circle on the truck-stop chip.
 ///
-/// Design principles:
-/// • **No card/pill background** — the logo and text float directly over the
-///   map so the chip is visually lightweight and never obscures road detail.
-/// • **Unified logo size** (28 × 28 px) — all brand logos render at the same
-///   dimensions for a consistent row regardless of the source PNG's intrinsic
-///   size.  Use transparent PNGs in `assets/logos/` so no white square appears
-///   behind the graphic.
-/// • **High-contrast text with shadow** — white text + subtle black shadow
-///   keeps the label readable over both light and dark map tiles.
-/// • **Graceful fallback** — if the logo asset is missing, a standard
-///   [Icons.local_gas_station] icon is shown at the same size.
-/// • **Approaching badge** — when [isApproaching] is true, an amber
-///   "Approaching" label is shown below the distance to alert the driver that
-///   the stop is imminent.
+/// Examples:
+///   'pilot'               → 'P'
+///   'loves'               → 'L'
+///   'ta_truck_stop' / 'ta' → 'TA'
+///   'petro_truck_stop'    → 'Pe'
+///   'flying_j_truck_stop' → 'FJ'
+///   'flyingj'             → 'FJ'
+String _truckStopBrandAbbr(String logoName) {
+  final key = logoName.toLowerCase();
+  if (key.contains('pilot')) return 'P';
+  if (key == 'loves' || key.startsWith('loves')) return 'L';
+  if (key == 'ta' || key.startsWith('ta_')) return 'TA';
+  if (key.contains('petro_canada')) return 'PC';
+  if (key.startsWith('petro')) return 'Pe';
+  if (key.contains('flyingj') || key.contains('flying_j')) return 'FJ';
+  if (key.contains('circle')) return 'CK';
+  if (key.contains('rest')) return 'RA';
+  if (key.contains('weigh')) return 'WS';
+  if (key.contains('quicktrip') || key.contains('quiktrip')) return 'QT';
+  if (key.contains('maverik')) return 'MV';
+  if (key.contains('walmart')) return 'W';
+  if (key.contains('hotel')) return 'H';
+  if (key.contains('restaurant')) return 'R';
+  // Generic fallback: first 1–2 uppercase letters of the stem.
+  final clean = key.replaceAll(RegExp(r'[_\-].*'), '');
+  if (clean.length >= 2) return clean.substring(0, 2).toUpperCase();
+  return clean.toUpperCase();
+}
+
+/// A single truck-stop card displayed in the closest-stops-ahead row.
 ///
-/// Best practice: keep logo PNGs trimmed to edge-to-edge artwork with a
-/// transparent background so `fit: BoxFit.contain` shows the full graphic.
+/// Visual layout (matching the reference screenshot):
+///   [Green exit badge]  [White rounded card: [Logo circle] [Miles]]
+///
+/// • **Exit badge** (left): green rounded rectangle with exit number and a
+///   small curved-arrow icon.  Hidden when [exitNumber] is null.
+/// • **White card**: rounded-rectangle with drop shadow.
+///   – Brand abbreviation (e.g. "P", "TA") in a red-bordered white circle.
+///   – Miles number in bold black with a smaller "mi" suffix.
 class ClosestTruckStopChip extends StatelessWidget {
-  /// Path to the brand logo asset, e.g. `'assets/logo_brand_markers/pilot.png'`.
-  final String logoAsset;
+  /// Brand logo name stem, e.g. `'pilot'` or `'ta_truck_stop'`.
+  /// Used to derive the abbreviation shown inside the logo circle.
+  final String logoName;
 
-  /// Formatted distance string, e.g. `'12 mi'` or `'3.4 mi'`.
-  final String distanceText;
+  /// Distance ahead in miles (raw value used to render "89 mi", "3.4 mi").
+  final double miles;
 
-  /// Full display name of the truck stop shown after the distance label,
-  /// e.g. `'Pilot Travel Center - Portland'`.
-  final String? stopName;
-
-  /// When non-null, an amber badge is shown below the distance text with this
-  /// message (e.g. `'2.3 miles approaching.'`) to alert the driver that the
-  /// stop is imminent.
-  final String? approachingText;
+  /// Highway exit number, e.g. `'309'`.  When non-null the green exit badge
+  /// is shown to the left of the white card.
+  final String? exitNumber;
 
   const ClosestTruckStopChip({
     super.key,
-    required this.logoAsset,
-    required this.distanceText,
-    this.stopName,
-    this.approachingText,
+    required this.logoName,
+    required this.miles,
+    this.exitNumber,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Shared text shadow for legibility over any map tile colour.
-    const textShadow = Shadow(
-      color: Colors.black54,
-      blurRadius: 3,
-      offset: Offset(0, 1),
-    );
+    final String abbr = _truckStopBrandAbbr(logoName);
+    final String milesNum =
+        miles < 10 ? miles.toStringAsFixed(1) : miles.round().toString();
 
     return Padding(
-      // Horizontal spacing between consecutive chips in the row.
-      padding: const EdgeInsets.symmetric(horizontal: 4.0),
+      padding: const EdgeInsets.only(right: 10.0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // ── Brand logo ───────────────────────────────────────────────────
-          // 28 × 28 px with BoxFit.contain so the full graphic is visible.
-          // Transparent PNGs render cleanly with no white background halo.
-          Image.asset(
-            logoAsset,
-            width: 28,
-            height: 28,
-            fit: BoxFit.contain,
-            // Fall back to a standard icon if the asset file is missing.
-            errorBuilder: (_, __, ___) => const Icon(
-              Icons.local_gas_station,
-              size: 24,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(width: 6),
-          // ── Distance label + optional approaching badge ──────────────────
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Distance row: value + optional stop name
-              Row(
+          // ── Green exit badge ─────────────────────────────────────────────
+          if (exitNumber != null && exitNumber!.isNotEmpty) ...[
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2E7D32),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  const Icon(
+                    Icons.subdirectory_arrow_right,
+                    color: Colors.white,
+                    size: 12,
+                  ),
+                  const SizedBox(height: 2),
                   Text(
-                    distanceText,
+                    exitNumber!,
                     style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
                       color: Colors.white,
-                      shadows: [textShadow],
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      height: 1.0,
                     ),
                   ),
-                  // ── Optional stop name ─────────────────────────────────
-                  if (stopName != null && stopName!.isNotEmpty) ...[
-                    const SizedBox(width: 5),
-                    Text(
-                      stopName!,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 13,
-                        color: Colors.white,
-                        shadows: [textShadow],
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
                 ],
               ),
-              // ── Approaching badge ──────────────────────────────────────
-              // Only shown for the first upcoming stop when within the
-              // approaching threshold (~3 miles).  The badge text includes
-              // the exact distance, e.g. "2.3 miles approaching."
-              if (approachingText != null)
+            ),
+            const SizedBox(width: 6),
+          ],
+          // ── White rounded card ───────────────────────────────────────────
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // ── Logo circle (red border, white fill, brand abbr) ──────
                 Container(
-                  margin: const EdgeInsets.only(top: 2),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF9800).withOpacity(0.90),
-                    borderRadius: BorderRadius.circular(6),
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    border: Border.all(
+                      color: const Color(0xFFCC0000),
+                      width: 2,
+                    ),
                   ),
-                  child: Text(
-                    approachingText!,
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      height: 1.3,
+                  child: Center(
+                    child: Text(
+                      abbr,
+                      style: const TextStyle(
+                        color: Color(0xFFCC0000),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        height: 1.0,
+                      ),
                     ),
                   ),
                 ),
-            ],
+                const SizedBox(width: 8),
+                // ── Miles: bold number + smaller 'mi' suffix ──────────────
+                RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: milesNum,
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                          height: 1.1,
+                        ),
+                      ),
+                      const TextSpan(
+                        text: ' mi',
+                        style: TextStyle(
+                          color: Colors.black54,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 11,
+                          height: 1.1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -11486,15 +11539,8 @@ class ClosestTruckStopChip extends StatelessWidget {
 
 /// A horizontally scrollable row of up to 2 [ClosestTruckStopChip] widgets,
 /// displayed during active navigation to show the nearest truck stops ahead.
-///
-/// The first stop shows a `"{X} miles approaching."` badge when it is within
-/// [_approachingThresholdMiles] of the driver's current position.
 class ClosestTruckStopsRow extends StatelessWidget {
   final List<AheadTruckStop> stops;
-
-  /// Distance threshold in miles below which the next stop is considered
-  /// "approaching" and receives the amber badge.
-  static const double _approachingThresholdMiles = 3.0;
 
   const ClosestTruckStopsRow({super.key, required this.stops});
 
@@ -11506,26 +11552,11 @@ class ClosestTruckStopsRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: stops.indexed.map(((int, AheadTruckStop) entry) {
-          final index = entry.$1;
-          final stop = entry.$2;
-          final miles = stop.routeMilesAhead;
-          final distText = miles < 10
-              ? '${miles.toStringAsFixed(1)} mi'
-              : '${miles.round()} mi';
-          // Only the first (closest) stop can show the approaching badge.
-          // Badge text includes the distance: e.g. "2.3 miles approaching."
-          // Since the badge only appears when miles < _approachingThresholdMiles
-          // (3.0), the distance is always < 10 so one decimal place is used.
-          final String? approachingText = (index == 0 &&
-                  miles < _approachingThresholdMiles)
-              ? '${miles.toStringAsFixed(1)} miles approaching.'
-              : null;
+        children: stops.map((stop) {
           return ClosestTruckStopChip(
-            logoAsset: 'assets/logo_brand_markers/${stop.poi.logoName}.png',
-            distanceText: distText,
-            stopName: stop.poi.name,
-            approachingText: approachingText,
+            logoName: stop.poi.logoName,
+            miles: stop.routeMilesAhead,
+            exitNumber: stop.poi.exitNumber,
           );
         }).toList(),
       ),
@@ -11551,6 +11582,7 @@ class TruckStop {
     this.icon,
     this.assetLogo,
     this.description,
+    this.exitNumber,
   });
 
   /// Unique identifier for this stop (used as the marker ID prefix).
@@ -11589,6 +11621,11 @@ class TruckStop {
   /// e.g. "Full-service truck stop with scales, showers & restaurant."
   /// When null the description row is omitted from the info sheet.
   final String? description;
+
+  /// Highway exit number nearest to this stop, e.g. "309".
+  /// Shown in the green exit badge on the truck-stop chip.
+  /// Null when no exit number is associated with this stop.
+  final String? exitNumber;
 }
 
 // ── Map POI types, model, and sample data ─────────────────────────────────────

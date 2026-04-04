@@ -9601,6 +9601,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               fontWeight: FontWeight.w700,
               color: Colors.white,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),

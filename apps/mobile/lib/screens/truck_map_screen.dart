@@ -6572,6 +6572,110 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Opens a bottom sheet that acts as an entry point for additional
+  /// map-related features accessible during navigation.
+  ///
+  /// Each list tile represents a map feature.  New features can be added by
+  /// appending additional [ListTile] entries to the children list of the
+  /// Column widget below.
+  void _showMoreMapFeaturesSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── Sheet handle ──────────────────────────────────────
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Map Features',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const Divider(height: 16),
+                // ── Feature: Trip Legs ────────────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.list_alt_outlined),
+                  title: const Text('Trip Legs'),
+                  subtitle: const Text('View leg-by-leg route breakdown'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showLegBreakdownSheet();
+                  },
+                ),
+                // ── Feature: Add Waypoint ─────────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.add_location_alt_outlined),
+                  title: const Text('Add Waypoint'),
+                  subtitle: const Text('Insert a stop along your route'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    // TODO: implement add-waypoint flow
+                  },
+                ),
+                // ── Feature: Nearby Services ──────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.local_gas_station_outlined),
+                  title: const Text('Nearby Services'),
+                  subtitle: const Text('Fuel, parking, and truck stops'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    // TODO: implement nearby-services flow
+                  },
+                ),
+                // ── Feature: Report Incident ──────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.report_problem_outlined),
+                  title: const Text('Report Incident'),
+                  subtitle: const Text('Notify other drivers of road issues'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    // TODO: implement report-incident flow
+                  },
+                ),
+                // ── Feature: Change Map Style ─────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.map_outlined),
+                  title: const Text('Change Map Style'),
+                  subtitle: const Text('Switch between map themes'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    // TODO: implement map-style picker
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   /// Builds a mini FAB that opens the leg breakdown sheet during navigation.
   ///
   /// Hidden when there are no legs or navigation has not started.
@@ -10211,17 +10315,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           const SizedBox(width: 8),
           // ── More button ──────────────────────────────────────────────
           GestureDetector(
-            onTap: _showLegBreakdownSheet,
+            onTap: _showMoreMapFeaturesSheet,
             child: Container(
-              padding: const EdgeInsets.all(6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.white12,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(
-                Icons.more_horiz,
-                color: Colors.white70,
-                size: 16,
+              child: const Text(
+                'More',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),

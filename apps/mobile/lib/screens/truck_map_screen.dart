@@ -389,6 +389,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Sample trip progress info for the TripSummaryStrip.
   late TripProgressInfo _tripProgressInfo;
 
+  // ── Wind alert visibility state ────────────────────────────────────────────
+  /// Controls whether the bottom wind advisory card is visible.
+  /// Starts true so the card shows as soon as navigation begins; the driver
+  /// can dismiss it with the close button.
+  bool _showWindAlert = true;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -8152,102 +8158,121 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Builds a compact wind/weather alert card shown at the bottom center-left
-  /// of the map during active navigation.
+  /// Builds the custom wind advisory card shown at the bottom of the map
+  /// during active navigation.
   ///
-  /// Displays the first active weather-type [NavigationAlert] in a compact
-  /// card (~90 px tall).  Returns [SizedBox.shrink] when there are no active
-  /// weather alerts so the zone stays empty without affecting layout.
+  /// Returns a plain [Container] (not [Positioned]); the caller wraps it in
+  /// a [Positioned] at `left: 16, right: 110, bottom: 92`.  The card is only
+  /// shown when [_isNavigating] is true and [_showWindAlert] is true.
   Widget _buildWindAlert() {
-    // Find the first undismissed weather/wind alert from the active alert list.
-    final Iterable<NavigationAlert> weatherAlerts = _navAlerts.where(
-      (a) => !a.isDismissed && (a.type == AlertType.weather ||
-          a.type == AlertType.windAdvisory || a.type == AlertType.highWind),
-    );
-    if (weatherAlerts.isEmpty) return const SizedBox.shrink();
-    final NavigationAlert weatherAlert = weatherAlerts.first;
+    final accent = const Color(0xFFFF7A00);
 
-    final Color alertColor = _alertSeverityColor(weatherAlert.severity);
-
-    return Positioned(
-      // bottom: 92 gives a clear gap above the stop button (bottom: 20 + height: 54 = 74 px top edge).
-      bottom: 92,
-      // left: 16 matches standard horizontal screen margin.
-      left: 16,
-      // right: 110 keeps the wind card clear of the speed box (right: 16, ~82 px wide) plus margin.
-      right: 110,
-      child: SizedBox(
-        // height: 88 is compact enough to leave a visible gap above the stop button.
-        height: 88,
-        child: Card(
-          margin: EdgeInsets.zero,
-          color: Colors.black.withOpacity(0.82),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: alertColor.withOpacity(0.7), width: 1.2),
+    return Container(
+      height: 84,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: accent.withOpacity(0.9),
+          width: 1.3,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withOpacity(0.14),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-          elevation: 4,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.air,
+              color: accent,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.air, color: alertColor, size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        weatherAlert.title,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: alertColor,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (weatherAlert.subtitle != null)
-                        Text(
-                          weatherAlert.subtitle!,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.white70,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      if (weatherAlert.distanceMiles != null)
-                        Text(
-                          _fmtMiles(weatherAlert.distanceMiles!),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: alertColor.withOpacity(0.85),
-                          ),
-                        ),
-                    ],
+                Text(
+                  'Wind Advisory',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      final idx = _navAlerts
-                          .indexWhere((a) => a.id == weatherAlert.id);
-                      if (idx != -1) {
-                        _navAlerts[idx] =
-                            _navAlerts[idx].copyWith(isDismissed: true);
-                      }
-                    });
-                  },
-                  child: const Icon(Icons.close,
-                      size: 16, color: Colors.white54),
+                SizedBox(height: 4),
+                Text(
+                  'Gusts up to 60 mph',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ],
             ),
           ),
-        ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _formatChipDistance(12.0),
+              style: TextStyle(
+                color: accent,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _showWindAlert = false;
+              });
+            },
+            child: Container(
+              width: 30,
+              height: 30,
+              decoration: const BoxDecoration(
+                color: Colors.white10,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.close,
+                color: Colors.white70,
+                size: 18,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -8841,7 +8866,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Zone 5 (bottom center/left): compact wind alert card ───
                 // Shows the primary active weather/wind alert in a compact card
                 // (~90 px tall) that sits above the stop button.
-                if (_isNavigating) _buildWindAlert(),
+                if (_isNavigating && _showWindAlert)
+                  Positioned(
+                    left: 16,
+                    right: 110,
+                    bottom: 92,
+                    child: _buildWindAlert(),
+                  ),
                 // ── Zone 6 (very bottom): stop navigation button ──────────
                 // Full-width "Stop Navigation" button with SafeArea padding.
                 if (_isNavigating) _buildStopNavigationButton(),
@@ -9535,6 +9566,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case UpcomingAlertType.restArea:
         return Icons.hotel_outlined;
     }
+  }
+
+  /// Formats [distance] (in miles) for display in a compact chip.
+  ///
+  /// Returns a whole number (e.g. `"12 mi"`) when [distance] is an integer,
+  /// or one decimal place (e.g. `"13.5 mi"`) otherwise.
+  String _formatChipDistance(double distance) {
+    if (distance % 1 == 0) {
+      return '${distance.toInt()} mi';
+    }
+    return '${distance.toStringAsFixed(1)} mi';
   }
 
   /// Returns the accent colour for an [UpcomingAlertType].

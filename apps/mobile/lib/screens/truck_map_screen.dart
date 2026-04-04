@@ -2905,6 +2905,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _tripLegs = const [];
       _activeLegIndex = 0;
       _closestTruckStopsAhead = const [];
+      _closestWeighStationsAhead = const [];
       _upcomingAlerts = const [];
       _topInstructionData = null;
     });
@@ -3221,6 +3222,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Notify AppShell (and any other listeners) that navigation is now active
     // so the bottom navigation bar is hidden during the driving session.
     TruckMapScreen.isNavigatingNotifier.value = true;
+    // Immediately populate the closest weigh station so the chip is visible
+    // as soon as the driver taps "Start Navigation" without waiting for the
+    // first GPS fix.
+    _refreshClosestWeighStationsAhead();
     // Start the warning manager so it evaluates proximity on each GPS fix.
     _warningManager.startNavigation();
     _startRouteAnimation();
@@ -6392,6 +6397,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .where((p) => p.type == PoiType.weighStation)
         .length;
 
+    // Closest upcoming weigh station on this route (preview mode).
+    // Re-uses the same ahead-on-route logic used during live navigation so the
+    // Route Preview and the navigation chip always agree.
+    final previewStations = _routePoints.isNotEmpty
+        ? _getClosestWeighStationsAheadOnRoute()
+        : const <AheadWeighStation>[];
+    final AheadWeighStation? nextPreviewStation =
+        previewStations.isNotEmpty ? previewStations.first : null;
+
     final restrictionCount = _selectedRouteOptionIndex < _routeOptions.length
         ? _routeOptions[_selectedRouteOptionIndex].restrictionCount
         : _routeViolations.length;
@@ -6427,6 +6441,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _previewRow('⏱', 'ETA:', etaLabel),
           _previewRow('⛽', 'Fuel Stops:', '$fuelStops'),
           _previewRow('⚖️', 'Weigh Stations:', '$weighStations'),
+          // If the route passes a weigh station, show the first one ahead
+          // with its name and distance so the driver can plan compliance stops.
+          if (nextPreviewStation != null) ...[
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.only(left: 24, bottom: 2),
+              child: Row(
+                children: [
+                  const Icon(Icons.scale,
+                      size: 13, color: Colors.orange),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      'Next: ${nextPreviewStation.poi.name}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.black54,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    nextPreviewStation.milesAhead < 10
+                        ? '${nextPreviewStation.milesAhead.toStringAsFixed(1)} mi'
+                        : '${nextPreviewStation.milesAhead.round()} mi',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           _previewRow(
             '⚠️',
             'Restrictions:',

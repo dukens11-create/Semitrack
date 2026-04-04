@@ -9673,17 +9673,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns the truck-specific speed limit for the given position.
-  ///
-  /// Applies a California bounding-box check and returns
-  /// [_caTruckSpeedLimitMph] (55 mph) inside CA; otherwise returns
-  /// [carSpeedLimit].  Extend this method to add more state/region rules.
-  double _getTruckSpeedLimit(double carSpeedLimit, double lat, double lng) {
-    final bool inCA = lat >= _caMinLat && lat <= _caMaxLat &&
-        lng >= _caMinLng && lng <= _caMaxLng;
-    return inCA ? _caTruckSpeedLimitMph : carSpeedLimit;
-  }
-
   /// Compact speed / speed-limit panel shown near the bottom center-right
   /// during active navigation.
   ///

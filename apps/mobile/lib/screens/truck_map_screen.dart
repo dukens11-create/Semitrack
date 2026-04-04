@@ -184,6 +184,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The banner is approximately 170 px tall; 180 px provides a small gap.
   static const double _kRoadInfoCardTopOffset = 180.0;
 
+  // ── Closest truck stops row bottom offsets ───────────────────────────────
+  /// Bottom offset (px) for the truck-stop row when the weigh-station row is
+  /// also visible.  The weigh-station chip is ~36 px tall and sits at
+  /// bottom: 86, so its top edge is at ~122 px; the 8 px gap gives 130 px.
+  static const double _kTruckStopRowBottomWithWeighStations = 130.0;
+
+  /// Bottom offset (px) for the truck-stop row when no weigh-station row is
+  /// present — floats just above the bottom trip strip (bottom: 18 + ~52 px
+  /// height + 18 px gap ≈ 88 px).
+  static const double _kTruckStopRowBottomDefault = 88.0;
+
   // ── Arrival detection threshold ───────────────────────────────────────────
   /// Radius in metres within which the driver is considered to have arrived at
   /// the destination.  30 m provides a comfortable buffer that triggers before
@@ -8269,10 +8280,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
       return const SizedBox.shrink();
     }
+    // When the weigh-station row is also visible, shift the truck-stop chips
+    // above it so the two panels do not overlap.  The weigh-station chip is
+    // ~36 px tall and sits at bottom: 86, so its top edge is at ~122 px;
+    // adding an 8 px gap gives bottom: 130.  When there are no weigh stations
+    // the chips sit just above the trip strip at bottom: 88.
+    final double bottomOffset =
+        _closestWeighStationsAhead.isNotEmpty
+            ? _kTruckStopRowBottomWithWeighStations
+            : _kTruckStopRowBottomDefault;
     return Positioned(
       left: 0,
       right: 0,
-      bottom: 88,
+      bottom: bottomOffset,
       child: ClosestTruckStopsRow(stops: _closestTruckStopsAhead),
     );
   }

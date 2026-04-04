@@ -2849,6 +2849,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         modifier:      nextStep.maneuver,
         roadName:      nextStep.name,
         distanceMiles: nextStep.distanceMeters * 0.000621371,
+        exitNumber:    nextStep.exitNumber,
       );
     }
   }
@@ -3319,6 +3320,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         modifier:       first.maneuver,
         roadName:       first.name,
         distanceMiles:  first.distanceMeters * 0.000621371,
+        exitNumber:     first.exitNumber,
       );
     } else {
       // Sample data — replace with real SDK values in production.
@@ -7077,6 +7079,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final distanceMeters = (step['distance'] as num?)?.toDouble() ?? 0.0;
       // Road name for this step (e.g. "US-95", "Wells Ave").
       final stepName = (step['name'] as String?) ?? '';
+      // Highway exit number from the Mapbox `exits` field (e.g. "13", "13A").
+      final rawExits = (step['exits'] as String?)?.trim();
+      final stepExitNumber =
+          (rawExits != null && rawExits.isNotEmpty) ? rawExits : null;
       return _NavStep(
         instruction,
         LatLng(lat, lng),
@@ -7084,6 +7090,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         type: maneuverType,
         distanceMeters: distanceMeters,
         name: stepName,
+        exitNumber: stepExitNumber,
       );
     }).toList();
   }
@@ -11163,6 +11170,7 @@ class _NavStep {
     this.type = '',
     this.distanceMeters = 0.0,
     this.name = '',
+    this.exitNumber,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -11185,6 +11193,10 @@ class _NavStep {
   /// Road name for this step, e.g. "US-95" or "Wells Ave", from the Mapbox
   /// Directions API `name` field.
   final String name;
+
+  /// Highway exit number for this step, e.g. "13", from the Mapbox
+  /// Directions API `exits` field.  Null when no exit number is available.
+  final String? exitNumber;
 }
 
 // ── Closest-truck-stops-ahead models ──────────────────────────────────────────

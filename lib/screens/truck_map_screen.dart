@@ -10493,11 +10493,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Current map bearing (degrees clockwise from north that is "up" on screen).
     final double bearing = _mapReady ? _mapController.camera.rotation : 0.0;
 
+    // During navigation, anchor the compass just to the upper-right of the
+    // primary maneuver card (left: 16, width: 320) with a small gap.
+    final bool navActive = _isNavigating && _topInstructionData != null;
+
     return Positioned(
-      // top: 18 vertically aligns the compass button with the top nav card.
-      top: 18,
-      // right: 16 matches standard horizontal screen margin.
-      right: 16,
+      top: navActive ? 16 : 18,
+      left: navActive ? 16.0 + 320.0 + 8.0 : null, // card_left + card_width + gap
+      right: navActive ? null : 16,
       child: SafeArea(
         bottom: false,
         child: GestureDetector(

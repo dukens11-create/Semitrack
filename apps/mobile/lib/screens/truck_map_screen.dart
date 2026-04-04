@@ -4132,8 +4132,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       return Marker(
         point: r.position,
-        width: 36,
-        height: 36,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showRestrictionInfoDialog(r),
@@ -4149,7 +4149,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
               ],
             ),
-            child: Icon(style.icon, color: Colors.white, size: 20),
+            child: Icon(style.icon, color: Colors.white, size: 22),
           ),
         ),
       );
@@ -4483,8 +4483,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       return Marker(
         point: LatLng(sign.lat, sign.lng),
-        width: 36,
-        height: 36,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showWarningInfoDialog(sign),
@@ -4500,7 +4500,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
               ],
             ),
-            child: Icon(style.icon, color: Colors.white, size: 20),
+            child: Icon(style.icon, color: Colors.white, size: 22),
           ),
         ),
       );

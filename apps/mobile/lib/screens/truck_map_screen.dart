@@ -126,6 +126,7 @@ class TopInstructionData {
     required this.roadName,
     required this.distanceMiles,
     this.bottomChipText,
+    this.shieldText,
   });
 
   /// Icon category derived from maneuver type + modifier.
@@ -142,6 +143,9 @@ class TopInstructionData {
 
   /// Optional label shown in the bottom chip (defaults to [roadName]).
   final String? bottomChipText;
+
+  /// Optional highway shield label (e.g. "88", "I-5") shown as a green pill.
+  final String? shieldText;
 }
 
 /// Full-featured truck navigation screen.
@@ -205,6 +209,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Minimum seconds between "Slow down" TTS announcements when the driver
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
+
+  // ── Truck speed limit constants (CA bounding box) ─────────────────────────
+  /// Truck-specific speed limit in California (mph).
+  static const double _caTruckSpeedLimitMph = 55.0;
+
+  /// Southern latitude boundary of the California bounding box check.
+  static const double _caMinLat = 32.0;
+
+  /// Northern latitude boundary of the California bounding box check.
+  static const double _caMaxLat = 42.5;
+
+  /// Western longitude boundary of the California bounding box check.
+  static const double _caMinLng = -125.0;
+
+  /// Eastern longitude boundary of the California bounding box check.
+  static const double _caMaxLng = -114.0;
 
   /// Minimum GPS speed (mph) that counts as real vehicle movement.
   /// Route progress and step advancement are frozen below this threshold.
@@ -394,8 +414,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Top instruction card state ─────────────────────────────────────────────
   /// Current data for the compact top navigation instruction card.
   /// Null until the first call to [_updateTopInstructionFromNavigationStep].
-  /// Drives [_buildCompactTopInstructionCard].
+  /// Drives [_buildPrimaryManeuverCard].
   TopInstructionData? _topInstructionData;
+
+  /// Data for the secondary "Then" maneuver card shown below the primary card.
+  /// Set to the step after [_topInstructionData]'s step, null when no such step.
+  TopInstructionData? _secondaryInstructionData;
 
   // ── Navigation alert state ─────────────────────────────────────────────────
   // Sample alerts shown during active navigation.  In production these would
@@ -2049,8 +2073,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// - 30–55 mph → 15.3  (highway approach)
   /// - 55+ mph   → 14.7  (open highway)
   double _navigationZoomForSpeed(double speedMph) {
-    if (speedMph <= 10) return 17.2;
-    if (speedMph <= 30) return 16.3;
+    if (speedMph <= 10) return 17.0;
+    if (speedMph <= 30) return 16.2;
     if (speedMph <= 55) return 15.3;
     return 14.7;
   }
@@ -7641,7 +7665,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         roadName:       displayRoadName.isEmpty ? primary : displayRoadName,
         distanceMiles:  distanceMiles,
         bottomChipText: displayRoadName.isEmpty ? null : displayRoadName,
+        shieldText: _extractHighwayShield(displayRoadName.isEmpty ? (roadName ?? '') : displayRoadName),
       );
+
+      // Populate secondary "Then" card from the next navigation step.
+      final nextIdx = _currentStepIndex + 1;
+      if (nextIdx < _navSteps.length) {
+        final next = _navSteps[nextIdx];
+        final nextRoad = next.name.isNotEmpty ? next.name : next.instruction;
+        _secondaryInstructionData = TopInstructionData(
+          visualType:    _mapStepToVisualType(next.type, next.maneuver),
+          primaryText:   next.instruction,
+          roadName:      nextRoad,
+          distanceMiles: next.distanceMeters / _metersPerMile,
+          shieldText:    _extractHighwayShield(nextRoad),
+        );
+      } else {
+        _secondaryInstructionData = null;
+      }
     });
   }
 
@@ -8602,12 +8643,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                               strokeJoin: StrokeJoin.round,
                               strokeCap: StrokeCap.round,
                             ),
-                        // ── Selected route (blue) ───────────────────────────
+                        // ── Selected route: outline + bright blue active line ──
                         if (_routePoints.isNotEmpty)
                           Polyline(
                             points: _routePoints,
-                            strokeWidth: 7,
-                            color: Colors.blue,
+                            strokeWidth: 12,
+                            color: Colors.white.withOpacity(0.3),
+                            strokeJoin: StrokeJoin.round,
+                            strokeCap: StrokeCap.round,
+                          ),
+                        if (_routePoints.isNotEmpty)
+                          Polyline(
+                            points: _routePoints,
+                            strokeWidth: 9,
+                            color: const Color(0xFF1E90FF),
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
                           ),
@@ -8875,64 +8924,59 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
-                // ── Zone 1 (top): compact top instruction card ────────────
-                // Data-driven card: maneuver icon + primary text + road name
-                // + distance + bottom chip.  Replaces the old static card and
-                // stays synced via _updateTopInstructionFromNavigationStep().
+                // ── Zone 1 (top-left): primary maneuver card ──────────────
+                // GPS-style dark card: maneuver icon, distance, highway shield
+                // pill (if applicable), and road name.
                 if (_isNavigating && _topInstructionData != null)
                   Positioned(
                     top: 16,
                     left: 16,
                     child: SafeArea(
                       bottom: false,
-                      child: _buildCompactTopInstructionCard(
-                          _topInstructionData!),
+                      child: _buildPrimaryManeuverCard(_topInstructionData!),
+                    ),
+                  ),
+                // ── Zone 1b (top-left, below primary): "Then" card ────────
+                // Small secondary chip showing the step after the current one.
+                if (_isNavigating && _secondaryInstructionData != null)
+                  Positioned(
+                    top: 112,
+                    left: 16,
+                    child: SafeArea(
+                      bottom: false,
+                      child: _buildSecondaryThenCard(_secondaryInstructionData!),
                     ),
                   ),
                 // ── Zone 1a (top-right): compass / re-centre button ────────
                 // Round dark button at the top-right corner.
                 _buildSmallCompassButton(),
-                // ── Zone 3 (right side): compact vertical alert stack ──────
-                // Up to three compact alert chips stacked on the right edge,
-                // starting at top:120 so they never overlap the top card or
-                // the compass button.
-                _buildRightSideAlertStack(),
-                // ── Zone 3a (top-right): upcoming route alert chips ─────────
-                // Shows up to 3 upcoming alerts (truck stop, weigh station,
-                // wind, restriction) sorted by distance.  Chips disappear as
-                // the driver passes each alert.  Positioned at top:118,
-                // right:16 so they share the right column with Zone 3 but only
-                // appear when _upcomingAlerts is populated.
-                // Remove _buildRightSideUpcomingAlerts() here and
-                // _refreshUpcomingAlerts() in _onGpsPosition to disable.
-                _buildRightSideUpcomingAlerts(),
-                // ── Zone 4 (bottom right): speed / speed-limit box ─────────
-                // Prominent speed indicator; turns red when over the limit.
-                Positioned(
-                  right: 16,
-                  bottom: 165,
-                  child: _buildSpeedLimitBox(),
-                ),
-                // ── Zone 5 (bottom center/left): compact wind alert card ───
-                // Shows the primary active weather/wind alert in a compact card
-                // (~90 px tall) that sits above the stop button.
-                if (_isNavigating && _showWindAlert)
+                // ── Zone 3 (right side): alert stack (hidden during nav) ───
+                // Hidden during active navigation to keep overlays minimal.
+                if (!_isNavigating) _buildRightSideAlertStack(),
+                // ── Zone 3a (top-right): upcoming route alert chips ────────
+                // Hidden during active navigation to keep overlays minimal.
+                if (!_isNavigating) _buildRightSideUpcomingAlerts(),
+                // ── Zone 4 (bottom center-right): compact speed panel ──────
+                // Compact dark speed indicator using truck speed limit.
+                if (_isNavigating)
                   Positioned(
-                    left: 16,
-                    right: 110,
-                    bottom: 92,
-                    child: _buildWindAlert(),
+                    right: 120,
+                    bottom: 18,
+                    child: SafeArea(
+                      top: false,
+                      child: _buildCompactSpeedPanel(),
+                    ),
                   ),
-                // ── Zone 6 (very bottom): stop navigation button ──────────
-                // Full-width pill-shaped "Stop Navigation" button with SafeArea padding.
+                // ── Zone 5 (bottom-left): trip summary strip ──────────────
+                // Dark translucent card with remaining mi, time, ETA,
+                // More button, and compact Stop icon.
                 if (_isNavigating)
                   Positioned(
                     left: 16,
-                    right: 16,
-                    bottom: 16,
+                    bottom: 18,
                     child: SafeArea(
                       top: false,
-                      child: _buildStopButton(),
+                      child: _buildBottomTripStrip(),
                     ),
                   ),
               ],
@@ -9255,6 +9299,374 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //     • Speed limit         → read _speedLimitMph
   //     • Service chips list  → populate from _closestTruckStopsAhead
   //     • Alert list          → populate from _navAlerts
+
+  // ── GPS-style navigation overlay widgets ────────────────────────────────────
+
+  /// Extracts a short highway shield label from [roadName] if it matches a
+  /// known highway pattern (e.g. "I-5" → "5", "US-95" → "95", "CA-88" → "88").
+  ///
+  /// Returns `null` when [roadName] is not a recognisable highway reference.
+  ///
+  /// To support additional state/country prefixes, extend the alternation in
+  /// the pattern (e.g. add `|TX-|NY-`).
+  String? _extractHighwayShield(String roadName) {
+    // Supported prefixes: Interstate (I-), US routes (US-), and common state
+    // highway abbreviations.  Add more prefixes here as needed.
+    final r = RegExp(
+        r'^(?:I-|US-|CA-|SR-|OR-|WA-|NV-|AZ-|TX-|FL-|Hwy\s*)(\d{1,3}[A-Z]?)$',
+        caseSensitive: false);
+    final m = r.firstMatch(roadName.trim());
+    return m?.group(1);
+  }
+
+  /// Compact GPS-style primary maneuver card shown at the top-left of the map
+  /// during active navigation.
+  ///
+  /// Displays:
+  ///  • Maneuver direction icon tile.
+  ///  • Distance to the next maneuver in large bold text.
+  ///  • Green highway-shield pill when a shield label is available.
+  ///  • Upcoming road name.
+  Widget _buildPrimaryManeuverCard(TopInstructionData data) {
+    final String? shield = data.shieldText ?? _extractHighwayShield(data.roadName);
+    return Container(
+      width: 270,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // ── Maneuver icon ────────────────────────────────────────────────
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              _maneuverVisualIcon(data.visualType),
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 10),
+          // ── Distance + road info ──────────────────────────────────────
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Distance to maneuver — prominent
+                Text(
+                  _formatMilesDisplay(data.distanceMiles),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                // Highway shield pill + road name row
+                Row(
+                  children: [
+                    if (shield != null) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A7340),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          shield,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                    ],
+                    Expanded(
+                      child: Text(
+                        data.roadName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Small secondary "Then" chip shown below [_buildPrimaryManeuverCard].
+  ///
+  /// Displays a "Then" label, the next maneuver icon, and the road name for
+  /// the step after the current upcoming turn.
+  Widget _buildSecondaryThenCard(TopInstructionData data) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.78),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Then',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          const SizedBox(width: 6),
+          Icon(
+            _maneuverVisualIcon(data.visualType),
+            color: Colors.white70,
+            size: 18,
+          ),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 160),
+            child: Text(
+              data.roadName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Dark GPS-style bottom trip strip shown at the bottom-left during
+  /// active navigation.
+  ///
+  /// Displays remaining miles, estimated drive time, and ETA in a compact
+  /// dark translucent card.  Includes a "More" button to open the full leg
+  /// breakdown sheet and a compact Stop icon to end navigation.
+  Widget _buildBottomTripStrip() {
+    final double milesLeft = _tripProgressInfo.milesRemaining;
+    final Duration timeLeft = _tripProgressInfo.durationRemaining;
+    final DateTime eta = _tripProgressInfo.etaLocal;
+
+    final String milesStr = milesLeft < 10
+        ? milesLeft.toStringAsFixed(1)
+        : milesLeft.round().toString();
+
+    final int totalMinutes = timeLeft.inMinutes;
+    final String timeStr = totalMinutes >= 60
+        ? '${totalMinutes ~/ 60}h ${totalMinutes % 60}m'
+        : '${totalMinutes}m';
+
+    final int h = eta.hour % 12 == 0 ? 12 : eta.hour % 12;
+    final String etaStr =
+        '$h:${eta.minute.toString().padLeft(2, '0')} ${eta.hour < 12 ? 'AM' : 'PM'}';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+              color: Colors.black54, blurRadius: 10, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _gpsStatCell('$milesStr mi', 'remaining'),
+          _gpsStripDivider(),
+          _gpsStatCell(timeStr, 'drive time'),
+          _gpsStripDivider(),
+          _gpsStatCell(etaStr, 'ETA'),
+          const SizedBox(width: 8),
+          // ── More button ──────────────────────────────────────────────
+          GestureDetector(
+            onTap: _showLegBreakdownSheet,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white12,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.more_horiz,
+                color: Colors.white70,
+                size: 16,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ── Stop icon ────────────────────────────────────────────────
+          GestureDetector(
+            onTap: _stopNavigation,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD94A4A).withOpacity(0.85),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.stop_circle_outlined,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Single stat cell for [_buildBottomTripStrip].
+  Widget _gpsStatCell(String value, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            height: 1,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Thin vertical divider between stat cells in [_buildBottomTripStrip].
+  Widget _gpsStripDivider() {
+    return Container(
+      width: 1,
+      height: 24,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      color: Colors.white24,
+    );
+  }
+
+  /// Returns the truck-specific speed limit for the given position.
+  ///
+  /// Applies a California bounding-box check and returns
+  /// [_caTruckSpeedLimitMph] (55 mph) inside CA; otherwise returns
+  /// [carSpeedLimit].  Extend this method to add more state/region rules.
+  double _getTruckSpeedLimit(double carSpeedLimit, double lat, double lng) {
+    final bool inCA = lat >= _caMinLat && lat <= _caMaxLat &&
+        lng >= _caMinLng && lng <= _caMaxLng;
+    return inCA ? _caTruckSpeedLimitMph : carSpeedLimit;
+  }
+
+  /// Compact speed / speed-limit panel shown near the bottom center-right
+  /// during active navigation.
+  ///
+  /// Uses [_getTruckSpeedLimit] to display and enforce the truck-specific
+  /// speed limit (e.g. 55 mph in California).  Speed text turns red when
+  /// the driver exceeds the truck limit.
+  Widget _buildCompactSpeedPanel() {
+    final double speedMph =
+        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    final double lat = _truckPosition?.latitude ?? 0.0;
+    final double lng = _truckPosition?.longitude ?? 0.0;
+    final double truckLimit = _getTruckSpeedLimit(_speedLimitMph, lat, lng);
+    final bool isOver = _currentSpeedMps >= 0 && speedMph > truckLimit;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+              color: Colors.black45, blurRadius: 8, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Current speed ─────────────────────────────────────────────
+          Text(
+            speedMph.round().toString(),
+            style: TextStyle(
+              color: isOver ? Colors.red : Colors.white,
+              fontSize: 32,
+              fontWeight: FontWeight.w800,
+              height: 1,
+            ),
+          ),
+          const Text(
+            'mph',
+            style: TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(height: 6),
+          // ── Truck speed-limit badge ───────────────────────────────────
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'LIMIT',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                Text(
+                  truckLimit.round().toString(),
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   // ── Top instruction card UI ───────────────────────────────────────────────
 

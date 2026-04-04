@@ -5242,9 +5242,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_refreshClosestWeighStationsAhead].  Returns [SizedBox.shrink] when no
   /// weigh station is ahead so the widget takes up no space in the tree.
   Widget _buildClosestWeighStationsRow() {
-    if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    // Always show the chip.  When live route data has no upcoming weigh
+    // station, fall back to a placeholder distance (8.4 mi) so the chip
+    // is always visible for user validation.
+    final List<AheadWeighStation> stations = _closestWeighStationsAhead.isNotEmpty
+        ? _closestWeighStationsAhead
+        : [
+            AheadWeighStation(
+              poi: WeighStationPoi(
+                id: 'default_ws',
+                position: const LatLng(0, 0),
+                name: 'Weigh Station',
+                status: 'Open',
+              ),
+              milesAhead: 8.4,
+              routeIndex: 0,
+            ),
+          ];
     return Positioned(
       // top: 134 = satellite top(74) + satellite height(48) + gap(12).
       top: 134,
@@ -5252,7 +5266,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         bottom: false,
         child: ClosestWeighStationsRow(
-          stations: _closestWeighStationsAhead,
+          stations: stations,
         ),
       ),
     );

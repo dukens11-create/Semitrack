@@ -663,6 +663,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// considered "on" the active route and eligible for ahead-on-route display.
   static const double _weighStationProximityMeters = 500.0;
 
+  /// Distance buffer (metres) used when deciding which warning signs are
+  /// shown as map markers.  Wider than [_warningProximityMeters] so the driver
+  /// can see upcoming hazards well in advance (~10 miles).
+  static const double _warningDisplayBufferMeters = 16093.0; // ≈ 10 miles
+
+  /// Distance buffer (metres) used when deciding which [MapPoi] markers
+  /// (weigh stations, police, ports of entry) are shown on the map.
+  /// Matches the truck-stop POI display buffer (~10 miles).
+  static const double _poiDisplayBufferMeters = 16093.0; // ≈ 10 miles
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -1408,8 +1418,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// overall complexity is O(stops × route_points) in the worst case but
   /// typically much faster.
   ///
-  /// When [routePoints] is empty (no active route) every stop is returned so
-  /// that the map is never blank before the driver sets a destination.
+  /// When [routePoints] is empty (no active route) an empty list is returned
+  /// so that unrelated POIs are not shown before the driver sets a destination.
   ///
   /// Production note: for very long routes consider sub-sampling [routePoints]
   /// with a spatial index (e.g. R-tree or bounding-box pre-filter) to avoid
@@ -1420,8 +1430,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     double maxDistanceMeters = 10000, // 10 km corridor around the route
     int maxPOIs = 50, // rendering cap for performance
   }) {
-    // No active route – show all stops so the map is useful before navigation.
-    if (routePoints.isEmpty) return allStops;
+    // No active route — hide all POI stops so that distant (e.g. West-Coast)
+    // markers are not shown before the driver picks a destination.
+    if (routePoints.isEmpty) {
+      debugPrint('[POI/Alert Filter] Truck stop markers: route not set – hiding all stops.');
+      return const [];
+    }
 
     // Step 1: keep only stops within [maxDistanceMeters] of any route point.
     final List<TruckStop> nearRoute = [];
@@ -1459,7 +1473,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     nearRoute.sort((a, b) => distToUser[a]!.compareTo(distToUser[b]!));
 
     // Step 3: cap at [maxPOIs] to keep the marker layer performant.
-    return nearRoute.length > maxPOIs ? nearRoute.sublist(0, maxPOIs) : nearRoute;
+    final result =
+        nearRoute.length > maxPOIs ? nearRoute.sublist(0, maxPOIs) : nearRoute;
+
+    debugPrint(
+      '[POI/Alert Filter] Truck stop markers: ${result.length}/${allStops.length} shown '
+      '(within ${(maxDistanceMeters / 1609.34).toStringAsFixed(1)} miles of route).',
+    );
+
+    return result;
   }
 
   /// Returns the number of fuel stops (non-rest-area truck stops) within
@@ -1709,8 +1731,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const [];
     }
 
-    return _mapPois
+    // Only display POI markers that lie within _poiDisplayBufferMeters of the
+    // active route polyline.  When no route is set, no markers are shown so
+    // that unrelated West-Coast (or any far-off) POIs are not cluttering the
+    // map before the driver picks a destination.
+    if (_routePoints.isEmpty) {
+      debugPrint('[POI/Alert Filter] Map POI markers: route not set – hiding all POI markers.');
+      return const [];
+    }
+
+    final List<MapPoi> poisNearRoute = _mapPois
         .where((poi) => poi.type == PoiType.weighStation)
+        .where((poi) {
+          for (final routePt in _routePoints) {
+            if (_distanceBetween(poi.position, routePt) <=
+                _poiDisplayBufferMeters) return true;
+          }
+          return false;
+        })
+        .toList();
+
+    debugPrint(
+      '[POI/Alert Filter] Map POI markers: ${poisNearRoute.length}/'
+      '${_mapPois.where((p) => p.type == PoiType.weighStation).length} '
+      'weigh-station POIs shown (within '
+      '${(_poiDisplayBufferMeters / 1609.34).toStringAsFixed(0)} miles of route).',
+    );
+
+    return poisNearRoute
         .map((poi) {
           return Marker(
             point: poi.position,
@@ -4374,7 +4422,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Builds coloured [Marker]s for all [_warningSigns].
+  /// Builds coloured [Marker]s for warning signs relevant to the active route.
+  ///
+  /// Only signs within [_warningDisplayBufferMeters] (~10 miles) of the active
+  /// route polyline are shown, so that unrelated West-Coast (or any far-off)
+  /// warnings do not clutter the map.  When no route is active, no markers are
+  /// returned.  During navigation, signs behind [_truckIndex] on the route are
+  /// additionally suppressed so only ahead-of-position hazards remain visible.
   ///
   /// Markers are colour-coded by severity (high=red, medium=orange, low=blue)
   /// using [WarningConfig.colorForSeverity], overriding the type colour for
@@ -4382,7 +4436,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [WarningConfig.styleFor] is always shown inside the badge.  Tapping a
   /// marker shows a brief info dialog via [_showWarningInfoDialog].
   List<Marker> _buildWarningMarkers() {
-    return _warningSigns.map((sign) {
+    // No active route — hide all warning markers.
+    if (_routePoints.isEmpty) {
+      debugPrint('[POI/Alert Filter] Warning markers: route not set – hiding all warning markers.');
+      return const [];
+    }
+
+    // Single-pass filter: for each sign find the nearest route point index and
+    // its distance in one loop.  This lets us simultaneously check proximity
+    // (is the sign within the 10-mile display buffer?) and, during navigation,
+    // whether the sign is ahead of or behind the truck — without a second
+    // O(signs × route_points) scan.
+    final List<WarningSign> signsToDisplay = [];
+    for (final sign in _warningSigns) {
+      final signPt = LatLng(sign.lat, sign.lng);
+      double bestDist = double.infinity;
+      int bestIdx = 0;
+      for (int i = 0; i < _routePoints.length; i++) {
+        final d = _distanceBetween(signPt, _routePoints[i]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+
+      // Skip signs farther than the display buffer from the route.
+      if (bestDist > _warningDisplayBufferMeters) continue;
+
+      // During active navigation suppress signs behind the truck's current
+      // route index so only ahead-of-position hazards remain visible.
+      if (_isNavigating && _truckIndex > 0 && bestIdx < _truckIndex) continue;
+
+      signsToDisplay.add(sign);
+    }
+
+    debugPrint(
+      '[POI/Alert Filter] Warning markers: ${signsToDisplay.length}/'
+      '${_warningSigns.length} shown '
+      '(within ${(_warningDisplayBufferMeters / 1609.34).toStringAsFixed(0)} miles of route'
+      '${_isNavigating ? ", ahead of position" : ""}).',
+    );
+
+    return signsToDisplay.map((sign) {
       final style = WarningConfig.styleFor(sign.type);
       final Color badgeColor = WarningConfig.colorForSeverity(sign.severity);
 

@@ -5234,26 +5234,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
-  /// Builds the chip showing the single closest upcoming weigh station ahead
-  /// of the driver on the active route.  Displayed in the navigation overlay
-  /// above the bottom trip strip so the driver can always see the next station
-  /// with its icon and distance in miles.
+  /// Builds the closest upcoming weigh station chip on the right side of the
+  /// map, directly below the satellite toggle button.
   ///
-  /// Automatically updates as the driver moves: once the current station is
-  /// passed (dropped from [_closestWeighStationsAhead]) the next one ahead is
-  /// shown immediately.  Returns [SizedBox.shrink] when there are no weigh
-  /// stations ahead so the widget takes up no space in the tree.
+  /// Displays a white 48 × 48 square chip with a bold green "W" and the
+  /// remaining miles centred below it.  Updates live on every GPS fix via
+  /// [_refreshClosestWeighStationsAhead].  Returns [SizedBox.shrink] when no
+  /// weigh station is ahead so the widget takes up no space in the tree.
   Widget _buildClosestWeighStationsRow() {
     if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
       return const SizedBox.shrink();
     }
     return Positioned(
-      // Position above the bottom trip strip (bottom ~18 + height ~52 + gap 8).
-      bottom: 86,
-      left: 16,
+      // top: 134 = satellite top(74) + satellite height(48) + gap(12).
+      top: 134,
       right: 16,
-      child: ClosestWeighStationsRow(
-        stations: _closestWeighStationsAhead,
+      child: SafeArea(
+        bottom: false,
+        child: ClosestWeighStationsRow(
+          stations: _closestWeighStationsAhead,
+        ),
       ),
     );
   }
@@ -12920,15 +12920,17 @@ class AheadWeighStation {
 
 // ── ClosestWeighStationChip widget ────────────────────────────────────────────
 
-/// A compact navigation chip displaying a single weigh station ahead on route.
+/// A compact right-side navigation chip for the closest weigh station ahead.
 ///
-/// Design principles:
-/// • **Dark translucent card background** — always readable on any map tile.
-/// • **Unified logo size** (28 × 28 px, [BoxFit.contain]) — consistent with
-///   all other POI chips.  Use transparent PNGs so no white square appears.
-/// • **Amber "Approaching" badge** — shown when the station is within
-///   [_approachingThresholdMiles] miles so the driver has advance notice.
-/// • **Graceful fallback** — [Icons.scale] shown when logo asset is missing.
+/// Design:
+/// • **White 48 × 48 square** with rounded corners, thin grey border, and a
+///   subtle drop shadow — matches the other right-side overlay chips.
+/// • **Bold green "W"** centred inside the square.
+/// • **Miles label** (e.g. `"8.4 mi"`) in small bold black text directly below
+///   the chip, centred horizontally.
+///
+/// The value updates live on every GPS fix via
+/// [_TruckMapScreenState._refreshClosestWeighStationsAhead].
 ///
 /// **Usage:**
 /// ```dart
@@ -12937,128 +12939,73 @@ class AheadWeighStation {
 class ClosestWeighStationChip extends StatelessWidget {
   final AheadWeighStation station;
 
-  /// Distance in miles below which the "Approaching" badge is displayed.
-  static const double _approachingThresholdMiles = 5.0;
-
   const ClosestWeighStationChip({super.key, required this.station});
 
   @override
   Widget build(BuildContext context) {
-    final poi = station.poi;
     final miles = station.milesAhead;
-    final bool isApproaching = miles < _approachingThresholdMiles;
 
-    // Format distance: one decimal below 10 mi, rounded above.
+    // Format distance: one decimal below 10 mi, whole number above.
     final String distLabel =
         miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        // Dark translucent background ensures legibility on any map tile color.
-        color: Colors.black.withOpacity(0.80),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isApproaching
-              ? Colors.orange.withOpacity(0.85)
-              : Colors.white24,
-          width: isApproaching ? 1.5 : 1.0,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.35),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // ── Station logo ──────────────────────────────────────────────────
-          // Loads `assets/logo_brand_markers/{logoName}.png` at 28 × 28 px
-          // with BoxFit.contain so the full graphic is visible.  Transparent
-          // PNGs render without a white background halo.  Falls back to a
-          // scale icon when the asset file is missing.
-          Image.asset(
-            'assets/logo_brand_markers/${poi.logoName}.png',
-            width: 28,
-            height: 28,
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Icon(
-              Icons.scale,
-              color: Colors.orangeAccent,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 8),
-          // ── Name + distance + approaching badge ───────────────────────────
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Station name
-              Text(
-                poi.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  height: 1.2,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ── White square chip with bold green "W" ─────────────────────────
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.black12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
-              // Distance in miles (orange for high visibility)
-              Text(
-                distLabel,
-                style: const TextStyle(
-                  color: Colors.orangeAccent,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  height: 1.2,
-                ),
-              ),
-              // Approaching badge — shown only when within threshold
-              if (isApproaching)
-                Container(
-                  margin: const EdgeInsets.only(top: 2),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withOpacity(0.90),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text(
-                    'Approaching',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      height: 1.3,
-                    ),
-                  ),
-                ),
             ],
           ),
-        ],
-      ),
+          child: const Center(
+            child: Text(
+              'W',
+              style: TextStyle(
+                color: Color(0xFF24B342),
+                fontWeight: FontWeight.w900,
+                fontSize: 28,
+                height: 1.0,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 3),
+        // ── Miles remaining, centred below the chip ────────────────────────
+        Text(
+          distLabel,
+          style: const TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
+      ],
     );
   }
 }
 
 // ── ClosestWeighStationsRow widget ────────────────────────────────────────────
 
-/// Displays the single closest upcoming weigh station ahead of the driver on
-/// the active route as a [ClosestWeighStationChip].
+/// Renders the single closest upcoming weigh station as a
+/// [ClosestWeighStationChip] on the right side of the map.
 ///
 /// Only one station is shown at a time so the driver's attention is focused on
-/// the very next weigh station they must cross.  Once the driver passes it the
-/// list is refreshed by [_refreshClosestWeighStationsAhead] and the next
-/// station ahead appears automatically.
+/// the very next weigh station ahead.  Once the driver passes it the list is
+/// refreshed by [_refreshClosestWeighStationsAhead] and the next station
+/// appears automatically.
 ///
-/// The row is automatically empty (zero size) when [stations] is empty.
+/// Returns zero-size when [stations] is empty.
 ///
 /// **Usage:**
 /// ```dart
@@ -13074,47 +13021,7 @@ class ClosestWeighStationsRow extends StatelessWidget {
     if (stations.isEmpty) return const SizedBox.shrink();
 
     // Show only the first (closest) station — one at a time per spec.
-    final station = stations.first;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // ── "WEIGH STATION AHEAD" header label ──────────────────────────────
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.scale,
-                color: Colors.orangeAccent,
-                size: 14,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'WEIGH STATION AHEAD',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.90),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                  shadows: const [
-                    Shadow(
-                      color: Colors.black54,
-                      blurRadius: 3,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        // ── Chip for the single next station ────────────────────────────────
-        ClosestWeighStationChip(station: station),
-      ],
-    );
+    return ClosestWeighStationChip(station: stations.first);
   }
 }
 

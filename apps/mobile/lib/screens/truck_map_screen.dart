@@ -9940,7 +9940,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget _buildPrimaryManeuverCard(TopInstructionData data) {
     return Container(
       width: 130,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+      // top: 10 keeps the arrow near the card top; bottom: 16 gives breathing room
+      // after the last text element.
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.82),
         borderRadius: BorderRadius.circular(20),
@@ -9956,10 +9958,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // ── Large maneuver arrow ─────────────────────────────────────────
+          // ── Large maneuver arrow (top-center, full card width) ───────────
+          // width: double.infinity expands to the parent's 130px minus the 14px
+          // horizontal padding on each side (= 102px usable), keeping the arrow
+          // flush with the card's inner edges.
           Container(
-            width: 64,
-            height: 64,
+            width: double.infinity,
+            height: 76,
             decoration: BoxDecoration(
               color: Colors.white12,
               borderRadius: BorderRadius.circular(14),
@@ -9967,7 +9972,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             child: Icon(
               _maneuverVisualIcon(data.visualType),
               color: Colors.white,
-              size: 40,
+              size: 52,
             ),
           ),
           const SizedBox(height: 10),

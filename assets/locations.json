@@ -5,7 +5,8 @@
     "icon": "pilot.png",
     "lat": 45.5051,
     "lng": -122.6750,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "302"
   },
   {
     "id": "loves_eugene_1",
@@ -13,7 +14,8 @@
     "icon": "loves.png",
     "lat": 44.0521,
     "lng": -123.0868,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "194"
   },
   {
     "id": "ta_medford_1",
@@ -21,7 +23,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 42.3265,
     "lng": -122.8756,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "27"
   },
   {
     "id": "petro_yreka_1",
@@ -29,7 +32,8 @@
     "icon": "petro_truck_stop.png",
     "lat": 41.7352,
     "lng": -122.6322,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "775"
   },
   {
     "id": "flyingj_redding_1",
@@ -37,7 +41,8 @@
     "icon": "flying_j_truck_stop.png",
     "lat": 40.5865,
     "lng": -122.3917,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "677"
   },
   {
     "id": "pilot_sacramento_1",
@@ -45,7 +50,8 @@
     "icon": "pilot.png",
     "lat": 38.5816,
     "lng": -121.4944,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "442"
   },
   {
     "id": "loves_fresno_1",
@@ -53,7 +59,8 @@
     "icon": "loves.png",
     "lat": 36.7378,
     "lng": -119.7871,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "133"
   },
   {
     "id": "ta_losangeles_1",
@@ -61,7 +68,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 34.0522,
     "lng": -118.2437,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "21"
   },
   {
     "id": "pilot_lasvegas_1",
@@ -69,7 +77,8 @@
     "icon": "pilot.png",
     "lat": 36.1699,
     "lng": -115.1398,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "37"
   },
   {
     "id": "loves_phoenix_1",
@@ -77,7 +86,8 @@
     "icon": "loves.png",
     "lat": 33.4484,
     "lng": -112.0740,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "143"
   },
   {
     "id": "ta_albuquerque_1",
@@ -85,7 +95,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 35.0844,
     "lng": -106.6504,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "159"
   },
   {
     "id": "quiktrip_oklahomacity_1",
@@ -93,7 +104,8 @@
     "icon": "quicktrip_truck_stop.png",
     "lat": 35.4676,
     "lng": -97.5164,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "125"
   },
   {
     "id": "pilot_dallas_1",
@@ -101,7 +113,8 @@
     "icon": "pilot.png",
     "lat": 32.7767,
     "lng": -96.7970,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "428"
   },
   {
     "id": "loves_houston_1",
@@ -109,7 +122,8 @@
     "icon": "loves.png",
     "lat": 29.7604,
     "lng": -95.3698,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "769"
   },
   {
     "id": "circle_memphis_1",
@@ -117,7 +131,8 @@
     "icon": "circle_truck_stop.png",
     "lat": 35.1495,
     "lng": -90.0490,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "12"
   },
   {
     "id": "pilot_nashville_1",
@@ -125,7 +140,8 @@
     "icon": "pilot.png",
     "lat": 36.1627,
     "lng": -86.7816,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "213"
   },
   {
     "id": "loves_atlanta_1",
@@ -133,7 +149,8 @@
     "icon": "loves.png",
     "lat": 33.7490,
     "lng": -84.3880,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "247"
   },
   {
     "id": "ta_charlotte_1",
@@ -141,7 +158,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 35.2271,
     "lng": -80.8431,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "36"
   },
   {
     "id": "pilot_orlando_1",
@@ -149,7 +167,8 @@
     "icon": "pilot.png",
     "lat": 28.5383,
     "lng": -81.3792,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "260"
   },
   {
     "id": "loves_jacksonville_1",
@@ -157,7 +176,8 @@
     "icon": "loves.png",
     "lat": 30.3322,
     "lng": -81.6557,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "362"
   },
   {
     "id": "pilot_richmond_1",
@@ -165,7 +185,8 @@
     "icon": "pilot.png",
     "lat": 37.5407,
     "lng": -77.4360,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "69"
   },
   {
     "id": "ta_baltimore_1",
@@ -173,7 +194,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 39.2904,
     "lng": -76.6122,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "50"
   },
   {
     "id": "petro_newjersey_1",
@@ -181,7 +203,8 @@
     "icon": "petro_truck_stop.png",
     "lat": 40.7357,
     "lng": -74.1724,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "14A"
   },
   {
     "id": "loves_philadelphia_1",
@@ -189,7 +212,8 @@
     "icon": "loves.png",
     "lat": 39.9526,
     "lng": -75.1652,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "7"
   },
   {
     "id": "pilot_cleveland_1",
@@ -197,7 +221,8 @@
     "icon": "pilot.png",
     "lat": 41.4993,
     "lng": -81.6944,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "170"
   },
   {
     "id": "ta_columbus_1",
@@ -205,7 +230,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 39.9612,
     "lng": -82.9988,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "105"
   },
   {
     "id": "loves_detroit_1",
@@ -213,7 +239,8 @@
     "icon": "loves.png",
     "lat": 42.3314,
     "lng": -83.0458,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "210"
   },
   {
     "id": "pilot_chicago_1",
@@ -221,7 +248,8 @@
     "icon": "pilot.png",
     "lat": 41.8781,
     "lng": -87.6298,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "43B"
   },
   {
     "id": "loves_indianapolis_1",
@@ -229,7 +257,8 @@
     "icon": "loves.png",
     "lat": 39.7684,
     "lng": -86.1581,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "87"
   },
   {
     "id": "ta_stlouis_1",
@@ -237,7 +266,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 38.6270,
     "lng": -90.1994,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "209"
   },
   {
     "id": "pilot_kansascity_1",
@@ -245,7 +275,8 @@
     "icon": "pilot.png",
     "lat": 39.0997,
     "lng": -94.5786,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "235"
   },
   {
     "id": "loves_denver_1",
@@ -253,7 +284,8 @@
     "icon": "loves.png",
     "lat": 39.7392,
     "lng": -104.9903,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "209B"
   },
   {
     "id": "flyingj_saltlake_1",
@@ -261,7 +293,8 @@
     "icon": "flying_j_truck_stop.png",
     "lat": 40.7608,
     "lng": -111.8910,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "311"
   },
   {
     "id": "pilot_boise_1",
@@ -269,7 +302,8 @@
     "icon": "pilot.png",
     "lat": 43.6150,
     "lng": -116.2023,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "53"
   },
   {
     "id": "loves_spokane_1",
@@ -277,7 +311,8 @@
     "icon": "loves.png",
     "lat": 47.6588,
     "lng": -117.4260,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "282"
   },
   {
     "id": "pilot_seattle_1",
@@ -285,7 +320,8 @@
     "icon": "pilot.png",
     "lat": 47.6062,
     "lng": -122.3321,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "166"
   },
   {
     "id": "ta_minneapolis_1",
@@ -293,7 +329,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 44.9778,
     "lng": -93.2650,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "234"
   },
   {
     "id": "loves_milwaukee_1",
@@ -301,7 +338,8 @@
     "icon": "loves.png",
     "lat": 43.0389,
     "lng": -87.9065,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "310"
   },
   {
     "id": "pilot_cincinnati_1",
@@ -309,7 +347,8 @@
     "icon": "pilot.png",
     "lat": 39.1031,
     "lng": -84.5120,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "2"
   },
   {
     "id": "loves_louisville_1",
@@ -317,7 +356,8 @@
     "icon": "loves.png",
     "lat": 38.2527,
     "lng": -85.7585,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "130"
   },
   {
     "id": "pilot_birmingham_1",
@@ -325,7 +365,8 @@
     "icon": "pilot.png",
     "lat": 33.5186,
     "lng": -86.8104,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "123"
   },
   {
     "id": "ta_neworleans_1",
@@ -333,7 +374,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 29.9511,
     "lng": -90.0715,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "236"
   },
   {
     "id": "pilot_sanantonio_1",
@@ -341,7 +383,8 @@
     "icon": "pilot.png",
     "lat": 29.4241,
     "lng": -98.4936,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "573"
   },
   {
     "id": "loves_elpaso_1",
@@ -349,7 +392,8 @@
     "icon": "loves.png",
     "lat": 31.7619,
     "lng": -106.4850,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "13"
   },
   {
     "id": "petro_tucson_1",
@@ -357,7 +401,8 @@
     "icon": "petro_truck_stop.png",
     "lat": 32.2226,
     "lng": -110.9747,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "264"
   },
   {
     "id": "flyingj_reno_1",
@@ -365,7 +410,8 @@
     "icon": "flying_j_truck_stop.png",
     "lat": 39.5296,
     "lng": -119.8138,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "22"
   },
   {
     "id": "pilot_sanjose_1",
@@ -373,7 +419,8 @@
     "icon": "pilot.png",
     "lat": 37.3382,
     "lng": -121.8863,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "121"
   },
   {
     "id": "loves_bakersfield_1",
@@ -381,7 +428,8 @@
     "icon": "loves.png",
     "lat": 35.3733,
     "lng": -119.0187,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "33"
   },
   {
     "id": "ta_sandiego_1",
@@ -389,7 +437,8 @@
     "icon": "ta_truck_stop.png",
     "lat": 32.7157,
     "lng": -117.1611,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "17"
   },
   {
     "id": "parking_anchorage_1",
@@ -549,7 +598,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 43.6532,
     "lng": -79.3832,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "369"
   },
   {
     "id": "petrocan_montreal_1",
@@ -557,7 +607,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 45.5017,
     "lng": -73.5673,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "68"
   },
   {
     "id": "petrocan_vancouver_1",
@@ -565,7 +616,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 49.2827,
     "lng": -123.1207,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "28"
   },
   {
     "id": "petrocan_calgary_1",
@@ -573,7 +625,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 51.0447,
     "lng": -114.0719,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "262"
   },
   {
     "id": "petrocan_edmonton_1",
@@ -581,7 +634,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 53.5461,
     "lng": -113.4938,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "374"
   },
   {
     "id": "petrocan_winnipeg_1",
@@ -589,7 +643,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 49.8951,
     "lng": -97.1384,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "16"
   },
   {
     "id": "petrocan_ottawa_1",
@@ -597,7 +652,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 45.4215,
     "lng": -75.6972,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "104"
   },
   {
     "id": "petrocan_quebec_1",
@@ -605,7 +661,8 @@
     "icon": "petro_canada_truck_stop.png",
     "lat": 46.8139,
     "lng": -71.2080,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "exit_number": "311"
   },
   {
     "id": "parking_ca_hwy1_1",

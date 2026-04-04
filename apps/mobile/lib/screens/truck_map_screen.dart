@@ -8329,6 +8329,84 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// A compact bottom-center badge showing the current highway or road name
+  /// the driver is on during active navigation.
+  ///
+  /// The badge sits at the bottom-center of the map, between the trip strip
+  /// (bottom-left) and the speed panel (bottom-right), mirroring the layout
+  /// used by popular GPS apps.  It updates automatically every time
+  /// [_currentStepIndex] advances to the next route step.
+  ///
+  /// Returns [SizedBox.shrink] when not navigating or when [_navSteps] is
+  /// empty so that the widget tree is unchanged in non-navigation mode.
+  Widget _buildCurrentRoadNameBadge() {
+    if (!_isNavigating || _navSteps.isEmpty) return const SizedBox.shrink();
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+    final String roadLabel = step.name.isNotEmpty ? step.name : 'En Route';
+    final String? shield = _extractHighwayShield(roadLabel);
+
+    return Positioned(
+      bottom: 18,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        top: false,
+        child: Center(
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.84),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.black54,
+                  blurRadius: 8,
+                  offset: Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (shield != null) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A7340),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      shield,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  roadLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Builds a GPS-style road name + distance info card shown during active
   /// navigation.  The card floats below the [RoadGuidanceBanner] and displays:
   ///   • An up-arrow icon for visual context.
@@ -9284,6 +9362,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // next station once the driver passes the current one.
                 // Only visible during active navigation when a station exists.
                 _buildClosestWeighStationsRow(),
+                // ── Zone 7 (bottom-center): current road/highway name badge ─
+                // Compact pill showing the name of the road or highway the
+                // driver is currently on.  Sits between the bottom trip strip
+                // (left) and the speed panel (right), matching the layout of
+                // popular GPS apps.  Updates automatically as the driver
+                // advances to each new route step.
+                _buildCurrentRoadNameBadge(),
               ],
             ),
           ),

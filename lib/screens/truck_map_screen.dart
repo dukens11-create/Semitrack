@@ -9939,126 +9939,112 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///  • Green exit-number chip when [data.exitNumber] is available.
   Widget _buildPrimaryManeuverCard(TopInstructionData data) {
     return Container(
-      width: 320,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      width: 130,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.82),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 10,
+            color: Colors.black.withOpacity(0.30),
+            blurRadius: 12,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // ── Maneuver icon tile ───────────────────────────────────────────
+          // ── Large maneuver arrow ─────────────────────────────────────────
           Container(
-            width: 38,
-            height: 38,
+            width: 64,
+            height: 64,
             decoration: BoxDecoration(
               color: Colors.white12,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Icon(
               _maneuverVisualIcon(data.visualType),
               color: Colors.white,
-              size: 22,
+              size: 40,
             ),
           ),
-          const SizedBox(width: 10),
-          // ── Text column ──────────────────────────────────────────────────
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Row 1: short action verb + road name side by side
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      data.primaryText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (data.roadName.isNotEmpty) ...[
-                      const SizedBox(width: 5),
-                      Flexible(
-                        child: Text(
-                          data.roadName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            height: 1.1,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 3),
-                // Row 2: distance + exit chip side by side
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      _formatMilesDisplay(data.distanceMiles),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        height: 1,
-                      ),
-                    ),
-                    // Green exit-number chip (only when exitNumber is set)
-                    if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF22C55E),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.turn_slight_right,
-                              color: Colors.white,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              data.exitNumber!,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
+          const SizedBox(height: 10),
+          // ── Action verb (e.g. "Head out") ────────────────────────────────
+          Text(
+            data.primaryText,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
           ),
+          const SizedBox(height: 8),
+          // ── Large bold distance ──────────────────────────────────────────
+          Text(
+            _formatMilesDisplay(data.distanceMiles),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
+          // ── Green exit chip (optional) ───────────────────────────────────
+          if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF22C55E),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.turn_slight_right,
+                    color: Colors.white,
+                    size: 13,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    data.exitNumber!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (data.roadName.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            // ── Road name at bottom ──────────────────────────────────────
+            Text(
+              data.roadName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                height: 1.2,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -10499,7 +10485,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return Positioned(
       top: navActive ? 16 : 18,
-      left: navActive ? 16.0 + 320.0 + 8.0 : null, // card_left + card_width + gap
+      left: navActive ? 16.0 + 130.0 + 8.0 : null, // card_left + card_width + gap
       right: navActive ? null : 16,
       child: SafeArea(
         bottom: false,

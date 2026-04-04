@@ -435,6 +435,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// can dismiss it with the close button.
   bool _showWindAlert = true;
 
+  // ── Satellite view toggle ──────────────────────────────────────────────────
+  /// When true the map tile layer switches to satellite imagery.
+  bool _isSatelliteView = false;
+
   // ── Off-route rerouting lock (prevents re-entrant reroute calls) ──────────
   bool _isRerouting = false;
 
@@ -958,9 +962,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Marker(
       point: _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : const LatLng(0, 0)),
-      // Bounding box matches the rendered icon size: 34 × 34 logical px.
-      width: 34,
-      height: 34,
+      // Bounding box matches the rendered icon size: 48 × 48 logical px.
+      width: 48,
+      height: 48,
       // Anchor slightly below centre (≡ Offset(0.5, 0.62)) so the cab nose
       // sits on the GPS coordinate rather than the trailer centre.
       alignment: const Alignment(0.0, 0.24),
@@ -971,11 +975,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Top-down truck sprite (assets/icons/truck_top.png, 64 × 64 px).
         child: Image.asset(
           'assets/icons/truck_top.png',
-          width: 34,
-          height: 34,
+          width: 48,
+          height: 48,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.local_shipping,
-            size: 32,
+            size: 44,
             color: Colors.blue,
           ),
         ),
@@ -8716,13 +8720,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   children: [
                     TileLayer(
                       // When a MAPBOX_TOKEN is provided (via --dart-define),
-                      // use Mapbox Streets tiles. Restrict the token to your
-                      // app's bundle ID in the Mapbox dashboard to limit its
+                      // use Mapbox Streets or Satellite tiles depending on
+                      // _isSatelliteView. Restrict the token to your app's
+                      // bundle ID in the Mapbox dashboard to limit its
                       // exposure. Falls back to OpenStreetMap otherwise.
                       urlTemplate: _mapboxToken.isNotEmpty
-                          ? 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
-                              '?access_token=$_mapboxToken'
-                          : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          ? _isSatelliteView
+                              ? 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}'
+                                  '?access_token=$_mapboxToken'
+                              : 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
+                                  '?access_token=$_mapboxToken'
+                          : _isSatelliteView
+                              ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                              : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.semitrack.mobile',
                     ),
                     PolylineLayer(
@@ -8733,7 +8743,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                               _routeOptions[i].points.isNotEmpty)
                             Polyline(
                               points: _routeOptions[i].points,
-                              strokeWidth: 4,
+                              strokeWidth: 6,
                               color: Colors.grey.shade400,
                               strokeJoin: StrokeJoin.round,
                               strokeCap: StrokeCap.round,
@@ -8742,7 +8752,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         if (_routePoints.isNotEmpty)
                           Polyline(
                             points: _routePoints,
-                            strokeWidth: 12,
+                            strokeWidth: 16,
                             color: Colors.white.withOpacity(0.3),
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
@@ -8750,7 +8760,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         if (_routePoints.isNotEmpty)
                           Polyline(
                             points: _routePoints,
-                            strokeWidth: 9,
+                            strokeWidth: 13,
                             color: const Color(0xFF1E90FF),
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
@@ -8759,7 +8769,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         for (final seg in _buildRestrictionSegments(_routePoints))
                           Polyline(
                             points: seg,
-                            strokeWidth: 8,
+                            strokeWidth: 11,
                             color: Colors.red.withOpacity(0.85),
                             strokeJoin: StrokeJoin.round,
                             strokeCap: StrokeCap.round,
@@ -9045,6 +9055,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Zone 1a (top-right): compass / re-centre button ────────
                 // Round dark button at the top-right corner.
                 _buildSmallCompassButton(),
+                // ── Zone 1c (top-right, below compass): satellite toggle ───
+                // Toggles between street and satellite tile layers.
+                _buildSatelliteToggle(),
                 // ── Zone 3 (right side): alert stack (hidden during nav) ───
                 // Hidden during active navigation to keep overlays minimal.
                 if (!_isNavigating) _buildRightSideAlertStack(),
@@ -9929,15 +9942,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Round, dark/translucent compass button overlay positioned at the top-right
-  /// of the map.
+  /// Round, dark/translucent compass widget positioned at the top-right of the
+  /// map, always visible.
+  ///
+  /// The compass needle rotates to reflect the current map heading: the red
+  /// half of the needle always points north and the white half points south.
   ///
   /// Tapping the button re-centres the camera to north-up and re-engages the
   /// camera-follow mode so the driver never loses their position.
-  ///
-  /// Only visible while [_isNavigating] is true.
   Widget _buildSmallCompassButton() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    // Current map bearing (degrees clockwise from north that is "up" on screen).
+    final double bearing = _mapReady ? _mapController.camera.rotation : 0.0;
 
     return Positioned(
       // top: 18 vertically aligns the compass button with the top nav card.
@@ -9946,34 +9961,72 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       right: 16,
       child: SafeArea(
         bottom: false,
-        child: Container(
-          margin: EdgeInsets.zero, // top offset handled by Positioned.top
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            // Translucent dark circle — matches GPS compass button conventions.
-            color: Colors.black.withOpacity(0.72),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.30),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(24),
-              // Re-engage camera follow and snap back to truck position.
-              onTap: _onRecenterPressed,
-              child: const Center(
-                child: Icon(
-                  Icons.explore_outlined, // compass rose icon
-                  color: Colors.white,
-                  size: 26,
+        child: GestureDetector(
+          onTap: _onRecenterPressed,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.72),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.30),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
                 ),
+              ],
+            ),
+            child: AnimatedRotation(
+              // Rotate the needle so the red tip always points north.
+              // When bearing=0 (north-up) turns=0; bearing=90 (east-up) turns=-0.25.
+              turns: -bearing / 360.0,
+              duration: const Duration(milliseconds: 200),
+              child: CustomPaint(
+                size: const Size(48, 48),
+                painter: _CompassNeedlePainter(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Circular satellite-view toggle button positioned just below the compass.
+  ///
+  /// Shows a map/satellite icon and switches the tile layer between
+  /// street-map and satellite imagery when tapped.
+  Widget _buildSatelliteToggle() {
+    return Positioned(
+      // top: 74 = compass top(18) + compass height(48) + gap(8).
+      top: 74,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: GestureDetector(
+          onTap: () => setState(() => _isSatelliteView = !_isSatelliteView),
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: _isSatelliteView
+                  ? const Color(0xFFB71C1C).withOpacity(0.92)
+                  : Colors.black.withOpacity(0.72),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.30),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.satellite_alt,
+                color: Colors.white,
+                size: 24,
               ),
             ),
           ),
@@ -12286,4 +12339,58 @@ class UpcomingAlertItem {
     required this.label,
     required this.distanceMiles,
   });
+}
+
+// ── Compass needle painter ─────────────────────────────────────────────────────
+
+/// Paints a red-and-white compass needle inside a 48 × 48 circle.
+///
+/// The upper half of the needle (pointing north) is painted red; the lower
+/// half (pointing south) is painted white.  A small dark dot is drawn at the
+/// centre.  Rotate the containing widget with [AnimatedRotation] to reflect
+/// the current map heading.
+class _CompassNeedlePainter extends CustomPainter {
+  const _CompassNeedlePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final needleHalfLen = size.height * 0.36;
+    final needleHalfWidth = size.width * 0.09;
+
+    // ── North (red) half ────────────────────────────────────────────────────
+    final redPaint = Paint()
+      ..color = const Color(0xFFE53935)
+      ..style = PaintingStyle.fill;
+
+    final northPath = Path()
+      ..moveTo(cx, cy - needleHalfLen)
+      ..lineTo(cx - needleHalfWidth, cy)
+      ..lineTo(cx + needleHalfWidth, cy)
+      ..close();
+    canvas.drawPath(northPath, redPaint);
+
+    // ── South (white) half ──────────────────────────────────────────────────
+    final whitePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+
+    final southPath = Path()
+      ..moveTo(cx, cy + needleHalfLen)
+      ..lineTo(cx - needleHalfWidth, cy)
+      ..lineTo(cx + needleHalfWidth, cy)
+      ..close();
+    canvas.drawPath(southPath, whitePaint);
+
+    // ── Centre dot ──────────────────────────────────────────────────────────
+    canvas.drawCircle(
+      Offset(cx, cy),
+      needleHalfWidth * 0.7,
+      Paint()..color = Colors.black87,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CompassNeedlePainter oldDelegate) => false;
 }

@@ -9527,7 +9527,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Small secondary chip showing the step after the current one.
                 if (_isNavigating && _secondaryInstructionData != null)
                   Positioned(
-                    top: 112,
+                    top: 76,
                     left: 16,
                     child: SafeArea(
                       bottom: false,
@@ -9939,11 +9939,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///  • Green exit-number chip when [data.exitNumber] is available.
   Widget _buildPrimaryManeuverCard(TopInstructionData data) {
     return Container(
-      width: 255,
-      padding: const EdgeInsets.all(14),
+      width: 320,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.82),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.25),
@@ -9953,96 +9953,109 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ],
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // ── Maneuver icon tile ───────────────────────────────────────────
           Container(
-            width: 58,
-            height: 58,
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
               color: Colors.white12,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
               _maneuverVisualIcon(data.visualType),
               color: Colors.white,
-              size: 34,
+              size: 22,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           // ── Text column ──────────────────────────────────────────────────
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // Short action verb, e.g. "Stay on" / "Turn onto"
-                Text(
-                  data.primaryText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                // Road name — large and bold (only shown when non-empty)
-                if (data.roadName.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    data.roadName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      height: 1.1,
+                // Row 1: short action verb + road name side by side
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      data.primaryText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                // Distance to next maneuver — extra large
-                Text(
-                  _formatMilesDisplay(data.distanceMiles),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 42,
-                    fontWeight: FontWeight.w800,
-                    height: 1,
-                  ),
-                ),
-                // Green exit-number chip (only when exitNumber is set)
-                if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF22C55E),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.turn_slight_right,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          data.exitNumber!,
+                    if (data.roadName.isNotEmpty) ...[
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          data.roadName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 22,
+                            fontSize: 15,
                             fontWeight: FontWeight.w800,
+                            height: 1.1,
                           ),
                         ),
-                      ],
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 3),
+                // Row 2: distance + exit chip side by side
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      _formatMilesDisplay(data.distanceMiles),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        height: 1,
+                      ),
                     ),
-                  ),
-                ],
+                    // Green exit-number chip (only when exitNumber is set)
+                    if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF22C55E),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.turn_slight_right,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              data.exitNumber!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
           ),

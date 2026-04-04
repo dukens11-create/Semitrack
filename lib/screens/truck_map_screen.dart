@@ -204,11 +204,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Off-route detection constants ─────────────────────────────────────────
   /// Distance in metres beyond which the truck is considered off-route.
-  static const double _offRouteThresholdMeters = 40.0;
+  static const double _offRouteThresholdMeters = 80.0;
 
   /// Minimum seconds that must elapse between automatic reroutes to prevent
   /// rapid repeated API calls in areas with poor GPS accuracy.
-  static const int _rerouteThrottleSeconds = 8;
+  static const int _rerouteThrottleSeconds = 15;
 
   // ── Trip statistics constants ─────────────────────────────────────────────
   /// Metres per mile conversion factor, used to convert GPS distances to miles.
@@ -464,6 +464,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Timestamp of the last automatic reroute, used to throttle rerouting
   /// frequency to at most one reroute every [_rerouteThrottleSeconds] seconds.
   DateTime? _lastRerouteTime;
+
+  // ── Startup reroute suppression and GPS stability tracking ────────────────
+  /// Timestamp when the current navigation session was started.  Used to
+  /// suppress reroutes during the first 10 seconds of navigation so the app
+  /// does not reroute on the initial GPS lock.
+  DateTime? _navigationStartedAt;
+
+  /// Timestamp of the last reroute triggered by off-route detection.  Used
+  /// for the 15-second cooldown between consecutive reroutes.
+  DateTime? _lastRerouteAt;
+
+  /// Number of consecutive GPS fixes that have detected the driver to be
+  /// off-route.  A reroute is only triggered after 3 consecutive off-route
+  /// fixes to avoid false positives from momentary GPS drift.
+  int _offRouteConfirmCount = 0;
+
+  /// True once a stable GPS fix (accuracy &lt; 30 m) has been received after
+  /// navigation started.  Reroutes are suppressed until this becomes true.
+  bool _hasStableFixForNavigation = false;
 
   // ── Trip statistics ────────────────────────────────────────────────────────
   // Initialized by _startTripStats() when navigation begins and updated on
@@ -2681,6 +2700,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
 
+    // ── Stable-fix detection for startup reroute suppression ─────────────
+    // Mark a stable GPS fix once accuracy is within 30 m and speed data is
+    // valid.  This allows the startup suppression to lift as soon as the
+    // device has a solid lock.
+    if (!_hasStableFixForNavigation &&
+        _isNavigating &&
+        position.accuracy < 30.0 &&
+        position.speed >= 0) {
+      _hasStableFixForNavigation = true;
+    }
+
     // ── Navigation-specific logic ─────────────────────────────────────────
     // The following checks only run when there is an active destination and
     // a live navigation session.  In plain GPS-tracking mode (no destination
@@ -2869,47 +2899,98 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // position outside the route corridor and trigger spurious reroutes.
     if (_isStopped) return;
 
-    // Throttle: skip if a reroute was triggered within the last 8 seconds.
-    if (_lastRerouteTime != null &&
-        DateTime.now().difference(_lastRerouteTime!).inSeconds <
-            _rerouteThrottleSeconds) {
+    // Suppress reroutes during the first 10 seconds after navigation starts
+    // and until a stable GPS fix is available.
+    if (_isRerouteSuppressedAtStartup()) return;
+
+    // Require the driver to be moving at more than 3 mph (≈1.34 m/s) before
+    // considering a reroute to ignore GPS jitter while slow or stopped.
+    if (_lastAcceptedPosition == null ||
+        _lastAcceptedPosition!.speed < 1.34) {
+      _resetOffRouteState();
       return;
     }
 
-    // Compute minimum distance from current position to any route point using
-    // geo.Geolocator.distanceBetween for accurate GPS-grade measurement.
+    // Compute minimum distance from current position to nearest route point.
+    final double minDist = _distanceToNearestRouteMeters(current);
+
+    if (minDist <= _offRouteThresholdMeters) {
+      // Driver is back on or near the route — reset confirmation counter.
+      _resetOffRouteState();
+      return;
+    }
+
+    // Increment consecutive off-route counter; require 3 confirmations before
+    // acting to filter out momentary GPS noise or drift.
+    _offRouteConfirmCount++;
+    if (_offRouteConfirmCount < 3) return;
+
+    // Enforce 15-second cooldown between consecutive reroutes.
+    final now = DateTime.now();
+    if (_lastRerouteAt != null &&
+        now.difference(_lastRerouteAt!).inSeconds < _rerouteThrottleSeconds) {
+      return;
+    }
+
+    // Additional API-rate guards: directions debounce and route-update check.
+    if (!_canCallDirections()) return;
+    if (!_canCallApi()) return;
+    if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
+
+    _isRerouting = true;
+    _lastRerouteTime = now;
+    _lastRerouteAt = now;
+    _offRouteConfirmCount = 0;
+    // Show rerouting status indicator and announce the change via TTS.
+    setState(() => _navStatus = 'Rerouting...');
+    _speak('Rerouting');
+    // Re-fetch the route from the current live position to the original
+    // destination, then clear the rerouting lock and status indicator.
+    fetchRoute(fromPosition: current).then((_) {
+      _isRerouting = false;
+      if (mounted) setState(() => _navStatus = null);
+    });
+  }
+
+  /// Returns true when rerouting should be suppressed because navigation just
+  /// started (within the 10-second startup window) or the device has not yet
+  /// received a stable GPS fix since navigation began.
+  bool _isRerouteSuppressedAtStartup() {
+    if (_navigationStartedAt == null) return true;
+    final elapsed = DateTime.now().difference(_navigationStartedAt!);
+    return elapsed.inSeconds < 10 || !_hasStableFixForNavigation;
+  }
+
+  /// Computes the minimum distance in metres from [pos] to the nearest point
+  /// on the active route polyline using GPS-grade Geolocator measurement.
+  double _distanceToNearestRouteMeters(LatLng pos) {
     double minDist = double.infinity;
     for (final pt in _routePoints) {
       final d = geo.Geolocator.distanceBetween(
-        current.latitude,
-        current.longitude,
+        pos.latitude,
+        pos.longitude,
         pt.latitude,
         pt.longitude,
       );
       if (d < minDist) minDist = d;
     }
+    return minDist;
+  }
 
-    if (minDist > _offRouteThresholdMeters) {
-      // Only trigger a reroute when the API debounce window has elapsed AND
-      // the truck has moved significantly, preventing flood of redundant calls.
-      // _canCallDirections is checked first (5 s per-directions throttle), then
-      // _canCallApi for the broader route-fetch guard, then _shouldUpdateRoute
-      // to confirm meaningful position change before updating the reference.
-      if (!_canCallDirections()) return;
-      if (!_canCallApi()) return;
-      if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
-      _isRerouting = true;
-      _lastRerouteTime = DateTime.now();
-      // Show rerouting status indicator and announce the change via TTS.
-      setState(() => _navStatus = 'Rerouting...');
-      _speak('Rerouting');
-      // Re-fetch the route from the current live position to the original
-      // destination, then clear the rerouting lock and status indicator.
-      fetchRoute(fromPosition: current).then((_) {
-        _isRerouting = false;
-        if (mounted) setState(() => _navStatus = null);
-      });
+  /// Returns true when all conditions for triggering a reroute are met:
+  /// the driver is moving faster than 3 mph and is more than
+  /// [_offRouteThresholdMeters] from the nearest route point.
+  bool _shouldTriggerReroute(LatLng pos) {
+    if (_lastAcceptedPosition == null || _lastAcceptedPosition!.speed < 1.34) {
+      return false;
     }
+    return _distanceToNearestRouteMeters(pos) > _offRouteThresholdMeters;
+  }
+
+  /// Resets the consecutive off-route confirmation counter so that a single
+  /// on-route GPS fix cancels any pending reroute decision.
+  void _resetOffRouteState() {
+    _offRouteConfirmCount = 0;
   }
 
   // ── Trip statistics logic ──────────────────────────────────────────────────
@@ -3295,6 +3376,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_routePoints.isEmpty) return;
     setState(() {
       _isNavigating = true;
+      _navigationStartedAt = DateTime.now();
+      _lastRerouteAt = null;
+      _offRouteConfirmCount = 0;
+      _hasStableFixForNavigation = false;
     });
     // Notify AppShell (and any other listeners) that navigation is now active
     // so the bottom navigation bar is hidden during the driving session.

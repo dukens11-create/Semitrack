@@ -1762,24 +1762,59 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       '${(_poiDisplayBufferMeters / 1609.34).toStringAsFixed(0)} miles of route).',
     );
 
+    // Determine which weigh station is the active next one during navigation
+    // so it can be rendered with a distinct highlight ring.
+    final String? nextStationId = (_isNavigating && _closestWeighStationsAhead.isNotEmpty)
+        ? _closestWeighStationsAhead.first.poi.id
+        : null;
+
     return poisNearRoute
         .map((poi) {
+          final bool isNext = poi.id == nextStationId;
+          // Next upcoming station is rendered at 48 px with an orange highlight
+          // ring so it stands out clearly from other stations on the map.
+          final double size = isNext ? 48.0 : 40.0;
+          final Widget markerChild = isNext
+              ? Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.orange,
+                      width: 2.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.orange.withOpacity(0.5),
+                        blurRadius: 8,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: ClipOval(
+                    child: Image.memory(
+                      weighBytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                )
+              : Image.memory(
+                  weighBytes,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                );
           return Marker(
             point: poi.position,
-            width: 40,
-            height: 40,
+            width: size,
+            height: size,
             alignment: Alignment.center,
             child: GestureDetector(
               onTap: () => _showPoiAlert(poi),
-              // Logo-only marker: no background, border, or container wrapping.
-              // The PNG from assets/logo_brand_markers/ is the entire visible marker.
-              child: Image.memory(
-                weighBytes,
-                width: 40,
-                height: 40,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-              ),
+              child: markerChild,
             ),
           );
         })
@@ -4726,9 +4761,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ));
     }
 
-    // Sort ascending by route miles and return the closest 2.
+    // Sort ascending by route miles and return the single closest station.
+    // Only one upcoming weigh station is highlighted at a time so the driver
+    // focuses on the very next one ahead before seeing the one after it.
     candidates.sort((a, b) => a.milesAhead.compareTo(b.milesAhead));
-    return candidates.take(2).toList();
+    return candidates.take(1).toList();
   }
 
   /// Recomputes [_closestWeighStationsAhead] from the current truck position
@@ -4865,18 +4902,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
-  /// Builds the compact row of [ClosestWeighStationChip] widgets displayed
-  /// above the Stop Navigation button during active navigation.
+  /// Builds the chip showing the single closest upcoming weigh station ahead
+  /// of the driver on the active route.  Displayed in the navigation overlay
+  /// above the bottom trip strip so the driver can always see the next station
+  /// with its icon and distance in miles.
   ///
-  /// Returns [SizedBox.shrink] when there are no weigh stations ahead so the
-  /// row takes up no space in the widget tree.
+  /// Automatically updates as the driver moves: once the current station is
+  /// passed (dropped from [_closestWeighStationsAhead]) the next one ahead is
+  /// shown immediately.  Returns [SizedBox.shrink] when there are no weigh
+  /// stations ahead so the widget takes up no space in the tree.
   Widget _buildClosestWeighStationsRow() {
     if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
       return const SizedBox.shrink();
     }
     return Positioned(
-      // Position above the Stop Navigation button (bottom ~30 + 60 height + gap)
-      bottom: 100,
+      // Position above the bottom trip strip (bottom ~18 + height ~52 + gap 8).
+      bottom: 86,
       left: 16,
       right: 16,
       child: ClosestWeighStationsRow(
@@ -9094,6 +9135,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       child: _buildBottomTripStrip(),
                     ),
                   ),
+                // ── Zone 6 (bottom, above strip): next weigh station ──────
+                // Chip showing the single closest upcoming weigh station with
+                // its icon and miles to go.  Automatically advances to the
+                // next station once the driver passes the current one.
+                // Only visible during active navigation when a station exists.
+                _buildClosestWeighStationsRow(),
               ],
             ),
           ),
@@ -12326,12 +12373,15 @@ class ClosestWeighStationChip extends StatelessWidget {
 
 // ── ClosestWeighStationsRow widget ────────────────────────────────────────────
 
-/// A horizontal row of [ClosestWeighStationChip]s showing the next 1–2 weigh
-/// stations ahead of the driver on the active route.
+/// Displays the single closest upcoming weigh station ahead of the driver on
+/// the active route as a [ClosestWeighStationChip].
 ///
-/// Displayed as an overlay during active navigation, positioned above the Stop
-/// Navigation button so it is visible without blocking the map.  The row is
-/// automatically empty (zero size) when [stations] is empty.
+/// Only one station is shown at a time so the driver's attention is focused on
+/// the very next weigh station they must cross.  Once the driver passes it the
+/// list is refreshed by [_refreshClosestWeighStationsAhead] and the next
+/// station ahead appears automatically.
+///
+/// The row is automatically empty (zero size) when [stations] is empty.
 ///
 /// **Usage:**
 /// ```dart

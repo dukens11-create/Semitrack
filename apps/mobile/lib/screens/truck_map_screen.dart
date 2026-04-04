@@ -266,6 +266,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// radius ensures the red overlay visually leads into the restricted zone.
   static const double _restrictionSegmentThresholdMultiplier = 3.0;
 
+  // ── California truck speed-limit constants ─────────────────────────────────
+  /// California state law maximum speed for trucks (mph).
+  static const double _californiaTruckSpeedLimitMph = 55.0;
+
+  /// Southern latitude boundary of the California bounding box.
+  static const double _californiaMinLat = 32.0;
+
+  /// Northern latitude boundary of the California bounding box.
+  static const double _californiaMaxLat = 42.5;
+
+  /// Western longitude boundary of the California bounding box.
+  static const double _californiaMinLng = -125.0;
+
+  /// Eastern longitude boundary of the California bounding box.
+  static const double _californiaMaxLng = -114.0;
+
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
   String? _error;
@@ -2542,7 +2558,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // pos.speed is in m/s; negative values mean the speed is unavailable.
     final double newSpeedMps =
         position.speed >= 0 ? position.speed : _currentSpeedMps;
-    final double newSpeedLimit = _estimateSpeedLimit();
+    final double carSpeedLimit = _estimateSpeedLimit();
+    final double newSpeedLimit =
+        _getTruckSpeedLimit(carSpeedLimit, position.latitude, position.longitude);
 
     setState(() {
       // Use the raw GPS fix so the marker reflects actual device location.
@@ -2929,6 +2947,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Near the route's start/end we assume a city segment with a lower limit.
     if (progress < 0.05 || progress > 0.95) return 35.0;
     return 65.0;
+  }
+
+  /// Returns the truck-specific speed limit for the given position.
+  ///
+  /// California state law caps trucks at 55 mph on most roads.  When the
+  /// position falls inside the California bounding box (lat 32.0–42.5,
+  /// lng -125.0–-114.0) this method returns 55.0.  For all other locations
+  /// the car speed limit from [_estimateSpeedLimit] is used as a fallback.
+  double _getTruckSpeedLimit(double carSpeedLimit, double lat, double lng) {
+    final bool inCalifornia = lat >= _californiaMinLat &&
+        lat <= _californiaMaxLat &&
+        lng >= _californiaMinLng &&
+        lng <= _californiaMaxLng;
+    if (inCalifornia) return _californiaTruckSpeedLimitMph;
+    return carSpeedLimit;
   }
 
   // ── Route animation ───────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mbx;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';

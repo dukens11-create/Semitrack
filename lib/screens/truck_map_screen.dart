@@ -3232,6 +3232,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // as soon as the driver taps "Start Navigation" without waiting for the
     // first GPS fix.
     _refreshClosestWeighStationsAhead();
+    // Immediately populate the two closest truck stops ahead so the row is
+    // visible as soon as the driver taps "Start Navigation".
+    _refreshClosestTruckStopsAhead();
     // Start the warning manager so it evaluates proximity on each GPS fix.
     _warningManager.startNavigation();
     _startRouteAnimation();
@@ -11169,16 +11172,17 @@ class ClosestTruckStopChip extends StatelessWidget {
   /// e.g. `'Pilot Travel Center - Portland'`.
   final String? stopName;
 
-  /// When true, an amber "Approaching" badge is shown below the distance text
-  /// to alert the driver that this stop is within the approaching threshold.
-  final bool isApproaching;
+  /// When non-null, an amber badge is shown below the distance text with this
+  /// message (e.g. `'2.3 miles approaching.'`) to alert the driver that the
+  /// stop is imminent.
+  final String? approachingText;
 
   const ClosestTruckStopChip({
     super.key,
     required this.logoAsset,
     required this.distanceText,
     this.stopName,
-    this.isApproaching = false,
+    this.approachingText,
   });
 
   @override
@@ -11249,8 +11253,9 @@ class ClosestTruckStopChip extends StatelessWidget {
               ),
               // ── Approaching badge ──────────────────────────────────────
               // Only shown for the first upcoming stop when within the
-              // approaching threshold (~3 miles).
-              if (isApproaching)
+              // approaching threshold (~3 miles).  The badge text includes
+              // the exact distance, e.g. "2.3 miles approaching."
+              if (approachingText != null)
                 Container(
                   margin: const EdgeInsets.only(top: 2),
                   padding:
@@ -11259,9 +11264,9 @@ class ClosestTruckStopChip extends StatelessWidget {
                     color: const Color(0xFFFF9800).withOpacity(0.90),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Text(
-                    'Approaching',
-                    style: TextStyle(
+                  child: Text(
+                    approachingText!,
+                    style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
@@ -11280,7 +11285,7 @@ class ClosestTruckStopChip extends StatelessWidget {
 /// A horizontally scrollable row of up to 2 [ClosestTruckStopChip] widgets,
 /// displayed during active navigation to show the nearest truck stops ahead.
 ///
-/// The first stop shows an "Approaching" badge when it is within
+/// The first stop shows a `"{X} miles approaching."` badge when it is within
 /// [_approachingThresholdMiles] of the driver's current position.
 class ClosestTruckStopsRow extends StatelessWidget {
   final List<AheadTruckStop> stops;
@@ -11307,13 +11312,18 @@ class ClosestTruckStopsRow extends StatelessWidget {
               ? '${miles.toStringAsFixed(1)} mi'
               : '${miles.round()} mi';
           // Only the first (closest) stop can show the approaching badge.
-          final bool isApproaching =
-              index == 0 && miles < _approachingThresholdMiles;
+          // Badge text includes the distance: e.g. "2.3 miles approaching."
+          // Since the badge only appears when miles < _approachingThresholdMiles
+          // (3.0), the distance is always < 10 so one decimal place is used.
+          final String? approachingText = (index == 0 &&
+                  miles < _approachingThresholdMiles)
+              ? '${miles.toStringAsFixed(1)} miles approaching.'
+              : null;
           return ClosestTruckStopChip(
             logoAsset: 'assets/logo_brand_markers/${stop.poi.logoName}.png',
             distanceText: distText,
             stopName: stop.poi.name,
-            isApproaching: isApproaching,
+            approachingText: approachingText,
           );
         }).toList(),
       ),

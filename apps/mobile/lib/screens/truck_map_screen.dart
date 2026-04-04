@@ -126,13 +126,13 @@ class TopInstructionData {
     required this.roadName,
     required this.distanceMiles,
     this.bottomChipText,
-    this.shieldText,
+    this.exitNumber,
   });
 
   /// Icon category derived from maneuver type + modifier.
   final ManeuverVisualType visualType;
 
-  /// Short action verb phrase, e.g. "Turn left onto" or "Continue on".
+  /// Short action verb phrase, e.g. "Turn onto" or "Stay on".
   final String primaryText;
 
   /// Name of the road at the upcoming maneuver point.
@@ -144,8 +144,8 @@ class TopInstructionData {
   /// Optional label shown in the bottom chip (defaults to [roadName]).
   final String? bottomChipText;
 
-  /// Optional highway shield label (e.g. "88", "I-5") shown as a green pill.
-  final String? shieldText;
+  /// Optional exit number shown in the green chip (e.g. "13").
+  final String? exitNumber;
 }
 
 /// Full-featured truck navigation screen.
@@ -7975,28 +7975,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the short action-verb phrase for [maneuverType] + [modifier].
   ///
-  /// For example: ("turn", "left") → "Turn left onto",
-  ///              ("merge", null) → "Merge onto".
-  String _buildPrimaryInstructionText(String? maneuverType, String? modifier) {
+  /// For example: ("turn", null) → "Turn onto",
+  ///              ("continue", null) → "Stay on".
+  String _buildPrimaryInstructionText(
+    String? maneuverType,
+    String? modifier, {
+    required bool hasRoadName,
+  }) {
     final type = (maneuverType ?? '').toLowerCase();
-    final mod  = (modifier   ?? '').toLowerCase();
 
     if (type == 'depart') return 'Head out';
-    if (type == 'continue' || type == 'new name') return 'Continue on';
-    if (type == 'merge') return 'Merge onto';
-    if (type == 'fork') {
-      return mod.contains('left') ? 'Keep left for' : 'Keep right for';
-    }
-    if (type == 'off ramp' || type == 'exit') return 'Take exit to';
-    if (type == 'on ramp'  || type == 'ramp') return 'Take ramp to';
-    if (type == 'roundabout') return 'Enter roundabout for';
-    if (type == 'turn') {
-      if (mod.contains('slight left'))  return 'Bear left onto';
-      if (mod.contains('slight right')) return 'Bear right onto';
-      if (mod.contains('left'))         return 'Turn left onto';
-      if (mod.contains('right'))        return 'Turn right onto';
-    }
-    return 'Continue ahead';
+    if (type == 'continue' || type == 'new name') return 'Stay on';
+    if (type == 'merge') return 'Stay on';
+    if (type == 'off ramp' || type == 'exit') return 'Take exit';
+    if (type == 'fork') return 'Stay on';
+    if (type == 'turn') return hasRoadName ? 'Turn onto' : 'Turn';
+    return hasRoadName ? 'Stay on' : 'Continue ahead';
   }
 
   /// Maps a Mapbox maneuver type + modifier pair to a [ManeuverVisualType].
@@ -8046,6 +8040,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     String? currentRoadName,
     String? nextRoadName,
     String? highwayName,
+    String? exitNumber,
   }) {
     final displayRoadName = _resolveDisplayRoadName(
       roadName:        roadName,
@@ -8054,16 +8049,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       highwayName:     highwayName,
     );
 
-    final primary = _buildPrimaryInstructionText(maneuverType, modifier);
+    final hasRoadName = displayRoadName.isNotEmpty;
+    final primary = _buildPrimaryInstructionText(
+      maneuverType,
+      modifier,
+      hasRoadName: hasRoadName,
+    );
 
     setState(() {
       _topInstructionData = TopInstructionData(
-        visualType:     _mapStepToVisualType(maneuverType, modifier),
-        primaryText:    primary,
-        roadName:       displayRoadName.isEmpty ? primary : displayRoadName,
-        distanceMiles:  distanceMiles,
-        bottomChipText: displayRoadName.isEmpty ? null : displayRoadName,
-        shieldText: _extractHighwayShield(displayRoadName.isEmpty ? (roadName ?? '') : displayRoadName),
+        visualType:    _mapStepToVisualType(maneuverType, modifier),
+        primaryText:   primary,
+        roadName:      hasRoadName ? displayRoadName : '',
+        distanceMiles: distanceMiles,
+        bottomChipText: null,
+        exitNumber:    exitNumber,
       );
 
       // Populate secondary "Then" card from the next navigation step.
@@ -8071,12 +8071,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (nextIdx < _navSteps.length) {
         final next = _navSteps[nextIdx];
         final nextRoad = next.name.isNotEmpty ? next.name : next.instruction;
+        final nextHasRoadName = nextRoad.isNotEmpty;
         _secondaryInstructionData = TopInstructionData(
           visualType:    _mapStepToVisualType(next.type, next.maneuver),
-          primaryText:   next.instruction,
+          primaryText:   _buildPrimaryInstructionText(
+            next.type,
+            next.maneuver,
+            hasRoadName: nextHasRoadName,
+          ),
           roadName:      nextRoad,
           distanceMiles: next.distanceMeters / _metersPerMile,
-          shieldText:    _extractHighwayShield(nextRoad),
         );
       } else {
         _secondaryInstructionData = null;
@@ -9833,96 +9837,120 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return m?.group(1);
   }
 
-  /// Compact GPS-style primary maneuver card shown at the top-left of the map
+  /// GPS-style primary maneuver card shown at the top-left of the map
   /// during active navigation.
   ///
   /// Displays:
-  ///  • Maneuver direction icon tile.
-  ///  • Distance to the next maneuver in large bold text.
-  ///  • Green highway-shield pill when a shield label is available.
-  ///  • Upcoming road name.
+  ///  • Maneuver direction icon tile on the left.
+  ///  • Instruction verb (primaryText), road name, and large distance to next
+  ///    maneuver stacked on the right.
+  ///  • Green exit-number chip when [data.exitNumber] is available.
   Widget _buildPrimaryManeuverCard(TopInstructionData data) {
-    final String? shield = data.shieldText ?? _extractHighwayShield(data.roadName);
     return Container(
-      width: 270,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      width: 255,
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.84),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: const [
-          BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 4)),
+        color: Colors.black.withOpacity(0.82),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Maneuver icon ────────────────────────────────────────────────
+          // ── Maneuver icon tile ───────────────────────────────────────────
           Container(
-            width: 46,
-            height: 46,
+            width: 58,
+            height: 58,
             decoration: BoxDecoration(
               color: Colors.white12,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
             ),
             child: Icon(
               _maneuverVisualIcon(data.visualType),
               color: Colors.white,
-              size: 28,
+              size: 34,
             ),
           ),
-          const SizedBox(width: 10),
-          // ── Distance + road info ──────────────────────────────────────
+          const SizedBox(width: 12),
+          // ── Text column ──────────────────────────────────────────────────
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                // Distance to maneuver — prominent
+                // Short action verb, e.g. "Stay on" / "Turn onto"
+                Text(
+                  data.primaryText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                // Road name — large and bold (only shown when non-empty)
+                if (data.roadName.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    data.roadName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                // Distance to next maneuver — extra large
                 Text(
                   _formatMilesDisplay(data.distanceMiles),
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 22,
+                    fontSize: 42,
                     fontWeight: FontWeight.w800,
                     height: 1,
                   ),
                 ),
-                const SizedBox(height: 4),
-                // Highway shield pill + road name row
-                Row(
-                  children: [
-                    if (shield != null) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1A7340),
-                          borderRadius: BorderRadius.circular(8),
+                // Green exit-number chip (only when exitNumber is set)
+                if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22C55E),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.turn_slight_right,
+                          color: Colors.white,
+                          size: 18,
                         ),
-                        child: Text(
-                          shield,
+                        const SizedBox(width: 6),
+                        Text(
+                          data.exitNumber!,
                           style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 5),
-                    ],
-                    Expanded(
-                      child: Text(
-                        data.roadName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 13,
-                        ),
-                      ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ],
             ),
           ),

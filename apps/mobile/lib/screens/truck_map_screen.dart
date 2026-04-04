@@ -10181,15 +10181,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Formats a distance in miles for display on an alert chip.
-  ///
-  /// Whole-number miles are shown without a decimal; fractional miles are
-  /// shown with one decimal place.
-  String _formatChipDistance(double miles) {
-    if (miles % 1 == 0) return '${miles.toInt()} mi';
-    return '${miles.toStringAsFixed(1)} mi';
-  }
-
   /// Builds a single upcoming-alert chip used in [_buildRightSideUpcomingAlerts].
   ///
   /// Each chip shows a coloured icon circle on the left, a short GPS-style

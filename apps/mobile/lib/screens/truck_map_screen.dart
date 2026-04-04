@@ -4205,8 +4205,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       height: 1.2,
                     ),
                     maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                          ),
                   Text(
                     '${style.label}$limitText · Approaching',
                     style: const TextStyle(
@@ -9541,99 +9540,124 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Color _upcomingAlertAccent(UpcomingAlertType type) {
     switch (type) {
       case UpcomingAlertType.wind:
-        return const Color(0xFF0288D1); // blue
+        return const Color(0xFFFF7A00);
       case UpcomingAlertType.truckStop:
-        return const Color(0xFF43A047); // green
-      case UpcomingAlertType.weighStation:
-        return const Color(0xFFF57C00); // amber
-      case UpcomingAlertType.restriction:
-        return const Color(0xFFD32F2F); // red
+        return const Color(0xFF22C55E);
       case UpcomingAlertType.fuel:
-        return const Color(0xFF43A047); // green
+        return const Color(0xFF22C55E);
+      case UpcomingAlertType.weighStation:
+        return const Color(0xFF14B8A6);
+      case UpcomingAlertType.restriction:
+        return const Color(0xFFEF4444);
       case UpcomingAlertType.restArea:
-        return const Color(0xFF6C52A6); // brand purple
+        return const Color(0xFF3B82F6);
     }
   }
 
   /// Returns the short GPS-style display label for an [UpcomingAlertType].
-  String _alertTypeLabel(UpcomingAlertType type) {
+  String _upcomingAlertShortLabel(UpcomingAlertType type) {
     switch (type) {
       case UpcomingAlertType.wind:
         return 'Wind';
-      case UpcomingAlertType.fuel:
-        return 'Fuel';
-      case UpcomingAlertType.restriction:
-        return 'Restriction';
-      case UpcomingAlertType.weighStation:
-        return 'Weigh';
-      case UpcomingAlertType.restArea:
-        return 'Rest';
       case UpcomingAlertType.truckStop:
         return 'Stop';
+      case UpcomingAlertType.fuel:
+        return 'Fuel';
+      case UpcomingAlertType.weighStation:
+        return 'Weigh';
+      case UpcomingAlertType.restriction:
+        return 'Restriction';
+      case UpcomingAlertType.restArea:
+        return 'Rest';
     }
   }
 
-  /// Returns the Material icon for an [UpcomingAlertType].
-  IconData _alertTypeIcon(UpcomingAlertType type) {
-    switch (type) {
-      case UpcomingAlertType.wind:
-        return Icons.air;
-      case UpcomingAlertType.fuel:
-        return Icons.local_gas_station;
-      case UpcomingAlertType.restriction:
-        return Icons.block;
-      case UpcomingAlertType.weighStation:
-        return Icons.scale;
-      case UpcomingAlertType.restArea:
-        return Icons.hotel;
-      case UpcomingAlertType.truckStop:
-        return Icons.stop_circle;
-    }
+  /// Formats a distance in miles for display on an alert chip.
+  ///
+  /// Whole-number miles are shown without a decimal; fractional miles are
+  /// shown with one decimal place.
+  String _formatChipDistance(double miles) {
+    if (miles % 1 == 0) return '${miles.toInt()} mi';
+    return '${miles.toStringAsFixed(1)} mi';
   }
 
   /// Builds a single upcoming-alert chip used in [_buildRightSideUpcomingAlerts].
   ///
-  /// Each chip shows a colour-coded icon, a short GPS-style label, and the
-  /// formatted distance in a compact dark pill with a coloured border that
-  /// matches the alert accent colour.  Width adapts to the text content.
+  /// Each chip shows a coloured icon circle on the left, a short GPS-style
+  /// label, and the formatted distance — all in a compact dark pill with a
+  /// coloured border that matches the alert accent colour.
   Widget _buildUpcomingAlertChip(UpcomingAlertItem item) {
-    final Color accent = _upcomingAlertAccent(item.type);
-    final IconData icon = _alertTypeIcon(item.type);
-    final String label = _alertTypeLabel(item.type);
-    final double miles = item.distanceMiles;
-    // Show a whole number unless the value has a fractional part; in that
-    // case show exactly one decimal place.
-    final String distText = miles == miles.truncateToDouble()
-        ? '${miles.toInt()} mi'
-        : '${miles.toStringAsFixed(1)} mi';
+    final accent = _upcomingAlertAccent(item.type);
+    final label = _upcomingAlertShortLabel(item.type);
+    final distanceText = _formatChipDistance(item.distanceMiles);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      constraints: const BoxConstraints(
+        minWidth: 112,
+        maxWidth: 165,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.80),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: accent.withOpacity(0.85), width: 1.2),
+        color: Colors.black.withOpacity(0.84),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: accent.withOpacity(0.95),
+          width: 1.4,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 6,
+            color: accent.withOpacity(0.18),
+            blurRadius: 8,
             offset: const Offset(0, 2),
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: accent, size: 15),
-          const SizedBox(width: 5),
-          Text(
-            '$label $distText',
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.14),
+              shape: BoxShape.circle,
             ),
-            overflow: TextOverflow.ellipsis,
+            child: Icon(
+              _upcomingAlertIcon(item.type),
+              color: accent,
+              size: 14,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: RichText(
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: '$label ',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  TextSpan(
+                    text: distanceText,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -9644,10 +9668,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// top-right of the map overlay during active navigation.
   ///
   /// Chips are right-aligned, sorted by ascending distance (closest first),
-  /// and spaced 8 px apart for a compact yet readable display.  Passes through
+  /// and spaced 9 px apart for a compact yet readable display.  Passes through
   /// as [SizedBox.shrink] when navigation is inactive or no alerts are present.
   ///
-  /// Positioned at top: 118, right: 16 so it sits just below the compass
+  /// Positioned at top: 120, right: 16 so it sits just below the compass
   /// button and does not conflict with the top instruction card on the left.
   ///
   /// To disable this overlay: remove the [_buildRightSideUpcomingAlerts] call
@@ -9659,9 +9683,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return const SizedBox.shrink();
     }
 
-    // Show at most 3 chips (already capped by _refreshUpcomingAlerts).
-    final visible = _upcomingAlerts.take(3).toList();
-
     return Positioned(
       // top: 120 aligns with the compass button bottom edge + gap, ensuring
       // chips never overlap the instruction card at the top-left.
@@ -9672,13 +9693,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            for (int i = 0; i < visible.length; i++) ...[
-              _buildUpcomingAlertChip(visible[i]),
-              // 8 px gap between consecutive chips for compact display.
-              if (i < visible.length - 1) const SizedBox(height: 8),
-            ],
-          ],
+          children: _upcomingAlerts.take(3).map((item) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 9),
+              child: _buildUpcomingAlertChip(item),
+            );
+          }).toList(),
         ),
       ),
     );

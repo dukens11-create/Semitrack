@@ -8278,38 +8278,56 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds the "Stop Navigation" button overlay shown only while [_isNavigating].
   ///
-  /// Provides a full-width "Stop Navigation" button so the driver can end the
-  /// active trip and return to the planning UI.  Positioned at the bottom
-  /// center of the screen with SafeArea padding to remain accessible on all
+  /// Provides a full-width, pill-shaped "Stop Navigation" button so the driver
+  /// can end the active trip and return to the planning UI.  Positioned at the
+  /// bottom of the screen with SafeArea padding to remain accessible on all
   /// devices.
-  Widget _buildStopNavigationButton() {
-    return Positioned(
-      bottom: 20,
-      left: 16,
-      right: 16,
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          // height: 54 is compact but touch-friendly, per Material spec minimum.
-          height: 54,
-          child: ElevatedButton.icon(
-            onPressed: _stopNavigation,
-            icon: const Icon(Icons.stop_circle_outlined),
-            label: const Text(
-              'Stop Navigation',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            style: ElevatedButton.styleFrom(
-              elevation: 8,
-              shadowColor: Colors.black45,
-              backgroundColor: const Color(0xFFD32F2F),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
+  Widget _buildStopButton() {
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.86),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(
+          color: const Color(0xFFD94A4A).withOpacity(0.9),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(26),
+          onTap: _stopNavigation,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.stop_circle_outlined,
+                  color: Color(0xFFD94A4A),
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Stop Navigation',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 22),
+              ],
             ),
           ),
         ),
@@ -8873,8 +8891,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     child: _buildWindAlert(),
                   ),
                 // ── Zone 6 (very bottom): stop navigation button ──────────
-                // Full-width "Stop Navigation" button with SafeArea padding.
-                if (_isNavigating) _buildStopNavigationButton(),
+                // Full-width pill-shaped "Stop Navigation" button with SafeArea padding.
+                if (_isNavigating)
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 16,
+                    child: SafeArea(
+                      top: false,
+                      child: _buildStopButton(),
+                    ),
+                  ),
               ],
             ),
           ),

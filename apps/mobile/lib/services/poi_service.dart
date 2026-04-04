@@ -34,16 +34,13 @@ const String _kPoiFallbackIcon = 'truck_parking';
 
 /// Loads every [PoiItem] from `assets/locations.json`.
 ///
-/// The JSON entries in that file use a simplified schema — they carry `name`,
-/// `icon` (a filename stem, e.g. `"pilot"`), `lat`, `lng`, `country`,
-/// `stateOrProvince`, and `city`, but do **not** include `id` or `category`.
-/// This function synthesises the missing fields:
-///   - `id`       — `"ts_NNNNN"` where NNNNN is the zero-padded list index.
-///   - `category` — always `"truck_stop"` for this dataset.
-///   - `icon`     — normalised via [poiIconId] so that it matches the Mapbox
-///                  image ID registered by [registerPoiIcons]
-///                  (e.g. `"flying j truck stop.png"` → `"flying_j_truck_stop"`,
-///                   or a plain stem `"pilot"` → `"pilot"`).
+/// The JSON entries use the standardised schema with five required fields:
+/// `id`, `name`, `icon` (PNG filename, e.g. `"pilot.png"`), `lat`, `lng`,
+/// and `category` (e.g. `"truck_stop"`, `"weigh_station"`, `"rest_area"`).
+///
+/// The `icon` value is normalised via [poiIconId] so that it matches the
+/// Mapbox image ID registered by [registerPoiIcons]
+/// (e.g. `"pilot.png"` → `"pilot"`, `"flying_j_truck_stop.png"` → `"flying_j_truck_stop"`).
 ///
 /// **Icon validation:** the normalised icon ID is cross-checked against the
 /// set of PNG assets actually bundled in `assets/logo_brand_markers/`.  If no
@@ -51,7 +48,7 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// [_kPoiFallbackIcon] so the POI is still rendered as a visible marker.
 ///
 /// No proximity or category filter is applied; every entry in the file is
-/// returned so that all truck stops appear as markers on the map.
+/// returned so that all USA and Canada POIs appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
       await rootBundle.loadString('assets/locations.json');
@@ -74,9 +71,8 @@ Future<List<PoiItem>> loadAllPois() async {
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
 
-  return data.asMap().entries.map((entry) {
-    final int index = entry.key;
-    final Map<String, dynamic> json = entry.value as Map<String, dynamic>;
+  return data.map((entry) {
+    final Map<String, dynamic> json = entry as Map<String, dynamic>;
     final String rawIcon = json['icon'] as String;
     final String normalizedId = poiIconId(rawIcon);
 
@@ -98,26 +94,22 @@ Future<List<PoiItem>> loadAllPois() async {
     }
 
     return PoiItem(
-      // Synthesise a stable ID from the list position.
-      id: 'ts_${index.toString().padLeft(5, '0')}',
+      // Read id and category directly from the standardised JSON schema.
+      id: json['id'] as String,
       name: json['name'] as String,
-      // All entries in this file are truck stops.
-      category: 'truck_stop',
+      category: json['category'] as String,
       // Resolved icon: normalised PNG filename if the asset exists, otherwise
       // the fallback icon so the POI still renders as a visible marker.
       icon: resolvedIcon,
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
-      country: json['country'] as String,
-      stateOrProvince: json['stateOrProvince'] as String,
-      city: json['city'] as String,
     );
   }).toList();
 }
 
 /// Converts [pois] to a GeoJSON FeatureCollection map.
 ///
-/// Each feature carries all [PoiItem] fields as GeoJSON properties.  The
+/// Each feature carries the core [PoiItem] fields as GeoJSON properties.  The
 /// `icon` property matches a Mapbox image ID registered via [registerPoiIcons],
 /// enabling `["get", "icon"]` expressions in symbol layers.
 Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
@@ -137,9 +129,6 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
               'name': poi.name,
               'category': poi.category,
               'icon': poi.icon,
-              'country': poi.country,
-              'stateOrProvince': poi.stateOrProvince,
-              'city': poi.city,
             },
           },
         )

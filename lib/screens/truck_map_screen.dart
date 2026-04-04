@@ -12481,7 +12481,7 @@ class ClosestWeighStationChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        // Dark translucent background ensures legibility on any map tile colour.
+        // Dark translucent background ensures legibility on any map tile color.
         color: Colors.black.withOpacity(0.80),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(

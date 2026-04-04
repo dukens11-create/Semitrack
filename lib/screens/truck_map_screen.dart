@@ -12560,7 +12560,7 @@ class WeighStationPoi {
     required this.position,
     required this.name,
     required this.status,
-    this.logoName = 'weigh_station',
+    this.logoName = 'weight_station',
   });
 
   /// Unique identifier — matches the source [MapPoi.id].
@@ -12575,12 +12575,13 @@ class WeighStationPoi {
   /// Operational status string, e.g. "Open", "Closed", "Bypass Required".
   final String status;
 
-  /// PNG filename (without `.png`) under `assets/logos/` used to display the
-  /// station's logo.  Defaults to `'weigh_station'` when no branded logo exists.
+  /// PNG filename (without `.png`) under `assets/logo_brand_markers/` used to
+  /// display the station's logo.  Defaults to `'weight_station'` which maps to
+  /// `assets/logo_brand_markers/weight_station.png`.
   final String logoName;
 
   /// Constructs a [WeighStationPoi] from an existing [MapPoi] of type
-  /// [PoiType.weighStation].  The [logoName] defaults to `'weigh_station'`.
+  /// [PoiType.weighStation].  The [logoName] defaults to `'weight_station'`.
   factory WeighStationPoi.fromMapPoi(MapPoi poi) {
     return WeighStationPoi(
       id: poi.id,

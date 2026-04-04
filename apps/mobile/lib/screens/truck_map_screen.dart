@@ -582,6 +582,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // are within range of the active route.
   List<AheadTruckStop> _closestTruckStopsAhead = [];
 
+  // Full POI dataset loaded from assets/locations.json once the Mapbox style
+  // is ready.  Used by _refreshClosestTruckStopsAhead as the primary data
+  // source so the navigation strip works for any route, not only the I-5
+  // corridor covered by _mockTruckStops.
+  List<PoiItem> _loadedPois = const [];
+
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -3584,13 +3590,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Refreshes [_closestTruckStopsAhead] using the current driver position,
   /// active route polyline, and truck stop list.
   ///
+  /// Uses [_loadedPois] (loaded from `assets/locations.json`) as the primary
+  /// data source so the panel works for any route.  Falls back to [_truckStops]
+  /// (mock data) when [_loadedPois] has not yet been populated.
+  ///
   /// No-ops (and clears the list) when not navigating, when there is no
   /// driver position, or when route / stop data is unavailable.
   void _refreshClosestTruckStopsAhead() {
+    final bool hasStopData = _loadedPois.isNotEmpty || _truckStops.isNotEmpty;
     if (!_isNavigating ||
         _truckPosition == null ||
         _routePoints.isEmpty ||
-        _truckStops.isEmpty) {
+        !hasStopData) {
       if (_closestTruckStopsAhead.isNotEmpty) {
         setState(() => _closestTruckStopsAhead = const []);
       }
@@ -3602,29 +3613,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
         .toList(growable: false);
 
-    // Convert TruckStop list to TruckStopPoi list, deriving logoName from
-    // the assetLogo path (e.g. 'assets/logo_brand_markers/pilot.png' → 'pilot').
-    final pois = _truckStops.map((s) {
-      String logoName;
-      if (s.assetLogo != null) {
-        final path = s.assetLogo!;
-        final slashIdx = path.lastIndexOf('/');
-        final dotIdx = path.lastIndexOf('.');
-        final start = slashIdx >= 0 ? slashIdx + 1 : 0;
-        final end = dotIdx > start ? dotIdx : path.length;
-        logoName = start < end ? path.substring(start, end) : s.brand;
-      } else {
-        logoName = s.icon ?? s.brand.toLowerCase();
-      }
-      return TruckStopPoi(
-        id: s.id,
-        brand: s.brand,
-        logoName: logoName,
-        latitude: s.position.latitude,
-        longitude: s.position.longitude,
-        locationName: s.address,
-      );
-    }).toList(growable: false);
+    // Build the TruckStopPoi list: prefer _loadedPois (locations.json) over
+    // the mock _truckStops so the panel is populated for any route geography.
+    final List<TruckStopPoi> pois;
+    if (_loadedPois.isNotEmpty) {
+      pois = _loadedPois.map((p) => TruckStopPoi(
+        id: p.id,
+        name: p.name,
+        brand: p.icon,
+        logoName: p.icon,
+        latitude: p.lat,
+        longitude: p.lng,
+        locationName: '${p.city}, ${p.stateOrProvince}',
+      )).toList(growable: false);
+    } else {
+      // Convert TruckStop list to TruckStopPoi list, deriving logoName from
+      // the assetLogo path (e.g. 'assets/logo_brand_markers/pilot.png' → 'pilot').
+      pois = _truckStops.map((s) {
+        String logoName;
+        if (s.assetLogo != null) {
+          final path = s.assetLogo!;
+          final slashIdx = path.lastIndexOf('/');
+          final dotIdx = path.lastIndexOf('.');
+          final start = slashIdx >= 0 ? slashIdx + 1 : 0;
+          final end = dotIdx > start ? dotIdx : path.length;
+          logoName = start < end ? path.substring(start, end) : s.brand;
+        } else {
+          logoName = s.icon ?? s.brand.toLowerCase();
+        }
+        return TruckStopPoi(
+          id: s.id,
+          name: s.name,
+          brand: s.brand,
+          logoName: logoName,
+          latitude: s.position.latitude,
+          longitude: s.position.longitude,
+          locationName: s.address,
+        );
+      }).toList(growable: false);
+    }
 
     final updated = _getClosestTruckStopsAheadOnRoute(
       driverLat: _truckPosition!.latitude,
@@ -4908,7 +4935,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (s.routeMilesAhead > 0) {
         fresh.add(UpcomingAlertItem(
           type: UpcomingAlertType.truckStop,
-          label: s.poi.brand,
+          label: s.poi.name,
           distanceMiles: s.routeMilesAhead,
         ));
       }
@@ -6684,6 +6711,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // 1. Load every POI from locations.json and register all PNG icons.
       final List<PoiItem> pois = await loadAllPois();
+
+      // Store the full POI list so _refreshClosestTruckStopsAhead can use it
+      // as the primary data source for the navigation overlay strip.
+      if (mounted) setState(() => _loadedPois = pois);
 
       // ── Audit: name + icon for every POI ─────────────────────────────────
       // Prints every loaded POI's name and normalised Mapbox icon ID so you can
@@ -10605,14 +10636,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             const Icon(Icons.local_gas_station_outlined,
                 size: 22, color: Color(0xFF6C52A6)),
           const SizedBox(width: 6),
-          // ── Brand name + distance ────────────────────────────────────
+          // ── Stop name + distance ─────────────────────────────────────
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                ahead.poi.brand,
+                ahead.poi.name,
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -10931,10 +10962,13 @@ class RoutePoint {
 
 /// A truck-stop point of interest used by the closest-stops-ahead system.
 ///
-/// [logoName] matches the filename stem under `assets/logos/` so the chip
-/// widget can load it as `assets/logos/{logoName}.png`.
+/// [name] is the full display name, e.g. "Pilot Travel Center - Portland".
+/// [logoName] matches the filename stem under `assets/logo_brand_markers/` so
+/// the chip widget can load it as `assets/logo_brand_markers/{logoName}.png`.
 class TruckStopPoi {
   final String id;
+  /// Full display name of the truck stop, e.g. "Pilot Travel Center - Portland".
+  final String name;
   final String brand;
   final String logoName;
   final double latitude;
@@ -10943,6 +10977,7 @@ class TruckStopPoi {
 
   const TruckStopPoi({
     required this.id,
+    required this.name,
     required this.brand,
     required this.logoName,
     required this.latitude,
@@ -10994,8 +11029,9 @@ class ClosestTruckStopChip extends StatelessWidget {
   /// Formatted distance string, e.g. `'12 mi'` or `'3.4 mi'`.
   final String distanceText;
 
-  /// Optional brand name shown after the distance label.
-  final String? brand;
+  /// Full display name of the truck stop shown after the distance label,
+  /// e.g. `'Pilot Travel Center - Portland'`.
+  final String? stopName;
 
   /// When true, an amber "Approaching" badge is shown below the distance text
   /// to alert the driver that this stop is within the approaching threshold.
@@ -11005,7 +11041,7 @@ class ClosestTruckStopChip extends StatelessWidget {
     super.key,
     required this.logoAsset,
     required this.distanceText,
-    this.brand,
+    this.stopName,
     this.isApproaching = false,
   });
 
@@ -11046,7 +11082,7 @@ class ClosestTruckStopChip extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Distance row: value + optional brand name
+              // Distance row: value + optional stop name
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -11059,11 +11095,11 @@ class ClosestTruckStopChip extends StatelessWidget {
                       shadows: [textShadow],
                     ),
                   ),
-                  // ── Optional brand name ────────────────────────────────
-                  if (brand != null && brand!.isNotEmpty) ...[
+                  // ── Optional stop name ─────────────────────────────────
+                  if (stopName != null && stopName!.isNotEmpty) ...[
                     const SizedBox(width: 5),
                     Text(
-                      brand!,
+                      stopName!,
                       style: const TextStyle(
                         fontWeight: FontWeight.w500,
                         fontSize: 13,
@@ -11140,7 +11176,7 @@ class ClosestTruckStopsRow extends StatelessWidget {
           return ClosestTruckStopChip(
             logoAsset: 'assets/logo_brand_markers/${stop.poi.logoName}.png',
             distanceText: distText,
-            brand: stop.poi.brand,
+            stopName: stop.poi.name,
             isApproaching: isApproaching,
           );
         }).toList(),

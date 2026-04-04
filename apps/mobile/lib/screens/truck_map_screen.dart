@@ -210,6 +210,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
 
+  // ── Truck speed limit constants (CA bounding box) ─────────────────────────
+  /// Truck-specific speed limit in California (mph).
+  static const double _caTruckSpeedLimitMph = 55.0;
+
+  /// Southern latitude boundary of the California bounding box check.
+  static const double _caMinLat = 32.0;
+
+  /// Northern latitude boundary of the California bounding box check.
+  static const double _caMaxLat = 42.5;
+
+  /// Western longitude boundary of the California bounding box check.
+  static const double _caMinLng = -125.0;
+
+  /// Eastern longitude boundary of the California bounding box check.
+  static const double _caMaxLng = -114.0;
+
   /// Minimum GPS speed (mph) that counts as real vehicle movement.
   /// Route progress and step advancement are frozen below this threshold.
   static const double _minMovingSpeedMph = 1.5;
@@ -9257,7 +9273,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// known highway pattern (e.g. "I-5" → "5", "US-95" → "95", "CA-88" → "88").
   ///
   /// Returns `null` when [roadName] is not a recognisable highway reference.
+  ///
+  /// To support additional state/country prefixes, extend the alternation in
+  /// the pattern (e.g. add `|TX-|NY-`).
   String? _extractHighwayShield(String roadName) {
+    // Supported prefixes: Interstate (I-), US routes (US-), and common state
+    // highway abbreviations.  Add more prefixes here as needed.
     final r = RegExp(
         r'^(?:I-|US-|CA-|SR-|OR-|WA-|NV-|AZ-|TX-|FL-|Hwy\s*)(\d{1,3}[A-Z]?)$',
         caseSensitive: false);
@@ -9526,12 +9547,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the truck-specific speed limit for the given position.
   ///
-  /// Applies a California bounding-box check (lat 32–42.5, lng −125 to −114)
-  /// and returns 55 mph inside CA, otherwise returns [carSpeedLimit].
+  /// Applies a California bounding-box check and returns
+  /// [_caTruckSpeedLimitMph] (55 mph) inside CA; otherwise returns
+  /// [carSpeedLimit].  Extend this method to add more state/region rules.
   double _getTruckSpeedLimit(double carSpeedLimit, double lat, double lng) {
-    final bool inCA =
-        lat >= 32.0 && lat <= 42.5 && lng >= -125.0 && lng <= -114.0;
-    return inCA ? 55.0 : carSpeedLimit;
+    final bool inCA = lat >= _caMinLat && lat <= _caMaxLat &&
+        lng >= _caMinLng && lng <= _caMaxLng;
+    return inCA ? _caTruckSpeedLimitMph : carSpeedLimit;
   }
 
   /// Compact speed / speed-limit panel shown near the bottom center-right

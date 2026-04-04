@@ -3796,6 +3796,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         latitude: p.lat,
         longitude: p.lng,
         locationName: '${p.city}, ${p.stateOrProvince}',
+        exitNumber: p.exitNumber,
       )).toList(growable: false);
     } else {
       // Convert TruckStop list to TruckStopPoi list, deriving logoName from
@@ -3825,13 +3826,56 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }).toList(growable: false);
     }
 
-    final updated = _getClosestTruckStopsAheadOnRoute(
+    final raw = _getClosestTruckStopsAheadOnRoute(
       driverLat: _truckPosition!.latitude,
       driverLng: _truckPosition!.longitude,
       routePoints: routePts,
       truckStops: pois,
     );
+
+    // Enrich each stop that lacks an exit number by finding the nearest
+    // _NavStep with an exit number within 2 miles of the stop's location.
+    final updated = raw.map((stop) {
+      if (stop.poi.exitNumber != null) return stop;
+      final exit =
+          _findExitNumberNearLocation(stop.poi.latitude, stop.poi.longitude);
+      if (exit == null) return stop;
+      final enriched = TruckStopPoi(
+        id: stop.poi.id,
+        name: stop.poi.name,
+        brand: stop.poi.brand,
+        logoName: stop.poi.logoName,
+        latitude: stop.poi.latitude,
+        longitude: stop.poi.longitude,
+        locationName: stop.poi.locationName,
+        exitNumber: exit,
+      );
+      return AheadTruckStop(
+        poi: enriched,
+        routeMilesAhead: stop.routeMilesAhead,
+        nearestRouteIndex: stop.nearestRouteIndex,
+      );
+    }).toList();
+
     setState(() => _closestTruckStopsAhead = updated);
+  }
+
+  /// Returns the exit number from the nearest [_NavStep] that has one and is
+  /// within [maxMiles] of the given coordinate, or null when none qualifies.
+  String? _findExitNumberNearLocation(double lat, double lng,
+      {double maxMiles = 2.0}) {
+    String? best;
+    double bestDist = double.infinity;
+    for (final step in _navSteps) {
+      if (step.exitNumber == null) continue;
+      final d = _distanceMiles(
+          lat, lng, step.location.latitude, step.location.longitude);
+      if (d < maxMiles && d < bestDist) {
+        bestDist = d;
+        best = step.exitNumber;
+      }
+    }
+    return best;
   }
 
   // ── Restricted-zone dataset for truck routing ─────────────────────────────
@@ -11521,7 +11565,7 @@ class ClosestTruckStopChip extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(
-                    Icons.subdirectory_arrow_right,
+                    Icons.arrow_upward,
                     color: Colors.white,
                     size: 11,
                   ),

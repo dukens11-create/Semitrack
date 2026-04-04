@@ -8,9 +8,8 @@ import 'dart:convert';
 /// with underscores, lowercase, no extension).
 ///
 /// The required fields are [id], [name], [icon], [lat], [lng], and [category].
-/// The optional fields [country], [stateOrProvince], and [city] default to an
-/// empty string when absent from the JSON — they are not present in the
-/// standardised `locations.json` schema.
+/// The optional fields [country], [stateOrProvince], [city], and [exitNumber]
+/// default to an empty string / null when absent from the JSON.
 class PoiItem {
   final String id;
   final String name;
@@ -21,6 +20,9 @@ class PoiItem {
   final String country;
   final String stateOrProvince;
   final String city;
+  /// Highway exit number nearest to this stop (e.g. "309", "13A").
+  /// Sourced from the optional `exit_number` field in `locations.json`.
+  final String? exitNumber;
 
   const PoiItem({
     required this.id,
@@ -32,6 +34,7 @@ class PoiItem {
     this.country = '',
     this.stateOrProvince = '',
     this.city = '',
+    this.exitNumber,
   });
 
   factory PoiItem.fromJson(Map<String, dynamic> json) {
@@ -45,6 +48,7 @@ class PoiItem {
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
+      exitNumber: json['exit_number'] as String?,
     );
   }
 

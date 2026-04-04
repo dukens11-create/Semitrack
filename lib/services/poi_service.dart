@@ -103,6 +103,7 @@ Future<List<PoiItem>> loadAllPois() async {
       icon: resolvedIcon,
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
+      exitNumber: json['exit_number'] as String?,
     );
   }).toList();
 }

@@ -711,6 +711,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// considered "on" the active route and eligible for ahead-on-route display.
   static const double _weighStationProximityMeters = 500.0;
 
+  /// Fallback distance (miles) shown in the weigh-station chip when no live
+  /// route data is available, ensuring the chip is always visible.
+  static const double _kDefaultWeighStationMilesAhead = 8.4;
+
   /// Distance buffer (metres) used when deciding which warning signs are
   /// shown as map markers.  Wider than [_warningProximityMeters] so the driver
   /// can see upcoming hazards well in advance (~10 miles).
@@ -5239,12 +5243,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Displays a white 48 × 48 square chip with a bold green "W" and the
   /// remaining miles centred below it.  Updates live on every GPS fix via
-  /// [_refreshClosestWeighStationsAhead].  Returns [SizedBox.shrink] when no
-  /// weigh station is ahead so the widget takes up no space in the tree.
+  /// [_refreshClosestWeighStationsAhead].  Always visible: falls back to
+  /// [_kDefaultWeighStationMilesAhead] when no live weigh station is ahead.
   Widget _buildClosestWeighStationsRow() {
-    if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    // Always show the chip.  When live route data has no upcoming weigh
+    // station, fall back to a placeholder distance so the chip is always
+    // visible for user validation.
+    final List<AheadWeighStation> stations = _closestWeighStationsAhead.isNotEmpty
+        ? _closestWeighStationsAhead
+        : [
+            AheadWeighStation(
+              poi: WeighStationPoi(
+                id: 'default_ws',
+                position: const LatLng(0, 0),
+                name: 'Weigh Station',
+                status: 'Open',
+              ),
+              milesAhead: _kDefaultWeighStationMilesAhead,
+              routeIndex: 0,
+            ),
+          ];
     return Positioned(
       // top: 134 = satellite top(74) + satellite height(48) + gap(12).
       top: 134,
@@ -5252,7 +5270,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         bottom: false,
         child: ClosestWeighStationsRow(
-          stations: _closestWeighStationsAhead,
+          stations: stations,
         ),
       ),
     );

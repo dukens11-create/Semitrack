@@ -8128,7 +8128,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds the 2-closest-ahead truck stops row shown during active navigation.
   ///
   /// Returns [SizedBox.shrink] when not navigating or when the list is empty.
-  /// Positioned above the main alert card so it never overlaps critical alerts.
+  /// Positioned just above the bottom trip strip so it is always visible.
   Widget _buildClosestTruckStopsRow() {
     if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
       return const SizedBox.shrink();
@@ -8136,7 +8136,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Positioned(
       left: 0,
       right: 0,
-      bottom: 192,
+      bottom: 88,
       child: ClosestTruckStopsRow(stops: _closestTruckStopsAhead),
     );
   }
@@ -9062,6 +9062,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       child: _buildCompactSpeedPanel(),
                     ),
                   ),
+                // ── Zone 5b (bottom-center): closest truck stops ahead ────
+                // Horizontally scrollable row showing up to 2 upcoming truck
+                // stops on the active route with their icon, brand name, and
+                // distance from the driver.  The first stop shows an
+                // "Approaching" badge when it is within 3 miles.
+                // Positioned just above the bottom trip strip.
+                _buildClosestTruckStopsRow(),
                 // ── Zone 5 (bottom-left): trip summary strip ──────────────
                 // Dark translucent card with remaining mi, time, ETA,
                 // More button, and compact Stop icon.
@@ -10762,6 +10769,9 @@ class AheadTruckStop {
 ///   keeps the label readable over both light and dark map tiles.
 /// • **Graceful fallback** — if the logo asset is missing, a standard
 ///   [Icons.local_gas_station] icon is shown at the same size.
+/// • **Approaching badge** — when [isApproaching] is true, an amber
+///   "Approaching" label is shown below the distance to alert the driver that
+///   the stop is imminent.
 ///
 /// Best practice: keep logo PNGs trimmed to edge-to-edge artwork with a
 /// transparent background so `fit: BoxFit.contain` shows the full graphic.
@@ -10775,11 +10785,16 @@ class ClosestTruckStopChip extends StatelessWidget {
   /// Optional brand name shown after the distance label.
   final String? brand;
 
+  /// When true, an amber "Approaching" badge is shown below the distance text
+  /// to alert the driver that this stop is within the approaching threshold.
+  final bool isApproaching;
+
   const ClosestTruckStopChip({
     super.key,
     required this.logoAsset,
     required this.distanceText,
     this.brand,
+    this.isApproaching = false,
   });
 
   @override
@@ -10796,6 +10811,7 @@ class ClosestTruckStopChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 4.0),
       child: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // ── Brand logo ───────────────────────────────────────────────────
           // 28 × 28 px with BoxFit.contain so the full graphic is visible.
@@ -10813,30 +10829,64 @@ class ClosestTruckStopChip extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 6),
-          // ── Distance label ───────────────────────────────────────────────
-          Text(
-            distanceText,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 15,
-              color: Colors.white,
-              shadows: [textShadow],
-            ),
-          ),
-          // ── Optional brand name ──────────────────────────────────────────
-          if (brand != null && brand!.isNotEmpty) ...[
-            const SizedBox(width: 5),
-            Text(
-              brand!,
-              style: const TextStyle(
-                fontWeight: FontWeight.w500,
-                fontSize: 13,
-                color: Colors.white,
-                shadows: [textShadow],
+          // ── Distance label + optional approaching badge ──────────────────
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Distance row: value + optional brand name
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    distanceText,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      color: Colors.white,
+                      shadows: [textShadow],
+                    ),
+                  ),
+                  // ── Optional brand name ────────────────────────────────
+                  if (brand != null && brand!.isNotEmpty) ...[
+                    const SizedBox(width: 5),
+                    Text(
+                      brand!,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 13,
+                        color: Colors.white,
+                        shadows: [textShadow],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
               ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+              // ── Approaching badge ──────────────────────────────────────
+              // Only shown for the first upcoming stop when within the
+              // approaching threshold (~3 miles).
+              if (isApproaching)
+                Container(
+                  margin: const EdgeInsets.only(top: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF9800).withOpacity(0.90),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'Approaching',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -10845,8 +10895,15 @@ class ClosestTruckStopChip extends StatelessWidget {
 
 /// A horizontally scrollable row of up to 2 [ClosestTruckStopChip] widgets,
 /// displayed during active navigation to show the nearest truck stops ahead.
+///
+/// The first stop shows an "Approaching" badge when it is within
+/// [_approachingThresholdMiles] of the driver's current position.
 class ClosestTruckStopsRow extends StatelessWidget {
   final List<AheadTruckStop> stops;
+
+  /// Distance threshold in miles below which the next stop is considered
+  /// "approaching" and receives the amber badge.
+  static const double _approachingThresholdMiles = 3.0;
 
   const ClosestTruckStopsRow({super.key, required this.stops});
 
@@ -10858,15 +10915,21 @@ class ClosestTruckStopsRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: stops.map((stop) {
+        children: stops.indexed.map(((int, AheadTruckStop) entry) {
+          final index = entry.$1;
+          final stop = entry.$2;
           final miles = stop.routeMilesAhead;
           final distText = miles < 10
               ? '${miles.toStringAsFixed(1)} mi'
               : '${miles.round()} mi';
+          // Only the first (closest) stop can show the approaching badge.
+          final bool isApproaching =
+              index == 0 && miles < _approachingThresholdMiles;
           return ClosestTruckStopChip(
             logoAsset: 'assets/logo_brand_markers/${stop.poi.logoName}.png',
             distanceText: distText,
             brand: stop.poi.brand,
+            isApproaching: isApproaching,
           );
         }).toList(),
       ),

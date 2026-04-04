@@ -312,6 +312,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Full route response ────────────────────────────────────────────────────
   Map<String, dynamic>? _routeData;
 
+  // ── Route totals – set when a route is fetched, used to compute remaining ──
+  /// Total route distance in miles as returned by the Directions API.
+  double _routeTotalDistanceMiles = 0.0;
+
+  /// Total route duration in seconds as returned by the Directions API.
+  int _routeTotalDurationSeconds = 0;
+
   // ── Map route points (from GeoJSON coordinates) ────────────────────────────
   List<LatLng> _routePoints = const [];
 
@@ -2723,6 +2730,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Refresh upcoming route alert chips (top-right overlay).
       // Remove the call below to disable the upcoming-alerts feature.
       _refreshUpcomingAlerts();
+      // Recalculate remaining miles, drive time, and ETA so the bottom trip
+      // strip and compact strip always reflect the true remaining distance
+      // for the active route, even after reroutes or destination changes.
+      _refreshTripProgress();
     }
   }
 
@@ -2859,6 +2870,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _navSteps = const [];
       _currentStepIndex = 0;
       _routeData = null;
+      _routeTotalDistanceMiles = 0.0;
+      _routeTotalDurationSeconds = 0;
       _routeViolations = const [];
       _weatherRisk = null;
       _restrictionAhead = null;
@@ -2952,6 +2965,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
     if (mounted) setState(() {});
+  }
+
+  // ── Trip progress helpers ──────────────────────────────────────────────────
+
+  /// Returns the remaining route distance in **miles** by summing polyline
+  /// segments from [_truckIndex] to the end of [_routePoints].
+  double _computeRemainingMilesOnRoute() {
+    if (_routePoints.isEmpty) return 0.0;
+    final end = _routePoints.length - 1;
+    final start = _truckIndex.clamp(0, end);
+    double total = 0.0;
+    for (int i = start; i < end; i++) {
+      total += _distanceMiles(
+        _routePoints[i].latitude,
+        _routePoints[i].longitude,
+        _routePoints[i + 1].latitude,
+        _routePoints[i + 1].longitude,
+      );
+    }
+    return total;
+  }
+
+  /// Refreshes [_tripProgressInfo] from a freshly fetched full-route
+  /// [distanceMiles] and [durationSeconds] (as returned by the Mapbox
+  /// Directions API).  Also caches the totals so [_refreshTripProgress] can
+  /// recalculate remaining values proportionally as the driver advances.
+  void _updateTripProgressFromRoute(double distanceMiles, int durationSeconds) {
+    _routeTotalDistanceMiles = distanceMiles;
+    _routeTotalDurationSeconds = durationSeconds;
+    final remaining = Duration(seconds: durationSeconds);
+    if (mounted) {
+      setState(() {
+        _tripProgressInfo = TripProgressInfo(
+          milesRemaining: distanceMiles,
+          durationRemaining: remaining,
+          etaLocal: DateTime.now().add(remaining),
+          timezoneLabel: _tripProgressInfo.timezoneLabel,
+        );
+      });
+    }
+  }
+
+  /// Recalculates [_tripProgressInfo] based on the driver's current position
+  /// on the route ([_truckIndex]).  Called on every GPS tick while navigating
+  /// so the miles-remaining, drive-time, and ETA values stay in real-time sync
+  /// with the map whenever the driver advances, reroutes, or changes destination.
+  void _refreshTripProgress() {
+    if (_routePoints.isEmpty || _routeTotalDistanceMiles <= 0) return;
+    final remainingMiles = _computeRemainingMilesOnRoute();
+    // Estimate remaining duration proportionally: remaining miles / total miles
+    // × original total duration, clamped to [0, total].
+    final ratio = (remainingMiles / _routeTotalDistanceMiles).clamp(0.0, 1.0);
+    final remainingSecs = (_routeTotalDurationSeconds * ratio).round();
+    final remaining = Duration(seconds: remainingSecs);
+    if (mounted) {
+      setState(() {
+        _tripProgressInfo = TripProgressInfo(
+          milesRemaining: remainingMiles,
+          durationRemaining: remaining,
+          etaLocal: DateTime.now().add(remaining),
+          timezoneLabel: _tripProgressInfo.timezoneLabel,
+        );
+      });
+    }
   }
 
   // ── Trip statistics computed display strings ───────────────────────────────
@@ -5063,6 +5140,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             _filterStopsNearRoute(_mockTruckStops, newPoints));
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
+        // Seed trip progress with the full-route distance and duration so
+        // the bottom strip shows correct values before navigation starts.
+        _updateTripProgressFromRoute(
+          selectedOpt.distanceMiles,
+          selectedOpt.durationSeconds,
+        );
         // Smart rerouting is skipped in pre-navigation mode — the driver can
         // choose a cleaner route from the alternatives panel instead.
         return;
@@ -5197,6 +5280,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // so the driver sees any low-bridge or weight-limit conflicts in the info
       // panel (in addition to the TruckRestriction violation sheet above).
       _updateRouteViolationWarnings();
+      // Refresh trip progress with the new route's full distance and duration
+      // so miles-remaining, drive-time, and ETA all reflect the new route.
+      _updateTripProgressFromRoute(
+        (route['distance'] as num).toDouble() / 1609.34,
+        (route['duration'] as num).toInt(),
+      );
     } catch (e) {
       print('Mapbox error: $e');
       setState(() {
@@ -5246,6 +5335,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();
+    // Keep trip-progress strip in sync with the newly selected route option.
+    _updateTripProgressFromRoute(opt.distanceMiles, opt.durationSeconds);
   }
 
   /// Opens a modal bottom sheet listing all available [_routeOptions] so the

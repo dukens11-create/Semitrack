@@ -9555,21 +9555,59 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
+  /// Returns the short GPS-style display label for an [UpcomingAlertType].
+  String _alertTypeLabel(UpcomingAlertType type) {
+    switch (type) {
+      case UpcomingAlertType.wind:
+        return 'Wind';
+      case UpcomingAlertType.fuel:
+        return 'Fuel';
+      case UpcomingAlertType.restriction:
+        return 'Restriction';
+      case UpcomingAlertType.weighStation:
+        return 'Weigh';
+      case UpcomingAlertType.restArea:
+        return 'Rest';
+      case UpcomingAlertType.truckStop:
+        return 'Stop';
+    }
+  }
+
+  /// Returns the Material icon for an [UpcomingAlertType].
+  IconData _alertTypeIcon(UpcomingAlertType type) {
+    switch (type) {
+      case UpcomingAlertType.wind:
+        return Icons.air;
+      case UpcomingAlertType.fuel:
+        return Icons.local_gas_station;
+      case UpcomingAlertType.restriction:
+        return Icons.block;
+      case UpcomingAlertType.weighStation:
+        return Icons.scale;
+      case UpcomingAlertType.restArea:
+        return Icons.hotel;
+      case UpcomingAlertType.truckStop:
+        return Icons.stop_circle;
+    }
+  }
+
   /// Builds a single upcoming-alert chip used in [_buildRightSideUpcomingAlerts].
   ///
-  /// Each chip shows a colour-coded icon on the left and the formatted distance
-  /// on the right, in a compact dark pill with a coloured border that matches
-  /// the alert accent colour.
+  /// Each chip shows a colour-coded icon, a short GPS-style label, and the
+  /// formatted distance in a compact dark pill with a coloured border that
+  /// matches the alert accent colour.  Width adapts to the text content.
   Widget _buildUpcomingAlertChip(UpcomingAlertItem item) {
     final Color accent = _upcomingAlertAccent(item.type);
-    final IconData icon = _upcomingAlertIcon(item.type);
+    final IconData icon = _alertTypeIcon(item.type);
+    final String label = _alertTypeLabel(item.type);
     final double miles = item.distanceMiles;
-    final String distText =
-        // Below 10 mi: show one decimal for precision; 10+ mi: round to integer.
-        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+    // Show a whole number unless the value has a fractional part; in that
+    // case show exactly one decimal place.
+    final String distText = miles == miles.truncateToDouble()
+        ? '${miles.toInt()} mi'
+        : '${miles.toStringAsFixed(1)} mi';
 
     return Container(
-      constraints: const BoxConstraints(maxWidth: 110),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.80),
@@ -9588,16 +9626,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         children: [
           Icon(icon, color: accent, size: 15),
           const SizedBox(width: 5),
-          Flexible(
-            child: Text(
-              distText,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-              overflow: TextOverflow.ellipsis,
+          Text(
+            '$label $distText',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),

@@ -9993,7 +9993,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Square satellite-view toggle button positioned just below the compass.
+  /// Circular satellite-view toggle button positioned just below the compass.
   ///
   /// Shows a map/satellite icon and switches the tile layer between
   /// street-map and satellite imagery when tapped.

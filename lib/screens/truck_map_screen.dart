@@ -869,6 +869,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
+    // Load all POIs from locations.json so _buildAllPoiMarkers() can display
+    // every POI on the map without requiring the Mapbox style cluster setup.
+    _loadPoisForMap();
+  }
+
+  /// Loads every [PoiItem] from `assets/locations.json` into [_loadedPois] so
+  /// that [_buildAllPoiMarkers] can render them as map markers.
+  ///
+  /// Called once from [initState]; the result is stored via [setState] so the
+  /// marker layer rebuilds as soon as the data is ready.
+  Future<void> _loadPoisForMap() async {
+    try {
+      final List<PoiItem> pois = await loadAllPois();
+      if (mounted) {
+        setState(() => _loadedPois = pois);
+        debugPrint('[PoiMap] Loaded ${pois.length} POI(s) for map display.');
+      }
+    } catch (e) {
+      debugPrint('[PoiMap] Failed to load POIs: $e');
+    }
   }
 
   @override
@@ -1677,34 +1697,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when [_showTruckStops] is false so markers disappear
   /// immediately when the driver toggles the POI overlay off.
   ///
-  /// Only stops whose [TruckStop.assetLogo] has been successfully loaded into
-  /// [_brandIconBytes] are rendered — this ensures that **every visible marker
-  /// uses a logo image from `assets/logo_brand_markers/`** and no generic
-  /// fallback icons appear on the map.  Tapping a marker calls
+  /// If a stop's [TruckStop.assetLogo] has been loaded into [_brandIconBytes]
+  /// it is used as the marker image; otherwise a fallback icon is shown so
+  /// every stop is visible on the map.  Tapping a marker calls
   /// [_showTruckStopSheet].
-  ///
-  /// Rest Area and Weigh Station markers display the raw PNG logo with no
-  /// background, border, or container — the asset image is the full marker.
-  /// If the PNG asset for a stop has not been loaded, that stop is silently
-  /// omitted rather than falling back to a generic icon.
   List<Marker> _buildTruckStopMarkers() {
     if (!_showTruckStops || _truckStops.isEmpty) return const [];
 
     final markers = <Marker>[];
     for (final stop in _truckStops) {
-      // Only render markers whose logo has been loaded — no fallback icons.
-      // For Rest Area and Weigh Station brands this guarantees the marker is
-      // always the branded PNG from assets/logo_brand_markers/.
       final Uint8List? bytes =
           stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
-      if (bytes == null) {
-        debugPrint(
-          '[TruckStopMarkers] ✗ Missing icon bytes for stop "${stop.name}" '
-          '(assetLogo="${stop.assetLogo}"). Check that the file exists in '
-          'assets/logo_brand_markers/ and is listed in pubspec.yaml.',
-        );
-        continue;
-      }
+
+      final Widget iconWidget = bytes != null
+          ? Image.memory(
+              bytes,
+              width: 40,
+              height: 40,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            )
+          : Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.blue.shade700,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.local_gas_station,
+                color: Colors.white,
+                size: 22,
+              ),
+            );
 
       markers.add(Marker(
         point: stop.position,
@@ -1713,79 +1738,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
-          // Display the PNG logo directly — no ClipOval, no Container, no
-          // background color.  The image fills the marker bounds exactly so
-          // drivers see only the brand asset on the map.
-          child: Image.memory(
-            bytes,
-            width: 40,
-            height: 40,
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-          ),
+          child: iconWidget,
         ),
       ));
     }
     return markers;
   }
 
-  /// Builds logo-only [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
+  /// Builds [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
-  /// Each weigh-station POI is rendered as its PNG logo from
-  /// `assets/logo_brand_markers/` with no background, border, or container —
-  /// the asset image is the full marker.  If the logo asset has not been loaded
-  /// into [_brandIconBytes] the POI is silently skipped (no fallback icon).
+  /// All weigh-station POIs are rendered regardless of whether a route is
+  /// active or how far they are from the route.  If the weigh-station logo
+  /// asset has been loaded into [_brandIconBytes] it is used as the marker
+  /// image; otherwise a visible fallback icon is shown so no marker is
+  /// silently omitted.
   ///
-  /// The fixed asset key used for all weigh-station POIs is
-  /// `'assets/logo_brand_markers/weight_station.png'`.  Update this constant
-  /// if the logo file is renamed.
-  ///
-  /// Tapping a weigh-station marker shows the proximity alert dialog via
-  /// [_showPoiAlert] so drivers receive the same actionable status information
-  /// they would get from the auto-proximity check.
+  /// The next upcoming weigh station during navigation is highlighted with an
+  /// orange ring so it stands out from the others.
   List<Marker> _buildPoiMarkers() {
-    // Asset key for the weigh-station logo — must match the file registered in
-    // pubspec.yaml and present under assets/logo_brand_markers/.
     const String weighStationAsset =
         'assets/logo_brand_markers/weight_station.png';
-
-    // Guard: if the weigh-station logo was not loaded, omit all POI markers
-    // rather than showing a fallback icon.
     final Uint8List? weighBytes = _brandIconBytes[weighStationAsset];
+
     if (weighBytes == null) {
       debugPrint(
-        '[PoiMarkers] ✗ Weigh-station icon not loaded from "$weighStationAsset". '
-        'Ensure weight_station.png exists in assets/logo_brand_markers/.',
+        '[PoiMarkers] Weigh-station icon not loaded from "$weighStationAsset". '
+        'Rendering all weigh-station POIs with fallback icon.',
       );
-      return const [];
     }
 
-    // Only display POI markers that lie within _poiDisplayBufferMeters of the
-    // active route polyline.  When no route is set, no markers are shown so
-    // that unrelated West-Coast (or any far-off) POIs are not cluttering the
-    // map before the driver picks a destination.
-    if (_routePoints.isEmpty) {
-      debugPrint('[POI/Alert Filter] Map POI markers: route not set – hiding all POI markers.');
-      return const [];
-    }
-
-    final List<MapPoi> poisNearRoute = _mapPois
-        .where((poi) => poi.type == PoiType.weighStation)
-        .where((poi) {
-          for (final routePt in _routePoints) {
-            if (_distanceBetween(poi.position, routePt) <=
-                _poiDisplayBufferMeters) return true;
-          }
-          return false;
-        })
-        .toList();
-
-    debugPrint(
-      '[POI/Alert Filter] Map POI markers: ${poisNearRoute.length}/'
-      '${_mapPois.where((p) => p.type == PoiType.weighStation).length} '
-      'weigh-station POIs shown (within '
-      '${(_poiDisplayBufferMeters / 1609.34).toStringAsFixed(0)} miles of route).',
-    );
+    // Show all weigh-station POIs — no route or proximity filter.
+    final List<MapPoi> weighStations =
+        _mapPois.where((p) => p.type == PoiType.weighStation).toList();
 
     // Determine which weigh station is the active next one during navigation
     // so it can be rendered with a distinct highlight ring.
@@ -1793,57 +1777,142 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ? _closestWeighStationsAhead.first.poi.id
         : null;
 
-    return poisNearRoute
-        .map((poi) {
-          final bool isNext = poi.id == nextStationId;
-          // Next upcoming station is rendered at 48 px with an orange highlight
-          // ring so it stands out clearly from other stations on the map.
-          final double size = isNext ? 48.0 : 40.0;
-          final Widget markerChild = isNext
-              ? Container(
-                  width: size,
-                  height: size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.orange,
-                      width: 2.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.orange.withOpacity(0.5),
-                        blurRadius: 8,
-                        spreadRadius: 2,
-                      ),
-                    ],
+    return weighStations.map((poi) {
+      final bool isNext = poi.id == nextStationId;
+      final double size = isNext ? 48.0 : 40.0;
+
+      Widget iconWidget;
+      if (weighBytes != null) {
+        iconWidget = Image.memory(
+          weighBytes,
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+        );
+      } else {
+        iconWidget = Container(
+          width: size,
+          height: size,
+          decoration: const BoxDecoration(
+            color: Colors.orange,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.scale, color: Colors.white, size: 22),
+        );
+      }
+
+      final Widget markerChild = isNext
+          ? Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.orange, width: 2.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.orange.withOpacity(0.5),
+                    blurRadius: 8,
+                    spreadRadius: 2,
                   ),
-                  child: ClipOval(
-                    child: Image.memory(
-                      weighBytes,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                    ),
-                  ),
-                )
-              : Image.memory(
-                  weighBytes,
-                  width: size,
-                  height: size,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                );
-          return Marker(
-            point: poi.position,
-            width: size,
-            height: size,
-            alignment: Alignment.center,
-            child: GestureDetector(
-              onTap: () => _showPoiAlert(poi),
-              child: markerChild,
-            ),
-          );
-        })
-        .toList();
+                ],
+              ),
+              child: ClipOval(
+                child: weighBytes != null
+                    ? Image.memory(weighBytes, fit: BoxFit.cover, gaplessPlayback: true)
+                    : const Icon(Icons.scale, color: Colors.white, size: 22),
+              ),
+            )
+          : iconWidget;
+
+      return Marker(
+        point: poi.position,
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showPoiAlert(poi),
+          child: markerChild,
+        ),
+      );
+    }).toList();
+  }
+
+  /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
+  /// `assets/locations.json`).
+  ///
+  /// Every POI is rendered regardless of type, proximity, or whether a route
+  /// is active.  If the POI's branded icon has been preloaded into
+  /// [_brandIconBytes] it is used as the marker image; otherwise a default
+  /// fallback icon ([Icons.local_gas_station]) is shown so that no POI is
+  /// ever missing or broken on the map.
+  ///
+  /// Tapping a marker shows a dialog with the POI name.
+  List<Marker> _buildAllPoiMarkers() {
+    if (_loadedPois.isEmpty) return const [];
+
+    return _loadedPois.map((poi) {
+      // Guard against an empty icon stem so the asset key is never malformed.
+      final String? assetKey = poi.icon.isNotEmpty
+          ? 'assets/logo_brand_markers/${poi.icon}.png'
+          : null;
+      final Uint8List? bytes =
+          assetKey != null ? _brandIconBytes[assetKey] : null;
+
+      final Widget iconWidget = bytes != null
+          ? Image.memory(
+              bytes,
+              width: 36,
+              height: 36,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            )
+          : Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.blue.shade700,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.local_gas_station,
+                color: Colors.white,
+                size: 20,
+              ),
+            );
+
+      return Marker(
+        point: LatLng(poi.lat, poi.lng),
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showPoiInfoDialog(poi),
+          child: iconWidget,
+        ),
+      );
+    }).toList();
+  }
+
+  /// Shows a brief [AlertDialog] with the [poi] name when a map POI marker is
+  /// tapped.
+  void _showPoiInfoDialog(PoiItem poi) {
+    if (!mounted) return;
+    final String subtitle =
+        poi.city.isNotEmpty ? poi.city : poi.category.isNotEmpty ? poi.category : 'POI';
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(poi.name),
+        content: Text(subtitle),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Checks whether the driver is within 500 m of any [MapPoi] and triggers
@@ -1951,17 +2020,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// [_buildTruckStopMarkers] renders brand-logo markers for all [TruckStop]
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
-  /// loaded from `assets/logos/`.  Clustered POIs from `assets/locations.json`
-  /// are rendered via the Mapbox style layers set up in [_setupPoiCluster].
-  /// [_buildPoiMarkers] adds logo-only markers for [MapPoi] weigh stations
-  /// using the same asset-existence guard — no generic fallback icons appear
-  /// on the map for either category.
+  /// loaded from `assets/logos/`.  [_buildAllPoiMarkers] renders every POI
+  /// from `assets/locations.json` with a brand logo or a fallback icon —
+  /// no POI is omitted.  [_buildPoiMarkers] adds markers for [MapPoi] weigh
+  /// stations (with fallback icon when the PNG is not loaded).
   List<Marker> _buildMarkers() {
     return [
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
+      // Every POI from locations.json — no filtering, with fallback icons.
+      ..._buildAllPoiMarkers(),
       ..._buildTruckStopMarkers(),
-      // Logo-only markers for MapPoi weigh stations (no background/fallback).
+      // MapPoi weigh-station markers (with fallback icon).
       ..._buildPoiMarkers(),
       ..._buildRestrictionMarkers(),
       ..._buildWarningMarkers(),

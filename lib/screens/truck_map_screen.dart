@@ -11405,7 +11405,7 @@ class ClosestTruckStopChip extends StatelessWidget {
   final double miles;
 
   /// Highway exit number, e.g. `'309'`.  When non-null the green exit badge
-  /// is shown to the left of the white card.
+  /// is shown at the top edge of the white card.
   final String? exitNumber;
 
   const ClosestTruckStopChip({
@@ -11421,30 +11421,111 @@ class ClosestTruckStopChip extends StatelessWidget {
     final String milesNum =
         miles < 10 ? miles.toStringAsFixed(1) : miles.round().toString();
 
-    return Padding(
-      padding: const EdgeInsets.only(right: 10.0),
+    // ── White rounded card ─────────────────────────────────────────────────
+    final Widget card = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // ── Green exit badge ─────────────────────────────────────────────
-          if (exitNumber != null && exitNumber!.isNotEmpty) ...[
-            Container(
+          // ── Logo circle (red border, white fill, brand abbr) ──────────
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(
+                color: const Color(0xFFCC0000),
+                width: 2,
+              ),
+            ),
+            child: Center(
+              child: Text(
+                abbr,
+                style: const TextStyle(
+                  color: Color(0xFFCC0000),
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                  height: 1.0,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ── Miles: bold number + smaller 'mi' suffix ──────────────────
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: milesNum,
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    height: 1.1,
+                  ),
+                ),
+                const TextSpan(
+                  text: ' mi',
+                  style: TextStyle(
+                    color: Colors.black54,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 11,
+                    height: 1.1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (exitNumber == null || exitNumber!.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 10.0),
+        child: card,
+      );
+    }
+
+    // ── Green exit badge overlaid at the top edge of the white card ────────
+    return Padding(
+      padding: const EdgeInsets.only(right: 10.0, top: 12.0),
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.topCenter,
+        children: [
+          card,
+          Positioned(
+            top: -12,
+            child: Container(
               padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFF2E7D32),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Column(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Icon(
                     Icons.subdirectory_arrow_right,
                     color: Colors.white,
-                    size: 12,
+                    size: 11,
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(width: 3),
                   Text(
                     exitNumber!,
                     style: const TextStyle(
@@ -11456,79 +11537,6 @@ class ClosestTruckStopChip extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 6),
-          ],
-          // ── White rounded card ───────────────────────────────────────────
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // ── Logo circle (red border, white fill, brand abbr) ──────
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                    border: Border.all(
-                      color: const Color(0xFFCC0000),
-                      width: 2,
-                    ),
-                  ),
-                  child: Center(
-                    child: Text(
-                      abbr,
-                      style: const TextStyle(
-                        color: Color(0xFFCC0000),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                        height: 1.0,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // ── Miles: bold number + smaller 'mi' suffix ──────────────
-                RichText(
-                  text: TextSpan(
-                    children: [
-                      TextSpan(
-                        text: milesNum,
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 18,
-                          height: 1.1,
-                        ),
-                      ),
-                      const TextSpan(
-                        text: ' mi',
-                        style: TextStyle(
-                          color: Colors.black54,
-                          fontWeight: FontWeight.w500,
-                          fontSize: 11,
-                          height: 1.1,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ),
           ),
         ],

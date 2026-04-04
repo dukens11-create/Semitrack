@@ -2615,7 +2615,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         modifier:      nextStep.maneuver,
         roadName:      nextStep.name,
         distanceMiles: nextStep.distanceMeters * 0.000621371,
-        bottomChipText: nextStep.name.isNotEmpty ? nextStep.name : null,
       );
     }
   }
@@ -2997,7 +2996,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         modifier:       first.maneuver,
         roadName:       first.name,
         distanceMiles:  first.distanceMeters * 0.000621371,
-        bottomChipText: first.name.isNotEmpty ? first.name : null,
       );
     } else {
       // Sample data — replace with real SDK values in production.
@@ -3006,7 +3004,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         modifier:       null,
         roadName:       'Allegrini Drive',
         distanceMiles:  16.9,
-        bottomChipText: 'Allegrini Drive',
       );
     }
   }
@@ -7490,6 +7487,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return '${feet.round()} ft';
   }
 
+  /// Returns true when [name] is not a usable road name (null, empty, or
+  /// the generic "Unnamed road" placeholder that Mapbox sometimes emits).
+  bool _isBadRoadName(String? name) {
+    if (name == null) return true;
+    final t = name.trim().toLowerCase();
+    return t.isEmpty || t == 'unnamed road';
+  }
+
+  /// Returns the best road name to display given several candidates, or an
+  /// empty string when none of the candidates is usable.
+  ///
+  /// Priority order: [roadName] → [nextRoadName] → [currentRoadName] →
+  /// [highwayName].
+  String _resolveDisplayRoadName({
+    String? roadName,
+    String? nextRoadName,
+    String? currentRoadName,
+    String? highwayName,
+  }) {
+    if (!_isBadRoadName(roadName))        return roadName!.trim();
+    if (!_isBadRoadName(nextRoadName))    return nextRoadName!.trim();
+    if (!_isBadRoadName(currentRoadName)) return currentRoadName!.trim();
+    if (!_isBadRoadName(highwayName))     return highwayName!.trim();
+    return '';
+  }
+
   /// Returns the short action-verb phrase for [maneuverType] + [modifier].
   ///
   /// For example: ("turn", "left") → "Turn left onto",
@@ -7498,7 +7521,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final type = (maneuverType ?? '').toLowerCase();
     final mod  = (modifier   ?? '').toLowerCase();
 
-    if (type == 'depart') return 'Head out on';
+    if (type == 'depart') return 'Head out';
     if (type == 'continue' || type == 'new name') return 'Continue on';
     if (type == 'merge') return 'Merge onto';
     if (type == 'fork') {
@@ -7513,7 +7536,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (mod.contains('left'))         return 'Turn left onto';
       if (mod.contains('right'))        return 'Turn right onto';
     }
-    return 'Stay on';
+    return 'Continue ahead';
   }
 
   /// Maps a Mapbox maneuver type + modifier pair to a [ManeuverVisualType].
@@ -7552,25 +7575,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// reflects the upcoming maneuver.
   ///
   /// Supply real SDK values for [maneuverType], [modifier], [roadName], and
-  /// [distanceMiles]; [bottomChipText] defaults to [roadName] when omitted.
+  /// [distanceMiles].  The optional [currentRoadName], [nextRoadName], and
+  /// [highwayName] parameters feed [_resolveDisplayRoadName] so the card
+  /// never falls back to "Unnamed road".
   void _updateTopInstructionFromNavigationStep({
     required String? maneuverType,
     required String? modifier,
     required String? roadName,
     required double distanceMiles,
-    String? bottomChipText,
+    String? currentRoadName,
+    String? nextRoadName,
+    String? highwayName,
   }) {
-    final resolvedRoad = (roadName == null || roadName.trim().isEmpty)
-        ? 'Unnamed road'
-        : roadName.trim();
+    final displayRoadName = _resolveDisplayRoadName(
+      roadName:        roadName,
+      nextRoadName:    nextRoadName,
+      currentRoadName: currentRoadName,
+      highwayName:     highwayName,
+    );
+
+    final primary = _buildPrimaryInstructionText(maneuverType, modifier);
 
     setState(() {
       _topInstructionData = TopInstructionData(
         visualType:     _mapStepToVisualType(maneuverType, modifier),
-        primaryText:    _buildPrimaryInstructionText(maneuverType, modifier),
-        roadName:       resolvedRoad,
+        primaryText:    primary,
+        roadName:       displayRoadName.isEmpty ? primary : displayRoadName,
         distanceMiles:  distanceMiles,
-        bottomChipText: bottomChipText ?? resolvedRoad,
+        bottomChipText: displayRoadName.isEmpty ? null : displayRoadName,
       );
     });
   }

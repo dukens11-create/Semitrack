@@ -880,6 +880,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Last bearing accepted for camera rotation (smoothed to avoid jitter).
   double _lastKnownBearing = 0.0;
 
+  // ── Real GPS camera state (smooth follow mode) ────────────────────────────
+  // Current smoothed zoom level applied by _updateRealNavigationCamera.
+  double _currentCameraZoom = 16.5;
+
+  // Current smoothed pitch applied by _updateRealNavigationCamera.
+  double _currentCameraPitch = 45.0;
+
   // Timestamp of the most recent map gesture so the 8-second idle window
   // can be measured precisely.
   DateTime? _lastManualMapInteractionAt;
@@ -945,6 +952,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // (down-screen), revealing the upcoming road — identical to the Google Maps
   // navigation trick.  Tune between −0.001 and −0.002 for your zoom level.
   static const _cameraLeadLatitude = 0.0015;
+
+  // Duration (ms) for each Mapbox easeTo camera transition in follow mode.
+  // 650 ms matches a typical GPS update interval and keeps the animation
+  // fluid without overshooting when fixes arrive quickly.
+  static const _navigationCameraAnimationDurationMs = 650;
 
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
@@ -2488,6 +2500,119 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return base;
   }
 
+  // ── Real GPS camera helpers ───────────────────────────────────────────────
+
+  /// Returns the target zoom level for [speedMph] using commercial GPS
+  /// stepped thresholds: closer at low speed, farther at highway speed.
+  double _targetZoomForSpeed(double speedMph) {
+    if (speedMph <= 5) return 17.6;
+    if (speedMph <= 15) return 17.0;
+    if (speedMph <= 30) return 16.3;
+    if (speedMph <= 50) return 15.5;
+    if (speedMph <= 65) return 14.8;
+    return 14.2;
+  }
+
+  /// Returns the target zoom for [speedMph], boosted slightly when a maneuver
+  /// is within 0.8 mi (mild) or 0.3 mi (strong).
+  double _targetZoomForManeuver(double speedMph, double? nextStepMiles) {
+    double zoom = _targetZoomForSpeed(speedMph);
+    if (nextStepMiles == null) return zoom;
+    if (nextStepMiles <= 0.3) {
+      zoom += 0.9;
+    } else if (nextStepMiles <= 0.8) {
+      zoom += 0.45;
+    }
+    return zoom;
+  }
+
+  /// Returns the target camera pitch for [speedMph]:
+  /// flat when stopped, tilted for city, more tilted at highway speed.
+  double _targetPitchForSpeed(double speedMph) {
+    if (speedMph < 3) return 35.0;
+    if (speedMph < 25) return 45.0;
+    if (speedMph < 55) return 52.0;
+    return 58.0;
+  }
+
+  /// Interpolates [current] toward [target] by [factor] (0–1).
+  /// Used to smooth camera zoom, pitch, and bearing without sudden jumps.
+  double _smoothValue(double current, double target, double factor) {
+    return current + (target - current) * factor;
+  }
+
+  /// Updates the Mapbox and flutter_map cameras with smooth, speed-adaptive
+  /// zoom, pitch, and bearing. Called on every GPS fix in follow mode.
+  ///
+  /// - Zoom is smoothed toward the maneuver-aware target for [pos] speed.
+  /// - Pitch adapts from flat (stopped) to tilted (highway).
+  /// - Bearing is smoothed from the last known bearing to the GPS heading
+  ///   when speed is sufficient for a stable heading (≥ 3 mph).
+  /// - Camera is kept stable when stopped to prevent spinning from GPS noise.
+  /// - Uses Mapbox [easeTo] for native SDK smoothness and flutter_map
+  ///   [moveAndRotate] for the visible navigation map layer.
+  Future<void> _updateRealNavigationCamera(geo.Position pos) async {
+    if (_cameraMode != NavigationCameraMode.follow) return;
+
+    final speedMph = _speedMphFromMps(pos.speed);
+    final nextStepMiles = _topInstructionData?.distanceMiles;
+
+    final targetZoom = _targetZoomForManeuver(speedMph, nextStepMiles);
+    final targetPitch = _targetPitchForSpeed(speedMph);
+
+    // Extra stability when essentially stopped: ease toward close zoom/flat pitch.
+    if (speedMph < 1.5) {
+      _currentCameraZoom = _smoothValue(_currentCameraZoom, 17.4, 0.15);
+      _currentCameraPitch = _smoothValue(_currentCameraPitch, 35.0, 0.15);
+    } else {
+      _currentCameraZoom = _smoothValue(_currentCameraZoom, targetZoom, 0.22);
+      _currentCameraPitch = _smoothValue(_currentCameraPitch, targetPitch, 0.20);
+    }
+
+    double bearing = _lastKnownBearing;
+    // Only update bearing from GPS when the truck is moving fast enough to
+    // produce a stable heading (≥ 3 mph).  Below this threshold, GPS heading
+    // values are unreliable and may cause the map to spin erratically.
+    // pos.heading < 0 indicates an unavailable heading fix; those are skipped.
+    if (speedMph >= 3 && pos.heading >= 0) {
+      _lastKnownBearing = _smoothValue(_lastKnownBearing, pos.heading, 0.25);
+      bearing = _lastKnownBearing;
+    }
+
+    // ── Mapbox SDK camera (handles Mapbox-layer POI cluster map) ─────────
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map != null) {
+      await map.easeTo(
+        mbx.CameraOptions(
+          center: mbx.Point(
+            coordinates: mbx.Position(pos.longitude, pos.latitude),
+          ),
+          zoom: _currentCameraZoom,
+          bearing: bearing,
+          pitch: _currentCameraPitch,
+          padding: mbx.MbxEdgeInsets(
+            top: 110,
+            left: 24,
+            bottom: 280,
+            right: 24,
+          ),
+        ),
+        mbx.MapAnimationOptions(
+          duration: _navigationCameraAnimationDurationMs,
+          startDelay: 0,
+        ),
+      );
+    }
+
+    // ── flutter_map camera (drives the visible navigation tile layer) ─────
+    if (!_mapReady || _isArrived) return;
+    final cameraTarget = LatLng(
+      pos.latitude - _cameraLeadLatitude,
+      pos.longitude,
+    );
+    _mapController.moveAndRotate(cameraTarget, _currentCameraZoom, bearing);
+  }
+
   /// Activates **follow mode**: locks the camera onto the truck with
   /// heading-based rotation, speed-adaptive zoom, and lower-third framing.
   ///
@@ -3101,18 +3226,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Check whether to auto-return from free mode to follow mode (8 s idle).
     _maybeReturnToFollowMode();
 
-    // Keep the camera centred on the truck while in navigation mode.
-    // Use _updateNavigationCamera when moving and _updateStoppedCamera when
-    // stopped so zoom, bearing, and target position are appropriate for speed.
-    if (_navigationMode && _hasActiveDestination) {
-      if (_cameraMode == NavigationCameraMode.follow) {
-        final double speedMph = newSpeedMps > 0 ? newSpeedMps * _mpsToMph : 0.0;
-        if (speedMph >= _minMovingSpeedMph) {
-          _updateNavigationCamera(position);
-        } else {
-          _updateStoppedCamera(position);
-        }
-      }
+    // Keep the camera centred on the truck while in follow mode.
+    // _updateRealNavigationCamera handles speed-adaptive zoom, pitch, bearing
+    // smoothing, and stable stopped behaviour in one place.
+    if (_cameraMode == NavigationCameraMode.follow) {
+      _updateRealNavigationCamera(position);
     }
 
     // Refresh the 2-closest-ahead truck stops row on every GPS fix during

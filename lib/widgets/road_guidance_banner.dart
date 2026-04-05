@@ -463,17 +463,11 @@ class RoadGuidanceBanner extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         child: Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.92),
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.22),
-                blurRadius: 14,
-                offset: const Offset(0, 4),
-              ),
-            ],
+            // Highly translucent — map remains clearly visible behind the panel.
+            color: Colors.black.withOpacity(0.28),
+            borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -483,18 +477,11 @@ class RoadGuidanceBanner extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(
-                      maneuverIcon(maneuver.maneuverType),
-                      color: Colors.white,
-                      size: 30,
-                    ),
+                  // Direction arrow — bare icon, no background box.
+                  Icon(
+                    maneuverIcon(maneuver.maneuverType),
+                    color: Colors.white,
+                    size: 36,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -516,8 +503,8 @@ class RoadGuidanceBanner extends StatelessWidget {
                           const SizedBox(height: 4),
                           Text(
                             towardText,
-                            style: const TextStyle(
-                              color: Colors.white70,
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.70),
                               fontSize: 13,
                             ),
                             maxLines: 1,
@@ -539,7 +526,7 @@ class RoadGuidanceBanner extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               // ── Road + exit chips ────────────────────────────────────────
               Wrap(
                 spacing: 8,

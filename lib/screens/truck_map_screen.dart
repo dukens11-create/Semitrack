@@ -10349,27 +10349,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
-                // ── Zone 1 (top-left): primary maneuver card ──────────────
-                // GPS-style dark card: maneuver icon, distance, highway shield
-                // pill (if applicable), and road name.
+                // ── Zone 1 (top-left): primary + secondary maneuver cards ─
+                // Minimal translucent overlay: stacked in a single Column so
+                // they never overlap regardless of primary card height.
                 if (_isNavigating && _topInstructionData != null)
                   Positioned(
                     top: 16,
                     left: 16,
                     child: SafeArea(
                       bottom: false,
-                      child: _buildPrimaryManeuverCard(_topInstructionData!),
-                    ),
-                  ),
-                // ── Zone 1b (top-left, below primary): "Then" card ────────
-                // Small secondary chip showing the step after the current one.
-                if (_isNavigating && _secondaryInstructionData != null)
-                  Positioned(
-                    top: 76,
-                    left: 16,
-                    child: SafeArea(
-                      bottom: false,
-                      child: _buildSecondaryThenCard(_secondaryInstructionData!),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildPrimaryManeuverCard(_topInstructionData!),
+                          if (_secondaryInstructionData != null) ...[
+                            const SizedBox(height: 6),
+                            _buildSecondaryThenCard(
+                                _secondaryInstructionData!),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
                 // ── Zone 1a (top-right): compass / re-centre button ────────
@@ -10781,57 +10780,50 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///  • Green exit-number chip when [data.exitNumber] is available.
   Widget _buildPrimaryManeuverCard(TopInstructionData data) {
     return Container(
-      width: 130,
-      // top: 10 keeps the arrow near the card top; bottom: 16 gives breathing room
-      // after the last text element.
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
+      width: 152,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.82),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.30),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        // Highly translucent — map remains clearly visible behind the panel.
+        color: Colors.black.withOpacity(0.28),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // ── Large maneuver arrow (top-center, full card width) ───────────
-          // width: double.infinity expands to the parent's 130px minus the 14px
-          // horizontal padding on each side (= 102px usable), keeping the arrow
-          // flush with the card's inner edges.
-          Container(
-            width: double.infinity,
-            height: 76,
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(
-              _maneuverVisualIcon(data.visualType),
-              color: Colors.white,
-              size: 52,
+          // ── "Next turn" micro-label ──────────────────────────────────────
+          Text(
+            'NEXT TURN',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.60),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.9,
+              height: 1,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          // ── Direction arrow — bare icon, no background box ───────────────
+          Icon(
+            _maneuverVisualIcon(data.visualType),
+            color: Colors.white,
+            size: 54,
+          ),
+          const SizedBox(height: 8),
           // ── Action verb (e.g. "Head out") ────────────────────────────────
           Text(
             data.primaryText,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white70,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.88),
               fontSize: 12,
               fontWeight: FontWeight.w600,
               height: 1.2,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           // ── Large bold distance ──────────────────────────────────────────
           Text(
             _formatMilesDisplay(data.distanceMiles),
@@ -10840,7 +10832,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 26,
+              fontSize: 28,
               fontWeight: FontWeight.w900,
               height: 1,
             ),
@@ -10877,8 +10869,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ],
           if (data.roadName.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            // ── Road name at bottom ──────────────────────────────────────
+            const SizedBox(height: 8),
+            // ── Road name ────────────────────────────────────────────────
             Text(
               data.roadName,
               maxLines: 2,
@@ -10905,23 +10897,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.78),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 2)),
-        ],
+        // Matching translucency — stays light so the map shows through.
+        color: Colors.black.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
+          Text(
             'Then',
-            style: TextStyle(color: Colors.white54, fontSize: 12),
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.60),
+              fontSize: 12,
+            ),
           ),
           const SizedBox(width: 6),
           Icon(
             _maneuverVisualIcon(data.visualType),
-            color: Colors.white70,
+            color: Colors.white,
             size: 18,
           ),
           const SizedBox(width: 4),
@@ -10931,7 +10924,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               data.roadName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.85),
+                fontSize: 12,
+              ),
             ),
           ),
         ],

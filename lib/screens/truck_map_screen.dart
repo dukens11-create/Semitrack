@@ -10783,8 +10783,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       width: 128,
       padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
       decoration: BoxDecoration(
-        // Highly translucent — map remains clearly visible behind the panel.
-        color: Colors.black.withOpacity(0.28),
+        // Dark opaque background for maximum instruction readability.
+        color: Colors.black.withOpacity(0.85),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -10897,8 +10897,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        // Matching translucency — stays light so the map shows through.
-        color: Colors.black.withOpacity(0.22),
+        // Dark opaque background to match the primary maneuver card.
+        color: Colors.black.withOpacity(0.85),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(

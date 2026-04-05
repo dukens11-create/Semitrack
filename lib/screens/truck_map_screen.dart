@@ -2155,6 +2155,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         typeIcon = Icons.border_all;
         typeColor = Colors.indigo.shade700;
         break;
+      case PoiType.camera511:
+        typeLabel = '511 Traffic Camera';
+        typeIcon = Icons.videocam;
+        typeColor = Colors.teal.shade700;
+        break;
     }
     showDialog<void>(
       context: context,

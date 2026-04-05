@@ -5503,10 +5503,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds cluster badge [Marker]s when the map is zoomed out.
   ///
-  /// Signs are grouped into ~11-km buckets (1 decimal place of lat/lng ≈ 11 km)
+  /// Signs are grouped into ~11-km buckets (0.1 degree of lat/lng ≈ 11 km)
   /// and represented by a single yellow triangle badge showing the count.
   List<Marker> _buildClusteredWarningMarkers(List<WarningSign> signs) {
-    const double bucketSize = 1.0; // ~111 km per degree, 1 decimal ≈ 11 km
+    const double bucketSize = 0.1; // 0.1 degree ≈ 11 km
     final Map<String, List<WarningSign>> clusters = {};
     for (final sign in signs) {
       final String key =

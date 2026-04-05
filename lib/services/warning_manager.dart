@@ -177,30 +177,28 @@ class WarningManager extends ChangeNotifier {
       final triggers = _triggersFor(sign);
       final fired = _firedStages.putIfAbsent(sign.id, () => {});
 
-      // ── Check trigger stages in order, advancing one stage per call ────
+      // ── Check trigger stages in order, advancing at most one stage per call ──
+      //
+      // Using else-if ensures exactly one new stage fires per GPS update so the
+      // driver receives distinct popup events as they approach the sign (rather
+      // than having all stages collapse into a single call).
       WarningTriggerStage? newStage;
 
       if (!fired.contains(WarningTriggerStage.preload) &&
           distMiles <= triggers[WarningTriggerStage.preload]!) {
         fired.add(WarningTriggerStage.preload);
         newStage = WarningTriggerStage.preload;
-      }
-
-      if (fired.contains(WarningTriggerStage.preload) &&
+      } else if (fired.contains(WarningTriggerStage.preload) &&
           !fired.contains(WarningTriggerStage.visible) &&
           distMiles <= triggers[WarningTriggerStage.visible]!) {
         fired.add(WarningTriggerStage.visible);
         newStage = WarningTriggerStage.visible;
-      }
-
-      if (fired.contains(WarningTriggerStage.visible) &&
+      } else if (fired.contains(WarningTriggerStage.visible) &&
           !fired.contains(WarningTriggerStage.highlighted) &&
           distMiles <= triggers[WarningTriggerStage.highlighted]!) {
         fired.add(WarningTriggerStage.highlighted);
         newStage = WarningTriggerStage.highlighted;
-      }
-
-      if (fired.contains(WarningTriggerStage.highlighted) &&
+      } else if (fired.contains(WarningTriggerStage.highlighted) &&
           !fired.contains(WarningTriggerStage.urgent) &&
           distMiles <= triggers[WarningTriggerStage.urgent]!) {
         fired.add(WarningTriggerStage.urgent);

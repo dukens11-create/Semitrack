@@ -17,6 +17,8 @@ import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
+import 'package:semitrack_mobile/models/nav_settings_model.dart';
+import 'package:semitrack_mobile/screens/nav_settings_screen.dart';
 import 'package:semitrack_mobile/services/poi_service.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
@@ -398,6 +400,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // AppBar, bottom nav bar) is hidden; only the map + navigation components
   // remain visible.
   bool _isNavigating = false;
+
+  /// Persistent navigation settings model.  Created once and passed into
+  /// [NavSettingsScreen] so that toggle state survives page transitions.
+  final NavSettingsModel _navSettings = NavSettingsModel();
 
   // _panelExpanded controls the collapsible floating dashboard panel.
   // When false only the header row (destination + ETA) is shown; when true
@@ -6572,107 +6578,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Opens a bottom sheet that acts as an entry point for additional
-  /// map-related features accessible during navigation.
+  /// Opens the full-screen [NavSettingsScreen] when the user taps the
+  /// **More** button on the bottom trip strip.
   ///
-  /// Each list tile represents a map feature.  New features can be added by
-  /// appending additional [ListTile] entries to the children list of the
-  /// Column widget below.
+  /// The persistent [_navSettings] model is passed in so that all toggle
+  /// state is retained across visits.
   void _showMoreMapFeaturesSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => NavSettingsScreen(settings: _navSettings),
       ),
-      builder: (sheetContext) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ── Sheet handle ──────────────────────────────────────
-                Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.black26,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Map Features',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                const Divider(height: 16),
-                // ── Feature: Trip Legs ────────────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.list_alt_outlined),
-                  title: const Text('Trip Legs'),
-                  subtitle: const Text('View leg-by-leg route breakdown'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showLegBreakdownSheet();
-                  },
-                ),
-                // ── Feature: Add Waypoint ─────────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.add_location_alt_outlined),
-                  title: const Text('Add Waypoint'),
-                  subtitle: const Text('Insert a stop along your route'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    // TODO: implement add-waypoint flow
-                  },
-                ),
-                // ── Feature: Nearby Services ──────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.local_gas_station_outlined),
-                  title: const Text('Nearby Services'),
-                  subtitle: const Text('Fuel, parking, and truck stops'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    // TODO: implement nearby-services flow
-                  },
-                ),
-                // ── Feature: Report Incident ──────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.report_problem_outlined),
-                  title: const Text('Report Incident'),
-                  subtitle: const Text('Notify other drivers of road issues'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    // TODO: implement report-incident flow
-                  },
-                ),
-                // ── Feature: Change Map Style ─────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.map_outlined),
-                  title: const Text('Change Map Style'),
-                  subtitle: const Text('Switch between map themes'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    // TODO: implement map-style picker
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 

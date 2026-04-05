@@ -2657,11 +2657,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds the circular recenter button shown in the bottom-right corner.
   ///
-  /// - **Tap**: returns to live follow mode ([_onRecenterPressed]).
+  /// - **Tap**: snaps camera to the real GPS position and enters follow mode
+  ///   ([_setFollowCameraFromCurrentPosition]).
   /// - **Long press**: switches to full-route overview ([_onRecenterLongPressed]).
   Widget _buildRecenterButton() {
     return GestureDetector(
-      onTap: _onRecenterPressed,
+      onTap: _setFollowCameraFromCurrentPosition,
       onLongPress: _onRecenterLongPressed,
       child: Container(
         width: 60,
@@ -2678,9 +2679,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ],
         ),
         child: const Icon(
-          Icons.explore,
+          Icons.my_location,
           color: Colors.white,
-          size: 28,
+          size: 32,
         ),
       ),
     );

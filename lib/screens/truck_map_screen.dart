@@ -2057,7 +2057,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// vehicle, and weight station) are rendered at the same fixed
   /// [_kPoiPinSize] × [_kPoiPinSize] bounding box so every marker is visually
   /// uniform on the map.  When [bytes] is non-null the decoded PNG is shown
-  /// inside the white circular head; otherwise [fallbackIcon] is used.
+  /// inside the white circular head; otherwise the fallback icon for [category]
+  /// (determined by [_poiCategoryIcon]) is displayed inside the head.
   Widget _buildGpsPinWidget(String category, {Uint8List? bytes}) {
     return buildGpsPinMarker(
       pinColor: _poiCategoryColor(category),

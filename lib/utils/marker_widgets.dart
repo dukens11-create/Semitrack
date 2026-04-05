@@ -124,7 +124,7 @@ Widget buildGpsPinMarker({
             gaplessPlayback: true,
           ),
         )
-      : Icon(fallbackIcon, size: headDiameter * 0.52, color: pinColor);
+      : Icon(fallbackIcon, size: headDiameter * 0.52, color: Colors.white);
 
   return SizedBox(
     width: pinSize,

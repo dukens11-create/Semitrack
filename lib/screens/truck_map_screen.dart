@@ -1046,15 +1046,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Sprite faces UP → bearing maps directly; no offset needed.
         turns: _truckBearing / 360.0,
         duration: const Duration(milliseconds: 300),
-        // Top-down truck sprite (assets/icons/truck_top.png, 64 × 64 px).
+        // Top-down truck sprite.  When customTruckAvatar is enabled, attempt
+        // to load 'assets/icons/truck_custom.png'; fall back to the standard
+        // truck_top.png (and ultimately to a coloured icon) on error.
         child: Image.asset(
-          'assets/icons/truck_top.png',
+          _navSettings.customTruckAvatar
+              ? 'assets/icons/truck_custom.png'
+              : 'assets/icons/truck_top.png',
           width: 48,
           height: 48,
-          errorBuilder: (_, __, ___) => const Icon(
+          errorBuilder: (_, __, ___) => Icon(
             Icons.local_shipping,
             size: 44,
-            color: Colors.blue,
+            color: _navSettings.customTruckAvatar
+                ? Colors.purple
+                : Colors.blue,
           ),
         ),
       ),
@@ -1791,6 +1797,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The next upcoming weigh station during navigation is highlighted with an
   /// orange ring so it stands out from the others.
   List<Marker> _buildPoiMarkers() {
+    // Hidden when the weigh-station layer is toggled off in nav settings.
+    if (!_navSettings.viewWeighStation) return const [];
+
     const String weighStationAsset =
         'assets/logo_brand_markers/weight_station.png';
     final Uint8List? weighBytes = _brandIconBytes[weighStationAsset];
@@ -2482,8 +2491,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     await _tts.setPitch(1.0);
   }
 
-  /// Speaks [text] via the TTS engine, interrupting any current utterance.
+  /// Applies the current [_navSettings] audio configuration to the TTS engine.
+  ///
+  /// Called when settings change (via the [NavSettingsScreen.onChanged]
+  /// callback) so voice package, pitch, and speech-rate updates are heard
+  /// immediately on the next spoken instruction.
+  Future<void> _applyAudioSettings() async {
+    // Map voice-package name to a BCP-47 locale tag.
+    final locale = switch (_navSettings.voicePackage) {
+      'UK English'         => 'en-GB',
+      'Australian English' => 'en-AU',
+      _                    => 'en-US',
+    };
+    await _tts.setLanguage(locale);
+    await _tts.setPitch(_navSettings.audioPitch);
+    await _tts.setSpeechRate(_navSettings.audioSpeechRate);
+  }
+
+  /// Speaks [text] via the TTS engine if audio is not muted.
+  ///
+  /// Respects [_navSettings.audioMode]:
+  ///  - 0 (Muted)      — silences all speech.
+  ///  - 1 (Alert Only) — silences navigation turn-by-turn instructions; only
+  ///                     safety alerts (see [_speakAlert]) are heard.
+  ///  - 2 (Unmuted)    — speaks everything (default behaviour).
+  ///
+  /// This method is used for **navigation instructions** (turn-by-turn,
+  /// rerouting, arrival).  Use [_speakAlert] for hazard / safety announcements.
   Future<void> _speak(String text) async {
+    if (_navSettings.audioMode < 2) return; // Muted or Alert-Only: skip nav TTS
+    await _tts.stop();
+    await _tts.speak(text);
+  }
+
+  /// Speaks a safety-critical [text] alert regardless of audio mode, unless
+  /// the driver has explicitly chosen Muted.
+  ///
+  ///  - 0 (Muted)      — silenced.
+  ///  - 1 (Alert Only) — **plays** this call (alerts allowed).
+  ///  - 2 (Unmuted)    — plays (same as [_speak]).
+  Future<void> _speakAlert(String text) async {
+    if (_navSettings.audioMode == 0) return; // Muted: no audio at all
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -2840,7 +2888,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     .inSeconds >=
                 _slowDownThrottleSeconds) {
           _lastSlowDownAnnouncementTime = now;
-          _speak('Slow down');
+          _speakAlert('Slow down');
         }
       }
     }
@@ -3287,7 +3335,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
     // Speak the arrival announcement (interrupts any in-progress TTS).
-    _speak('You have arrived at your destination');
+    _speakAlert('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _showArrivalSheet(context);
@@ -4507,7 +4555,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Restriction markers use a red-tinted palette with distinctive icons so
   /// drivers can tell them apart from truck stops (blue) and POIs (orange /
   /// purple / indigo) at a glance.  Tapping a marker shows a brief info card.
+  /// Hidden when [NavSettingsModel.viewTruckRestrictions] is false.
   List<Marker> _buildRestrictionMarkers() {
+    if (!_navSettings.viewTruckRestrictions) return const [];
     return _restrictions.map((r) {
       final style = _restrictionStyle(r.type);
 
@@ -4615,7 +4665,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         if (!_restrictionAlertShown.contains(r.id)) {
           _restrictionAlertShown.add(r.id);
           final String ttsMsg = _restrictionTtsMessage(r);
-          _speak(ttsMsg);
+          _speakAlert(ttsMsg);
         }
         if (mounted && _restrictionAhead?.id != r.id) {
           setState(() => _restrictionAhead = r);
@@ -4779,7 +4829,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Fire TTS only once per sign per session.
       if (!_warningAlertShown.contains(best.id)) {
         _warningAlertShown.add(best.id);
-        _speak('Warning: ${best.title} ahead. ${best.message ?? ''}');
+        _speakAlert('Warning: ${best.title} ahead. ${best.message ?? ''}');
       }
       if (mounted && _warningAhead?.id != best.id) {
         setState(() => _warningAhead = best);
@@ -4816,11 +4866,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// immediate severity recognition at a glance.  The type icon from
   /// [WarningConfig.styleFor] is always shown inside the badge.  Tapping a
   /// marker shows a brief info dialog via [_showWarningInfoDialog].
+  ///
+  /// Individual warning categories can be hidden via [NavSettingsModel]
+  /// (viewTrafficCongestion, viewTrafficIncidents, viewWeatherAlert,
+  /// viewWeighStation, viewRoadSign, viewExit).
   List<Marker> _buildWarningMarkers() {
     // No active route — hide all warning markers.
     if (_routePoints.isEmpty) {
       debugPrint('[POI/Alert Filter] Warning markers: route not set – hiding all warning markers.');
       return const [];
+    }
+
+    // Build the set of warning types that are currently hidden by settings.
+    final Set<String> hiddenTypes = {};
+    if (!_navSettings.viewTrafficCongestion) {
+      hiddenTypes.add(WarningTypes.laneClosure);
+    }
+    if (!_navSettings.viewTrafficIncidents) {
+      hiddenTypes.addAll([WarningTypes.accidentAhead, WarningTypes.roadClosed]);
+    }
+    if (!_navSettings.viewWeatherAlert) {
+      hiddenTypes.addAll([WarningTypes.highWindArea, WarningTypes.chainRequirement]);
+    }
+    if (!_navSettings.viewWeighStation) {
+      hiddenTypes.add(WarningTypes.weighStation);
+    }
+    if (!_navSettings.viewRoadSign) {
+      hiddenTypes.addAll([
+        WarningTypes.lowBridge,
+        WarningTypes.weightRestriction,
+        WarningTypes.noTrucksAllowed,
+        WarningTypes.hazmatRestriction,
+        WarningTypes.steepGrade,
+        WarningTypes.sharpCurve,
+        WarningTypes.brakeCheckArea,
+        WarningTypes.constructionZone,
+        WarningTypes.detour,
+        WarningTypes.restArea,
+        WarningTypes.animalCrossing,
+      ]);
+    }
+    if (!_navSettings.viewExit) {
+      hiddenTypes.addAll([WarningTypes.runawayTruckRamp, WarningTypes.detour]);
     }
 
     // Single-pass filter: for each sign find the nearest route point index and
@@ -4830,6 +4917,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // O(signs × route_points) scan.
     final List<WarningSign> signsToDisplay = [];
     for (final sign in _warningSigns) {
+      // Skip types hidden by nav settings.
+      if (hiddenTypes.contains(sign.type)) continue;
       final signPt = LatLng(sign.lat, sign.lng);
       double bestDist = double.infinity;
       int bestIdx = 0;
@@ -6582,13 +6671,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// **More** button on the bottom trip strip.
   ///
   /// The persistent [_navSettings] model is passed in so that all toggle
-  /// state is retained across visits.
+  /// state is retained across visits.  The [onChanged] callback triggers
+  /// an immediate map rebuild whenever the user changes a setting, so
+  /// features like map type, layer visibility, and audio mode take effect
+  /// in real time even while the settings screen is open.
   void _showMoreMapFeaturesSheet() {
     Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         fullscreenDialog: true,
-        builder: (_) => NavSettingsScreen(settings: _navSettings),
+        builder: (_) => NavSettingsScreen(
+          settings: _navSettings,
+          onChanged: () {
+            if (!mounted) return;
+            // Sync _isSatelliteView so the satellite-toggle button stays in step.
+            _isSatelliteView = _navSettings.mapType == 1;
+            _applyAudioSettings();
+            setState(() {});
+          },
+        ),
       ),
     );
   }
@@ -6609,6 +6710,643 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         backgroundColor: Colors.white,
         onPressed: _showLegBreakdownSheet,
         child: const Icon(Icons.list_alt, color: Colors.black),
+      ),
+    );
+  }
+
+  // ── Shortcut bar ─────────────────────────────────────────────────────────
+
+  /// Builds a horizontally scrollable row of quick-action shortcut buttons
+  /// just above the bottom trip strip during active navigation.
+  ///
+  /// Only shortcuts that the driver has enabled (active = true) in the
+  /// [NavSettingsScreen] Shortcut section are shown.  Returns
+  /// [SizedBox.shrink] when no shortcuts are active or navigation is idle.
+  Widget _buildShortcutBar() {
+    if (!_isNavigating) return const SizedBox.shrink();
+
+    final items = <_ShortcutBarItem>[];
+    if (_navSettings.shortcutReroute) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.alt_route,
+        label: 'Reroute',
+        onTap: _shortcutReroute,
+      ));
+    }
+    if (_navSettings.shortcutPoiAhead) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.local_parking,
+        label: 'POI Ahead',
+        onTap: _shortcutPoiAhead,
+      ));
+    }
+    if (_navSettings.shortcutSearchPlaces) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.search,
+        label: 'Search',
+        onTap: _shortcutSearchPlaces,
+      ));
+    }
+    if (_navSettings.shortcutReport) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.flag_outlined,
+        label: 'Report',
+        onTap: _shortcutReport,
+      ));
+    }
+    if (_navSettings.shortcutPlacesFilter) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.filter_list,
+        label: 'Filter',
+        onTap: _shortcutPlacesFilter,
+      ));
+    }
+    if (_navSettings.shortcutShareTrip) {
+      items.add(_ShortcutBarItem(
+        icon: Icons.share,
+        label: 'Share',
+        onTap: _shortcutShareTrip,
+      ));
+    }
+
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Positioned(
+      left: 16,
+      // Position just above the bottom trip strip (~45 px tall at bottom: 18).
+      bottom: 74,
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: items
+                .map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _buildShortcutBarButton(item),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a single compact shortcut button for the shortcut bar.
+  Widget _buildShortcutBarButton(_ShortcutBarItem item) {
+    return GestureDetector(
+      onTap: item.onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.82),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(item.icon, color: Colors.white, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              item.label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Shortcut action handlers ──────────────────────────────────────────────
+
+  /// Manually triggers a reroute from the current GPS position.
+  void _shortcutReroute() {
+    if (_truckPosition == null) {
+      _showSnack('GPS position not yet available.  Try again in a moment.');
+      return;
+    }
+    if (!_isNavigating) {
+      _showSnack('Start navigation first to use Reroute.');
+      return;
+    }
+    setState(() => _navStatus = 'Rerouting...');
+    _speakAlert('Rerouting');
+    fetchRoute(fromPosition: _truckPosition).then((_) {
+      if (mounted) setState(() => _navStatus = null);
+    });
+  }
+
+  /// Shows a bottom sheet listing nearby POIs ahead on the active route.
+  void _shortcutPoiAhead() {
+    final pos = _truckPosition;
+    if (pos == null) {
+      _showSnack('Waiting for GPS position.');
+      return;
+    }
+
+    // Collect POIs within roughly 20 miles ahead (≈ 32 km).
+    const double radiusMeters = 32_000;
+    final nearby = <MapPoi>[];
+    for (final poi in _mapPois) {
+      final dist = geo.Geolocator.distanceBetween(
+        pos.latitude, pos.longitude,
+        poi.position.latitude, poi.position.longitude,
+      );
+      if (dist <= radiusMeters) nearby.add(poi);
+    }
+    nearby.sort((a, b) {
+      final da = geo.Geolocator.distanceBetween(
+          pos.latitude, pos.longitude, a.position.latitude, a.position.longitude);
+      final db = geo.Geolocator.distanceBetween(
+          pos.latitude, pos.longitude, b.position.latitude, b.position.longitude);
+      return da.compareTo(db);
+    });
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A2535),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+            child: Text(
+              'POIs Ahead (${nearby.length})',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (nearby.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 24),
+              child: Text(
+                'No points of interest found within 20 miles.',
+                style: TextStyle(color: Color(0xFF8A9BB0)),
+              ),
+            )
+          else
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: nearby.length > 10 ? 10 : nearby.length,
+                itemBuilder: (_, i) {
+                  final poi = nearby[i];
+                  final dist = geo.Geolocator.distanceBetween(
+                    pos.latitude, pos.longitude,
+                    poi.position.latitude, poi.position.longitude,
+                  );
+                  final miles = (dist / 1609.34);
+                  return ListTile(
+                    leading: const Icon(Icons.place_outlined,
+                        color: Color(0xFF2196F3)),
+                    title: Text(
+                      poi.name,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    subtitle: Text(
+                      '${miles.toStringAsFixed(1)} mi away',
+                      style: const TextStyle(color: Color(0xFF8A9BB0)),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showPoiAlert(poi);
+                    },
+                  );
+                },
+              ),
+            ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  /// Opens a search dialog so the driver can find a new destination while
+  /// navigating.
+  void _shortcutSearchPlaces() {
+    final controller = TextEditingController();
+    List<PlaceSuggestion> results = [];
+    bool searching = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Search Places',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'City, address, or place…',
+                    hintStyle:
+                        const TextStyle(color: Color(0xFF8A9BB0)),
+                    prefixIcon: const Icon(Icons.search,
+                        color: Color(0xFF8A9BB0)),
+                    suffixIcon: searching
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF2196F3),
+                              ),
+                            ),
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF0F1923),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  onSubmitted: (q) async {
+                    if (q.trim().isEmpty) return;
+                    setDlgState(() => searching = true);
+                    await _executeSearch(q.trim());
+                    setDlgState(() {
+                      results = List.from(_searchResults);
+                      searching = false;
+                    });
+                  },
+                ),
+                if (results.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 200),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: results.length,
+                      itemBuilder: (_, i) => ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.place_outlined,
+                            color: Color(0xFF2196F3), size: 18),
+                        title: Text(
+                          results[i].name,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13),
+                        ),
+                        subtitle: Text(
+                          results[i].placeName,
+                          style: const TextStyle(
+                              color: Color(0xFF8A9BB0), fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _selectDestinationFromSearch(results[i]);
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFF8A9BB0))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shows a dialog for reporting a road incident or hazard.
+  void _shortcutReport() {
+    const List<String> incidentTypes = [
+      'Traffic Jam',
+      'Accident',
+      'Road Hazard',
+      'Construction',
+      'Speed Camera',
+      'Weigh Station Active',
+      'Road Closed',
+      'Other',
+    ];
+    String? selected;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.flag_outlined, color: Color(0xFFF44336), size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Report Incident',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select incident type:',
+                style: TextStyle(color: Color(0xFF8A9BB0), fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: incidentTypes
+                    .map(
+                      (t) => GestureDetector(
+                        onTap: () => setDlgState(() => selected = t),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: selected == t
+                                ? const Color(0xFFF44336).withOpacity(0.18)
+                                : const Color(0xFF253041),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: selected == t
+                                  ? const Color(0xFFF44336)
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: Text(
+                            t,
+                            style: TextStyle(
+                              color: selected == t
+                                  ? Colors.white
+                                  : const Color(0xFF8A9BB0),
+                              fontSize: 12,
+                              fontWeight: selected == t
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFF8A9BB0))),
+            ),
+            TextButton(
+              onPressed: selected == null
+                  ? null
+                  : () {
+                      Navigator.pop(ctx);
+                      _showSnack(
+                          'Thanks! "$selected" reported near your location.');
+                    },
+              child: const Text('Submit',
+                  style: TextStyle(color: Color(0xFF2196F3))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shows a dialog to filter which POI categories are shown on the map.
+  void _shortcutPlacesFilter() {
+    // Use the current nav-settings toggles as the filter state, with a local
+    // copy so the driver can cancel without committing.
+    bool weighStation = _navSettings.viewWeighStation;
+    bool truckRestrictions = _navSettings.viewTruckRestrictions;
+    bool roadSigns = _navSettings.viewRoadSign;
+    bool trafficIncidents = _navSettings.viewTrafficIncidents;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.filter_list, color: Color(0xFF2196F3), size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Places Filter',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _filterCheckRow(
+                'Weigh Stations',
+                Icons.scale_outlined,
+                weighStation,
+                (v) => setDlgState(() => weighStation = v),
+              ),
+              _filterCheckRow(
+                'Truck Restrictions',
+                Icons.local_shipping,
+                truckRestrictions,
+                (v) => setDlgState(() => truckRestrictions = v),
+              ),
+              _filterCheckRow(
+                'Road Signs',
+                Icons.turn_right_outlined,
+                roadSigns,
+                (v) => setDlgState(() => roadSigns = v),
+              ),
+              _filterCheckRow(
+                'Traffic Incidents',
+                Icons.warning_amber_outlined,
+                trafficIncidents,
+                (v) => setDlgState(() => trafficIncidents = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFF8A9BB0))),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _navSettings.viewWeighStation = weighStation;
+                  _navSettings.viewTruckRestrictions = truckRestrictions;
+                  _navSettings.viewRoadSign = roadSigns;
+                  _navSettings.viewTrafficIncidents = trafficIncidents;
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply',
+                  style: TextStyle(color: Color(0xFF2196F3))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Helper row for the Places Filter dialog.
+  Widget _filterCheckRow(
+    String label,
+    IconData icon,
+    bool value,
+    ValueChanged<bool> onChanged,
+  ) {
+    return CheckboxListTile(
+      value: value,
+      onChanged: (v) => onChanged(v ?? value),
+      activeColor: const Color(0xFF2196F3),
+      checkColor: Colors.white,
+      title: Row(
+        children: [
+          Icon(icon, color: const Color(0xFF8A9BB0), size: 18),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(color: Colors.white, fontSize: 14)),
+        ],
+      ),
+      contentPadding: EdgeInsets.zero,
+    );
+  }
+
+  /// Shows a share dialog with the current trip summary that the driver can
+  /// copy to the clipboard or share via the system share sheet.
+  void _shortcutShareTrip() {
+    final pos = _truckPosition;
+    final info = StringBuffer('🚛 Semitrack Trip Share\n');
+    if (pos != null) {
+      info.writeln(
+          'Current position: ${pos.latitude.toStringAsFixed(5)}, '
+          '${pos.longitude.toStringAsFixed(5)}');
+    }
+    if (_hasActiveDestination) {
+      final dest = _selectedDestination ?? _destination;
+      info.writeln('Destination: ${(_selectedDestinationName?.isNotEmpty ?? false) ? _selectedDestinationName! : '${dest.latitude.toStringAsFixed(4)}, ${dest.longitude.toStringAsFixed(4)}'}');
+      final miles = _tripProgressInfo.milesRemaining;
+      final mins = _tripProgressInfo.durationRemaining.inMinutes;
+      if (miles > 0) {
+        info.writeln('Remaining: ${miles.toStringAsFixed(1)} mi, ~${mins}m');
+      }
+    }
+    final shareText = info.toString().trim();
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2535),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.share, color: Color(0xFF2196F3), size: 22),
+            SizedBox(width: 8),
+            Text(
+              'Share Trip',
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F1923),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                shareText.isEmpty
+                    ? 'No active trip to share.'
+                    : shareText,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close',
+                style: TextStyle(color: Color(0xFF8A9BB0))),
+          ),
+          if (shareText.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: shareText));
+                Navigator.pop(ctx);
+                _showSnack('Trip info copied to clipboard.');
+              },
+              child: const Text('Copy',
+                  style: TextStyle(color: Color(0xFF2196F3))),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Shows a brief snackbar [message] at the bottom of the screen.
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
@@ -8361,6 +9099,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// maneuver/distance conditions are not met.
   Widget _buildLaneGuidance() {
     if (!_isNavigating) return const SizedBox.shrink();
+    // Lane assist is hidden when disabled in navigation settings.
+    if (!_navSettings.viewLaneAssist) return const SizedBox.shrink();
 
     final bool visible = _shouldShowLaneGuidance(_upcomingManeuverStep);
 
@@ -9297,12 +10037,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       // bundle ID in the Mapbox dashboard to limit its
                       // exposure. Falls back to OpenStreetMap otherwise.
                       urlTemplate: _mapboxToken.isNotEmpty
-                          ? _isSatelliteView
+                          ? _navSettings.mapType == 1
                               ? 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}'
                                   '?access_token=$_mapboxToken'
                               : 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
                                   '?access_token=$_mapboxToken'
-                          : _isSatelliteView
+                          : _navSettings.mapType == 1
                               ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                               : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.semitrack.mobile',
@@ -9672,6 +10412,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // next station once the driver passes the current one.
                 // Only visible during active navigation when a station exists.
                 _buildClosestWeighStationsRow(),
+                // ── Zone 6b (bottom-left, above strip): shortcut bar ─────
+                // Quick-action shortcut buttons for features the driver has
+                // enabled in the More > Shortcut settings section.
+                _buildShortcutBar(),
                 // ── Zone 7 (bottom-center): current road/highway name badge ─
                 // Compact pill showing the name of the road or highway the
                 // driver is currently on.  Sits between the bottom trip strip
@@ -10631,7 +11375,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         bottom: false,
         child: GestureDetector(
-          onTap: () => setState(() => _isSatelliteView = !_isSatelliteView),
+          onTap: () => setState(() {
+            _isSatelliteView = !_isSatelliteView;
+            _navSettings.mapType = _isSatelliteView ? 1 : 0;
+          }),
           child: Container(
             width: 48,
             height: 48,
@@ -11255,6 +12002,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the limit.  Returns an empty widget when not navigating.
   Widget _buildSpeedLimitBox() {
     if (!_isNavigating) return const SizedBox.shrink();
+    if (!_navSettings.viewSpeedLimit) return const SizedBox.shrink();
 
     final double speedMph =
         _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
@@ -13111,6 +13859,21 @@ class UpcomingAlertItem {
     required this.label,
     required this.distanceMiles,
   });
+}
+
+// ── Shortcut bar data model ────────────────────────────────────────────────────
+
+/// Data model for a single shortcut button in the navigation shortcut bar.
+class _ShortcutBarItem {
+  const _ShortcutBarItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
 }
 
 // ── Compass needle painter ─────────────────────────────────────────────────────

@@ -21,6 +21,12 @@ class NavSettingsModel {
   int audioMode = 2;
   String voicePackage = 'Default';
 
+  /// TTS pitch (0.5 – 2.0).  Default 1.0.
+  double audioPitch = 1.0;
+
+  /// TTS speech rate (0.25 – 1.0).  Default 0.5.
+  double audioSpeechRate = 0.5;
+
   // ── Map type ─────────────────────────────────────────────────────────────
   /// 0 = Map, 1 = Satellite
   int mapType = 0;

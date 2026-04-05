@@ -6,10 +6,23 @@ import 'package:semitrack_mobile/models/nav_settings_model.dart';
 ///
 /// All toggle/selection state is stored in a [NavSettingsModel] instance that
 /// is passed in from the parent so that the settings survive page transitions.
+///
+/// [onChanged] is invoked after every toggle/selection change so the caller
+/// (typically [TruckMapScreen]) can call `setState` and rebuild the live map
+/// in real-time.
 class NavSettingsScreen extends StatefulWidget {
-  const NavSettingsScreen({super.key, required this.settings});
+  const NavSettingsScreen({
+    super.key,
+    required this.settings,
+    this.onChanged,
+  });
 
   final NavSettingsModel settings;
+
+  /// Optional callback fired on every settings change.  The caller should
+  /// use this to trigger a map rebuild so that feature toggles (map type,
+  /// view-on-map, etc.) take effect immediately.
+  final VoidCallback? onChanged;
 
   @override
   State<NavSettingsScreen> createState() => _NavSettingsScreenState();
@@ -26,6 +39,23 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
   static const Color _accentGreen = Color(0xFF4CAF50);
   static const Color _textPrimary = Colors.white;
   static const Color _divider = Color(0xFF253041);
+
+  /// Available voice packages for the TTS engine.
+  static const List<String> _voicePackages = [
+    'Default',
+    'Male',
+    'Female',
+    'UK English',
+    'Australian English',
+  ];
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Updates state and notifies the parent (TruckMapScreen) to rebuild.
+  void _update(VoidCallback fn) {
+    setState(fn);
+    widget.onChanged?.call();
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -84,20 +114,20 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               label: 'Reroute',
               active: _s.shortcutReroute,
               onTap: () =>
-                  setState(() => _s.shortcutReroute = !_s.shortcutReroute),
+                  _update(() => _s.shortcutReroute = !_s.shortcutReroute),
             ),
             _ShortcutItem(
               icon: Icons.local_parking,
               label: 'POI Ahead',
               active: _s.shortcutPoiAhead,
               onTap: () =>
-                  setState(() => _s.shortcutPoiAhead = !_s.shortcutPoiAhead),
+                  _update(() => _s.shortcutPoiAhead = !_s.shortcutPoiAhead),
             ),
             _ShortcutItem(
               icon: Icons.search,
               label: 'Search Places',
               active: _s.shortcutSearchPlaces,
-              onTap: () => setState(
+              onTap: () => _update(
                   () => _s.shortcutSearchPlaces = !_s.shortcutSearchPlaces),
             ),
             _ShortcutItem(
@@ -105,13 +135,13 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               label: 'Report',
               active: _s.shortcutReport,
               onTap: () =>
-                  setState(() => _s.shortcutReport = !_s.shortcutReport),
+                  _update(() => _s.shortcutReport = !_s.shortcutReport),
             ),
             _ShortcutItem(
               icon: Icons.filter_list,
               label: 'Places Filter',
               active: _s.shortcutPlacesFilter,
-              onTap: () => setState(
+              onTap: () => _update(
                   () => _s.shortcutPlacesFilter = !_s.shortcutPlacesFilter),
             ),
             _ShortcutItem(
@@ -119,7 +149,7 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               label: 'Share Trip',
               active: _s.shortcutShareTrip,
               onTap: () =>
-                  setState(() => _s.shortcutShareTrip = !_s.shortcutShareTrip),
+                  _update(() => _s.shortcutShareTrip = !_s.shortcutShareTrip),
             ),
           ],
         ),
@@ -138,7 +168,7 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           label: 'Custom Truck Avatar',
           subtitle: 'Use a personalised truck icon on the map',
           value: _s.customTruckAvatar,
-          onChanged: (v) => setState(() => _s.customTruckAvatar = v),
+          onChanged: (v) => _update(() => _s.customTruckAvatar = v),
         ),
       ],
     );
@@ -159,21 +189,21 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
                 icon: Icons.volume_off,
                 label: 'Muted',
                 selected: _s.audioMode == 0,
-                onTap: () => setState(() => _s.audioMode = 0),
+                onTap: () => _update(() => _s.audioMode = 0),
               ),
               const SizedBox(width: 8),
               _AudioModeChip(
                 icon: Icons.notifications_active_outlined,
                 label: 'Alert Only',
                 selected: _s.audioMode == 1,
-                onTap: () => setState(() => _s.audioMode = 1),
+                onTap: () => _update(() => _s.audioMode = 1),
               ),
               const SizedBox(width: 8),
               _AudioModeChip(
                 icon: Icons.volume_up,
                 label: 'Unmuted',
                 selected: _s.audioMode == 2,
-                onTap: () => setState(() => _s.audioMode = 2),
+                onTap: () => _update(() => _s.audioMode = 2),
               ),
             ],
           ),
@@ -183,19 +213,163 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           icon: Icons.record_voice_over_outlined,
           label: 'Voice Package',
           value: _s.voicePackage,
-          onTap: () {
-            // TODO: open voice-package picker
-          },
+          onTap: _showVoicePackagePicker,
         ),
         _dividerLine(),
         _TappableRow(
           icon: Icons.tune,
           label: 'More Audio Settings',
-          onTap: () {
-            // TODO: open full audio settings page
-          },
+          onTap: _showMoreAudioSettings,
         ),
       ],
+    );
+  }
+
+  /// Shows a bottom sheet picker for the TTS voice package.
+  void _showVoicePackagePicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _cardBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: _divider,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Voice Package',
+            style: TextStyle(
+              color: _textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final pkg in _voicePackages)
+            ListTile(
+              leading: Icon(
+                Icons.record_voice_over_outlined,
+                color: pkg == _s.voicePackage ? _accent : const Color(0xFF8A9BB0),
+              ),
+              title: Text(
+                pkg,
+                style: TextStyle(
+                  color: pkg == _s.voicePackage ? _accent : _textPrimary,
+                  fontWeight: pkg == _s.voicePackage
+                      ? FontWeight.w700
+                      : FontWeight.w400,
+                ),
+              ),
+              trailing: pkg == _s.voicePackage
+                  ? const Icon(Icons.check, color: _accent)
+                  : null,
+              onTap: () {
+                _update(() => _s.voicePackage = pkg);
+                Navigator.pop(context);
+              },
+            ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  /// Shows a dialog with advanced audio settings (pitch and speech rate).
+  void _showMoreAudioSettings() {
+    // Local copies so the sliders are responsive before confirming.
+    double pitch = _s.audioPitch;
+    double rate = _s.audioSpeechRate;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) => AlertDialog(
+          backgroundColor: _cardBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Audio Settings',
+            style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Pitch ─────────────────────────────────────────────────
+              Row(
+                children: [
+                  const Icon(Icons.music_note,
+                      color: Color(0xFF8A9BB0), size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Pitch',
+                      style: TextStyle(color: _textPrimary, fontSize: 14)),
+                  const Spacer(),
+                  Text(pitch.toStringAsFixed(1),
+                      style: const TextStyle(
+                          color: Color(0xFF8A9BB0), fontSize: 13)),
+                ],
+              ),
+              Slider(
+                value: pitch,
+                min: 0.5,
+                max: 2.0,
+                divisions: 15,
+                activeColor: _accent,
+                onChanged: (v) => setDlgState(() => pitch = v),
+              ),
+              const SizedBox(height: 8),
+              // ── Speech rate ───────────────────────────────────────────
+              Row(
+                children: [
+                  const Icon(Icons.speed, color: Color(0xFF8A9BB0), size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Speech Rate',
+                      style: TextStyle(color: _textPrimary, fontSize: 14)),
+                  const Spacer(),
+                  Text(rate.toStringAsFixed(1),
+                      style: const TextStyle(
+                          color: Color(0xFF8A9BB0), fontSize: 13)),
+                ],
+              ),
+              Slider(
+                value: rate,
+                min: 0.25,
+                max: 1.0,
+                divisions: 15,
+                activeColor: _accent,
+                onChanged: (v) => setDlgState(() => rate = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFF8A9BB0))),
+            ),
+            TextButton(
+              onPressed: () {
+                _update(() {
+                  _s.audioPitch = pitch;
+                  _s.audioSpeechRate = rate;
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply', style: TextStyle(color: _accent)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -213,14 +387,14 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
                 icon: Icons.map,
                 label: 'Map',
                 selected: _s.mapType == 0,
-                onTap: () => setState(() => _s.mapType = 0),
+                onTap: () => _update(() => _s.mapType = 0),
               ),
               const SizedBox(width: 12),
               _MapTypeCard(
                 icon: Icons.satellite_alt,
                 label: 'Satellite',
                 selected: _s.mapType == 1,
-                onTap: () => setState(() => _s.mapType = 1),
+                onTap: () => _update(() => _s.mapType = 1),
               ),
             ],
           ),
@@ -239,84 +413,84 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           icon: Icons.account_tree_outlined,
           label: 'Junction View',
           value: _s.viewJunctionView,
-          onChanged: (v) => setState(() => _s.viewJunctionView = v),
+          onChanged: (v) => _update(() => _s.viewJunctionView = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.linear_scale,
           label: 'Lane Assist',
           value: _s.viewLaneAssist,
-          onChanged: (v) => setState(() => _s.viewLaneAssist = v),
+          onChanged: (v) => _update(() => _s.viewLaneAssist = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.local_shipping,
           label: 'Truck Restrictions',
           value: _s.viewTruckRestrictions,
-          onChanged: (v) => setState(() => _s.viewTruckRestrictions = v),
+          onChanged: (v) => _update(() => _s.viewTruckRestrictions = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.signpost_outlined,
           label: 'Exit',
           value: _s.viewExit,
-          onChanged: (v) => setState(() => _s.viewExit = v),
+          onChanged: (v) => _update(() => _s.viewExit = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.traffic,
           label: 'Traffic Congestion',
           value: _s.viewTrafficCongestion,
-          onChanged: (v) => setState(() => _s.viewTrafficCongestion = v),
+          onChanged: (v) => _update(() => _s.viewTrafficCongestion = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.warning_amber_outlined,
           label: 'Traffic Incidents',
           value: _s.viewTrafficIncidents,
-          onChanged: (v) => setState(() => _s.viewTrafficIncidents = v),
+          onChanged: (v) => _update(() => _s.viewTrafficIncidents = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.thunderstorm_outlined,
           label: 'Weather Alert',
           value: _s.viewWeatherAlert,
-          onChanged: (v) => setState(() => _s.viewWeatherAlert = v),
+          onChanged: (v) => _update(() => _s.viewWeatherAlert = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.scale_outlined,
           label: 'Weigh Station',
           value: _s.viewWeighStation,
-          onChanged: (v) => setState(() => _s.viewWeighStation = v),
+          onChanged: (v) => _update(() => _s.viewWeighStation = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.speed,
           label: 'Speed Limit',
           value: _s.viewSpeedLimit,
-          onChanged: (v) => setState(() => _s.viewSpeedLimit = v),
+          onChanged: (v) => _update(() => _s.viewSpeedLimit = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.videocam_outlined,
           label: '511 Camera',
           value: _s.view511Camera,
-          onChanged: (v) => setState(() => _s.view511Camera = v),
+          onChanged: (v) => _update(() => _s.view511Camera = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.turn_right_outlined,
           label: 'Road Sign',
           value: _s.viewRoadSign,
-          onChanged: (v) => setState(() => _s.viewRoadSign = v),
+          onChanged: (v) => _update(() => _s.viewRoadSign = v),
         ),
         _dividerLine(),
         _ToggleRow(
           icon: Icons.toll_outlined,
           label: 'Tollbooth',
           value: _s.viewTollbooth,
-          onChanged: (v) => setState(() => _s.viewTollbooth = v),
+          onChanged: (v) => _update(() => _s.viewTollbooth = v),
         ),
       ],
     );

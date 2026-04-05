@@ -10796,7 +10796,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             'NEXT TURN',
             style: TextStyle(
               color: Colors.white.withOpacity(0.60),
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.9,
               height: 1,

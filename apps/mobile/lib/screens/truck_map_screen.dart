@@ -2083,7 +2083,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // Uniform bounding-box size used for every GPS-pin POI marker so all types
   // appear at the same size on the map.
-  static const double _kPoiPinSize = 48.0;
+  static const double _kPoiPinSize = 72.0;
 
   /// Builds a GPS teardrop-pin [Widget] for a POI, optionally embedding a
   /// branded logo image inside the pin head.

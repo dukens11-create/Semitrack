@@ -856,13 +856,42 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   DateTime? _lastSlowDownAnnouncementTime;
 
   // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
-  // Pre-populated with mock/placeholder values so the Drive Intelligence card
-  // is never blank.  These are replaced by real API data once available.
-  Map<String, dynamic> _intelligence = const {
-    'driveMinutesLeft': 470, // ~7 h 50 m mock ETA
+  // Initialised with the FMCSA 11-hour driving limit (660 min).  driveMinutesLeft
+  // is recalculated on every GPS fix based on actual driving time so it
+  // decreases in real-time and resets after a 10-hour off-duty break.
+  Map<String, dynamic> _intelligence = {
+    'driveMinutesLeft': 660, // FMCSA 11-hour limit; updated from GPS in real-time
     'weather': 'Clear',      // placeholder weather condition
     'riskScore': 92.0,       // 92 → "Low" risk bucket
   };
+
+  // ── HOS (Hours of Service) tracking ──────────────────────────────────────
+  // Implements a simplified FMCSA property-carrying driver HOS model:
+  //   • 11-hour driving limit per duty cycle (_hosMaxDriveMinutes = 660).
+  //   • Driving time (_hosDrivingDuration) accumulates whenever GPS speed
+  //     is ≥ 1 m/s; remaining = 660 − driving minutes.
+  //   • Break time (_hosCurrentBreakDuration) accumulates when stopped.
+  //   • After 10 consecutive off-duty hours the drive clock fully resets.
+  //   • After 8 hours of accumulated driving _hosBreakDue is set true to
+  //     surface a 30-minute break reminder in the UI.
+
+  /// Maximum driving minutes per duty cycle (FMCSA 11-hour rule).
+  static const int _hosMaxDriveMinutes = 660;
+
+  /// Accumulated driving time since the last 10-hour off-duty reset.
+  Duration _hosDrivingDuration = Duration.zero;
+
+  /// Accumulated consecutive off-duty (stopped) time since the truck last moved.
+  /// Resets to zero each time the driver resumes driving.
+  Duration _hosCurrentBreakDuration = Duration.zero;
+
+  /// True when accumulated driving has reached the 8-hour mark, indicating a
+  /// 30-minute break is required before any additional driving.
+  bool _hosBreakDue = false;
+
+  /// Timestamp of the GPS fix used for the most recent HOS delta calculation.
+  /// Null until the first GPS fix is received after the screen is mounted.
+  DateTime? _hosLastFixTime;
 
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
@@ -3281,6 +3310,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final double newSpeedLimit =
         _getTruckSpeedLimit(carSpeedLimit, position.latitude, position.longitude);
 
+    // ── HOS: accumulate driving / break time from this GPS fix ────────────
+    // Runs on every accepted fix so HOS remaining updates in real-time,
+    // both during active navigation and in plain GPS-tracking mode.
+    final hosNow = DateTime.now();
+    if (_hosLastFixTime != null && position.speed >= 0) {
+      final delta = hosNow.difference(_hosLastFixTime!);
+      // Guard: ignore deltas > 5 min (app backgrounded / GPS gap) to avoid
+      // crediting a long pause as continuous driving or a long stop as a break.
+      if (delta > Duration.zero && delta < const Duration(minutes: 5)) {
+        if (position.speed >= 1.0) {
+          // Vehicle is moving — accumulate driving time and reset break clock.
+          _hosDrivingDuration += delta;
+          _hosCurrentBreakDuration = Duration.zero;
+          _hosBreakDue = _hosDrivingDuration.inMinutes >= 480; // 8-hour mark
+        } else {
+          // Vehicle is stopped — accumulate break time.
+          _hosCurrentBreakDuration += delta;
+          // FMCSA 10-hour off-duty reset: full drive clock resets after a
+          // 10-consecutive-hour break.
+          if (_hosCurrentBreakDuration.inMinutes >= 600) {
+            _hosDrivingDuration = Duration.zero;
+            _hosCurrentBreakDuration = Duration.zero;
+            _hosBreakDue = false;
+          }
+        }
+      }
+    }
+    _hosLastFixTime = hosNow;
+
+    // Compute updated HOS remaining before entering setState so it is
+    // applied atomically with the speed/position update.
+    final hosDrivingMinutes = _hosDrivingDuration.inSeconds / 60.0;
+    final hosRemaining =
+        (_hosMaxDriveMinutes - hosDrivingMinutes).clamp(0.0, _hosMaxDriveMinutes.toDouble()).toInt();
+
     setState(() {
       // Use the raw GPS fix so the marker reflects actual device location.
       _truckPosition = gpsPoint;
@@ -3289,6 +3353,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Persist updated speed and speed-limit for the PositionPanel overlay.
       _currentSpeedMps = newSpeedMps;
       _speedLimitMph = newSpeedLimit;
+      // Update HOS remaining so the floating dashboard and Drive Intelligence
+      // card always reflect the actual remaining drive time.
+      _intelligence = {..._intelligence, 'driveMinutesLeft': hosRemaining};
     });
 
     // Record this fix as the last accepted position for the next filter cycle.

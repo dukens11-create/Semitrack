@@ -13721,11 +13721,11 @@ class AheadWeighStation {
 /// A compact right-side navigation chip for the closest weigh station ahead.
 ///
 /// Design:
-/// • **White 48 × 48 square** with rounded corners, thin grey border, and a
-///   subtle drop shadow — matches the other right-side overlay chips.
-/// • **Bold green "W"** centred inside the square.
-/// • **Miles label** (e.g. `"8.4 mi"`) in small bold black text directly below
-///   the chip, centred horizontally.
+/// • **White rounded card** with a subtle drop shadow — matches the other
+///   right-side overlay chips.
+/// • **Bold green "W"** at the top of the card.
+/// • **Miles label** (e.g. `"8.4 mi"`) in small bold black text directly
+///   below the "W", inside the same card.
 ///
 /// The value updates live on every GPS fix via
 /// [_TruckMapScreenState._refreshClosestWeighStationsAhead].
@@ -13747,48 +13747,46 @@ class ClosestWeighStationChip extends StatelessWidget {
     final String distLabel =
         miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // ── White square chip with bold green "W" ─────────────────────────
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.black12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.18),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
+    // ── White rounded card containing "W" and distance together ───────────
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
-          child: const Center(
-            child: Text(
-              'W',
-              style: TextStyle(
-                color: Color(0xFF24B342),
-                fontWeight: FontWeight.w900,
-                fontSize: 28,
-                height: 1.0,
-              ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Bold green "W" ────────────────────────────────────────────
+          const Text(
+            'W',
+            style: TextStyle(
+              color: Color(0xFF24B342),
+              fontWeight: FontWeight.w900,
+              fontSize: 28,
+              height: 1.0,
             ),
           ),
-        ),
-        const SizedBox(height: 3),
-        // ── Miles remaining, centred below the chip ────────────────────────
-        Text(
-          distLabel,
-          style: const TextStyle(
-            color: Colors.black87,
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
+          const SizedBox(height: 4),
+          // ── Distance label directly below "W", inside the card ────────
+          Text(
+            distLabel,
+            style: const TextStyle(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              height: 1.0,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

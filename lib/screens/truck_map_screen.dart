@@ -839,6 +839,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// can see upcoming hazards well in advance (~10 miles).
   static const double _warningDisplayBufferMeters = 16093.0; // ≈ 10 miles
 
+  /// Map zoom level below which warning markers are grouped into cluster badges
+  /// to avoid clutter.  Above this threshold every eligible sign is shown
+  /// individually.
+  static const double _warningClusterZoomThreshold = 11.0;
+
   /// Distance buffer (metres) used when deciding which [MapPoi] markers
   /// (weigh stations, police, ports of entry) are shown on the map.
   /// Matches the truck-stop POI display buffer (~10 miles).
@@ -5307,9 +5312,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [WarningSign] on the active route and updates [_warningAhead].
   ///
   /// High-severity warnings are prioritised over medium/low ones.  The first
-  /// unshown warning within range fires a TTS announcement; each sign id is
-  /// added to [_warningAlertShown] after the first announcement to prevent
-  /// repeated alerts for the same sign.  Only one banner is shown at a time.
+  /// unshown warning within range fires a TTS announcement only when the sign
+  /// type is in [WarningTypes.soundAlertTypes] (e.g. sharp curve, steep grade,
+  /// low clearance, narrow bridge, railroad crossing, animal crossing); all
+  /// other types receive a visual banner only.  Each sign id is added to
+  /// [_warningAlertShown] after the first banner to prevent repeated alerts.
+  /// Only one banner is shown at a time.
   void _checkWarningAheadAlert(LatLng currentPosition) {
     WarningSign? best;
     double bestDist = double.infinity;
@@ -5336,10 +5344,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     if (best != null) {
-      // Fire TTS only once per sign per session.
+      // Fire TTS only once per sign per session, and only for sound-alert types.
       if (!_warningAlertShown.contains(best.id)) {
         _warningAlertShown.add(best.id);
-        _speakAlert('Warning: ${best.title} ahead. ${best.message ?? ''}');
+        // Only speak for the most important warning sign types.
+        if (WarningTypes.soundAlertTypes.contains(best.type)) {
+          _speakAlert('Warning: ${best.title} ahead. ${best.message ?? ''}');
+        }
       }
       if (mounted && _warningAhead?.id != best.id) {
         setState(() => _warningAhead = best);
@@ -5365,21 +5376,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds coloured [Marker]s for warning signs relevant to the active route.
   ///
+  /// Each sign is drawn as an official-style yellow warning triangle with the
+  /// type icon inside.  Emphasis scales with the driver's distance:
+  ///   - > 2.0 mi  (highway) / > 1.0 mi  (city): preload — faint, small.
+  ///   - ≤ 2.0 mi  (highway) / ≤ 1.0 mi  (city): low-emphasis — visible marker.
+  ///   - ≤ 1.0 mi  (highway) / ≤ 0.5 mi  (city): normal — standard size.
+  ///   - ≤ 0.5 mi  (highway) / ≤ 0.25 mi (city): highlighted — larger + shadow.
+  ///   - ≤ 0.2 mi  (highway) / ≤ 0.1 mi  (city): urgent — maximum size + glow.
+  ///
+  /// At map zoom < [_warningClusterZoomThreshold], nearby signs are grouped
+  /// into cluster badges to avoid marker clutter.  Above that zoom, every
+  /// eligible sign is shown individually.
+  ///
   /// Only signs within [_warningDisplayBufferMeters] (~10 miles) of the active
-  /// route polyline are shown, so that unrelated West-Coast (or any far-off)
-  /// warnings do not clutter the map.  When no route is active, no markers are
-  /// returned.  During navigation, signs behind [_truckIndex] on the route are
+  /// route polyline are shown, so that unrelated far-off warnings do not clutter
+  /// the map.  During navigation, signs behind [_truckIndex] on the route are
   /// additionally suppressed so only ahead-of-position hazards remain visible.
-  ///
-  /// Markers are colour-coded by severity (high=red, medium=orange, low=blue)
-  /// using [WarningConfig.colorForSeverity], overriding the type colour for
-  /// immediate severity recognition at a glance.  The type icon from
-  /// [WarningConfig.styleFor] is always shown inside the badge.  Tapping a
-  /// marker shows a brief info dialog via [_showWarningInfoDialog].
-  ///
-  /// Individual warning categories can be hidden via [NavSettingsModel]
-  /// (viewTrafficCongestion, viewTrafficIncidents, viewWeatherAlert,
-  /// viewWeighStation, viewRoadSign, viewExit).
   List<Marker> _buildWarningMarkers() {
     // No active route — hide all warning markers.
     if (_routePoints.isEmpty) {
@@ -5414,6 +5426,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         WarningTypes.detour,
         WarningTypes.restArea,
         WarningTypes.animalCrossing,
+        WarningTypes.narrowBridge,
+        WarningTypes.railroadCrossing,
       ]);
     }
     if (!_navSettings.viewExit) {
@@ -5460,34 +5474,168 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       '${_isNavigating ? ", ahead of position" : ""}).',
     );
 
+    // ── Cluster when zoomed out ──────────────────────────────────────────────
+    final double currentZoom = _mapReady ? _mapController.camera.zoom : 15.0;
+    if (currentZoom < _warningClusterZoomThreshold) {
+      return _buildClusteredWarningMarkers(signsToDisplay);
+    }
+
+    // ── Individual markers ───────────────────────────────────────────────────
     return signsToDisplay.map((sign) {
       final style = WarningConfig.styleFor(sign.type);
-      final Color badgeColor = WarningConfig.colorForSeverity(sign.severity);
+      final _WarningEmphasis emphasis = _warningEmphasis(sign);
 
       return Marker(
         point: LatLng(sign.lat, sign.lng),
-        width: 40,
-        height: 40,
+        width: emphasis.markerSize,
+        height: emphasis.markerSize,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showWarningInfoDialog(sign),
-          child: Container(
-            decoration: BoxDecoration(
-              color: badgeColor,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Icon(style.icon, color: Colors.white, size: 22),
+          child: _buildYellowTriangleMarker(
+            icon: style.icon,
+            emphasis: emphasis,
           ),
         ),
       );
     }).toList();
+  }
+
+  /// Builds cluster badge [Marker]s when the map is zoomed out.
+  ///
+  /// Signs are grouped into ~11-km buckets (1 decimal place of lat/lng ≈ 11 km)
+  /// and represented by a single yellow triangle badge showing the count.
+  List<Marker> _buildClusteredWarningMarkers(List<WarningSign> signs) {
+    const double bucketSize = 1.0; // ~111 km per degree, 1 decimal ≈ 11 km
+    final Map<String, List<WarningSign>> clusters = {};
+    for (final sign in signs) {
+      final String key =
+          '${(sign.lat / bucketSize).round()},${(sign.lng / bucketSize).round()}';
+      clusters.putIfAbsent(key, () => []).add(sign);
+    }
+
+    return clusters.values.map((clusterSigns) {
+      final double lat = clusterSigns
+              .map((s) => s.lat)
+              .reduce((a, b) => a + b) /
+          clusterSigns.length;
+      final double lng = clusterSigns
+              .map((s) => s.lng)
+              .reduce((a, b) => a + b) /
+          clusterSigns.length;
+      final int count = clusterSigns.length;
+
+      return Marker(
+        point: LatLng(lat, lng),
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () {
+            // Tapping a cluster zooms into the cluster area so signs expand.
+            _mapController.move(LatLng(lat, lng), _warningClusterZoomThreshold + 0.5);
+          },
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CustomPaint(
+                size: const Size(44, 44),
+                painter: _WarningTrianglePainter(
+                  opacity: 1.0,
+                  shadowBlur: 6,
+                ),
+              ),
+              Positioned(
+                bottom: 8,
+                child: Text(
+                  '$count',
+                  style: const TextStyle(
+                    color: Colors.black87,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns the [_WarningEmphasis] level for [sign] based on the truck's
+  /// current distance to it and the sign's road-type thresholds.
+  _WarningEmphasis _warningEmphasis(WarningSign sign) {
+    if (_truckPosition == null) return _WarningEmphasis.visible;
+
+    final double distMiles =
+        _distanceBetween(_truckPosition!, LatLng(sign.lat, sign.lng)) /
+            1609.344;
+
+    final bool isCity = sign.roadType == 'city';
+    final double t1 = isCity ? 1.0 : 2.0;  // preload threshold
+    final double t2 = isCity ? 0.5 : 1.0;  // visible threshold
+    final double t3 = isCity ? 0.25 : 0.5; // highlighted threshold
+    final double t4 = isCity ? 0.1 : 0.2;  // urgent threshold
+
+    if (distMiles > t1) return _WarningEmphasis.preload;
+    if (distMiles > t2) return _WarningEmphasis.lowEmphasis;
+    if (distMiles > t3) return _WarningEmphasis.visible;
+    if (distMiles > t4) return _WarningEmphasis.highlighted;
+    return _WarningEmphasis.urgent;
+  }
+
+  /// Builds a single yellow-triangle warning-sign marker widget.
+  ///
+  /// The triangle mimics the official USA/Canada road warning sign appearance:
+  /// bright yellow fill, black border, type icon centred inside.
+  Widget _buildYellowTriangleMarker({
+    required IconData icon,
+    required _WarningEmphasis emphasis,
+  }) {
+    final double size = emphasis.markerSize;
+    final double opacity = emphasis.opacity;
+    final double shadowBlur = emphasis.shadowBlur;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Yellow triangle background with black border.
+          CustomPaint(
+            size: Size(size, size),
+            painter: _WarningTrianglePainter(
+              opacity: opacity,
+              shadowBlur: shadowBlur,
+            ),
+          ),
+          // Type icon positioned in the lower-centre of the triangle.
+          Positioned(
+            bottom: size * 0.08,
+            child: Opacity(
+              opacity: opacity,
+              child: Icon(
+                icon,
+                color: Colors.black87,
+                size: size * 0.42,
+              ),
+            ),
+          ),
+          // Urgent: show a red glow ring for maximum emphasis.
+          if (emphasis == _WarningEmphasis.urgent)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _UrgentGlowPainter(size: size),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   /// Shows an [AlertDialog] with the details of a tapped [sign].
@@ -14746,7 +14894,161 @@ class TripSummaryStrip extends StatelessWidget {
   }
 }
 
-// ── Sample truck safety warning sign data ─────────────────────────────────────
+// ── Warning marker visual helpers ─────────────────────────────────────────────
+
+/// Distance-based visual emphasis for a warning sign marker.
+///
+/// Used by [_buildYellowTriangleMarker] to scale size, opacity, and shadow
+/// based on how far the driver is from the sign.
+enum _WarningEmphasis {
+  /// > 2.0 mi (highway) / > 1.0 mi (city): faint preload indicator.
+  preload,
+
+  /// ≤ 2.0 mi (highway) / ≤ 1.0 mi (city): low-emphasis visible marker.
+  lowEmphasis,
+
+  /// ≤ 1.0 mi (highway) / ≤ 0.5 mi (city): normal, clear marker.
+  visible,
+
+  /// ≤ 0.5 mi (highway) / ≤ 0.25 mi (city): strong pop, larger marker.
+  highlighted,
+
+  /// ≤ 0.2 mi (highway) / ≤ 0.1 mi (city): urgent maximum emphasis.
+  urgent;
+
+  double get markerSize {
+    switch (this) {
+      case _WarningEmphasis.preload:
+        return 24;
+      case _WarningEmphasis.lowEmphasis:
+        return 30;
+      case _WarningEmphasis.visible:
+        return 36;
+      case _WarningEmphasis.highlighted:
+        return 44;
+      case _WarningEmphasis.urgent:
+        return 52;
+    }
+  }
+
+  double get opacity {
+    switch (this) {
+      case _WarningEmphasis.preload:
+        return 0.35;
+      case _WarningEmphasis.lowEmphasis:
+        return 0.65;
+      case _WarningEmphasis.visible:
+        return 0.88;
+      case _WarningEmphasis.highlighted:
+        return 1.0;
+      case _WarningEmphasis.urgent:
+        return 1.0;
+    }
+  }
+
+  double get shadowBlur {
+    switch (this) {
+      case _WarningEmphasis.preload:
+        return 0;
+      case _WarningEmphasis.lowEmphasis:
+        return 3;
+      case _WarningEmphasis.visible:
+        return 5;
+      case _WarningEmphasis.highlighted:
+        return 8;
+      case _WarningEmphasis.urgent:
+        return 12;
+    }
+  }
+}
+
+/// Paints a yellow equilateral-style warning triangle with a black border,
+/// matching the official USA / Canada MUTCD road-sign appearance.
+///
+/// The triangle points upward.  Fill is the standard warning-sign yellow
+/// (0xFFFFCC00).  The [opacity] parameter fades the entire marker for
+/// distance-based preload emphasis.
+class _WarningTrianglePainter extends CustomPainter {
+  const _WarningTrianglePainter({
+    required this.opacity,
+    required this.shadowBlur,
+  });
+
+  final double opacity;
+  final double shadowBlur;
+
+  static const Color _fillColor = Color(0xFFFFCC00);
+  static const Color _borderColor = Colors.black;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+
+    // Triangle path: tip at top-centre, base at bottom.
+    final path = Path()
+      ..moveTo(w * 0.5, 0)
+      ..lineTo(w, h)
+      ..lineTo(0, h)
+      ..close();
+
+    // Shadow / glow when emphasis is elevated.
+    if (shadowBlur > 0) {
+      canvas.drawShadow(
+        path,
+        Colors.black.withOpacity(0.4 * opacity),
+        shadowBlur,
+        false,
+      );
+    }
+
+    // Yellow fill.
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = _fillColor.withOpacity(opacity)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Black border.
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = _borderColor.withOpacity(opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.06
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_WarningTrianglePainter old) =>
+      old.opacity != opacity || old.shadowBlur != shadowBlur;
+}
+
+/// Paints a semi-transparent red glow ring around the urgent warning triangle
+/// to create a strong visual pulse effect for the 0.2-mile urgency stage.
+class _UrgentGlowPainter extends CustomPainter {
+  const _UrgentGlowPainter({required this.size});
+
+  final double size;
+
+  @override
+  void paint(Canvas canvas, Size canvasSize) {
+    final center = Offset(canvasSize.width / 2, canvasSize.height / 2);
+    final radius = size * 0.52;
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = Colors.red.withOpacity(0.30)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_UrgentGlowPainter old) => old.size != size;
+}
 
 /// Sample [WarningSign] objects covering all 18 required truck safety warning
 /// types along the Portland OR → Winnemucca NV corridor.
@@ -14952,6 +15254,28 @@ const List<WarningSign> _sampleWarningSigns = [
     severity: 'low',
     message: 'Deer and elk crossing zone — reduce speed at night.',
     icon: WarningTypes.animalCrossing,
+  ),
+  // ── Narrow bridge ─────────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_narrow_bridge_i5_or',
+    type: WarningTypes.narrowBridge,
+    title: 'Narrow Bridge',
+    lat: 44.540,
+    lng: -123.260,
+    severity: 'high',
+    message: 'One-lane bridge — oversized loads must stop and proceed with care.',
+    icon: WarningTypes.narrowBridge,
+  ),
+  // ── Railroad crossing ─────────────────────────────────────────────────────
+  WarningSign(
+    id: 'warn_railroad_crossing_i5_ca',
+    type: WarningTypes.railroadCrossing,
+    title: 'Railroad Crossing',
+    lat: 40.220,
+    lng: -122.295,
+    severity: 'high',
+    message: 'Active grade crossing — stop if signal is active.',
+    icon: WarningTypes.railroadCrossing,
   ),
 ];
 

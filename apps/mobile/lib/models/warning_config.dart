@@ -26,6 +26,25 @@ class WarningTypes {
   static const String brakeCheckArea = 'brake_check_area';
   static const String restArea = 'rest_area';
   static const String animalCrossing = 'animal_crossing';
+
+  /// Narrow bridge / reduced-width roadway — official USA/Canada warning sign.
+  static const String narrowBridge = 'narrow_bridge';
+
+  /// Railroad grade crossing — official USA/Canada warning sign.
+  static const String railroadCrossing = 'railroad_crossing';
+
+  /// Types that produce both a visual popup AND a TTS/sound alert.
+  ///
+  /// All other warning types produce a visual popup only.  Keep this list
+  /// limited to hazards that require immediate driver attention.
+  static const Set<String> soundAlertTypes = {
+    sharpCurve,
+    steepGrade,
+    lowBridge,
+    narrowBridge,
+    railroadCrossing,
+    animalCrossing,
+  };
 }
 
 /// Encapsulates the visual style for a single warning type: icon, colour, and
@@ -182,6 +201,16 @@ class WarningConfig {
       icon: Icons.pets,
       color: Colors.blue,
       label: 'Animal Crossing',
+    ),
+    WarningTypes.narrowBridge: WarningStyle(
+      icon: Icons.swap_horiz,
+      color: Colors.deepOrange,
+      label: 'Narrow Bridge',
+    ),
+    WarningTypes.railroadCrossing: WarningStyle(
+      icon: Icons.train,
+      color: Colors.red,
+      label: 'Railroad Crossing',
     ),
   };
 }

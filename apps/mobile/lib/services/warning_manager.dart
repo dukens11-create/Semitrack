@@ -16,27 +16,59 @@ const double _kMetresPerMile = 1609.344;
 const double _kRouteProximityMetres = 300.0;
 
 /// Trigger stages for a single warning sign.
-enum _TriggerStage { first, second, final_ }
+///
+/// Stages fire in order as the driver approaches the sign:
+/// - [preload]     2.0 mi (highway) / 1.0 mi (city): low-emphasis awareness.
+/// - [visible]     1.0 mi (highway) / 0.5 mi (city): normal marker appears.
+/// - [highlighted] 0.5 mi (highway) / 0.25 mi (city): stronger highlight.
+/// - [urgent]      0.2 mi (highway) / 0.1 mi (city): maximum emphasis.
+enum WarningTriggerStage {
+  /// 2.0 mi (highway) / 1.0 mi (city) — preload awareness, low emphasis.
+  preload,
 
-/// Trigger-distance defaults (in miles) keyed by severity string and stage.
-const Map<String, Map<_TriggerStage, double>> _kTriggerDefaults = {
-  'high':   { _TriggerStage.first: 2.0, _TriggerStage.second: 1.0, _TriggerStage.final_: 0.5 },
-  'medium': { _TriggerStage.first: 1.5, _TriggerStage.second: 0.75, _TriggerStage.final_: 0.3 },
-  'low':    { _TriggerStage.first: 1.0, _TriggerStage.second: 0.5,  _TriggerStage.final_: 0.2 },
+  /// 1.0 mi (highway) / 0.5 mi (city) — visible ahead warning.
+  visible,
+
+  /// 0.5 mi (highway) / 0.25 mi (city) — strong pop / highlight.
+  highlighted,
+
+  /// 0.2 mi (highway) / 0.1 mi (city) — urgent / maximum emphasis.
+  urgent,
+}
+
+/// Highway trigger-distance defaults (in miles) keyed by stage.
+const Map<WarningTriggerStage, double> _kHighwayTriggers = {
+  WarningTriggerStage.preload:     2.0,
+  WarningTriggerStage.visible:     1.0,
+  WarningTriggerStage.highlighted: 0.5,
+  WarningTriggerStage.urgent:      0.2,
 };
 
-/// Returns the trigger-distance map for [severity], falling back to 'medium'
-/// defaults for any unrecognised severity string.
-Map<_TriggerStage, double> _triggersFor(String severity) =>
-    _kTriggerDefaults[severity] ?? _kTriggerDefaults['medium']!;
+/// City / low-speed road trigger-distance defaults (in miles) keyed by stage.
+/// Shorter than highway so drivers on urban streets still receive timely alerts.
+const Map<WarningTriggerStage, double> _kCityTriggers = {
+  WarningTriggerStage.preload:     1.0,
+  WarningTriggerStage.visible:     0.5,
+  WarningTriggerStage.highlighted: 0.25,
+  WarningTriggerStage.urgent:      0.1,
+};
+
+/// Returns the trigger-distance map for [sign] based on its [WarningSign.roadType].
+Map<WarningTriggerStage, double> _triggersFor(WarningSign sign) =>
+    sign.roadType == 'city' ? _kCityTriggers : _kHighwayTriggers;
 
 /// A single active warning popup entry exposed by [WarningManager.activePopups].
 ///
-/// Bundles the [WarningSign] together with the distance ahead so the UI can
-/// render a "X mi ahead" label without recomputing the distance itself.
+/// Bundles the [WarningSign] together with the distance ahead and the current
+/// trigger stage so the UI can render appropriate emphasis without recomputing
+/// distances itself.
 @immutable
 class ActiveWarning {
-  const ActiveWarning({required this.sign, required this.distanceMiles});
+  const ActiveWarning({
+    required this.sign,
+    required this.distanceMiles,
+    required this.stage,
+  });
 
   /// The warning sign whose popup is currently visible.
   final WarningSign sign;
@@ -44,6 +76,10 @@ class ActiveWarning {
   /// Straight-line distance from the current truck position to the sign,
   /// in miles.  Updated on every [WarningManager.update] call.
   final double distanceMiles;
+
+  /// The highest trigger stage that has fired for this sign in the current
+  /// session.  Used by the UI to apply the correct emphasis level.
+  final WarningTriggerStage stage;
 }
 
 /// Manages the lifecycle of truck-navigation warning popups.
@@ -59,11 +95,16 @@ class ActiveWarning {
 /// 1. Checks whether the sign is within [_kRouteProximityMetres] of any point
 ///    on the active route polyline.  Signs not on the route are ignored.
 /// 2. Computes the straight-line distance from the truck position to the sign.
-/// 3. Fires a popup at the first-trigger distance, a follow-up at the
-///    second-trigger, and a final reminder at the final-trigger.  Each stage
-///    fires **at most once** per session per sign.
+/// 3. Fires a popup at each of the four trigger stages (preload → visible →
+///    highlighted → urgent).  Each stage fires **at most once** per session
+///    per sign.
 /// 4. Automatically removes a popup once the truck has passed the sign
-///    (all triggers fired and truck is beyond the first-trigger distance).
+///    (all triggers fired and truck is beyond the preload distance).
+///
+/// ## Road-type thresholds
+///
+/// Highway (default) uses full distances: 2.0 / 1.0 / 0.5 / 0.2 miles.
+/// City / low-speed roads use shorter distances: 1.0 / 0.5 / 0.25 / 0.1 miles.
 ///
 /// ## Deduplication
 ///
@@ -83,7 +124,7 @@ class WarningManager extends ChangeNotifier {
   final List<WarningSign> _signs;
 
   /// Tracks which trigger stages have fired for each sign id.
-  final Map<String, Set<_TriggerStage>> _firedStages = {};
+  final Map<String, Set<WarningTriggerStage>> _firedStages = {};
 
   /// Signs that the driver has explicitly dismissed this session.
   final Set<String> _dismissed = {};
@@ -133,44 +174,58 @@ class WarningManager extends ChangeNotifier {
       final double distMetres = _distanceToSign(truckPosition, sign);
       final double distMiles = distMetres / _kMetresPerMile;
 
-      final triggers = _triggersFor(sign.severity);
+      final triggers = _triggersFor(sign);
       final fired = _firedStages.putIfAbsent(sign.id, () => {});
 
-      // ── Check each trigger stage in order ──────────────────────────────
-      if (!fired.contains(_TriggerStage.first) &&
-          distMiles <= triggers[_TriggerStage.first]!) {
-        fired.add(_TriggerStage.first);
-        _upsertPopup(sign, distMiles);
-        changed = true;
-      } else if (fired.contains(_TriggerStage.first) &&
-          !fired.contains(_TriggerStage.second) &&
-          distMiles <= triggers[_TriggerStage.second]!) {
-        fired.add(_TriggerStage.second);
-        _upsertPopup(sign, distMiles);
-        changed = true;
-      } else if (fired.contains(_TriggerStage.second) &&
-          !fired.contains(_TriggerStage.final_) &&
-          distMiles <= triggers[_TriggerStage.final_]!) {
-        fired.add(_TriggerStage.final_);
-        _upsertPopup(sign, distMiles);
+      // ── Check trigger stages in order, advancing one stage per call ────
+      WarningTriggerStage? newStage;
+
+      if (!fired.contains(WarningTriggerStage.preload) &&
+          distMiles <= triggers[WarningTriggerStage.preload]!) {
+        fired.add(WarningTriggerStage.preload);
+        newStage = WarningTriggerStage.preload;
+      }
+
+      if (fired.contains(WarningTriggerStage.preload) &&
+          !fired.contains(WarningTriggerStage.visible) &&
+          distMiles <= triggers[WarningTriggerStage.visible]!) {
+        fired.add(WarningTriggerStage.visible);
+        newStage = WarningTriggerStage.visible;
+      }
+
+      if (fired.contains(WarningTriggerStage.visible) &&
+          !fired.contains(WarningTriggerStage.highlighted) &&
+          distMiles <= triggers[WarningTriggerStage.highlighted]!) {
+        fired.add(WarningTriggerStage.highlighted);
+        newStage = WarningTriggerStage.highlighted;
+      }
+
+      if (fired.contains(WarningTriggerStage.highlighted) &&
+          !fired.contains(WarningTriggerStage.urgent) &&
+          distMiles <= triggers[WarningTriggerStage.urgent]!) {
+        fired.add(WarningTriggerStage.urgent);
+        newStage = WarningTriggerStage.urgent;
+      }
+
+      if (newStage != null) {
+        _upsertPopup(sign, distMiles, _highestFiredStage(fired));
         changed = true;
       }
 
       // ── Update distance on already-active popup ─────────────────────────
       final int idx = _activePopups.indexWhere((w) => w.sign.id == sign.id);
       if (idx != -1) {
-        _activePopups[idx] =
-            ActiveWarning(sign: _activePopups[idx].sign, distanceMiles: distMiles);
+        _activePopups[idx] = ActiveWarning(
+          sign: _activePopups[idx].sign,
+          distanceMiles: distMiles,
+          stage: _highestFiredStage(fired),
+        );
         changed = true;
       }
 
       // ── Auto-evict once the truck has passed the sign ───────────────────
-      if (fired.containsAll([
-            _TriggerStage.first,
-            _TriggerStage.second,
-            _TriggerStage.final_,
-          ]) &&
-          distMiles > triggers[_TriggerStage.first]!) {
+      if (fired.containsAll(WarningTriggerStage.values) &&
+          distMiles > triggers[WarningTriggerStage.preload]!) {
         if (_removePopup(sign.id)) changed = true;
       }
     }
@@ -237,13 +292,31 @@ class WarningManager extends ChangeNotifier {
 
   static double _toRad(double deg) => deg * math.pi / 180.0;
 
-  void _upsertPopup(WarningSign sign, double distMiles) {
+  /// Returns the highest [WarningTriggerStage] present in [fired].
+  static WarningTriggerStage _highestFiredStage(
+    Set<WarningTriggerStage> fired,
+  ) {
+    for (final stage in WarningTriggerStage.values.reversed) {
+      if (fired.contains(stage)) return stage;
+    }
+    return WarningTriggerStage.preload;
+  }
+
+  void _upsertPopup(
+    WarningSign sign,
+    double distMiles,
+    WarningTriggerStage stage,
+  ) {
     final int idx = _activePopups.indexWhere((w) => w.sign.id == sign.id);
+    final entry = ActiveWarning(
+      sign: sign,
+      distanceMiles: distMiles,
+      stage: stage,
+    );
     if (idx == -1) {
-      _activePopups.add(ActiveWarning(sign: sign, distanceMiles: distMiles));
+      _activePopups.add(entry);
     } else {
-      _activePopups[idx] =
-          ActiveWarning(sign: sign, distanceMiles: distMiles);
+      _activePopups[idx] = entry;
     }
   }
 

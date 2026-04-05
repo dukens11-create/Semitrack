@@ -6855,7 +6855,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     // Collect POIs within roughly 20 miles ahead (≈ 32 km).
-    const double radiusMeters = 32_000;
+    const double radiusMeters = 32000;
     final nearby = <MapPoi>[];
     for (final poi in _mapPois) {
       final dist = geo.Geolocator.distanceBetween(

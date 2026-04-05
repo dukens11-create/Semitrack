@@ -9,7 +9,9 @@
     "exit_number": "302",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 45.505382,
+    "entrance_lng": -122.674617
   },
   {
     "id": "loves_eugene_1",
@@ -21,7 +23,9 @@
     "exit_number": "194",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 44.052383,
+    "entrance_lng": -123.086341
   },
   {
     "id": "ta_medford_1",
@@ -33,7 +37,9 @@
     "exit_number": "27",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 42.326783,
+    "entrance_lng": -122.875142
   },
   {
     "id": "petro_yreka_1",
@@ -45,7 +51,9 @@
     "exit_number": "775",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 41.735482,
+    "entrance_lng": -122.631748
   },
   {
     "id": "flyingj_redding_1",
@@ -57,7 +65,9 @@
     "exit_number": "677",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 40.586783,
+    "entrance_lng": -122.391243
   },
   {
     "id": "pilot_sacramento_1",
@@ -69,7 +79,9 @@
     "exit_number": "442",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 38.581882,
+    "entrance_lng": -121.493946
   },
   {
     "id": "loves_fresno_1",
@@ -81,7 +93,9 @@
     "exit_number": "133",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 36.738083,
+    "entrance_lng": -119.786653
   },
   {
     "id": "ta_losangeles_1",
@@ -93,7 +107,9 @@
     "exit_number": "21",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 34.052483,
+    "entrance_lng": -118.243253
   },
   {
     "id": "pilot_lasvegas_1",
@@ -105,7 +121,9 @@
     "exit_number": "37",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 36.170183,
+    "entrance_lng": -115.139352
   },
   {
     "id": "loves_phoenix_1",
@@ -117,7 +135,9 @@
     "exit_number": "143",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 33.448673,
+    "entrance_lng": -112.073648
   },
   {
     "id": "ta_albuquerque_1",
@@ -129,7 +149,9 @@
     "exit_number": "159",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 35.084683,
+    "entrance_lng": -106.649946
   },
   {
     "id": "quiktrip_oklahomacity_1",
@@ -141,7 +163,9 @@
     "exit_number": "125",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 35.467883,
+    "entrance_lng": -97.515948
   },
   {
     "id": "pilot_dallas_1",
@@ -153,7 +177,9 @@
     "exit_number": "428",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 32.776952,
+    "entrance_lng": -96.796531
   },
   {
     "id": "loves_houston_1",
@@ -165,7 +191,9 @@
     "exit_number": "769",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 29.760683,
+    "entrance_lng": -95.369352
   },
   {
     "id": "circle_memphis_1",
@@ -177,7 +205,9 @@
     "exit_number": "12",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 35.149748,
+    "entrance_lng": -90.048514
   },
   {
     "id": "pilot_nashville_1",
@@ -189,7 +219,9 @@
     "exit_number": "213",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 36.162983,
+    "entrance_lng": -86.781148
   },
   {
     "id": "loves_atlanta_1",
@@ -201,7 +233,9 @@
     "exit_number": "247",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 33.749284,
+    "entrance_lng": -84.387621
   },
   {
     "id": "ta_charlotte_1",
@@ -213,7 +247,9 @@
     "exit_number": "36",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 35.227383,
+    "entrance_lng": -80.842653
   },
   {
     "id": "pilot_orlando_1",
@@ -225,7 +261,9 @@
     "exit_number": "260",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 28.538583,
+    "entrance_lng": -81.378748
   },
   {
     "id": "loves_jacksonville_1",
@@ -237,7 +275,9 @@
     "exit_number": "362",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 30.332483,
+    "entrance_lng": -81.655253
   },
   {
     "id": "pilot_richmond_1",
@@ -249,7 +289,9 @@
     "exit_number": "69",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 37.540923,
+    "entrance_lng": -77.435538
   },
   {
     "id": "ta_baltimore_1",
@@ -261,7 +303,9 @@
     "exit_number": "50",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 39.290683,
+    "entrance_lng": -76.611748
   },
   {
     "id": "petro_newjersey_1",
@@ -273,7 +317,9 @@
     "exit_number": "14A",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 40.735983,
+    "entrance_lng": -74.171948
   },
   {
     "id": "loves_philadelphia_1",
@@ -285,7 +331,9 @@
     "exit_number": "7",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 39.952883,
+    "entrance_lng": -75.164748
   },
   {
     "id": "pilot_cleveland_1",
@@ -297,7 +345,9 @@
     "exit_number": "170",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 41.499583,
+    "entrance_lng": -81.693948
   },
   {
     "id": "ta_columbus_1",
@@ -357,7 +407,9 @@
     "exit_number": "209",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 38.627241,
+    "entrance_lng": -90.198973
   },
   {
     "id": "pilot_kansascity_1",
@@ -393,7 +445,9 @@
     "exit_number": "311",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 40.761082,
+    "entrance_lng": -111.890541
   },
   {
     "id": "pilot_boise_1",
@@ -405,7 +459,9 @@
     "exit_number": "53",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 43.615278,
+    "entrance_lng": -116.201852
   },
   {
     "id": "loves_spokane_1",
@@ -417,7 +473,9 @@
     "exit_number": "282",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 47.659073,
+    "entrance_lng": -117.425548
   },
   {
     "id": "pilot_seattle_1",
@@ -441,7 +499,9 @@
     "exit_number": "234",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 44.978053,
+    "entrance_lng": -93.264531
   },
   {
     "id": "loves_milwaukee_1",
@@ -465,7 +525,9 @@
     "exit_number": "2",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 39.103374,
+    "entrance_lng": -84.511548
   },
   {
     "id": "loves_louisville_1",
@@ -525,7 +587,9 @@
     "exit_number": "13",
     "country": "US",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 31.762163,
+    "entrance_lng": -106.484541
   },
   {
     "id": "petro_tucson_1",
@@ -890,7 +954,9 @@
     "exit_number": "311",
     "country": "CA",
     "stateOrProvince": "",
-    "city": ""
+    "city": "",
+    "entrance_lat": 46.814173,
+    "entrance_lng": -71.207548
   },
   {
     "id": "parking_ca_hwy1_1",
@@ -1004,7 +1070,9 @@
     "country": "CA",
     "stateOrProvince": "ON",
     "city": "Mississauga",
-    "exit_number": "320"
+    "exit_number": "320",
+    "entrance_lat": 43.589261,
+    "entrance_lng": -79.643652
   },
   {
     "id": "petro_canada_winnipeg_1",

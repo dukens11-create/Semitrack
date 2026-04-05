@@ -4,9 +4,12 @@
     "name": "Pilot Travel Center - Portland",
     "icon": "pilot.png",
     "lat": 45.5051,
-    "lng": -122.6750,
+    "lng": -122.675,
     "category": "truck_stop",
-    "exit_number": "302"
+    "exit_number": "302",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_eugene_1",
@@ -15,7 +18,10 @@
     "lat": 44.0521,
     "lng": -123.0868,
     "category": "truck_stop",
-    "exit_number": "194"
+    "exit_number": "194",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_medford_1",
@@ -24,7 +30,10 @@
     "lat": 42.3265,
     "lng": -122.8756,
     "category": "truck_stop",
-    "exit_number": "27"
+    "exit_number": "27",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petro_yreka_1",
@@ -33,7 +42,10 @@
     "lat": 41.7352,
     "lng": -122.6322,
     "category": "truck_stop",
-    "exit_number": "775"
+    "exit_number": "775",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "flyingj_redding_1",
@@ -42,7 +54,10 @@
     "lat": 40.5865,
     "lng": -122.3917,
     "category": "truck_stop",
-    "exit_number": "677"
+    "exit_number": "677",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_sacramento_1",
@@ -51,7 +66,10 @@
     "lat": 38.5816,
     "lng": -121.4944,
     "category": "truck_stop",
-    "exit_number": "442"
+    "exit_number": "442",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_fresno_1",
@@ -60,7 +78,10 @@
     "lat": 36.7378,
     "lng": -119.7871,
     "category": "truck_stop",
-    "exit_number": "133"
+    "exit_number": "133",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_losangeles_1",
@@ -69,7 +90,10 @@
     "lat": 34.0522,
     "lng": -118.2437,
     "category": "truck_stop",
-    "exit_number": "21"
+    "exit_number": "21",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_lasvegas_1",
@@ -78,16 +102,22 @@
     "lat": 36.1699,
     "lng": -115.1398,
     "category": "truck_stop",
-    "exit_number": "37"
+    "exit_number": "37",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_phoenix_1",
     "name": "Love's Travel Stop - Phoenix",
     "icon": "loves.png",
     "lat": 33.4484,
-    "lng": -112.0740,
+    "lng": -112.074,
     "category": "truck_stop",
-    "exit_number": "143"
+    "exit_number": "143",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_albuquerque_1",
@@ -96,7 +126,10 @@
     "lat": 35.0844,
     "lng": -106.6504,
     "category": "truck_stop",
-    "exit_number": "159"
+    "exit_number": "159",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "quiktrip_oklahomacity_1",
@@ -105,16 +138,22 @@
     "lat": 35.4676,
     "lng": -97.5164,
     "category": "truck_stop",
-    "exit_number": "125"
+    "exit_number": "125",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_dallas_1",
     "name": "Pilot Travel Center - Dallas",
     "icon": "pilot.png",
     "lat": 32.7767,
-    "lng": -96.7970,
+    "lng": -96.797,
     "category": "truck_stop",
-    "exit_number": "428"
+    "exit_number": "428",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_houston_1",
@@ -123,16 +162,22 @@
     "lat": 29.7604,
     "lng": -95.3698,
     "category": "truck_stop",
-    "exit_number": "769"
+    "exit_number": "769",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "circle_memphis_1",
     "name": "Circle K Truck Stop - Memphis",
     "icon": "circle_truck_stop.png",
     "lat": 35.1495,
-    "lng": -90.0490,
+    "lng": -90.049,
     "category": "truck_stop",
-    "exit_number": "12"
+    "exit_number": "12",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_nashville_1",
@@ -141,16 +186,22 @@
     "lat": 36.1627,
     "lng": -86.7816,
     "category": "truck_stop",
-    "exit_number": "213"
+    "exit_number": "213",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_atlanta_1",
     "name": "Love's Travel Stop - Atlanta",
     "icon": "loves.png",
-    "lat": 33.7490,
-    "lng": -84.3880,
+    "lat": 33.749,
+    "lng": -84.388,
     "category": "truck_stop",
-    "exit_number": "247"
+    "exit_number": "247",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_charlotte_1",
@@ -159,7 +210,10 @@
     "lat": 35.2271,
     "lng": -80.8431,
     "category": "truck_stop",
-    "exit_number": "36"
+    "exit_number": "36",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_orlando_1",
@@ -168,7 +222,10 @@
     "lat": 28.5383,
     "lng": -81.3792,
     "category": "truck_stop",
-    "exit_number": "260"
+    "exit_number": "260",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_jacksonville_1",
@@ -177,16 +234,22 @@
     "lat": 30.3322,
     "lng": -81.6557,
     "category": "truck_stop",
-    "exit_number": "362"
+    "exit_number": "362",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_richmond_1",
     "name": "Pilot Travel Center - Richmond",
     "icon": "pilot.png",
     "lat": 37.5407,
-    "lng": -77.4360,
+    "lng": -77.436,
     "category": "truck_stop",
-    "exit_number": "69"
+    "exit_number": "69",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_baltimore_1",
@@ -195,7 +258,10 @@
     "lat": 39.2904,
     "lng": -76.6122,
     "category": "truck_stop",
-    "exit_number": "50"
+    "exit_number": "50",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petro_newjersey_1",
@@ -204,7 +270,10 @@
     "lat": 40.7357,
     "lng": -74.1724,
     "category": "truck_stop",
-    "exit_number": "14A"
+    "exit_number": "14A",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_philadelphia_1",
@@ -213,7 +282,10 @@
     "lat": 39.9526,
     "lng": -75.1652,
     "category": "truck_stop",
-    "exit_number": "7"
+    "exit_number": "7",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_cleveland_1",
@@ -222,7 +294,10 @@
     "lat": 41.4993,
     "lng": -81.6944,
     "category": "truck_stop",
-    "exit_number": "170"
+    "exit_number": "170",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_columbus_1",
@@ -231,7 +306,10 @@
     "lat": 39.9612,
     "lng": -82.9988,
     "category": "truck_stop",
-    "exit_number": "105"
+    "exit_number": "105",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_detroit_1",
@@ -240,7 +318,10 @@
     "lat": 42.3314,
     "lng": -83.0458,
     "category": "truck_stop",
-    "exit_number": "210"
+    "exit_number": "210",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_chicago_1",
@@ -249,7 +330,10 @@
     "lat": 41.8781,
     "lng": -87.6298,
     "category": "truck_stop",
-    "exit_number": "43B"
+    "exit_number": "43B",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_indianapolis_1",
@@ -258,16 +342,22 @@
     "lat": 39.7684,
     "lng": -86.1581,
     "category": "truck_stop",
-    "exit_number": "87"
+    "exit_number": "87",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_stlouis_1",
     "name": "TA Travel Center - St. Louis",
     "icon": "ta_truck_stop.png",
-    "lat": 38.6270,
+    "lat": 38.627,
     "lng": -90.1994,
     "category": "truck_stop",
-    "exit_number": "209"
+    "exit_number": "209",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_kansascity_1",
@@ -276,7 +366,10 @@
     "lat": 39.0997,
     "lng": -94.5786,
     "category": "truck_stop",
-    "exit_number": "235"
+    "exit_number": "235",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_denver_1",
@@ -285,34 +378,46 @@
     "lat": 39.7392,
     "lng": -104.9903,
     "category": "truck_stop",
-    "exit_number": "209B"
+    "exit_number": "209B",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "flyingj_saltlake_1",
     "name": "Flying J Travel Center - Salt Lake City",
     "icon": "flying_j_truck_stop.png",
     "lat": 40.7608,
-    "lng": -111.8910,
+    "lng": -111.891,
     "category": "truck_stop",
-    "exit_number": "311"
+    "exit_number": "311",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_boise_1",
     "name": "Pilot Travel Center - Boise",
     "icon": "pilot.png",
-    "lat": 43.6150,
+    "lat": 43.615,
     "lng": -116.2023,
     "category": "truck_stop",
-    "exit_number": "53"
+    "exit_number": "53",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_spokane_1",
     "name": "Love's Travel Stop - Spokane",
     "icon": "loves.png",
     "lat": 47.6588,
-    "lng": -117.4260,
+    "lng": -117.426,
     "category": "truck_stop",
-    "exit_number": "282"
+    "exit_number": "282",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_seattle_1",
@@ -321,16 +426,22 @@
     "lat": 47.6062,
     "lng": -122.3321,
     "category": "truck_stop",
-    "exit_number": "166"
+    "exit_number": "166",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_minneapolis_1",
     "name": "TA Travel Center - Minneapolis",
     "icon": "ta_truck_stop.png",
     "lat": 44.9778,
-    "lng": -93.2650,
+    "lng": -93.265,
     "category": "truck_stop",
-    "exit_number": "234"
+    "exit_number": "234",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_milwaukee_1",
@@ -339,16 +450,22 @@
     "lat": 43.0389,
     "lng": -87.9065,
     "category": "truck_stop",
-    "exit_number": "310"
+    "exit_number": "310",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_cincinnati_1",
     "name": "Pilot Travel Center - Cincinnati",
     "icon": "pilot.png",
     "lat": 39.1031,
-    "lng": -84.5120,
+    "lng": -84.512,
     "category": "truck_stop",
-    "exit_number": "2"
+    "exit_number": "2",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_louisville_1",
@@ -357,7 +474,10 @@
     "lat": 38.2527,
     "lng": -85.7585,
     "category": "truck_stop",
-    "exit_number": "130"
+    "exit_number": "130",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_birmingham_1",
@@ -366,7 +486,10 @@
     "lat": 33.5186,
     "lng": -86.8104,
     "category": "truck_stop",
-    "exit_number": "123"
+    "exit_number": "123",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_neworleans_1",
@@ -375,7 +498,10 @@
     "lat": 29.9511,
     "lng": -90.0715,
     "category": "truck_stop",
-    "exit_number": "236"
+    "exit_number": "236",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_sanantonio_1",
@@ -384,16 +510,22 @@
     "lat": 29.4241,
     "lng": -98.4936,
     "category": "truck_stop",
-    "exit_number": "573"
+    "exit_number": "573",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_elpaso_1",
     "name": "Love's Travel Stop - El Paso",
     "icon": "loves.png",
     "lat": 31.7619,
-    "lng": -106.4850,
+    "lng": -106.485,
     "category": "truck_stop",
-    "exit_number": "13"
+    "exit_number": "13",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petro_tucson_1",
@@ -402,7 +534,10 @@
     "lat": 32.2226,
     "lng": -110.9747,
     "category": "truck_stop",
-    "exit_number": "264"
+    "exit_number": "264",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "flyingj_reno_1",
@@ -411,7 +546,10 @@
     "lat": 39.5296,
     "lng": -119.8138,
     "category": "truck_stop",
-    "exit_number": "22"
+    "exit_number": "22",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "pilot_sanjose_1",
@@ -420,7 +558,10 @@
     "lat": 37.3382,
     "lng": -121.8863,
     "category": "truck_stop",
-    "exit_number": "121"
+    "exit_number": "121",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "loves_bakersfield_1",
@@ -429,7 +570,10 @@
     "lat": 35.3733,
     "lng": -119.0187,
     "category": "truck_stop",
-    "exit_number": "33"
+    "exit_number": "33",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "ta_sandiego_1",
@@ -438,7 +582,10 @@
     "lat": 32.7157,
     "lng": -117.1611,
     "category": "truck_stop",
-    "exit_number": "17"
+    "exit_number": "17",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "parking_anchorage_1",
@@ -446,31 +593,43 @@
     "icon": "truck_parking.png",
     "lat": 61.2181,
     "lng": -149.9003,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_ca_i5_1",
     "name": "Weigh Station - I-5 Woodland",
     "icon": "weight_station.png",
     "lat": 38.6785,
-    "lng": -121.7750,
-    "category": "weigh_station"
+    "lng": -121.775,
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": ""
   },
   {
     "id": "weigh_ca_i80_1",
     "name": "Weigh Station - I-80 Truckee",
     "icon": "weight_station.png",
-    "lat": 39.3270,
+    "lat": 39.327,
     "lng": -120.1833,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": ""
   },
   {
     "id": "weigh_az_i40_1",
     "name": "Weigh Station - I-40 Kingman",
     "icon": "weight_station.png",
     "lat": 35.1894,
-    "lng": -114.0530,
-    "category": "weigh_station"
+    "lng": -114.053,
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_tx_i10_1",
@@ -478,7 +637,10 @@
     "icon": "weight_station.png",
     "lat": 29.5863,
     "lng": -97.9644,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_fl_i75_1",
@@ -486,7 +648,10 @@
     "icon": "weight_station.png",
     "lat": 29.6516,
     "lng": -82.3248,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_ga_i95_1",
@@ -494,31 +659,43 @@
     "icon": "weight_station.png",
     "lat": 32.0835,
     "lng": -81.0998,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_oh_i90_1",
     "name": "Weigh Station - I-90 Cleveland",
     "icon": "weight_station.png",
     "lat": 41.5051,
-    "lng": -81.5910,
-    "category": "weigh_station"
+    "lng": -81.591,
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_il_i55_1",
     "name": "Weigh Station - I-55 Joliet",
     "icon": "weight_station.png",
-    "lat": 41.5250,
+    "lat": 41.525,
     "lng": -88.0814,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_co_i70_1",
     "name": "Weigh Station - I-70 Denver East",
     "icon": "weight_station.png",
-    "lat": 39.7350,
-    "lng": -104.7500,
-    "category": "weigh_station"
+    "lat": 39.735,
+    "lng": -104.75,
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_wa_i90_1",
@@ -526,15 +703,21 @@
     "icon": "weight_station.png",
     "lat": 46.9965,
     "lng": -120.5478,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_ca_i5_1",
     "name": "Rest Area - I-5 Coalinga",
     "icon": "rest_area.png",
     "lat": 36.1441,
-    "lng": -120.3600,
-    "category": "rest_area"
+    "lng": -120.36,
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "CA",
+    "city": ""
   },
   {
     "id": "rest_tx_i10_1",
@@ -542,15 +725,21 @@
     "icon": "rest_area.png",
     "lat": 31.1768,
     "lng": -105.3567,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_fl_i10_1",
     "name": "Rest Area - I-10 Tallahassee",
     "icon": "rest_area.png",
-    "lat": 30.4380,
+    "lat": 30.438,
     "lng": -84.2807,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_nc_i95_1",
@@ -558,23 +747,32 @@
     "icon": "rest_area.png",
     "lat": 35.9382,
     "lng": -77.7905,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_oh_i71_1",
     "name": "Rest Area - I-71 Medina",
     "icon": "rest_area.png",
-    "lat": 41.1400,
-    "lng": -81.8600,
-    "category": "rest_area"
+    "lat": 41.14,
+    "lng": -81.86,
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_mn_i94_1",
     "name": "Rest Area - I-94 St. Cloud",
     "icon": "rest_area.png",
-    "lat": 45.5580,
-    "lng": -94.1610,
-    "category": "rest_area"
+    "lat": 45.558,
+    "lng": -94.161,
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_co_i25_1",
@@ -582,15 +780,21 @@
     "icon": "rest_area.png",
     "lat": 37.6238,
     "lng": -104.7815,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_wa_i5_1",
     "name": "Rest Area - I-5 Olympia",
     "icon": "rest_area.png",
     "lat": 46.9756,
-    "lng": -122.9020,
-    "category": "rest_area"
+    "lng": -122.902,
+    "category": "rest_area",
+    "country": "US",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_toronto_1",
@@ -599,7 +803,10 @@
     "lat": 43.6532,
     "lng": -79.3832,
     "category": "truck_stop",
-    "exit_number": "369"
+    "exit_number": "369",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_montreal_1",
@@ -608,7 +815,10 @@
     "lat": 45.5017,
     "lng": -73.5673,
     "category": "truck_stop",
-    "exit_number": "68"
+    "exit_number": "68",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_vancouver_1",
@@ -617,7 +827,10 @@
     "lat": 49.2827,
     "lng": -123.1207,
     "category": "truck_stop",
-    "exit_number": "28"
+    "exit_number": "28",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_calgary_1",
@@ -626,7 +839,10 @@
     "lat": 51.0447,
     "lng": -114.0719,
     "category": "truck_stop",
-    "exit_number": "262"
+    "exit_number": "262",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_edmonton_1",
@@ -635,7 +851,10 @@
     "lat": 53.5461,
     "lng": -113.4938,
     "category": "truck_stop",
-    "exit_number": "374"
+    "exit_number": "374",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_winnipeg_1",
@@ -644,7 +863,10 @@
     "lat": 49.8951,
     "lng": -97.1384,
     "category": "truck_stop",
-    "exit_number": "16"
+    "exit_number": "16",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_ottawa_1",
@@ -653,16 +875,22 @@
     "lat": 45.4215,
     "lng": -75.6972,
     "category": "truck_stop",
-    "exit_number": "104"
+    "exit_number": "104",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "petrocan_quebec_1",
     "name": "Petro-Canada Truck Stop - Quebec City",
     "icon": "petro_canada_truck_stop.png",
     "lat": 46.8139,
-    "lng": -71.2080,
+    "lng": -71.208,
     "category": "truck_stop",
-    "exit_number": "311"
+    "exit_number": "311",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "parking_ca_hwy1_1",
@@ -670,7 +898,10 @@
     "icon": "truck_parking.png",
     "lat": 49.6942,
     "lng": -112.8328,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "parking_ca_transcan_1",
@@ -678,15 +909,21 @@
     "icon": "truck_parking.png",
     "lat": 50.4452,
     "lng": -104.6189,
-    "category": "truck_stop"
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_ca_on_401_1",
     "name": "Weigh Station - Hwy 401 Kingston",
     "icon": "weight_station.png",
     "lat": 44.2298,
-    "lng": -76.4810,
-    "category": "weigh_station"
+    "lng": -76.481,
+    "category": "weigh_station",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "weigh_ca_bc_1_1",
@@ -694,7 +931,10 @@
     "icon": "weight_station.png",
     "lat": 49.3836,
     "lng": -121.4418,
-    "category": "weigh_station"
+    "category": "weigh_station",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_ca_on_1",
@@ -702,7 +942,10 @@
     "icon": "rest_area.png",
     "lat": 42.9849,
     "lng": -81.2453,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
   },
   {
     "id": "rest_ca_ab_1",
@@ -710,6 +953,114 @@
     "icon": "rest_area.png",
     "lat": 52.2681,
     "lng": -113.8112,
-    "category": "rest_area"
+    "category": "rest_area",
+    "country": "CA",
+    "stateOrProvince": "",
+    "city": ""
+  },
+  {
+    "id": "petro_canada_calgary_1",
+    "name": "Petro-Canada Truck Stop - Calgary",
+    "icon": "petro_canada_truck_stop.png",
+    "lat": 51.0447,
+    "lng": -114.0719,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "AB",
+    "city": "Calgary",
+    "exit_number": "262"
+  },
+  {
+    "id": "petro_canada_edmonton_1",
+    "name": "Petro-Canada Truck Stop - Edmonton",
+    "icon": "petro_canada_truck_stop.png",
+    "lat": 53.5461,
+    "lng": -113.4938,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "AB",
+    "city": "Edmonton",
+    "exit_number": "382"
+  },
+  {
+    "id": "petro_canada_vancouver_1",
+    "name": "Petro-Canada Truck Stop - Langley",
+    "icon": "petro_canada_truck_stop.png",
+    "lat": 49.1044,
+    "lng": -122.6604,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "BC",
+    "city": "Langley",
+    "exit_number": "58"
+  },
+  {
+    "id": "petro_canada_toronto_1",
+    "name": "Petro-Canada Truck Stop - Mississauga",
+    "icon": "petro_canada_truck_stop.png",
+    "lat": 43.589,
+    "lng": -79.6441,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "ON",
+    "city": "Mississauga",
+    "exit_number": "320"
+  },
+  {
+    "id": "petro_canada_winnipeg_1",
+    "name": "Petro-Canada Truck Stop - Winnipeg",
+    "icon": "petro_canada_truck_stop.png",
+    "lat": 49.8954,
+    "lng": -97.1385,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "MB",
+    "city": "Winnipeg",
+    "exit_number": "449"
+  },
+  {
+    "id": "loves_regina_1",
+    "name": "Love's Travel Stop - Regina",
+    "icon": "loves.png",
+    "lat": 50.4452,
+    "lng": -104.6189,
+    "category": "truck_stop",
+    "country": "CA",
+    "stateOrProvince": "SK",
+    "city": "Regina",
+    "exit_number": "1"
+  },
+  {
+    "id": "weigh_ca_hwy1_ab_1",
+    "name": "Weigh Station - Trans-Canada Hwy AB",
+    "icon": "weight_station.png",
+    "lat": 50.9835,
+    "lng": -110.6744,
+    "category": "weigh_station",
+    "country": "CA",
+    "stateOrProvince": "AB",
+    "city": "Medicine Hat"
+  },
+  {
+    "id": "weigh_ca_hwy1_bc_1",
+    "name": "Weigh Station - Trans-Canada Hwy BC",
+    "icon": "weight_station.png",
+    "lat": 49.6831,
+    "lng": -117.6312,
+    "category": "weigh_station",
+    "country": "CA",
+    "stateOrProvince": "BC",
+    "city": "Castlegar"
+  },
+  {
+    "id": "weigh_ca_hwy400_on_1",
+    "name": "Weigh Station - Hwy 400 ON",
+    "icon": "weight_station.png",
+    "lat": 44.5557,
+    "lng": -79.7023,
+    "category": "weigh_station",
+    "country": "CA",
+    "stateOrProvince": "ON",
+    "city": "Barrie"
   }
 ]

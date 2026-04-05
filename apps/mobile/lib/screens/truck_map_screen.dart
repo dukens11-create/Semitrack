@@ -15,6 +15,7 @@ import 'package:latlong2/latlong.dart' hide Path;
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
+import 'package:semitrack_mobile/models/poi.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
 import 'package:semitrack_mobile/models/nav_settings_model.dart';
@@ -86,6 +87,68 @@ class UpcomingManeuverStep {
   /// Per-lane data for the dynamic lane guidance panel.  Falls back to a
   /// sample four-lane array when the SDK does not provide lane data.
   final List<LaneInfo> lanes;
+}
+
+// ── Junction-view and enhanced lane guidance models ────────────────────────
+
+/// The direction a single arrow can point on a lane marker.
+///
+/// Used by [LaneGuidanceData] to describe the allowed movements for each lane
+/// in the junction-view and enhanced lane-guidance overlays.
+enum LaneArrowType {
+  left,
+  slightLeft,
+  straight,
+  slightRight,
+  right,
+  uTurn,
+  none,
+}
+
+/// Visual description of a single lane as shown in the lane-guidance and
+/// junction-view overlays.
+///
+/// [arrows] lists every arrow drawn on the lane marker — most lanes carry
+/// one arrow, but shared lanes (e.g. straight-or-right) carry two.
+/// [isActive] is true when the driver should use this lane to follow the route.
+class LaneGuidanceData {
+  const LaneGuidanceData({
+    required this.arrows,
+    required this.isActive,
+  });
+
+  final List<LaneArrowType> arrows;
+  final bool isActive;
+}
+
+/// Data snapshot driving the compact junction-view overlay.
+///
+/// Produced by [_TruckMapScreenState._buildJunctionViewSnapshot] and stored in
+/// [_TruckMapScreenState._junctionViewData].  The overlay is rendered by
+/// [_TruckMapScreenState._buildJunctionView].
+class JunctionViewData {
+  const JunctionViewData({
+    required this.maneuverType,
+    required this.incomingRoadName,
+    required this.outgoingRoadName,
+    required this.lanes,
+    required this.distanceMiles,
+  });
+
+  /// Mapbox maneuver type string (e.g. "exit", "fork", "merge").
+  final String maneuverType;
+
+  /// Road name the driver is currently travelling on (may be empty).
+  final String incomingRoadName;
+
+  /// Road name at the upcoming junction (may be empty).
+  final String outgoingRoadName;
+
+  /// Per-lane display data for the junction-view panel.
+  final List<LaneGuidanceData> lanes;
+
+  /// Distance in miles to this junction from the driver's current position.
+  final double distanceMiles;
 }
 
 // ── Top navigation instruction card models ────────────────────────────────
@@ -459,6 +522,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Drives both [_shouldShowLaneGuidance] and [_buildDynamicLaneAssist].
   UpcomingManeuverStep? _upcomingManeuverStep;
 
+  // ── Junction-view state ────────────────────────────────────────────────────
+  /// Data for the compact junction-view card shown when the driver approaches
+  /// a complex interchange, exit, fork, or merge.
+  /// Null when junction view should not be visible.
+  JunctionViewData? _junctionViewData;
+
   // ── Top instruction card state ─────────────────────────────────────────────
   /// Current data for the compact top navigation instruction card.
   /// Null until the first call to [_updateTopInstructionFromNavigationStep].
@@ -743,7 +812,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Maximum cross-track distance (metres) for a weigh station to be
   /// considered "on" the active route and eligible for ahead-on-route display.
-  static const double _weighStationProximityMeters = 500.0;
+  /// 5 km gives reliable matches on straight highways while excluding parallel
+  /// roads and facilities far from the route.
+  static const double _weighStationProximityMeters = 5000.0;
+
+  /// Maximum distance ahead (miles) at which a POI is surfaced in the
+  /// chips/badges.  50 km ≈ 31.07 mi.  POIs farther ahead are hidden until
+  /// the driver gets within this range.
+  static const double _poiMaxAheadMiles = 31.07;
+
+  /// A POI within this distance (miles) of the driver is considered "passed"
+  /// and removed from the chips.  200 m ≈ 0.124 mi.
+  static const double _poiPassedThresholdMiles = 0.124;
 
   /// Fallback distance (miles) shown in the weigh-station chip when no live
   /// route data is available, ensuring the chip is always visible.
@@ -3840,8 +3920,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// A stop is considered "ahead" when its nearest route index is strictly
   /// greater than the driver's nearest route index.  Stops closer than
-  /// 0.2 miles (virtually passed) are excluded.  Stops farther than
-  /// [maxOffRouteMiles] from the route polyline are also excluded.
+  /// [_poiPassedThresholdMiles] (200 m) are excluded as virtually passed.
+  /// Stops farther than [_poiMaxAheadMiles] (50 km) ahead are also excluded
+  /// so only nearby upcoming stops are surfaced.  Stops farther than
+  /// [maxOffRouteMiles] from the route polyline are excluded.
   List<AheadTruckStop> _getClosestTruckStopsAheadOnRoute({
     required double driverLat,
     required double driverLng,
@@ -3866,7 +3948,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final routeMilesAhead =
           _routeDistanceMilesBetweenIndices(routePoints, driverIdx, poiIdx);
-      if (routeMilesAhead < 0.2) continue; // virtually passed
+      if (routeMilesAhead < _poiPassedThresholdMiles) continue; // virtually passed (< 200 m)
+      if (routeMilesAhead > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
       ahead.add(AheadTruckStop(
         poi: poi,
@@ -3905,20 +3988,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
         .toList(growable: false);
 
-    // Build the TruckStopPoi list: prefer _loadedPois (locations.json) over
-    // the mock _truckStops so the panel is populated for any route geography.
+    // Build the TruckStopPoi list via the unified Poi model.
+    // Convert PoiItem → Poi (unified model) → TruckStopPoi.
+    // Only entries with type == "truck_stop" are surfaced as chips.
     final List<TruckStopPoi> pois;
     if (_loadedPois.isNotEmpty) {
-      pois = _loadedPois.map((p) => TruckStopPoi(
-        id: p.id,
-        name: p.name,
-        brand: p.icon,
-        logoName: p.icon,
-        latitude: p.lat,
-        longitude: p.lng,
-        locationName: '${p.city}, ${p.stateOrProvince}',
-        exitNumber: p.exitNumber,
-      )).toList(growable: false);
+      pois = _loadedPois
+          .map(Poi.fromPoiItem)
+          .where((p) => p.type == 'truck_stop')
+          .map((p) => TruckStopPoi(
+                id: p.id,
+                name: p.name,
+                brand: p.icon,
+                logoName: p.icon,
+                latitude: p.lat,
+                longitude: p.lng,
+                locationName: p.city.isNotEmpty
+                    ? '${p.city}, ${p.stateOrProvince}'
+                    : p.stateOrProvince,
+                exitNumber: p.exitNumber,
+              ))
+          .toList(growable: false);
     } else {
       // Convert TruckStop list to TruckStopPoi list, deriving logoName from
       // the assetLogo path (e.g. 'assets/logo_brand_markers/pilot.png' → 'pilot').
@@ -5219,20 +5309,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the next 1–2 weigh stations that are ahead of the truck on the
   /// active route, sorted by ascending route distance.
   ///
+  /// **Data sources (merged):**
+  ///   1. `_loadedPois` (from `assets/locations.json`) where `category ==
+  ///      "weigh_station"` — covers both USA and Canada JSON data.
+  ///   2. `_mapPois` of type [PoiType.weighStation] — the in-memory sample set.
+  ///
   /// A station is considered "ahead" when its nearest route-point index is
   /// strictly greater than [_truckIndex] AND the station is within
-  /// [_weighStationProximityMeters] of the route polyline.  Route miles are
-  /// approximated by summing Haversine segment lengths from [_truckIndex] to
-  /// the station's nearest route point.
+  /// [_weighStationProximityMeters] of the route polyline.
+  /// Stations closer than [_poiPassedThresholdMiles] (200 m) are treated as
+  /// passed and excluded.  Stations farther than [_poiMaxAheadMiles] (50 km)
+  /// ahead are also excluded.
   List<AheadWeighStation> _getClosestWeighStationsAheadOnRoute() {
     if (_routePoints.isEmpty) return const [];
 
-    // Derive WeighStationPoi entries from existing MapPoi data so there is a
-    // single source of truth for weigh-station coordinates.
-    final weighPois = _mapPois
-        .where((p) => p.type == PoiType.weighStation)
-        .map((p) => WeighStationPoi.fromMapPoi(p))
-        .toList();
+    // Build a deduplicated list of WeighStationPoi entries.
+    // Prefer _loadedPois (JSON dataset, USA + Canada) and fall back to / merge
+    // with _mapPois for any legacy in-memory entries not in the JSON file.
+    final Set<String> seenIds = {};
+    final List<WeighStationPoi> weighPois = [];
+
+    // 1. JSON-loaded weigh stations (both USA and Canada).
+    for (final p in _loadedPois) {
+      if (p.category != 'weigh_station') continue;
+      if (seenIds.contains(p.id)) continue;
+      seenIds.add(p.id);
+      weighPois.add(WeighStationPoi(
+        id: p.id,
+        position: LatLng(p.lat, p.lng),
+        name: p.name,
+        status: 'Open',
+        logoName: p.icon.isNotEmpty ? p.icon : 'weight_station',
+      ));
+    }
+
+    // 2. In-memory MapPoi weigh stations (legacy / fallback).
+    for (final p in _mapPois) {
+      if (p.type != PoiType.weighStation) continue;
+      if (seenIds.contains(p.id)) continue;
+      seenIds.add(p.id);
+      weighPois.add(WeighStationPoi.fromMapPoi(p));
+    }
 
     final List<AheadWeighStation> candidates = [];
 
@@ -5250,6 +5367,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         meters += _distanceBetween(_routePoints[i], _routePoints[i + 1]);
       }
       final double miles = meters / _metersPerMile;
+
+      if (miles < _poiPassedThresholdMiles) continue; // within 200 m — passed
+      if (miles > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
       candidates.add(AheadWeighStation(
         poi: poi,
@@ -8887,6 +9007,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
                 LaneInfo(directions: [LaneDirection.right],      isRecommended: false),
               ];
+
+    // Build junction-view snapshot when the maneuver warrants one.
+    final JunctionViewData? newJunctionData =
+        _maneuverNeedsJunctionView(maneuverType)
+            ? _buildJunctionViewSnapshot(
+                maneuverType:    maneuverType!,
+                distanceMiles:   distanceMiles,
+                roadName:        roadName,
+                resolvedLanes:   resolvedLanes,
+              )
+            : null;
+
     setState(() {
       _nextManeuverType              = maneuverType;
       _distanceToNextManeuverMiles   = distanceMiles;
@@ -8898,10 +9030,90 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         roadName:           roadName,
         lanes:              resolvedLanes,
       );
+      _junctionViewData = newJunctionData;
     });
   }
 
   // ── Dynamic lane guidance helpers ─────────────────────────────────────────
+
+  // ── Junction-view helpers ─────────────────────────────────────────────────
+
+  /// Returns true when [maneuverType] is one of the complex interchange
+  /// categories that warrant a junction-view overlay (exits, forks, merges).
+  ///
+  /// Junction view is reserved for highway-class complexity where a top-down
+  /// intersection diagram provides genuine driver value.  Simple city turns
+  /// are covered by the lane-guidance panel alone.
+  bool _maneuverNeedsJunctionView(String? maneuverType) {
+    if (maneuverType == null) return false;
+    const supported = {'exit', 'fork', 'merge', 'off ramp', 'on ramp'};
+    return supported.contains(maneuverType.toLowerCase());
+  }
+
+  /// Returns true when the junction-view overlay should be visible.
+  ///
+  /// Show threshold is 0.5 miles for highway junctions (exits/ramps) and
+  /// 0.3 miles for city-level forks/merges — tighter than lane guidance so
+  /// the card only appears when the driver is truly close to the junction.
+  bool _shouldShowJunctionView(UpcomingManeuverStep? step) {
+    if (step == null || !_maneuverNeedsJunctionView(step.maneuverType)) {
+      return false;
+    }
+    final double threshold = step.isHighwayManeuver ? 0.5 : 0.3;
+    return step.distanceMiles <= threshold;
+  }
+
+  /// Converts a [LaneDirection] value to the equivalent [LaneArrowType].
+  LaneArrowType _laneDirectionToArrowType(LaneDirection direction) {
+    switch (direction) {
+      case LaneDirection.left:        return LaneArrowType.left;
+      case LaneDirection.slightLeft:  return LaneArrowType.slightLeft;
+      case LaneDirection.straight:    return LaneArrowType.straight;
+      case LaneDirection.slightRight: return LaneArrowType.slightRight;
+      case LaneDirection.right:       return LaneArrowType.right;
+      case LaneDirection.uTurn:       return LaneArrowType.uTurn;
+    }
+  }
+
+  /// Builds a [JunctionViewData] snapshot from the supplied parameters.
+  ///
+  /// Called inside [_updateUpcomingManeuver] when [maneuverType] qualifies for
+  /// a junction-view overlay.  Converts [LaneInfo] entries to [LaneGuidanceData]
+  /// and derives road name labels from available context.
+  JunctionViewData _buildJunctionViewSnapshot({
+    required String maneuverType,
+    required double distanceMiles,
+    required String? roadName,
+    required List<LaneInfo> resolvedLanes,
+  }) {
+    final List<LaneGuidanceData> jvLanes = resolvedLanes.map((lane) {
+      return LaneGuidanceData(
+        arrows: lane.directions.map(_laneDirectionToArrowType).toList(),
+        isActive: lane.isRecommended,
+      );
+    }).toList();
+
+    // Use the outgoing road name where available; fall back gracefully.
+    final String outgoing = (roadName != null && roadName.trim().isNotEmpty)
+        ? roadName.trim()
+        : '';
+
+    // Derive the incoming road name from the current nav step when possible.
+    String incoming = '';
+    if (_navSteps.isNotEmpty) {
+      final safeIdx = _currentStepIndex.clamp(0, _navSteps.length - 1);
+      final name = _navSteps[safeIdx].name;
+      if (name.isNotEmpty) incoming = name;
+    }
+
+    return JunctionViewData(
+      maneuverType:     maneuverType,
+      incomingRoadName: incoming,
+      outgoingRoadName: outgoing,
+      lanes:            jvLanes,
+      distanceMiles:    distanceMiles,
+    );
+  }
 
   // ── Top instruction card helpers ─────────────────────────────────────────
 
@@ -9441,6 +9653,155 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             color: const Color(0xFF1E293B),
             child: _buildExitPreviewGraphic(data),
           ),
+        ],
+      ),
+    );
+  }
+  // ── Junction View ─────────────────────────────────────────────────────────
+
+  /// Maps a [LaneArrowType] value to the best matching [IconData].
+  IconData _junctionArrowIcon(LaneArrowType type) {
+    switch (type) {
+      case LaneArrowType.left:        return Icons.turn_left;
+      case LaneArrowType.slightLeft:  return Icons.turn_slight_left;
+      case LaneArrowType.straight:    return Icons.straight;
+      case LaneArrowType.slightRight: return Icons.turn_slight_right;
+      case LaneArrowType.right:       return Icons.turn_right;
+      case LaneArrowType.uTurn:       return Icons.u_turn_left;
+      case LaneArrowType.none:        return Icons.straight;
+    }
+  }
+
+  /// Builds a single lane tile for the junction-view diagram.
+  ///
+  /// Active (recommended) lanes are highlighted in blue with a border;
+  /// non-active lanes use a dark-grey background.
+  Widget _buildJunctionLaneTile(LaneGuidanceData lane) {
+    const Color activeColor   = Color(0xFF1565C0); // blue 800
+    const Color inactiveColor = Color(0xFF37474F); // blue-grey 800
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      decoration: BoxDecoration(
+        color: lane.isActive ? activeColor : inactiveColor,
+        borderRadius: BorderRadius.circular(7),
+        border: lane.isActive
+            ? Border.all(color: Colors.blueAccent, width: 1.5)
+            : Border.all(color: Colors.white24, width: 0.5),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: lane.arrows
+            .map((a) => Icon(_junctionArrowIcon(a), color: Colors.white, size: 16))
+            .toList(),
+      ),
+    );
+  }
+
+  /// Compact junction-view overlay card shown in the top-right area of the
+  /// map when the driver is approaching a complex exit, fork, or merge.
+  ///
+  /// Displays a lane diagram with color-coded arrows so the driver can see
+  /// which lane to take without looking away from the road.
+  ///
+  /// Visibility rules:
+  ///  - Only shown during active navigation ([_isNavigating] == true).
+  ///  - Gated by [NavSettingsModel.viewJunctionView].
+  ///  - Maneuver type must be an exit, fork, or merge.
+  ///  - Driver must be within 0.5 mi (highway) or 0.3 mi (city) of junction.
+  ///
+  /// Returns [SizedBox.shrink] at zero cost when conditions are not met.
+  Widget _buildJunctionView() {
+    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_navSettings.viewJunctionView) return const SizedBox.shrink();
+
+    final bool visible = _shouldShowJunctionView(_upcomingManeuverStep);
+
+    return Positioned(
+      // top: 130 positions the card below the satellite toggle (top:74 + 48 + 8)
+      // so it never overlaps the compass or satellite buttons.
+      top: 130,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: (visible && _junctionViewData != null)
+              ? _buildJunctionViewCard(
+                  _junctionViewData!,
+                  key: const ValueKey('junctionViewOn'),
+                )
+              : const SizedBox.shrink(key: ValueKey('junctionViewOff')),
+        ),
+      ),
+    );
+  }
+
+  /// Renders the actual junction-view card content for [data].
+  ///
+  /// Extracted from [_buildJunctionView] so the [AnimatedSwitcher] child is
+  /// a stable, keyed widget.
+  Widget _buildJunctionViewCard(JunctionViewData data, {Key? key}) {
+    final String distStr = _formatMilesDisplay(data.distanceMiles);
+    return Container(
+      key: key,
+      width: 148,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.88),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black45,
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // ── Header: junction icon + distance ──────────────────────────────
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.call_split, color: Colors.blueAccent, size: 13),
+              const SizedBox(width: 4),
+              Text(
+                'JUNCTION  $distStr',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // ── Lane diagram ──────────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: data.lanes.map(_buildJunctionLaneTile).toList(),
+          ),
+          // ── Outgoing road name ────────────────────────────────────────────
+          if (data.outgoingRoadName.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              data.outgoingRoadName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -10478,6 +10839,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                   ),
+                // ── Junction-view card ────────────────────────────────────
+                // Compact top-right lane diagram shown when the driver is
+                // within 0.5 mi (highway) / 0.3 mi (city) of a complex
+                // exit, fork, or merge.  Returns SizedBox.shrink() when
+                // conditions are not met, so it is zero-cost otherwise.
+                _buildJunctionView(),
                 // ── Inline search bar ─────────────────────────────────────
                 // Hidden during active turn-by-turn navigation so it does not
                 // overlap the navigation banner.  Visible at all other times

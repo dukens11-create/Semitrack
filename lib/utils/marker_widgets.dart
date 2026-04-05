@@ -100,7 +100,7 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
 /// - [fallbackIcon] – Icon to display when [imageBytes] is null.
 ///                    Defaults to [Icons.location_on].
 /// - [pinSize]      – Total bounding-box size in logical pixels.
-///                    Defaults to `48`.  Keep consistent across call sites.
+///                    Defaults to `72`.  Keep consistent across call sites.
 ///
 /// ### Returns
 /// A [Widget] ready to embed in a [Marker] child.
@@ -108,23 +108,24 @@ Widget buildGpsPinMarker({
   required Color pinColor,
   Uint8List? imageBytes,
   IconData fallbackIcon = Icons.location_on,
-  double pinSize = 48.0,
+  double pinSize = 72.0,
 }) {
   // The head of the pin occupies roughly the top 60 % of the icon bounding box.
+  // A larger headDiameter ratio (0.60) maximises the visible logo/icon area.
   // We leave a small inset so the white circle does not clip the pin outline.
-  final double headDiameter = pinSize * 0.52;
+  final double headDiameter = pinSize * 0.60;
   final double headInset = pinSize * 0.04;
 
   final Widget innerContent = imageBytes != null
       ? Padding(
-          padding: const EdgeInsets.all(3),
+          padding: const EdgeInsets.all(2),
           child: Image.memory(
             imageBytes,
             fit: BoxFit.contain,
             gaplessPlayback: true,
           ),
         )
-      : Icon(fallbackIcon, size: headDiameter * 0.52, color: Colors.white);
+      : Icon(fallbackIcon, size: headDiameter * 0.65, color: Colors.white);
 
   return SizedBox(
     width: pinSize,

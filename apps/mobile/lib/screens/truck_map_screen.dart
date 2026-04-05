@@ -1823,7 +1823,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return weighStations.map((poi) {
       final bool isNext = poi.id == nextStationId;
-      final double size = isNext ? 48.0 : 40.0;
+      const double size = 40.0;
 
       Widget iconWidget;
       if (weighBytes != null) {
@@ -1906,14 +1906,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Widget iconWidget = bytes != null
           ? Image.memory(
               bytes,
-              width: 36,
-              height: 36,
+              width: 40,
+              height: 40,
               fit: BoxFit.contain,
               gaplessPlayback: true,
             )
           : Container(
-              width: 36,
-              height: 36,
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
                 color: Colors.blue.shade700,
                 shape: BoxShape.circle,
@@ -1927,8 +1927,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       return Marker(
         point: LatLng(poi.lat, poi.lng),
-        width: 36,
-        height: 36,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showPoiInfoDialog(poi),

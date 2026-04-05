@@ -2536,7 +2536,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _onMapGestureStarted() {
     if (_cameraMode == NavigationCameraMode.follow ||
         _cameraMode == NavigationCameraMode.overview) {
-      _setFreeCamera();
+      _enterFreeCameraMode();
     } else if (_cameraMode == NavigationCameraMode.free) {
       // Reset the idle timer while the user is still interacting.
       _gestureReturnTimer?.cancel();
@@ -2567,18 +2567,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns to follow mode if enough idle time has elapsed and navigation
   /// is still active.
   ///
-  /// Called by [_gestureReturnTimer] after 8 seconds.
+  /// Called by [_gestureReturnTimer] after 8 seconds and on every GPS fix
+  /// via [_onGpsPosition] for redundancy.
   void _maybeReturnToFollowMode() {
     if (!mounted) return;
     if (!_hasActiveDestination) return;
+    if (_cameraMode != NavigationCameraMode.free) return;
     if (_isUserInteractingWithMap) return;
     final last = _lastManualMapInteractionAt;
-    if (last != null &&
-        DateTime.now().difference(last).inSeconds < 8) {
+    if (last == null) return;
+    if (DateTime.now().difference(last).inSeconds < 8) {
       return; // user interacted very recently; wait longer
     }
-    setState(() => _cameraMode = NavigationCameraMode.follow);
-    _followTruckCamera();
+    _setFollowCameraFromCurrentPosition();
   }
 
   /// Handles the recenter button tap.
@@ -2591,6 +2592,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _gestureReturnTimer = null;
     setState(() => _cameraMode = NavigationCameraMode.follow);
     _followTruckCamera();
+  }
+
+  /// Handles the recenter button long press: switches to route overview mode.
+  void _onRecenterLongPressed() {
+    _setOverviewCamera();
+  }
+
+  /// Activates **follow mode** from the last accepted GPS position.
+  ///
+  /// Used by [_buildRecenterButton] tap handler and [_maybeReturnToFollowMode]
+  /// so that every return to follow snaps to the real last-known position.
+  Future<void> _setFollowCameraFromCurrentPosition() async {
+    if (_lastAcceptedPosition == null) return;
+    setState(() => _cameraMode = NavigationCameraMode.follow);
+    await _updateRealNavigationCamera(_lastAcceptedPosition!);
+  }
+
+  /// Updates the camera for active navigation using real GPS position data.
+  ///
+  /// Delegates to the speed-adaptive follow-camera logic; safe to call from
+  /// async contexts (e.g. [_setFollowCameraFromCurrentPosition]).
+  Future<void> _updateRealNavigationCamera(geo.Position pos) async {
+    _setFollowCamera(pos);
+  }
+
+  /// Switches the camera to **free mode** and records the interaction time.
+  ///
+  /// Convenience wrapper used by gesture callbacks so the naming matches the
+  /// user-facing camera-mode vocabulary.
+  void _enterFreeCameraMode() {
+    _setFreeCamera();
+  }
+
+  // ── Recenter button widget ─────────────────────────────────────────────────
+
+  /// Builds the circular recenter button shown in the bottom-right corner.
+  ///
+  /// - **Tap**: returns to live follow mode ([_onRecenterPressed]).
+  /// - **Long press**: switches to full-route overview ([_onRecenterLongPressed]).
+  Widget _buildRecenterButton() {
+    return GestureDetector(
+      onTap: _onRecenterPressed,
+      onLongPress: _onRecenterLongPressed,
+      child: Container(
+        width: 60,
+        height: 60,
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.85),
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: const Icon(
+          Icons.explore,
+          color: Colors.white,
+          size: 28,
+        ),
+      ),
+    );
   }
 
   // ── TTS initialisation ────────────────────────────────────────────────────
@@ -3004,15 +3069,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
 
+    // Check whether to auto-return from free mode to follow mode (8 s idle).
+    _maybeReturnToFollowMode();
+
     // Keep the camera centred on the truck while in navigation mode.
     // Use _updateNavigationCamera when moving and _updateStoppedCamera when
     // stopped so zoom, bearing, and target position are appropriate for speed.
     if (_navigationMode && _hasActiveDestination) {
-      final double speedMph = newSpeedMps > 0 ? newSpeedMps * _mpsToMph : 0.0;
-      if (speedMph >= _minMovingSpeedMph) {
-        _updateNavigationCamera(position);
-      } else {
-        _updateStoppedCamera(position);
+      if (_cameraMode == NavigationCameraMode.follow) {
+        final double speedMph = newSpeedMps > 0 ? newSpeedMps * _mpsToMph : 0.0;
+        if (speedMph >= _minMovingSpeedMph) {
+          _updateNavigationCamera(position);
+        } else {
+          _updateStoppedCamera(position);
+        }
       }
     }
 
@@ -10689,28 +10759,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   _buildRestrictionRerouteBanner(),
                 // ── Recenter FAB ──────────────────────────────────────────
                 // Always visible in the bottom-right corner.
-                // Icon and tooltip change based on follow state:
-                //   navigation  = camera is actively following the truck
-                //   my_location = user has panned away; tap to re-centre
-                // Tapping re-enables camera follow (recenter).
-                // Long-pressing switches to overview mode (full-route view).
+                // Tap: returns to live follow mode.
+                // Long-press: switches to full-route overview mode.
                 Positioned(
                   bottom: 16,
                   right: 16,
-                  child: GestureDetector(
-                    onLongPress: _setOverviewCamera,
-                    child: FloatingActionButton.small(
-                      tooltip: _followTruck ? 'Following truck' : 'Recenter on truck',
-                      onPressed: _onRecenterPressed,
-                      child: Icon(
-                        _cameraMode == NavigationCameraMode.overview
-                            ? Icons.map_outlined
-                            : _followTruck
-                                ? Icons.navigation
-                                : Icons.my_location,
-                      ),
-                    ),
-                  ),
+                  child: _buildRecenterButton(),
                 ),
                 // ── Rerouting status indicator ────────────────────────────
                 // Shown in the centre of the map while a new route is being

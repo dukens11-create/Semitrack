@@ -925,6 +925,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // navigation trick.  Tune between −0.001 and −0.002 for your zoom level.
   static const _cameraLeadLatitude = 0.0015;
 
+  // Duration (ms) for each Mapbox easeTo camera transition in follow mode.
+  // 650 ms matches a typical GPS update interval and keeps the animation
+  // fluid without overshooting when fixes arrive quickly.
+  static const _navigationCameraAnimationDurationMs = 650;
+
   // ── Mapbox public tile access token ──────────────────────────────────────────
   static const _mapboxToken =
       'pk.eyJ1Ijoic2VtaXRyYWNrLTExIiwiYSI6ImNtbmFoeHRoNjBqcjcycXE2ZWk5cGpzNGMifQ.09eo4qJKyLZq_3aUEXWiAA';
@@ -2537,6 +2542,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     double bearing = _lastKnownBearing;
+    // Only update bearing from GPS when the truck is moving fast enough to
+    // produce a stable heading (≥ 3 mph).  Below this threshold, GPS heading
+    // values are unreliable and may cause the map to spin erratically.
+    // pos.heading < 0 indicates an unavailable heading fix; those are skipped.
     if (speedMph >= 3 && pos.heading >= 0) {
       _lastKnownBearing = _smoothValue(_lastKnownBearing, pos.heading, 0.25);
       bearing = _lastKnownBearing;
@@ -2561,7 +2570,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ),
         mbx.MapAnimationOptions(
-          duration: 650,
+          duration: _navigationCameraAnimationDurationMs,
           startDelay: 0,
         ),
       );

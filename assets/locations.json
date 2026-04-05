@@ -606,7 +606,7 @@
     "lng": -121.775,
     "category": "weigh_station",
     "country": "US",
-    "stateOrProvince": "",
+    "stateOrProvince": "CA",
     "city": ""
   },
   {
@@ -617,7 +617,7 @@
     "lng": -120.1833,
     "category": "weigh_station",
     "country": "US",
-    "stateOrProvince": "",
+    "stateOrProvince": "CA",
     "city": ""
   },
   {
@@ -716,7 +716,7 @@
     "lng": -120.36,
     "category": "rest_area",
     "country": "US",
-    "stateOrProvince": "",
+    "stateOrProvince": "CA",
     "city": ""
   },
   {
@@ -804,7 +804,7 @@
     "lng": -79.3832,
     "category": "truck_stop",
     "exit_number": "369",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -816,7 +816,7 @@
     "lng": -73.5673,
     "category": "truck_stop",
     "exit_number": "68",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -828,7 +828,7 @@
     "lng": -123.1207,
     "category": "truck_stop",
     "exit_number": "28",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -840,7 +840,7 @@
     "lng": -114.0719,
     "category": "truck_stop",
     "exit_number": "262",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -852,7 +852,7 @@
     "lng": -113.4938,
     "category": "truck_stop",
     "exit_number": "374",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -864,7 +864,7 @@
     "lng": -97.1384,
     "category": "truck_stop",
     "exit_number": "16",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -876,7 +876,7 @@
     "lng": -75.6972,
     "category": "truck_stop",
     "exit_number": "104",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -888,7 +888,7 @@
     "lng": -71.208,
     "category": "truck_stop",
     "exit_number": "311",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -899,7 +899,7 @@
     "lat": 49.6942,
     "lng": -112.8328,
     "category": "truck_stop",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -910,7 +910,7 @@
     "lat": 50.4452,
     "lng": -104.6189,
     "category": "truck_stop",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -943,7 +943,7 @@
     "lat": 42.9849,
     "lng": -81.2453,
     "category": "rest_area",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },
@@ -954,7 +954,7 @@
     "lat": 52.2681,
     "lng": -113.8112,
     "category": "rest_area",
-    "country": "US",
+    "country": "CA",
     "stateOrProvince": "",
     "city": ""
   },

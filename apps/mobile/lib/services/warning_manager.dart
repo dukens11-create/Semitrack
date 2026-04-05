@@ -37,7 +37,10 @@ enum WarningTriggerStage {
 }
 
 /// Highway trigger-distance defaults (in miles) keyed by stage.
-const Map<WarningTriggerStage, double> _kHighwayTriggers = {
+///
+/// Used by both [WarningManager.update] and the map marker emphasis logic in
+/// [TruckMapScreen] to compute the correct visual emphasis level for each sign.
+const Map<WarningTriggerStage, double> kHighwayWarningTriggers = {
   WarningTriggerStage.preload:     2.0,
   WarningTriggerStage.visible:     1.0,
   WarningTriggerStage.highlighted: 0.5,
@@ -46,7 +49,10 @@ const Map<WarningTriggerStage, double> _kHighwayTriggers = {
 
 /// City / low-speed road trigger-distance defaults (in miles) keyed by stage.
 /// Shorter than highway so drivers on urban streets still receive timely alerts.
-const Map<WarningTriggerStage, double> _kCityTriggers = {
+///
+/// Used by both [WarningManager.update] and the map marker emphasis logic in
+/// [TruckMapScreen] to compute the correct visual emphasis level for each sign.
+const Map<WarningTriggerStage, double> kCityWarningTriggers = {
   WarningTriggerStage.preload:     1.0,
   WarningTriggerStage.visible:     0.5,
   WarningTriggerStage.highlighted: 0.25,
@@ -55,7 +61,7 @@ const Map<WarningTriggerStage, double> _kCityTriggers = {
 
 /// Returns the trigger-distance map for [sign] based on its [WarningSign.roadType].
 Map<WarningTriggerStage, double> _triggersFor(WarningSign sign) =>
-    sign.roadType == 'city' ? _kCityTriggers : _kHighwayTriggers;
+    sign.roadType == 'city' ? kCityWarningTriggers : kHighwayWarningTriggers;
 
 /// A single active warning popup entry exposed by [WarningManager.activePopups].
 ///

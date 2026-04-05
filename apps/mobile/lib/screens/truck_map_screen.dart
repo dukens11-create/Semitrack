@@ -5566,6 +5566,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the [_WarningEmphasis] level for [sign] based on the truck's
   /// current distance to it and the sign's road-type thresholds.
+  ///
+  /// Threshold values are sourced from [kHighwayWarningTriggers] and
+  /// [kCityWarningTriggers] (both defined in warning_manager.dart) so the map
+  /// marker emphasis is always consistent with the popup trigger distances.
   _WarningEmphasis _warningEmphasis(WarningSign sign) {
     if (_truckPosition == null) return _WarningEmphasis.visible;
 
@@ -5573,16 +5577,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _distanceBetween(_truckPosition!, LatLng(sign.lat, sign.lng)) /
             1609.344;
 
-    final bool isCity = sign.roadType == 'city';
-    final double t1 = isCity ? 1.0 : 2.0;  // preload threshold
-    final double t2 = isCity ? 0.5 : 1.0;  // visible threshold
-    final double t3 = isCity ? 0.25 : 0.5; // highlighted threshold
-    final double t4 = isCity ? 0.1 : 0.2;  // urgent threshold
+    final triggers = sign.roadType == 'city'
+        ? kCityWarningTriggers
+        : kHighwayWarningTriggers;
 
-    if (distMiles > t1) return _WarningEmphasis.preload;
-    if (distMiles > t2) return _WarningEmphasis.lowEmphasis;
-    if (distMiles > t3) return _WarningEmphasis.visible;
-    if (distMiles > t4) return _WarningEmphasis.highlighted;
+    if (distMiles > triggers[WarningTriggerStage.preload]!) {
+      return _WarningEmphasis.preload;
+    }
+    if (distMiles > triggers[WarningTriggerStage.visible]!) {
+      return _WarningEmphasis.lowEmphasis;
+    }
+    if (distMiles > triggers[WarningTriggerStage.highlighted]!) {
+      return _WarningEmphasis.visible;
+    }
+    if (distMiles > triggers[WarningTriggerStage.urgent]!) {
+      return _WarningEmphasis.highlighted;
+    }
     return _WarningEmphasis.urgent;
   }
 

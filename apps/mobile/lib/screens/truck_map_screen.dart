@@ -731,6 +731,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _isNavigating is true via _refreshClosestWeighStationsAhead().
   List<AheadWeighStation> _closestWeighStationsAhead = const [];
 
+  // ── Ahead-on-route rest areas ──────────────────────────────────────────────
+  //
+  // Holds the closest rest area ahead of the truck on the current route,
+  // sorted by ascending route miles.  Updated on every GPS fix while
+  // _isNavigating is true via _refreshClosestRestAreasAhead().
+  List<AheadRestArea> _closestRestAreasAhead = const [];
+
   // ── Upcoming route alert chips (top-right overlay) ────────────────────────
   //
   // Holds up to 3 UpcomingAlertItem entries representing the nearest upcoming
@@ -3183,6 +3190,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // ahead on the active route so the ClosestWeighStationsRow stays current.
       if (_isNavigating) _refreshClosestWeighStationsAhead();
 
+      // Ahead-on-route rest areas: refresh the closest rest area ahead on the
+      // active route so the ClosestRestAreasRow stays current.
+      if (_isNavigating) _refreshClosestRestAreasAhead();
+
       // Trip statistics: update mileage and stopped time from live GPS.
       _updateTripStats(position);
     }
@@ -5628,6 +5639,116 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() => _closestWeighStationsAhead = next);
   }
 
+  // ── Rest area ahead-on-route helpers ────────────────────────────────────────
+
+  /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
+  /// segment of [routePoints].
+  bool _isRestAreaNearRoute(RestAreaPoi poi, List<LatLng> routePoints) {
+    if (routePoints.isEmpty) return false;
+    if (routePoints.length == 1) {
+      return _distanceBetween(poi.position, routePoints.first) <=
+          _weighStationProximityMeters;
+    }
+    for (int i = 0; i < routePoints.length - 1; i++) {
+      final d =
+          _crossTrackDistance(poi.position, routePoints[i], routePoints[i + 1]);
+      if (d <= _weighStationProximityMeters) return true;
+    }
+    return false;
+  }
+
+  /// Finds the nearest route-point index for [poi] by scanning [_routePoints].
+  ///
+  /// Only considers route points at or after [startIndex] so that rest areas
+  /// behind the truck are naturally excluded.  Returns -1 when no point is
+  /// found within [_weighStationProximityMeters].
+  int _nearestRouteIndexForRestAreaPoi(RestAreaPoi poi, int startIndex) {
+    double best = double.infinity;
+    int bestIdx = -1;
+    for (int i = startIndex; i < _routePoints.length; i++) {
+      final d = _distanceBetween(poi.position, _routePoints[i]);
+      if (d < best) {
+        best = d;
+        bestIdx = i;
+      }
+    }
+    return (best <= _weighStationProximityMeters) ? bestIdx : -1;
+  }
+
+  /// Returns the single closest rest area that is ahead of the truck on the
+  /// active route.
+  ///
+  /// **Data source:** `_loadedPois` (from `assets/locations.json`) where
+  /// `category == "rest_area"`.
+  ///
+  /// A rest area is considered "ahead" when its nearest route-point index is
+  /// strictly greater than [_truckIndex] AND it is within
+  /// [_weighStationProximityMeters] of the route polyline.
+  /// Rest areas closer than [_poiPassedThresholdMiles] (200 m) are treated as
+  /// passed and excluded.  Rest areas farther than [_poiMaxAheadMiles] (50 km)
+  /// ahead are also excluded.
+  List<AheadRestArea> _getClosestRestAreasAheadOnRoute() {
+    if (_routePoints.isEmpty) return const [];
+
+    final List<RestAreaPoi> restPois = [];
+    for (final p in _loadedPois) {
+      if (p.category != 'rest_area') continue;
+      restPois.add(RestAreaPoi(
+        id: p.id,
+        position: LatLng(p.lat, p.lng),
+        name: p.name,
+      ));
+    }
+
+    final List<AheadRestArea> candidates = [];
+
+    for (final poi in restPois) {
+      // Skip rest areas not near the route at all.
+      if (!_isRestAreaNearRoute(poi, _routePoints)) continue;
+
+      // Find nearest route point strictly ahead of current truck position.
+      final idx = _nearestRouteIndexForRestAreaPoi(poi, _truckIndex + 1);
+      if (idx < 0) continue; // rest area is behind or off-route
+
+      // Compute approximate route miles from truck to this rest area.
+      double meters = 0.0;
+      for (int i = _truckIndex; i < idx && i + 1 < _routePoints.length; i++) {
+        meters += _distanceBetween(_routePoints[i], _routePoints[i + 1]);
+      }
+      final double miles = meters / _metersPerMile;
+
+      if (miles < _poiPassedThresholdMiles) continue; // within 200 m — passed
+      if (miles > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
+
+      candidates.add(AheadRestArea(
+        poi: poi,
+        milesAhead: miles,
+        routeIndex: idx,
+      ));
+    }
+
+    // Sort ascending by route miles and return the single closest rest area.
+    candidates.sort((a, b) => a.milesAhead.compareTo(b.milesAhead));
+    return candidates.take(1).toList();
+  }
+
+  /// Recomputes [_closestRestAreasAhead] from the current truck position and
+  /// triggers a rebuild so the [ClosestRestAreasRow] updates in place.
+  ///
+  /// Called on every GPS fix when [_isNavigating] is true (see
+  /// [_onGpsPosition]).
+  void _refreshClosestRestAreasAhead() {
+    final next = _getClosestRestAreasAheadOnRoute();
+    // Avoid a redundant rebuild if the list content hasn't changed.
+    if (next.length == _closestRestAreasAhead.length &&
+        next.every((r) => _closestRestAreasAhead
+            .any((existing) => existing.poi.id == r.poi.id &&
+                (existing.milesAhead - r.milesAhead).abs() < 0.05))) {
+      return;
+    }
+    setState(() => _closestRestAreasAhead = next);
+  }
+
   /// Builds and stores the list of [UpcomingAlertItem]s shown in the
   /// top-right overlay chips during active navigation.
   ///
@@ -5673,6 +5794,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           type: UpcomingAlertType.weighStation,
           label: w.poi.name,
           distanceMiles: w.milesAhead,
+        ));
+      }
+    }
+
+    // ── Rest areas ahead ─────────────────────────────────────────────────────
+    for (final r in _closestRestAreasAhead) {
+      if (r.milesAhead > 0) {
+        fresh.add(UpcomingAlertItem(
+          type: UpcomingAlertType.restArea,
+          label: r.poi.name,
+          distanceMiles: r.milesAhead,
         ));
       }
     }
@@ -5768,6 +5900,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         bottom: false,
         child: ClosestWeighStationsRow(
           stations: _closestWeighStationsAhead,
+        ),
+      ),
+    );
+  }
+
+  /// Builds the closest rest-area chip shown on the right side of the map
+  /// during active navigation.
+  ///
+  /// Returns [SizedBox.shrink] when:
+  ///   - Navigation is not active.
+  ///   - There are no rest areas ahead on the current route.
+  ///
+  /// When a rest area is ahead, the chip shows its live route miles and
+  /// updates on every GPS fix via [_refreshClosestRestAreasAhead].
+  Widget _buildClosestRestAreasRow() {
+    // Hidden when not navigating or when no rest areas are ahead on route.
+    if (!_isNavigating || _closestRestAreasAhead.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      // top: 206 = weigh station top(134) + chip height(60) + gap(12).
+      top: 206,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: ClosestRestAreasRow(
+          areas: _closestRestAreasAhead,
         ),
       ),
     );
@@ -11330,6 +11489,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // next station once the driver passes the current one.
                 // Only visible during active navigation when a station exists.
                 _buildClosestWeighStationsRow(),
+                // ── Zone 6c (right side): next rest area ─────────────────
+                // Chip showing the single closest upcoming rest area with
+                // its icon and miles to go.  Automatically advances to the
+                // next rest area once the driver passes the current one.
+                // Only visible during active navigation when a rest area exists.
+                _buildClosestRestAreasRow(),
                 // ── Zone 6b (bottom-left, above strip): shortcut bar ─────
                 // Quick-action shortcut buttons for features the driver has
                 // enabled in the More > Shortcut settings section.
@@ -14838,6 +15003,145 @@ class ClosestWeighStationsRow extends StatelessWidget {
 
     // Show only the first (closest) station — one at a time per spec.
     return ClosestWeighStationChip(station: stations.first);
+  }
+}
+
+// ── RestAreaPoi model ──────────────────────────────────────────────────────────
+
+/// A rest area point-of-interest used for ahead-on-route detection.
+class RestAreaPoi {
+  const RestAreaPoi({
+    required this.id,
+    required this.position,
+    required this.name,
+  });
+
+  /// Unique identifier — matches the source [PoiItem.id].
+  final String id;
+
+  /// Geographic coordinate of the rest area.
+  final LatLng position;
+
+  /// Human-readable rest area name shown in chips.
+  final String name;
+}
+
+// ── AheadRestArea model ────────────────────────────────────────────────────────
+
+/// A rest area that lies ahead of the truck on the active route, together
+/// with pre-computed distance information.
+///
+/// Produced by [_TruckMapScreenState._getClosestRestAreasAheadOnRoute] and
+/// consumed by [ClosestRestAreaChip] / [ClosestRestAreasRow].
+class AheadRestArea {
+  const AheadRestArea({
+    required this.poi,
+    required this.milesAhead,
+    required this.routeIndex,
+  });
+
+  /// The rest area POI data including its name.
+  final RestAreaPoi poi;
+
+  /// Approximate route miles from the truck's current position to this rest area.
+  final double milesAhead;
+
+  /// Index into `_routePoints` of the nearest point to this rest area.
+  final int routeIndex;
+}
+
+// ── ClosestRestAreaChip widget ─────────────────────────────────────────────────
+
+/// A compact right-side navigation chip for the closest rest area ahead.
+///
+/// Design:
+/// • **White rounded card** with a subtle drop shadow — matches the other
+///   right-side overlay chips.
+/// • **Bold blue "R"** at the top of the card.
+/// • **Miles label** (e.g. `"8.4 mi"`) in small bold black text directly
+///   below the "R", inside the same card.
+///
+/// The value updates live on every GPS fix via
+/// [_TruckMapScreenState._refreshClosestRestAreasAhead].
+class ClosestRestAreaChip extends StatelessWidget {
+  final AheadRestArea area;
+
+  const ClosestRestAreaChip({super.key, required this.area});
+
+  @override
+  Widget build(BuildContext context) {
+    final miles = area.milesAhead;
+
+    // Format distance: one decimal below 10 mi, whole number above.
+    final String distLabel =
+        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+
+    // ── White rounded card containing "R" and distance together ───────────
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Bold blue "R" ──────────────────────────────────────────────
+          const Text(
+            'R',
+            style: TextStyle(
+              color: Color(0xFF3B82F6),
+              fontWeight: FontWeight.w900,
+              fontSize: 28,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 4),
+          // ── Distance label directly below "R", inside the card ────────
+          Text(
+            distLabel,
+            style: const TextStyle(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              height: 1.0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── ClosestRestAreasRow widget ─────────────────────────────────────────────────
+
+/// Renders the single closest upcoming rest area as a [ClosestRestAreaChip]
+/// on the right side of the map.
+///
+/// Only one rest area is shown at a time so the driver's attention is focused
+/// on the very next one ahead.  Once the driver passes it the list is refreshed
+/// by [_refreshClosestRestAreasAhead] and the next rest area appears
+/// automatically.
+///
+/// Returns zero-size when [areas] is empty.
+class ClosestRestAreasRow extends StatelessWidget {
+  final List<AheadRestArea> areas;
+
+  const ClosestRestAreasRow({super.key, required this.areas});
+
+  @override
+  Widget build(BuildContext context) {
+    if (areas.isEmpty) return const SizedBox.shrink();
+
+    // Show only the first (closest) rest area — one at a time per spec.
+    return ClosestRestAreaChip(area: areas.first);
   }
 }
 

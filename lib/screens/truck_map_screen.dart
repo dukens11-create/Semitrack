@@ -15,6 +15,7 @@ import 'package:latlong2/latlong.dart' hide Path;
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
+import 'package:semitrack_mobile/models/poi.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
 import 'package:semitrack_mobile/models/nav_settings_model.dart';
@@ -715,7 +716,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Maximum cross-track distance (metres) for a weigh station to be
   /// considered "on" the active route and eligible for ahead-on-route display.
-  static const double _weighStationProximityMeters = 500.0;
+  /// 5 km gives reliable matches on straight highways while excluding parallel
+  /// roads and facilities far from the route.
+  static const double _weighStationProximityMeters = 5000.0;
+
+  /// Maximum distance ahead (miles) at which a POI is surfaced in the
+  /// chips/badges.  50 km ≈ 31.07 mi.  POIs farther ahead are hidden until
+  /// the driver gets within this range.
+  static const double _poiMaxAheadMiles = 31.07;
+
+  /// A POI within this distance (miles) of the driver is considered "passed"
+  /// and removed from the chips.  200 m ≈ 0.124 mi.
+  static const double _poiPassedThresholdMiles = 0.124;
 
   /// Fallback distance (miles) shown in the weigh-station chip when no live
   /// route data is available, ensuring the chip is always visible.
@@ -3808,8 +3820,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// A stop is considered "ahead" when its nearest route index is strictly
   /// greater than the driver's nearest route index.  Stops closer than
-  /// 0.2 miles (virtually passed) are excluded.  Stops farther than
-  /// [maxOffRouteMiles] from the route polyline are also excluded.
+  /// [_poiPassedThresholdMiles] (200 m) are excluded as virtually passed.
+  /// Stops farther than [_poiMaxAheadMiles] (50 km) ahead are also excluded
+  /// so only nearby upcoming stops are surfaced.  Stops farther than
+  /// [maxOffRouteMiles] from the route polyline are excluded.
   List<AheadTruckStop> _getClosestTruckStopsAheadOnRoute({
     required double driverLat,
     required double driverLng,
@@ -3834,7 +3848,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final routeMilesAhead =
           _routeDistanceMilesBetweenIndices(routePoints, driverIdx, poiIdx);
-      if (routeMilesAhead < 0.2) continue; // virtually passed
+      if (routeMilesAhead < _poiPassedThresholdMiles) continue; // virtually passed (< 200 m)
+      if (routeMilesAhead > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
       ahead.add(AheadTruckStop(
         poi: poi,
@@ -3873,20 +3888,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
         .toList(growable: false);
 
-    // Build the TruckStopPoi list: prefer _loadedPois (locations.json) over
-    // the mock _truckStops so the panel is populated for any route geography.
+    // Build the TruckStopPoi list via the unified Poi model.
+    // Convert PoiItem → Poi (unified model) → TruckStopPoi.
+    // Only entries with type == "truck_stop" are surfaced as chips.
     final List<TruckStopPoi> pois;
     if (_loadedPois.isNotEmpty) {
-      pois = _loadedPois.map((p) => TruckStopPoi(
-        id: p.id,
-        name: p.name,
-        brand: p.icon,
-        logoName: p.icon,
-        latitude: p.lat,
-        longitude: p.lng,
-        locationName: '${p.city}, ${p.stateOrProvince}',
-        exitNumber: p.exitNumber,
-      )).toList(growable: false);
+      pois = _loadedPois
+          .map(Poi.fromPoiItem)
+          .where((p) => p.type == 'truck_stop')
+          .map((p) => TruckStopPoi(
+                id: p.id,
+                name: p.name,
+                brand: p.icon,
+                logoName: p.icon,
+                latitude: p.lat,
+                longitude: p.lng,
+                locationName: p.city.isNotEmpty
+                    ? '${p.city}, ${p.stateOrProvince}'
+                    : p.stateOrProvince,
+                exitNumber: p.exitNumber,
+              ))
+          .toList(growable: false);
     } else {
       // Convert TruckStop list to TruckStopPoi list, deriving logoName from
       // the assetLogo path (e.g. 'assets/logo_brand_markers/pilot.png' → 'pilot').
@@ -5187,20 +5209,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the next 1–2 weigh stations that are ahead of the truck on the
   /// active route, sorted by ascending route distance.
   ///
+  /// **Data sources (merged):**
+  ///   1. `_loadedPois` (from `assets/locations.json`) where `category ==
+  ///      "weigh_station"` — covers both USA and Canada JSON data.
+  ///   2. `_mapPois` of type [PoiType.weighStation] — the in-memory sample set.
+  ///
   /// A station is considered "ahead" when its nearest route-point index is
   /// strictly greater than [_truckIndex] AND the station is within
-  /// [_weighStationProximityMeters] of the route polyline.  Route miles are
-  /// approximated by summing Haversine segment lengths from [_truckIndex] to
-  /// the station's nearest route point.
+  /// [_weighStationProximityMeters] of the route polyline.
+  /// Stations closer than [_poiPassedThresholdMiles] (200 m) are treated as
+  /// passed and excluded.  Stations farther than [_poiMaxAheadMiles] (50 km)
+  /// ahead are also excluded.
   List<AheadWeighStation> _getClosestWeighStationsAheadOnRoute() {
     if (_routePoints.isEmpty) return const [];
 
-    // Derive WeighStationPoi entries from existing MapPoi data so there is a
-    // single source of truth for weigh-station coordinates.
-    final weighPois = _mapPois
-        .where((p) => p.type == PoiType.weighStation)
-        .map((p) => WeighStationPoi.fromMapPoi(p))
-        .toList();
+    // Build a deduplicated list of WeighStationPoi entries.
+    // Prefer _loadedPois (JSON dataset, USA + Canada) and fall back to / merge
+    // with _mapPois for any legacy in-memory entries not in the JSON file.
+    final Set<String> seenIds = {};
+    final List<WeighStationPoi> weighPois = [];
+
+    // 1. JSON-loaded weigh stations (both USA and Canada).
+    for (final p in _loadedPois) {
+      if (p.category != 'weigh_station') continue;
+      if (seenIds.contains(p.id)) continue;
+      seenIds.add(p.id);
+      weighPois.add(WeighStationPoi(
+        id: p.id,
+        position: LatLng(p.lat, p.lng),
+        name: p.name,
+        status: 'Open',
+        logoName: p.icon.isNotEmpty ? p.icon : 'weight_station',
+      ));
+    }
+
+    // 2. In-memory MapPoi weigh stations (legacy / fallback).
+    for (final p in _mapPois) {
+      if (p.type != PoiType.weighStation) continue;
+      if (seenIds.contains(p.id)) continue;
+      seenIds.add(p.id);
+      weighPois.add(WeighStationPoi.fromMapPoi(p));
+    }
 
     final List<AheadWeighStation> candidates = [];
 
@@ -5218,6 +5267,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         meters += _distanceBetween(_routePoints[i], _routePoints[i + 1]);
       }
       final double miles = meters / _metersPerMile;
+
+      if (miles < _poiPassedThresholdMiles) continue; // within 200 m — passed
+      if (miles > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
       candidates.add(AheadWeighStation(
         poi: poi,

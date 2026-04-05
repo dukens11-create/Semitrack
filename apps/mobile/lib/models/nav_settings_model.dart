@@ -39,6 +39,7 @@ class NavSettingsModel {
   bool viewTrafficCongestion = true;
   bool viewTrafficIncidents = true;
   bool viewWeatherAlert = true;
+  bool viewPoiAhead = true;
   bool viewWeighStation = true;
   bool viewSpeedLimit = true;
   bool view511Camera = false;

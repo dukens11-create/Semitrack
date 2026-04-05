@@ -459,6 +459,13 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
         ),
         _dividerLine(),
         _ToggleRow(
+          icon: Icons.place_outlined,
+          label: 'POI Ahead',
+          value: _s.viewPoiAhead,
+          onChanged: (v) => _update(() => _s.viewPoiAhead = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
           icon: Icons.scale_outlined,
           label: 'Weigh Station',
           value: _s.viewWeighStation,

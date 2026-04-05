@@ -1938,6 +1938,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }).toList();
   }
 
+  /// Builds [Marker]s for every [MapPoi] of type [PoiType.camera511].
+  ///
+  /// Only shown when the 511 Camera layer is enabled in nav settings.
+  /// Returns an empty list when disabled, so no camera icons appear on the map.
+  List<Marker> _buildCameraMarkers() {
+    if (!_navSettings.view511Camera) return const [];
+    final cameras = _mapPois.where((p) => p.type == PoiType.camera511).toList();
+    return cameras.map((poi) {
+      return Marker(
+        point: poi.position,
+        width: 32,
+        height: 32,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showPoiAlert(poi),
+          child: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Colors.blue.shade800,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.videocam, color: Colors.white, size: 18),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
   /// Shows a brief [AlertDialog] with the [poi] name when a map POI marker is
   /// tapped.
   void _showPoiInfoDialog(PoiItem poi) {
@@ -2077,6 +2106,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ..._buildTruckStopMarkers(),
       // MapPoi weigh-station markers (with fallback icon).
       ..._buildPoiMarkers(),
+      // 511 camera markers (gated by view511Camera setting).
+      ..._buildCameraMarkers(),
       ..._buildRestrictionMarkers(),
       ..._buildWarningMarkers(),
     ];
@@ -5344,6 +5375,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_refreshClosestWeighStationsAhead].  Always visible: falls back to
   /// [_kDefaultWeighStationMilesAhead] when no live weigh station is ahead.
   Widget _buildClosestWeighStationsRow() {
+    // Hidden when the weigh-station layer is toggled off in nav settings.
+    if (!_navSettings.viewWeighStation) return const SizedBox.shrink();
     // Always show the chip.  When live route data has no upcoming weigh
     // station, fall back to a placeholder distance so the chip is always
     // visible for user validation.
@@ -9365,26 +9398,55 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds the 2-closest-ahead truck stops row shown during active navigation.
   ///
   /// Returns [SizedBox.shrink] when not navigating or when the list is empty.
-  /// Positioned just above the bottom trip strip so it is always visible.
+  /// Positioned on the left edge of the map, centered vertically.
   Widget _buildClosestTruckStopsRow() {
-    if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    // When the weigh-station row is also visible, shift the truck-stop chips
-    // above it so the two panels do not overlap.  The weigh-station panel
-    // (header ~20 px + card ~70 px) sits at bottom: 86, placing its top edge
-    // at ~176 px; adding an 8 px gap gives bottom: 184.  When there are no
-    // weigh stations the chips sit just above the trip strip at bottom: 88.
-    final double bottomOffset =
-        _closestWeighStationsAhead.isNotEmpty
-            ? _kTruckStopRowBottomWithWeighStations
-            : _kTruckStopRowBottomDefault;
+    if (!_isNavigating) return const SizedBox.shrink();
+    // Gate: hidden when POI Ahead is disabled in nav settings.
+    if (!_navSettings.viewPoiAhead) return const SizedBox.shrink();
+    if (_closestTruckStopsAhead.isEmpty) return const SizedBox.shrink();
+
+    // Derive a direction label from the current maneuver for the first chip.
+    final String dirLabel = _poiDirectionLabel();
+
     return Positioned(
-      left: 0,
-      right: 0,
-      bottom: bottomOffset,
-      child: ClosestTruckStopsRow(stops: _closestTruckStopsAhead),
+      left: 12,
+      top: 0,
+      bottom: 0,
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: ClosestTruckStopsRow(
+            stops: _closestTruckStopsAhead,
+            directionLabel: dirLabel,
+          ),
+        ),
+      ),
     );
+  }
+
+  /// Derives a compact direction label shown above the first POI chip.
+  ///
+  /// Uses the current navigation step's maneuver to produce a short arrow
+  /// indicator (e.g. "↑ AHEAD", "→ RIGHT", "← LEFT").  Falls back to
+  /// "↑ AHEAD" when no maneuver data is available.
+  String _poiDirectionLabel() {
+    if (_navSteps.isEmpty) return '↑ AHEAD';
+    final int safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+    switch (step.maneuver) {
+      case 'left':
+      case 'sharp left':
+      case 'slight left':
+        return '← LEFT';
+      case 'right':
+      case 'sharp right':
+      case 'slight right':
+        return '→ RIGHT';
+      case 'uturn':
+        return '↩ U-TURN';
+      default:
+        return '↑ AHEAD';
+    }
   }
 
   /// A compact bottom-center badge showing the current highway or road name
@@ -10362,7 +10424,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _buildPrimaryManeuverCard(_topInstructionData!),
-                          if (_secondaryInstructionData != null) ...[
+                          if (_secondaryInstructionData != null &&
+                              _navSettings.viewJunctionView) ...[
                             const SizedBox(height: 6),
                             _buildSecondaryThenCard(
                                 _secondaryInstructionData!),
@@ -10372,7 +10435,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                   ),
                 // ── Zone 1a (top-right): compass / re-centre button ────────
-                // Round dark button at the top-right corner.
+                // Round dark button at the top-right corner — always top-right.
                 _buildSmallCompassButton(),
                 // ── Zone 1c (top-right, below compass): satellite toggle ───
                 // Toggles between street and satellite tile layers.
@@ -10383,23 +10446,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Zone 3a (top-right): upcoming route alert chips ────────
                 // Hidden during active navigation to keep overlays minimal.
                 if (!_isNavigating) _buildRightSideUpcomingAlerts(),
-                // ── Zone 4 (bottom center-right): compact speed panel ──────
-                // Compact dark speed indicator using truck speed limit.
-                if (_isNavigating)
-                  Positioned(
-                    right: 120,
-                    bottom: 18,
-                    child: SafeArea(
-                      top: false,
-                      child: _buildCompactSpeedPanel(),
-                    ),
-                  ),
-                // ── Zone 5b (bottom-center): closest truck stops ahead ────
-                // Horizontally scrollable row showing up to 2 upcoming truck
-                // stops on the active route with their icon, brand name, and
-                // distance from the driver.  The first stop shows an
-                // "Approaching" badge when it is within 3 miles.
-                // Positioned just above the bottom trip strip.
+                // ── Zone 4 (right edge, centered): voice + speed panel ──────
+                // Voice-mute toggle above the compact speed panel, anchored to
+                // the right edge and centered vertically.  Replaces the old
+                // bottom-center-right speed panel position.
+                _buildRightCenterPanel(),
+                // ── Zone 5b (left edge, centered): closest truck stops ────
+                // Vertically stacked chips on the left side showing up to 2
+                // upcoming truck stops with direction label and approaching badge.
                 _buildClosestTruckStopsRow(),
                 // ── Zone 5 (bottom-left): trip summary strip ──────────────
                 // Dark translucent card with remaining mi, time, ETA,
@@ -10838,7 +10892,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ),
           // ── Green exit chip (optional) ───────────────────────────────────
-          if ((data.exitNumber ?? '').trim().isNotEmpty) ...[
+          if ((data.exitNumber ?? '').trim().isNotEmpty &&
+              _navSettings.viewExit) ...[
             const SizedBox(height: 6),
             Container(
               padding:
@@ -11138,6 +11193,64 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Top instruction card UI ───────────────────────────────────────────────
 
+  /// Right-edge panel: voice-mute button + speed panel, centered vertically.
+  ///
+  /// Only visible during active navigation.  The voice button toggles audio
+  /// between Muted (0), Alert-Only (1), and Unmuted (2) in a cycle.
+  /// The speed panel is only rendered when [_navSettings.viewSpeedLimit] is on.
+  Widget _buildRightCenterPanel() {
+    if (!_isNavigating) return const SizedBox.shrink();
+    final IconData voiceIcon = switch (_navSettings.audioMode) {
+      0 => Icons.volume_off,
+      1 => Icons.volume_down,
+      _ => Icons.volume_up,
+    };
+    return Positioned(
+      right: 16,
+      top: 0,
+      bottom: 0,
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Voice toggle button ────────────────────────────────────
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _navSettings.audioMode =
+                        (_navSettings.audioMode + 1) % 3;
+                  });
+                  _applyAudioSettings();
+                },
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.72),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.28),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Icon(voiceIcon, color: Colors.white, size: 24),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // ── Speed panel ────────────────────────────────────────────
+              if (_navSettings.viewSpeedLimit) _buildCompactSpeedPanel(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Compact, data-driven top navigation instruction card.
   ///
   /// Displays:
@@ -11325,14 +11438,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Current map bearing (degrees clockwise from north that is "up" on screen).
     final double bearing = _mapReady ? _mapController.camera.rotation : 0.0;
 
-    // During navigation, anchor the compass just to the upper-right of the
-    // primary maneuver card (left: 16, width: 320) with a small gap.
-    final bool navActive = _isNavigating && _topInstructionData != null;
-
     return Positioned(
-      top: navActive ? 16 : 18,
-      left: navActive ? 16.0 + 130.0 + 8.0 : null, // card_left + card_width + gap
-      right: navActive ? null : 16,
+      top: 18,
+      right: 16,
       child: SafeArea(
         bottom: false,
         child: GestureDetector(
@@ -12234,6 +12342,7 @@ String _truckStopBrandAbbr(String logoName) {
 /// • **White card**: rounded-rectangle with drop shadow.
 ///   – Brand abbreviation (e.g. "P", "TA") in a red-bordered white circle.
 ///   – Miles number in bold black with a smaller "mi" suffix.
+///   – "approaching" badge when the stop is within 2 miles.
 class ClosestTruckStopChip extends StatelessWidget {
   /// Brand logo name stem, e.g. `'pilot'` or `'ta_truck_stop'`.
   /// Used to derive the abbreviation shown inside the logo circle.
@@ -12258,6 +12367,7 @@ class ClosestTruckStopChip extends StatelessWidget {
     final String abbr = _truckStopBrandAbbr(logoName);
     final String milesNum =
         miles < 10 ? miles.toStringAsFixed(1) : miles.round().toString();
+    final bool isApproaching = miles < 2.0;
 
     // ── White rounded card ─────────────────────────────────────────────────
     final Widget card = Container(
@@ -12273,74 +12383,100 @@ class ClosestTruckStopChip extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Logo circle (red border, white fill, brand abbr) ──────────
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white,
-              border: Border.all(
-                color: const Color(0xFFCC0000),
-                width: 2,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Logo circle (red border, white fill, brand abbr) ──────
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  border: Border.all(
+                    color: const Color(0xFFCC0000),
+                    width: 2,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    abbr,
+                    style: const TextStyle(
+                      color: Color(0xFFCC0000),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      height: 1.0,
+                    ),
+                  ),
+                ),
               ),
-            ),
-            child: Center(
-              child: Text(
-                abbr,
-                style: const TextStyle(
-                  color: Color(0xFFCC0000),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12,
+              const SizedBox(width: 8),
+              // ── Miles: bold number + smaller 'mi' suffix ──────────────
+              RichText(
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: milesNum,
+                      style: const TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        height: 1.1,
+                      ),
+                    ),
+                    const TextSpan(
+                      text: ' mi',
+                      style: TextStyle(
+                        color: Colors.black54,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // ── Approaching badge (< 2 miles) ──────────────────────────────
+          if (isApproaching) ...[
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.orange,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'approaching',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
                   height: 1.0,
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          // ── Miles: bold number + smaller 'mi' suffix ──────────────────
-          RichText(
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: milesNum,
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                    height: 1.1,
-                  ),
-                ),
-                const TextSpan(
-                  text: ' mi',
-                  style: TextStyle(
-                    color: Colors.black54,
-                    fontWeight: FontWeight.w500,
-                    fontSize: 11,
-                    height: 1.1,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          ],
         ],
       ),
     );
 
     if (exitNumber == null || exitNumber!.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.only(right: 10.0),
+        padding: const EdgeInsets.only(bottom: 10.0),
         child: card,
       );
     }
 
     // ── Green exit badge overlaid at the top edge of the white card ────────
     return Padding(
-      padding: const EdgeInsets.only(right: 10.0, top: 12.0),
+      padding: const EdgeInsets.only(bottom: 10.0, top: 12.0),
       child: Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.topCenter,
@@ -12383,29 +12519,57 @@ class ClosestTruckStopChip extends StatelessWidget {
   }
 }
 
-/// A horizontally scrollable row of up to 2 [ClosestTruckStopChip] widgets,
-/// displayed during active navigation to show the nearest truck stops ahead.
+/// A vertically stacked column of up to 2 [ClosestTruckStopChip] widgets,
+/// displayed on the left edge of the map during active navigation.
+///
+/// A direction label (e.g. "↑ AHEAD", "→ RIGHT") is shown above the first
+/// chip to indicate the route direction toward the stops.
 class ClosestTruckStopsRow extends StatelessWidget {
   final List<AheadTruckStop> stops;
 
-  const ClosestTruckStopsRow({super.key, required this.stops});
+  /// Short direction label shown above the first chip (e.g. "↑ AHEAD").
+  final String directionLabel;
+
+  const ClosestTruckStopsRow({
+    super.key,
+    required this.stops,
+    this.directionLabel = '↑ AHEAD',
+  });
 
   @override
   Widget build(BuildContext context) {
     if (stops.isEmpty) return const SizedBox.shrink();
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: stops.map((stop) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Direction label above first chip ─────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.72),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            directionLabel,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              height: 1.0,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        // ── Chips (up to 2) ───────────────────────────────────────────────
+        ...stops.take(2).map((stop) {
           return ClosestTruckStopChip(
             logoName: stop.poi.logoName,
             miles: stop.routeMilesAhead,
             exitNumber: stop.poi.exitNumber,
           );
-        }).toList(),
-      ),
+        }),
+      ],
     );
   }
 }
@@ -12486,6 +12650,9 @@ enum PoiType {
 
   /// International or inter-state port of entry inspection facility.
   portOfEntry,
+
+  /// 511 traffic camera visible to the driver on the map.
+  camera511,
 }
 
 /// A map point of interest (POI) relevant to commercial truck drivers.

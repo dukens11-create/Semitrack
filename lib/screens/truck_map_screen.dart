@@ -24,6 +24,8 @@ import 'package:semitrack_mobile/services/poi_service.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
+import 'package:semitrack_mobile/utils/marker_widgets.dart'
+    show buildGpsPinMarker;
 
 // ── Lane guidance models ───────────────────────────────────────────────────
 
@@ -1946,33 +1948,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return weighStations.map((poi) {
       final bool isNext = poi.id == nextStationId;
-      final double size = isNext ? 48.0 : 40.0;
+      // All markers use the same uniform pin size; the active-next station gets
+      // an additional glow border to stand out from nearby weigh stations.
+      final double size = _kPoiPinSize;
 
-      Widget iconWidget;
-      if (weighBytes != null) {
-        iconWidget = Image.memory(
-          weighBytes,
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-        );
-      } else {
-        iconWidget = Container(
-          width: size,
-          height: size,
-          decoration: const BoxDecoration(
-            color: Colors.orange,
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(Icons.scale, color: Colors.white, size: 22),
-        );
-      }
+      Widget pinWidget = buildGpsPinMarker(
+        pinColor: isNext ? Colors.deepOrange : Colors.orange,
+        imageBytes: weighBytes,
+        fallbackIcon: Icons.scale,
+        pinSize: size,
+      );
 
-      final Widget markerChild = isNext
-          ? Container(
-              width: size,
-              height: size,
+      if (isNext) {
+        pinWidget = Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: size + 6,
+              height: size + 6,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.orange, width: 2.5),
@@ -1984,22 +1977,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                 ],
               ),
-              child: ClipOval(
-                child: weighBytes != null
-                    ? Image.memory(weighBytes, fit: BoxFit.cover, gaplessPlayback: true)
-                    : const Icon(Icons.scale, color: Colors.white, size: 22),
-              ),
-            )
-          : iconWidget;
+            ),
+            pinWidget,
+          ],
+        );
+      }
 
       return Marker(
         point: poi.position,
-        width: size,
-        height: size,
+        width: isNext ? size + 6 : size,
+        height: isNext ? size + 6 : size,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showPoiAlert(poi),
-          child: markerChild,
+          child: pinWidget,
         ),
       );
     }).toList();
@@ -2007,16 +1998,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the accent [Color] used for GPS pin markers of the given POI
   /// [category].  Matches the color conventions used across the app:
-  ///   • `truck_stop`    → blue  (fuel/parking)
-  ///   • `weigh_station` → orange (regulatory)
-  ///   • `rest_area`     → green  (amenity/comfort)
-  ///   • anything else   → blue  (generic default)
+  ///   • `truck_stop`           → blue   (fuel/parking)
+  ///   • `weigh_station`        → orange (regulatory)
+  ///   • `rest_area`            → green  (amenity/comfort)
+  ///   • `hotel`                → indigo (lodging)
+  ///   • `restaurant`           → red    (dining)
+  ///   • `gym`                  → teal   (fitness)
+  ///   • `commercial_vehicle`   → brown  (commercial services)
+  ///   • anything else          → blue   (generic default)
   Color _poiCategoryColor(String category) {
     switch (category) {
       case 'weigh_station':
         return Colors.orange;
       case 'rest_area':
         return Colors.green.shade700;
+      case 'hotel':
+        return Colors.indigo.shade600;
+      case 'restaurant':
+        return Colors.red.shade700;
+      case 'gym':
+        return Colors.teal.shade700;
+      case 'commercial_vehicle':
+        return Colors.brown.shade600;
       default:
         return Colors.blue.shade700;
     }
@@ -2030,44 +2033,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return Icons.scale;
       case 'rest_area':
         return Icons.local_hotel;
+      case 'hotel':
+        return Icons.hotel;
+      case 'restaurant':
+        return Icons.restaurant;
+      case 'gym':
+        return Icons.fitness_center;
+      case 'commercial_vehicle':
+        return Icons.local_shipping;
       default:
         return Icons.local_shipping;
     }
   }
 
-  /// Builds a GPS teardrop-pin [Widget] for a POI that has no branded image.
+  // Uniform bounding-box size used for every GPS-pin POI marker so all types
+  // appear at the same size on the map.
+  static const double _kPoiPinSize = 48.0;
+
+  /// Builds a GPS teardrop-pin [Widget] for a POI, optionally embedding a
+  /// branded logo image inside the pin head.
   ///
-  /// The pin shape is [Icons.location_on] (standard Material GPS teardrop)
-  /// coloured by [_poiCategoryColor] with a small category icon centred in
-  /// the round head of the pin.  This matches the "standard Mapbox marker
-  /// style" for unbranded points of interest.
-  Widget _buildGpsPinWidget(String category) {
-    final Color pinColor = _poiCategoryColor(category);
-    final IconData pinIcon = _poiCategoryIcon(category);
-    return SizedBox(
-      width: 40,
-      height: 40,
-      child: Stack(
-        alignment: Alignment.topCenter,
-        children: [
-          Icon(Icons.location_on, size: 40, color: pinColor),
-          Positioned(
-            top: 5,
-            child: Icon(pinIcon, size: 13, color: Colors.white),
-          ),
-        ],
-      ),
+  /// All POI types (truck stop, hotel, restaurant, rest area, gym, commercial
+  /// vehicle, and weight station) are rendered at the same fixed
+  /// [_kPoiPinSize] × [_kPoiPinSize] bounding box so every marker is visually
+  /// uniform on the map.  When [bytes] is non-null the decoded PNG is shown
+  /// inside the white circular head; otherwise [fallbackIcon] is used.
+  Widget _buildGpsPinWidget(String category, {Uint8List? bytes}) {
+    return buildGpsPinMarker(
+      pinColor: _poiCategoryColor(category),
+      imageBytes: bytes,
+      fallbackIcon: _poiCategoryIcon(category),
+      pinSize: _kPoiPinSize,
     );
   }
 
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
-  /// Every POI is rendered regardless of type, proximity, or whether a route
-  /// is active.  If the POI's branded icon has been preloaded into
-  /// [_brandIconBytes] it is used as the marker image; otherwise a GPS
-  /// teardrop-pin icon coloured by category is shown so that every POI
-  /// is always visible on the map as a recognisable GPS marker.
+  /// Every POI — truck stop, hotel, restaurant, rest area, gym, commercial
+  /// vehicle, and weight station — is rendered at a uniform size using the
+  /// GPS teardrop-pin shape so all types look visually consistent on the map.
+  /// Branded logo bytes are embedded in the pin head when available; otherwise
+  /// a category-appropriate fallback icon is shown.
   ///
   /// Tapping a marker shows a dialog with the POI name.
   List<Marker> _buildAllPoiMarkers() {
@@ -2081,24 +2088,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      final Widget iconWidget = bytes != null
-          ? Image.memory(
-              bytes,
-              width: 36,
-              height: 36,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            )
-          : _buildGpsPinWidget(poi.category);
+      // All POI types use the same GPS pin shape at a uniform size.
+      final Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
 
       return Marker(
         point: LatLng(poi.lat, poi.lng),
-        width: 40,
-        height: 40,
+        width: _kPoiPinSize,
+        height: _kPoiPinSize,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showPoiInfoDialog(poi),
-          child: iconWidget,
+          child: pinWidget,
         ),
       );
     }).toList();

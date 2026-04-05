@@ -11154,7 +11154,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       width: 270,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.7),
+        color: const Color(0xEE22232A),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(

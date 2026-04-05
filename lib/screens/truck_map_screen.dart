@@ -213,6 +213,29 @@ class TopInstructionData {
   final String? exitNumber;
 }
 
+// ── Exit Preview / Junction View model ───────────────────────────────────
+
+/// Immutable data snapshot for the Exit Preview / Junction View card.
+///
+/// Populated by [_TruckMapScreenState._buildExitPreviewData] whenever the
+/// driver is within 0.8 mi of an exit-type maneuver and cleared once the
+/// maneuver is passed.
+class ExitPreviewData {
+  final double distanceMiles;
+  final String roadName;
+  final String? exitNumber;
+  final ManeuverVisualType visualType;
+  final bool show;
+
+  const ExitPreviewData({
+    required this.distanceMiles,
+    required this.roadName,
+    required this.exitNumber,
+    required this.visualType,
+    required this.show,
+  });
+}
+
 /// Full-featured truck navigation screen.
 ///
 /// Integrates a Mapbox map widget (via flutter_map), fetches a live truck
@@ -514,6 +537,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Data for the secondary "Then" maneuver card shown below the primary card.
   /// Set to the step after [_topInstructionData]'s step, null when no such step.
   TopInstructionData? _secondaryInstructionData;
+
+  // ── Exit Preview / Junction View state ────────────────────────────────────
+  /// Current exit preview card data.  Null when no exit is approaching or
+  /// when navigation is not active.  Drives [_buildExitPreviewCard].
+  ExitPreviewData? _exitPreviewData;
 
   // ── Navigation alert state ─────────────────────────────────────────────────
   // Sample alerts shown during active navigation.  In production these would
@@ -3097,6 +3125,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // strip and compact strip always reflect the true remaining distance
       // for the active route, even after reroutes or destination changes.
       _refreshTripProgress();
+      // Refresh the exit preview card based on the current step and distance.
+      _refreshExitPreview();
     }
   }
 
@@ -3126,6 +3156,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         distanceMiles: nextStep.distanceMeters * 0.000621371,
         exitNumber:    nextStep.exitNumber,
       );
+      // Refresh exit preview for the newly active step.
+      _refreshExitPreview();
     }
   }
 
@@ -9451,6 +9483,250 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  // ── Exit Preview / Junction View helpers and UI ───────────────────────────
+
+  /// Returns true when [maneuverType] is an exit-style maneuver and the
+  /// driver is within the 0.8-mile show threshold.
+  bool _shouldShowExitPreview(String? maneuverType, double distanceMiles) {
+    if (distanceMiles > 0.8) return false;
+    final t = (maneuverType ?? '').toLowerCase();
+    return t == 'exit' ||
+        t == 'off ramp' ||
+        t == 'ramp' ||
+        t == 'fork';
+  }
+
+  /// Builds an [ExitPreviewData] snapshot from the current navigation step
+  /// data.  Returns null when the maneuver does not qualify or is too far away.
+  ExitPreviewData? _buildExitPreviewData({
+    required String? maneuverType,
+    required String? modifier,
+    required String? roadName,
+    required String? exitNumber,
+    required double distanceMiles,
+  }) {
+    if (!_shouldShowExitPreview(maneuverType, distanceMiles)) return null;
+    final visualType = _mapStepToVisualType(maneuverType, modifier);
+    final displayName =
+        (roadName == null || roadName.trim().isEmpty) ? 'Upcoming exit' : roadName.trim();
+    return ExitPreviewData(
+      distanceMiles: distanceMiles,
+      roadName: displayName,
+      exitNumber: exitNumber,
+      visualType: visualType,
+      show: true,
+    );
+  }
+
+  /// Refreshes [_exitPreviewData] from the current active navigation step.
+  ///
+  /// Should be called on every GPS tick while [_isNavigating] is true and
+  /// whenever the step index advances.
+  void _refreshExitPreview() {
+    if (!_isNavigating || _navSteps.isEmpty) {
+      if (_exitPreviewData != null) setState(() => _exitPreviewData = null);
+      return;
+    }
+    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final step = _navSteps[safeIndex];
+    final distMeters = _distanceToNextStep();
+    final distMiles = distMeters / _metersPerMile;
+
+    final updated = _buildExitPreviewData(
+      maneuverType: step.type,
+      modifier: step.maneuver,
+      roadName: step.name,
+      exitNumber: step.exitNumber,
+      distanceMiles: distMiles,
+    );
+
+    // Only call setState when the value has meaningfully changed to avoid
+    // unnecessary rebuilds on every GPS tick.
+    if (updated?.show != _exitPreviewData?.show ||
+        updated?.roadName != _exitPreviewData?.roadName ||
+        updated?.exitNumber != _exitPreviewData?.exitNumber ||
+        (updated != null &&
+            (updated.distanceMiles - (_exitPreviewData?.distanceMiles ?? 999.0)).abs() > 0.005)) {
+      setState(() => _exitPreviewData = updated);
+    }
+  }
+
+  /// Formats [miles] as a compact distance string suitable for the exit
+  /// preview card header (e.g. "318 ft" or "0.6 mi").
+  String _formatExitPreviewDistance(double miles) {
+    if (miles < (1.0 / 5.0)) {
+      return '${(miles * 5280).round()} ft';
+    }
+    if (miles < 1.0) return '${(miles * 10).round() / 10} mi';
+    return '${miles.toStringAsFixed(1)} mi';
+  }
+
+  /// Builds the stylised highway lane preview graphic shown in the lower half
+  /// of the exit preview card.  Uses a [CustomPaint] to draw lane lines and
+  /// a blue exit-ramp path.
+  Widget _buildExitPreviewGraphic(ExitPreviewData data) {
+    final bool exitRight = data.visualType != ManeuverVisualType.forkLeft &&
+        data.visualType != ManeuverVisualType.left &&
+        data.visualType != ManeuverVisualType.slightLeft;
+
+    return SizedBox(
+      height: 90,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Lane lines background
+          CustomPaint(
+            painter: _ExitLanePainter(exitRight: exitRight),
+          ),
+          // Exit sign block on the appropriate side
+          Positioned(
+            top: 10,
+            right: exitRight ? 8 : null,
+            left: exitRight ? null : 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF16A34A),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if ((data.exitNumber ?? '').isNotEmpty)
+                    Text(
+                      'Exit ${data.exitNumber}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  Text(
+                    data.roadName.length > 16
+                        ? '${data.roadName.substring(0, 14)}…'
+                        : data.roadName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the Exit Preview / Junction View overlay card.
+  ///
+  /// Returns [SizedBox.shrink] when there is no active exit preview data.
+  Widget _buildExitPreviewCard() {
+    final data = _exitPreviewData;
+    if (data == null || !data.show) return const SizedBox.shrink();
+
+    final bool urgent = data.distanceMiles <= 0.3;
+
+    return Container(
+      width: 300,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Green header ─────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            color: urgent ? const Color(0xFF15803D) : const Color(0xFF16A34A),
+            child: Row(
+              children: [
+                // Maneuver icon
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    _maneuverVisualIcon(data.visualType),
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Distance countdown
+                Expanded(
+                  child: Text(
+                    _formatExitPreviewDistance(data.distanceMiles),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: urgent ? 22 : 20,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                // Exit number chip
+                if ((data.exitNumber ?? '').isNotEmpty)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      data.exitNumber!,
+                      style: const TextStyle(
+                        color: Color(0xFF15803D),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Road name bar
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            color: const Color(0xFF14532D),
+            child: Text(
+              data.roadName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          // ── Lane graphic ─────────────────────────────────────────────────
+          Container(
+            color: const Color(0xFF1E293B),
+            child: _buildExitPreviewGraphic(data),
+          ),
+        ],
+      ),
+    );
+  }
   // ── Junction View ─────────────────────────────────────────────────────────
 
   /// Maps a [LaneArrowType] value to the best matching [IconData].
@@ -10618,6 +10894,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // banner during active navigation.  Returns SizedBox.shrink()
                 // when not navigating, so it is zero-cost outside nav mode.
                 _buildLaneGuidance(),
+                // ── Exit Preview / Junction View card ─────────────────────
+                // Shown top-center during exit/ramp/fork maneuvers when
+                // within 0.8 mi.  Returns SizedBox.shrink() otherwise.
+                if (_isNavigating && _exitPreviewData != null && (_exitPreviewData?.show ?? false))
+                  Positioned(
+                    top: 16,
+                    left: 0,
+                    right: 0,
+                    child: SafeArea(
+                      bottom: false,
+                      child: Center(
+                        child: _buildExitPreviewCard(),
+                      ),
+                    ),
+                  ),
                 // ── Junction-view card ────────────────────────────────────
                 // Compact top-right lane diagram shown when the driver is
                 // within 0.5 mi (highway) / 0.3 mi (city) of a complex
@@ -14519,4 +14810,67 @@ class _CompassNeedlePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_CompassNeedlePainter oldDelegate) => false;
+}
+
+
+// ── Exit Preview lane painter ─────────────────────────────────────────────
+
+/// [CustomPainter] that draws a simplified top-down highway diagram with
+/// dashed lane lines and a blue exit-ramp path curving off to the right
+/// (or left when [exitRight] is false).
+class _ExitLanePainter extends CustomPainter {
+  const _ExitLanePainter({required this.exitRight});
+
+  final bool exitRight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+
+    // ── Road surface ─────────────────────────────────────────────────────
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, w, h),
+      Paint()..color = const Color(0xFF334155),
+    );
+
+    // ── Lane dividers (dashed white lines) ───────────────────────────────
+    final dashPaint = Paint()
+      ..color = Colors.white38
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    for (int i = 1; i <= 2; i++) {
+      final double x = w * i / 3;
+      double y = 0;
+      while (y < h) {
+        canvas.drawLine(Offset(x, y), Offset(x, (y + 12).clamp(0, h)), dashPaint);
+        y += 22;
+      }
+    }
+
+    // ── Blue route / exit-ramp path ──────────────────────────────────────
+    final routePaint = Paint()
+      ..color = const Color(0xFF2563EB)
+      ..strokeWidth = 10
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final rampPath = Path();
+    if (exitRight) {
+      // Straight along the middle-right lane, then curve right off the road.
+      rampPath.moveTo(w * 0.67, h);
+      rampPath.lineTo(w * 0.67, h * 0.5);
+      rampPath.quadraticBezierTo(w * 0.67, h * 0.1, w, h * 0.05);
+    } else {
+      // Mirror for left exits.
+      rampPath.moveTo(w * 0.33, h);
+      rampPath.lineTo(w * 0.33, h * 0.5);
+      rampPath.quadraticBezierTo(w * 0.33, h * 0.1, 0, h * 0.05);
+    }
+    canvas.drawPath(rampPath, routePaint);
+  }
+
+  @override
+  bool shouldRepaint(_ExitLanePainter old) => old.exitRight != exitRight;
 }

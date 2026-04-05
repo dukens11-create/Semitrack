@@ -57,6 +57,26 @@ final List<WarningSign> warningSigns = [
     message: 'Hazardous-materials transport prohibited in this corridor.',
     icon: WarningTypes.hazmatRestriction,
   ),
+  WarningSign(
+    id: 'ws_narrow_bridge_001',
+    type: WarningTypes.narrowBridge,
+    title: 'Narrow Bridge',
+    lat: 34.1050,
+    lng: -118.2200,
+    severity: 'high',
+    message: 'One-lane bridge — oversized loads must proceed with caution.',
+    icon: WarningTypes.narrowBridge,
+  ),
+  WarningSign(
+    id: 'ws_railroad_crossing_001',
+    type: WarningTypes.railroadCrossing,
+    title: 'Railroad Crossing',
+    lat: 34.2350,
+    lng: -118.1350,
+    severity: 'high',
+    message: 'Active grade crossing — stop if signal is active.',
+    icon: WarningTypes.railroadCrossing,
+  ),
 
   // ── Medium severity ────────────────────────────────────────────────────────
 

@@ -37,6 +37,7 @@ class WarningSign {
     required this.severity,
     this.message,
     this.icon,
+    this.roadType,
   });
 
   /// Unique identifier — also used for alert deduplication.
@@ -67,6 +68,14 @@ class WarningSign {
   /// is used as a fallback.
   final String? icon;
 
+  /// Road type that governs trigger-distance thresholds.
+  ///
+  /// - `'highway'` (default when null) — use full standard distances
+  ///   (2.0 / 1.0 / 0.5 / 0.2 miles).
+  /// - `'city'` — use shorter thresholds suitable for low-speed urban roads
+  ///   (1.0 / 0.5 / 0.25 / 0.1 miles).
+  final String? roadType;
+
   // ── JSON serialisation ────────────────────────────────────────────────────
 
   /// Creates a [WarningSign] from a JSON map (e.g. from a REST API response).
@@ -80,6 +89,7 @@ class WarningSign {
       severity: json['severity'] as String,
       message: json['message'] as String?,
       icon: json['icon'] as String?,
+      roadType: json['road_type'] as String?,
     );
   }
 
@@ -94,6 +104,7 @@ class WarningSign {
       'severity': severity,
       if (message != null) 'message': message,
       if (icon != null) 'icon': icon,
+      if (roadType != null) 'road_type': roadType,
     };
   }
 

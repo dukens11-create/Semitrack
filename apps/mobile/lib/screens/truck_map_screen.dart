@@ -89,6 +89,68 @@ class UpcomingManeuverStep {
   final List<LaneInfo> lanes;
 }
 
+// ── Junction-view and enhanced lane guidance models ────────────────────────
+
+/// The direction a single arrow can point on a lane marker.
+///
+/// Used by [LaneGuidanceData] to describe the allowed movements for each lane
+/// in the junction-view and enhanced lane-guidance overlays.
+enum LaneArrowType {
+  left,
+  slightLeft,
+  straight,
+  slightRight,
+  right,
+  uTurn,
+  none,
+}
+
+/// Visual description of a single lane as shown in the lane-guidance and
+/// junction-view overlays.
+///
+/// [arrows] lists every arrow drawn on the lane marker — most lanes carry
+/// one arrow, but shared lanes (e.g. straight-or-right) carry two.
+/// [isActive] is true when the driver should use this lane to follow the route.
+class LaneGuidanceData {
+  const LaneGuidanceData({
+    required this.arrows,
+    required this.isActive,
+  });
+
+  final List<LaneArrowType> arrows;
+  final bool isActive;
+}
+
+/// Data snapshot driving the compact junction-view overlay.
+///
+/// Produced by [_TruckMapScreenState._buildJunctionViewSnapshot] and stored in
+/// [_TruckMapScreenState._junctionViewData].  The overlay is rendered by
+/// [_TruckMapScreenState._buildJunctionView].
+class JunctionViewData {
+  const JunctionViewData({
+    required this.maneuverType,
+    required this.incomingRoadName,
+    required this.outgoingRoadName,
+    required this.lanes,
+    required this.distanceMiles,
+  });
+
+  /// Mapbox maneuver type string (e.g. "exit", "fork", "merge").
+  final String maneuverType;
+
+  /// Road name the driver is currently travelling on (may be empty).
+  final String incomingRoadName;
+
+  /// Road name at the upcoming junction (may be empty).
+  final String outgoingRoadName;
+
+  /// Per-lane display data for the junction-view panel.
+  final List<LaneGuidanceData> lanes;
+
+  /// Distance in miles to this junction from the driver's current position.
+  final double distanceMiles;
+}
+
 // ── Top navigation instruction card models ────────────────────────────────
 
 /// Visual maneuver type used by [TopInstructionData] to select the correct
@@ -436,6 +498,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Null until [_updateUpcomingManeuver] is first called.
   /// Drives both [_shouldShowLaneGuidance] and [_buildDynamicLaneAssist].
   UpcomingManeuverStep? _upcomingManeuverStep;
+
+  // ── Junction-view state ────────────────────────────────────────────────────
+  /// Data for the compact junction-view card shown when the driver approaches
+  /// a complex interchange, exit, fork, or merge.
+  /// Null when junction view should not be visible.
+  JunctionViewData? _junctionViewData;
 
   // ── Top instruction card state ─────────────────────────────────────────────
   /// Current data for the compact top navigation instruction card.
@@ -8907,6 +8975,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
                 LaneInfo(directions: [LaneDirection.right],      isRecommended: false),
               ];
+
+    // Build junction-view snapshot when the maneuver warrants one.
+    final JunctionViewData? newJunctionData =
+        _maneuverNeedsJunctionView(maneuverType)
+            ? _buildJunctionViewSnapshot(
+                maneuverType:    maneuverType!,
+                distanceMiles:   distanceMiles,
+                roadName:        roadName,
+                resolvedLanes:   resolvedLanes,
+              )
+            : null;
+
     setState(() {
       _nextManeuverType              = maneuverType;
       _distanceToNextManeuverMiles   = distanceMiles;
@@ -8918,10 +8998,90 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         roadName:           roadName,
         lanes:              resolvedLanes,
       );
+      _junctionViewData = newJunctionData;
     });
   }
 
   // ── Dynamic lane guidance helpers ─────────────────────────────────────────
+
+  // ── Junction-view helpers ─────────────────────────────────────────────────
+
+  /// Returns true when [maneuverType] is one of the complex interchange
+  /// categories that warrant a junction-view overlay (exits, forks, merges).
+  ///
+  /// Junction view is reserved for highway-class complexity where a top-down
+  /// intersection diagram provides genuine driver value.  Simple city turns
+  /// are covered by the lane-guidance panel alone.
+  bool _maneuverNeedsJunctionView(String? maneuverType) {
+    if (maneuverType == null) return false;
+    const supported = {'exit', 'fork', 'merge', 'off ramp', 'on ramp'};
+    return supported.contains(maneuverType.toLowerCase());
+  }
+
+  /// Returns true when the junction-view overlay should be visible.
+  ///
+  /// Show threshold is 0.5 miles for highway junctions (exits/ramps) and
+  /// 0.3 miles for city-level forks/merges — tighter than lane guidance so
+  /// the card only appears when the driver is truly close to the junction.
+  bool _shouldShowJunctionView(UpcomingManeuverStep? step) {
+    if (step == null || !_maneuverNeedsJunctionView(step.maneuverType)) {
+      return false;
+    }
+    final double threshold = step.isHighwayManeuver ? 0.5 : 0.3;
+    return step.distanceMiles <= threshold;
+  }
+
+  /// Converts a [LaneDirection] value to the equivalent [LaneArrowType].
+  LaneArrowType _laneDirectionToArrowType(LaneDirection direction) {
+    switch (direction) {
+      case LaneDirection.left:        return LaneArrowType.left;
+      case LaneDirection.slightLeft:  return LaneArrowType.slightLeft;
+      case LaneDirection.straight:    return LaneArrowType.straight;
+      case LaneDirection.slightRight: return LaneArrowType.slightRight;
+      case LaneDirection.right:       return LaneArrowType.right;
+      case LaneDirection.uTurn:       return LaneArrowType.uTurn;
+    }
+  }
+
+  /// Builds a [JunctionViewData] snapshot from the supplied parameters.
+  ///
+  /// Called inside [_updateUpcomingManeuver] when [maneuverType] qualifies for
+  /// a junction-view overlay.  Converts [LaneInfo] entries to [LaneGuidanceData]
+  /// and derives road name labels from available context.
+  JunctionViewData _buildJunctionViewSnapshot({
+    required String maneuverType,
+    required double distanceMiles,
+    required String? roadName,
+    required List<LaneInfo> resolvedLanes,
+  }) {
+    final List<LaneGuidanceData> jvLanes = resolvedLanes.map((lane) {
+      return LaneGuidanceData(
+        arrows: lane.directions.map(_laneDirectionToArrowType).toList(),
+        isActive: lane.isRecommended,
+      );
+    }).toList();
+
+    // Use the outgoing road name where available; fall back gracefully.
+    final String outgoing = (roadName != null && roadName.trim().isNotEmpty)
+        ? roadName.trim()
+        : '';
+
+    // Derive the incoming road name from the current nav step when possible.
+    String incoming = '';
+    if (_navSteps.isNotEmpty) {
+      final safeIdx = _currentStepIndex.clamp(0, _navSteps.length - 1);
+      final name = _navSteps[safeIdx].name;
+      if (name.isNotEmpty) incoming = name;
+    }
+
+    return JunctionViewData(
+      maneuverType:     maneuverType,
+      incomingRoadName: incoming,
+      outgoingRoadName: outgoing,
+      lanes:            jvLanes,
+      distanceMiles:    distanceMiles,
+    );
+  }
 
   // ── Top instruction card helpers ─────────────────────────────────────────
 
@@ -9217,6 +9377,156 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 )
               : const SizedBox.shrink(key: ValueKey('laneGuidanceOff')),
         ),
+      ),
+    );
+  }
+
+  // ── Junction View ─────────────────────────────────────────────────────────
+
+  /// Maps a [LaneArrowType] value to the best matching [IconData].
+  IconData _junctionArrowIcon(LaneArrowType type) {
+    switch (type) {
+      case LaneArrowType.left:        return Icons.turn_left;
+      case LaneArrowType.slightLeft:  return Icons.turn_slight_left;
+      case LaneArrowType.straight:    return Icons.straight;
+      case LaneArrowType.slightRight: return Icons.turn_slight_right;
+      case LaneArrowType.right:       return Icons.turn_right;
+      case LaneArrowType.uTurn:       return Icons.u_turn_left;
+      case LaneArrowType.none:        return Icons.straight;
+    }
+  }
+
+  /// Builds a single lane tile for the junction-view diagram.
+  ///
+  /// Active (recommended) lanes are highlighted in blue with a border;
+  /// non-active lanes use a dark-grey background.
+  Widget _buildJunctionLaneTile(LaneGuidanceData lane) {
+    const Color activeColor   = Color(0xFF1565C0); // blue 800
+    const Color inactiveColor = Color(0xFF37474F); // blue-grey 800
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      decoration: BoxDecoration(
+        color: lane.isActive ? activeColor : inactiveColor,
+        borderRadius: BorderRadius.circular(7),
+        border: lane.isActive
+            ? Border.all(color: Colors.blueAccent, width: 1.5)
+            : Border.all(color: Colors.white24, width: 0.5),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: lane.arrows
+            .map((a) => Icon(_junctionArrowIcon(a), color: Colors.white, size: 16))
+            .toList(),
+      ),
+    );
+  }
+
+  /// Compact junction-view overlay card shown in the top-right area of the
+  /// map when the driver is approaching a complex exit, fork, or merge.
+  ///
+  /// Displays a lane diagram with color-coded arrows so the driver can see
+  /// which lane to take without looking away from the road.
+  ///
+  /// Visibility rules:
+  ///  - Only shown during active navigation ([_isNavigating] == true).
+  ///  - Gated by [NavSettingsModel.viewJunctionView].
+  ///  - Maneuver type must be an exit, fork, or merge.
+  ///  - Driver must be within 0.5 mi (highway) or 0.3 mi (city) of junction.
+  ///
+  /// Returns [SizedBox.shrink] at zero cost when conditions are not met.
+  Widget _buildJunctionView() {
+    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_navSettings.viewJunctionView) return const SizedBox.shrink();
+
+    final bool visible = _shouldShowJunctionView(_upcomingManeuverStep);
+
+    return Positioned(
+      // top: 130 positions the card below the satellite toggle (top:74 + 48 + 8)
+      // so it never overlaps the compass or satellite buttons.
+      top: 130,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: (visible && _junctionViewData != null)
+              ? _buildJunctionViewCard(
+                  _junctionViewData!,
+                  key: const ValueKey('junctionViewOn'),
+                )
+              : const SizedBox.shrink(key: ValueKey('junctionViewOff')),
+        ),
+      ),
+    );
+  }
+
+  /// Renders the actual junction-view card content for [data].
+  ///
+  /// Extracted from [_buildJunctionView] so the [AnimatedSwitcher] child is
+  /// a stable, keyed widget.
+  Widget _buildJunctionViewCard(JunctionViewData data, {Key? key}) {
+    final String distStr = _formatMilesDisplay(data.distanceMiles);
+    return Container(
+      key: key,
+      width: 148,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.88),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black45,
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // ── Header: junction icon + distance ──────────────────────────────
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.call_split, color: Colors.blueAccent, size: 13),
+              const SizedBox(width: 4),
+              Text(
+                'JUNCTION  $distStr',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // ── Lane diagram ──────────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: data.lanes.map(_buildJunctionLaneTile).toList(),
+          ),
+          // ── Outgoing road name ────────────────────────────────────────────
+          if (data.outgoingRoadName.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              data.outgoingRoadName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -10238,6 +10548,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // banner during active navigation.  Returns SizedBox.shrink()
                 // when not navigating, so it is zero-cost outside nav mode.
                 _buildLaneGuidance(),
+                // ── Junction-view card ────────────────────────────────────
+                // Compact top-right lane diagram shown when the driver is
+                // within 0.5 mi (highway) / 0.3 mi (city) of a complex
+                // exit, fork, or merge.  Returns SizedBox.shrink() when
+                // conditions are not met, so it is zero-cost otherwise.
+                _buildJunctionView(),
                 // ── Inline search bar ─────────────────────────────────────
                 // Hidden during active turn-by-turn navigation so it does not
                 // overlap the navigation banner.  Visible at all other times

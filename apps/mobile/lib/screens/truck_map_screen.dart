@@ -2006,7 +2006,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns the accent [Color] used for GPS pin markers of the given POI
-  /// [category].  Matches the colour conventions used across the app:
+  /// [category].  Matches the color conventions used across the app:
   ///   • `truck_stop`    → blue  (fuel/parking)
   ///   • `weigh_station` → orange (regulatory)
   ///   • `rest_area`     → green  (amenity/comfort)

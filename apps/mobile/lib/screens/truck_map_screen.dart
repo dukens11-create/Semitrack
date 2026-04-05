@@ -878,6 +878,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Maximum driving minutes per duty cycle (FMCSA 11-hour rule).
   static const int _hosMaxDriveMinutes = 660;
 
+  /// Driving minutes after which a 30-minute break is required (FMCSA 8-hour rule).
+  static const int _hosBreakDueMinutes = 480;
+
+  /// Consecutive off-duty minutes required to fully reset the drive clock (FMCSA 10-hour rule).
+  static const int _hosResetBreakMinutes = 600;
+
   /// Accumulated driving time since the last 10-hour off-duty reset.
   Duration _hosDrivingDuration = Duration.zero;
 
@@ -3323,13 +3329,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           // Vehicle is moving — accumulate driving time and reset break clock.
           _hosDrivingDuration += delta;
           _hosCurrentBreakDuration = Duration.zero;
-          _hosBreakDue = _hosDrivingDuration.inMinutes >= 480; // 8-hour mark
+          _hosBreakDue = _hosDrivingDuration.inMinutes >= _hosBreakDueMinutes; // 8-hour mark
         } else {
           // Vehicle is stopped — accumulate break time.
           _hosCurrentBreakDuration += delta;
           // FMCSA 10-hour off-duty reset: full drive clock resets after a
           // 10-consecutive-hour break.
-          if (_hosCurrentBreakDuration.inMinutes >= 600) {
+          if (_hosCurrentBreakDuration.inMinutes >= _hosResetBreakMinutes) {
             _hosDrivingDuration = Duration.zero;
             _hosCurrentBreakDuration = Duration.zero;
             _hosBreakDue = false;
@@ -3341,9 +3347,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Compute updated HOS remaining before entering setState so it is
     // applied atomically with the speed/position update.
-    final hosDrivingMinutes = _hosDrivingDuration.inSeconds / 60.0;
     final hosRemaining =
-        (_hosMaxDriveMinutes - hosDrivingMinutes).clamp(0.0, _hosMaxDriveMinutes.toDouble()).toInt();
+        (_hosMaxDriveMinutes - _hosDrivingDuration.inMinutes).clamp(0, _hosMaxDriveMinutes);
 
     setState(() {
       // Use the raw GPS fix so the marker reflects actual device location.

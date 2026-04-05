@@ -15,6 +15,11 @@ import 'package:semitrack_mobile/models/poi_item.dart';
 ///
 /// [icon] is the normalised Mapbox image ID (PNG filename stem) registered via
 /// `registerPoiIcons()`, e.g. `"pilot"`, `"loves"`, `"weight_station"`.
+///
+/// For maximum geographic precision, the optional [entranceLat] and
+/// [entranceLng] fields capture the GPS coordinate of the facility's primary
+/// truck entrance.  Use [displayLat] and [displayLng] to obtain the
+/// best-available coordinate automatically.
 class Poi {
   final String id;
   final String name;
@@ -24,6 +29,18 @@ class Poi {
 
   final double lat;
   final double lng;
+
+  /// Precise latitude of the primary truck entrance / access point.
+  ///
+  /// When present this is more accurate than [lat] (the property centre) and
+  /// should be used for map marker placement.
+  final double? entranceLat;
+
+  /// Precise longitude of the primary truck entrance / access point.
+  ///
+  /// When present this is more accurate than [lng] (the property centre) and
+  /// should be used for map marker placement.
+  final double? entranceLng;
 
   /// Mapbox image ID / asset filename stem for the brand logo marker.
   final String icon;
@@ -47,11 +64,25 @@ class Poi {
     required this.lat,
     required this.lng,
     required this.icon,
+    this.entranceLat,
+    this.entranceLng,
     this.country = '',
     this.stateOrProvince = '',
     this.city = '',
     this.exitNumber,
   });
+
+  /// Best-available display latitude.
+  ///
+  /// Returns [entranceLat] when set (precise truck-entrance GPS fix), falling
+  /// back to [lat] (property centre) otherwise.
+  double get displayLat => entranceLat ?? lat;
+
+  /// Best-available display longitude.
+  ///
+  /// Returns [entranceLng] when set (precise truck-entrance GPS fix), falling
+  /// back to [lng] (property centre) otherwise.
+  double get displayLng => entranceLng ?? lng;
 
   /// Deserialises a single POI from a JSON map.
   ///
@@ -63,6 +94,12 @@ class Poi {
       type: (json['type'] ?? json['category']) as String,
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
+      entranceLat: json['entrance_lat'] != null
+          ? (json['entrance_lat'] as num).toDouble()
+          : null,
+      entranceLng: json['entrance_lng'] != null
+          ? (json['entrance_lng'] as num).toDouble()
+          : null,
       icon: json['icon'] as String,
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
@@ -79,6 +116,8 @@ class Poi {
       type: item.category,
       lat: item.lat,
       lng: item.lng,
+      entranceLat: item.entranceLat,
+      entranceLng: item.entranceLng,
       icon: item.icon,
       country: item.country,
       stateOrProvince: item.stateOrProvince,

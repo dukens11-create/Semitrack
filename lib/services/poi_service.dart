@@ -103,6 +103,15 @@ Future<List<PoiItem>> loadAllPois() async {
       icon: resolvedIcon,
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
+      // Optional high-precision entrance coordinates.  When present these
+      // represent the GPS fix of the primary truck access point (more accurate
+      // than the property-centre lat/lng) and are used for map placement.
+      entranceLat: json['entrance_lat'] != null
+          ? (json['entrance_lat'] as num).toDouble()
+          : null,
+      entranceLng: json['entrance_lng'] != null
+          ? (json['entrance_lng'] as num).toDouble()
+          : null,
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
@@ -116,6 +125,11 @@ Future<List<PoiItem>> loadAllPois() async {
 /// Each feature carries the core [PoiItem] fields as GeoJSON properties.  The
 /// `icon` property matches a Mapbox image ID registered via [registerPoiIcons],
 /// enabling `["get", "icon"]` expressions in symbol layers.
+///
+/// The geometry coordinate uses [PoiItem.displayLng] / [PoiItem.displayLat] so
+/// that markers are placed at the most precise GPS fix available — the truck
+/// entrance point when `entrance_lat`/`entrance_lng` are set in the JSON, or
+/// the property-centre coordinates otherwise.
 Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
   return {
     'type': 'FeatureCollection',
@@ -126,7 +140,9 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
             'id': poi.id,
             'geometry': {
               'type': 'Point',
-              'coordinates': [poi.lng, poi.lat],
+              // Use the most precise coordinate available: entrance point when
+              // present, property centre otherwise.  GeoJSON uses [lng, lat].
+              'coordinates': [poi.displayLng, poi.displayLat],
             },
             'properties': {
               'id': poi.id,

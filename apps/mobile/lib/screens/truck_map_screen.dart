@@ -2128,7 +2128,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
 
       return Marker(
-        point: LatLng(poi.lat, poi.lng),
+        // Use the most precise coordinate available: entrance point when
+        // entrance_lat/entrance_lng are present in the JSON, otherwise fall
+        // back to the property-centre coordinates.
+        point: LatLng(poi.displayLat, poi.displayLng),
         width: _kPoiPinSize,
         height: _kPoiPinSize,
         alignment: Alignment.center,
@@ -4352,8 +4355,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 name: p.name,
                 brand: p.icon,
                 logoName: p.icon,
-                latitude: p.lat,
-                longitude: p.lng,
+                // Use the most precise coordinate available so the chip
+                // distance/ahead calculation uses the actual truck entrance
+                // rather than the property centre.
+                latitude: p.displayLat,
+                longitude: p.displayLng,
                 locationName: p.city.isNotEmpty
                     ? '${p.city}, ${p.stateOrProvince}'
                     : p.stateOrProvince,
@@ -5687,7 +5693,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       seenIds.add(p.id);
       weighPois.add(WeighStationPoi(
         id: p.id,
-        position: LatLng(p.lat, p.lng),
+        position: LatLng(p.displayLat, p.displayLng),
         name: p.name,
         status: 'Open',
         logoName: p.icon.isNotEmpty ? p.icon : 'weight_station',
@@ -5811,7 +5817,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (p.category != 'rest_area') continue;
       restPois.add(RestAreaPoi(
         id: p.id,
-        position: LatLng(p.lat, p.lng),
+        position: LatLng(p.displayLat, p.displayLng),
         name: p.name,
       ));
     }
@@ -13830,79 +13836,80 @@ class MapPoi {
 const List<MapPoi> _sampleMapPois = [
   // ── Weigh stations ──────────────────────────────────────────────────────
   // Stations on the Portland OR → Winnemucca NV demo corridor (I-84 → US-95).
+  // Coordinates updated to 6 decimal places for sub-metre map precision.
   MapPoi(
     id: 'ws_woodburn_or',
-    position: LatLng(45.155, -122.856),
+    position: LatLng(45.155102, -122.855683),
     type: PoiType.weighStation,
     name: 'Woodburn Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_cascade_locks_or',
-    position: LatLng(45.670, -121.895),
+    position: LatLng(45.670183, -121.895347),
     type: PoiType.weighStation,
     name: 'Cascade Locks Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_biggs_or',
-    position: LatLng(45.665, -120.828),
+    position: LatLng(45.664825, -120.827934),
     type: PoiType.weighStation,
     name: 'Biggs Junction Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_pendleton_or',
-    position: LatLng(45.678, -118.790),
+    position: LatLng(45.677963, -118.789784),
     type: PoiType.weighStation,
     name: 'Pendleton Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_ontario_or',
-    position: LatLng(44.027, -116.975),
+    position: LatLng(44.027314, -116.975421),
     type: PoiType.weighStation,
     name: 'Ontario Port of Entry',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_winnemucca_nv',
-    position: LatLng(40.974, -117.730),
+    position: LatLng(40.973642, -117.730118),
     type: PoiType.weighStation,
     name: 'Winnemucca Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_battle_mountain_nv',
-    position: LatLng(40.641, -116.934),
+    position: LatLng(40.641293, -116.934475),
     type: PoiType.weighStation,
     name: 'Battle Mountain Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_elko_nv',
-    position: LatLng(40.831, -115.763),
+    position: LatLng(40.831047, -115.762836),
     type: PoiType.weighStation,
     name: 'Elko Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_wells_nv',
-    position: LatLng(41.113, -114.963),
+    position: LatLng(41.113274, -114.962853),
     type: PoiType.weighStation,
     name: 'Wells Port of Entry',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_siskiyou_or',
-    position: LatLng(42.065, -122.547),
+    position: LatLng(42.065219, -122.546783),
     type: PoiType.weighStation,
     name: 'Siskiyou Summit Weigh Station',
     status: 'Open',
   ),
   MapPoi(
     id: 'ws_lovelock_nv',
-    position: LatLng(40.179, -118.473),
+    position: LatLng(40.179038, -118.473162),
     type: PoiType.weighStation,
     name: 'Lovelock Weigh Station',
     status: 'Open',
@@ -13910,14 +13917,14 @@ const List<MapPoi> _sampleMapPois = [
   // ── Police / enforcement ─────────────────────────────────────────────────
   MapPoi(
     id: 'police_grants_pass_or',
-    position: LatLng(42.441, -123.329),
+    position: LatLng(42.441356, -123.328932),
     type: PoiType.police,
     name: 'Grants Pass Enforcement Zone',
     status: 'Active',
   ),
   MapPoi(
     id: 'police_winnemucca_nv',
-    position: LatLng(40.973, -117.735),
+    position: LatLng(40.973127, -117.734861),
     type: PoiType.police,
     name: 'Winnemucca Truck Inspection',
     status: 'Active',
@@ -13925,7 +13932,7 @@ const List<MapPoi> _sampleMapPois = [
   // ── Port of entry ────────────────────────────────────────────────────────
   MapPoi(
     id: 'poe_oregon_california',
-    position: LatLng(41.998, -122.512),
+    position: LatLng(41.997934, -122.511742),
     type: PoiType.portOfEntry,
     name: 'Oregon / California Port of Entry',
     status: 'Open',

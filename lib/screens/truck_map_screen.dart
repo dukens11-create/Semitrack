@@ -2005,14 +2005,69 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }).toList();
   }
 
+  /// Returns the accent [Color] used for GPS pin markers of the given POI
+  /// [category].  Matches the color conventions used across the app:
+  ///   • `truck_stop`    → blue  (fuel/parking)
+  ///   • `weigh_station` → orange (regulatory)
+  ///   • `rest_area`     → green  (amenity/comfort)
+  ///   • anything else   → blue  (generic default)
+  Color _poiCategoryColor(String category) {
+    switch (category) {
+      case 'weigh_station':
+        return Colors.orange;
+      case 'rest_area':
+        return Colors.green.shade700;
+      default:
+        return Colors.blue.shade700;
+    }
+  }
+
+  /// Returns the [IconData] placed inside the GPS pin for the given POI
+  /// [category] when no branded PNG is available.
+  IconData _poiCategoryIcon(String category) {
+    switch (category) {
+      case 'weigh_station':
+        return Icons.scale;
+      case 'rest_area':
+        return Icons.local_hotel;
+      default:
+        return Icons.local_shipping;
+    }
+  }
+
+  /// Builds a GPS teardrop-pin [Widget] for a POI that has no branded image.
+  ///
+  /// The pin shape is [Icons.location_on] (standard Material GPS teardrop)
+  /// coloured by [_poiCategoryColor] with a small category icon centred in
+  /// the round head of the pin.  This matches the "standard Mapbox marker
+  /// style" for unbranded points of interest.
+  Widget _buildGpsPinWidget(String category) {
+    final Color pinColor = _poiCategoryColor(category);
+    final IconData pinIcon = _poiCategoryIcon(category);
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          Icon(Icons.location_on, size: 40, color: pinColor),
+          Positioned(
+            top: 5,
+            child: Icon(pinIcon, size: 13, color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
   /// Every POI is rendered regardless of type, proximity, or whether a route
   /// is active.  If the POI's branded icon has been preloaded into
-  /// [_brandIconBytes] it is used as the marker image; otherwise a default
-  /// fallback icon ([Icons.local_gas_station]) is shown so that no POI is
-  /// ever missing or broken on the map.
+  /// [_brandIconBytes] it is used as the marker image; otherwise a GPS
+  /// teardrop-pin icon coloured by category is shown so that every POI
+  /// is always visible on the map as a recognisable GPS marker.
   ///
   /// Tapping a marker shows a dialog with the POI name.
   List<Marker> _buildAllPoiMarkers() {
@@ -2034,24 +2089,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               fit: BoxFit.contain,
               gaplessPlayback: true,
             )
-          : Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.blue.shade700,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.local_gas_station,
-                color: Colors.white,
-                size: 20,
-              ),
-            );
+          : _buildGpsPinWidget(poi.category);
 
       return Marker(
         point: LatLng(poi.lat, poi.lng),
-        width: 36,
-        height: 36,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showPoiInfoDialog(poi),

@@ -825,10 +825,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// and removed from the chips.  200 m ≈ 0.124 mi.
   static const double _poiPassedThresholdMiles = 0.124;
 
-  /// Fallback distance (miles) shown in the weigh-station chip when no live
-  /// route data is available, ensuring the chip is always visible.
-  static const double _kDefaultWeighStationMilesAhead = 8.4;
-
   /// Distance buffer (metres) used when deciding which warning signs are
   /// shown as map markers.  Wider than [_warningProximityMeters] so the driver
   /// can see upcoming hazards well in advance (~10 miles).
@@ -5705,33 +5701,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
-  /// Builds the closest upcoming weigh station chip on the right side of the
-  /// map, directly below the satellite toggle button.
+  /// Builds the closest weigh-station chip shown on the right side of the map
+  /// during active navigation.
   ///
-  /// Displays a white 48 × 48 square chip with a bold green "W" and the
-  /// remaining miles centred below it.  Updates live on every GPS fix via
-  /// [_refreshClosestWeighStationsAhead].  Always visible: falls back to
-  /// [_kDefaultWeighStationMilesAhead] when no live weigh station is ahead.
+  /// Returns [SizedBox.shrink] when:
+  ///   - The weigh-station layer is disabled in nav settings.
+  ///   - Navigation is not active.
+  ///   - There are no weigh stations ahead on the current route.
+  ///
+  /// When a weigh station is ahead, the chip shows its live route miles and
+  /// updates on every GPS fix via [_refreshClosestWeighStationsAhead].
   Widget _buildClosestWeighStationsRow() {
     // Hidden when the weigh-station layer is toggled off in nav settings.
     if (!_navSettings.viewWeighStation) return const SizedBox.shrink();
-    // Always show the chip.  When live route data has no upcoming weigh
-    // station, fall back to a placeholder distance so the chip is always
-    // visible for user validation.
-    final List<AheadWeighStation> stations = _closestWeighStationsAhead.isNotEmpty
-        ? _closestWeighStationsAhead
-        : [
-            AheadWeighStation(
-              poi: WeighStationPoi(
-                id: 'default_ws',
-                position: const LatLng(0, 0),
-                name: 'Weigh Station',
-                status: 'Open',
-              ),
-              milesAhead: _kDefaultWeighStationMilesAhead,
-              routeIndex: 0,
-            ),
-          ];
+    // Hidden when not navigating or when no weigh stations are ahead on route.
+    if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Positioned(
       // top: 134 = satellite top(74) + satellite height(48) + gap(12).
       top: 134,
@@ -5739,7 +5725,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         bottom: false,
         child: ClosestWeighStationsRow(
-          stations: stations,
+          stations: _closestWeighStationsAhead,
         ),
       ),
     );

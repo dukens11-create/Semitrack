@@ -5,11 +5,19 @@
 /// designed to be used as the visual representation of a Point-of-Interest
 /// (truck stop, weigh station, etc.) on the map overlay.
 ///
+/// [buildGpsPinMarker] renders any POI logo or fallback icon inside a
+/// GPS teardrop-pin shape at a uniform size so every POI type looks
+/// visually consistent on the map.
+///
 /// Example usage:
 /// ```dart
 /// buildCleanMarker('assets/logos/loves.png')
+/// buildGpsPinMarker(pinColor: Colors.blue, imageBytes: bytes)
+/// buildGpsPinMarker(pinColor: Colors.orange, fallbackIcon: Icons.scale)
 /// ```
 library marker_widgets;
+
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -68,6 +76,78 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
           ),
         ),
       ),
+    ),
+  );
+}
+
+/// Builds a GPS teardrop-pin [Widget] for a POI.
+///
+/// All POI types (truck stop, hotel, restaurant, rest area, gym,
+/// commercial vehicle, weight station) are rendered at the same fixed
+/// [pinSize] × [pinSize] bounding box so every marker is visually uniform
+/// on the map.
+///
+/// The pin uses [Icons.location_on] as the outer teardrop shape, coloured
+/// with [pinColor].  The circular head of the pin contains a white circle
+/// that holds either:
+/// - [imageBytes] decoded as an in-memory PNG logo, or
+/// - [fallbackIcon] as a white Material icon when no image is available.
+///
+/// ### Parameters
+/// - [pinColor]     – Colour of the teardrop pin shape.
+/// - [imageBytes]   – Optional preloaded PNG bytes for the logo.  Takes
+///                    precedence over [fallbackIcon] when non-null.
+/// - [fallbackIcon] – Icon to display when [imageBytes] is null.
+///                    Defaults to [Icons.location_on].
+/// - [pinSize]      – Total bounding-box size in logical pixels.
+///                    Defaults to `48`.  Keep consistent across call sites.
+///
+/// ### Returns
+/// A [Widget] ready to embed in a [Marker] child.
+Widget buildGpsPinMarker({
+  required Color pinColor,
+  Uint8List? imageBytes,
+  IconData fallbackIcon = Icons.location_on,
+  double pinSize = 48.0,
+}) {
+  // The head of the pin occupies roughly the top 60 % of the icon bounding box.
+  // We leave a small inset so the white circle does not clip the pin outline.
+  final double headDiameter = pinSize * 0.52;
+  final double headInset = pinSize * 0.04;
+
+  final Widget innerContent = imageBytes != null
+      ? Padding(
+          padding: const EdgeInsets.all(3),
+          child: Image.memory(
+            imageBytes,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+          ),
+        )
+      : Icon(fallbackIcon, size: headDiameter * 0.52, color: Colors.white);
+
+  return SizedBox(
+    width: pinSize,
+    height: pinSize,
+    child: Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        // Outer teardrop pin shape.
+        Icon(Icons.location_on, size: pinSize, color: pinColor),
+        // White circular background in the pin head.
+        Positioned(
+          top: headInset,
+          child: Container(
+            width: headDiameter,
+            height: headDiameter,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+            ),
+            child: ClipOval(child: innerContent),
+          ),
+        ),
+      ],
     ),
   );
 }

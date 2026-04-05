@@ -65,10 +65,10 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
     ),
     child: ClipOval(
       child: Padding(
-        padding: const EdgeInsets.all(6),
+        padding: const EdgeInsets.all(2),
         child: Image.asset(
           asset,
-          fit: BoxFit.contain,
+          fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) => const Icon(
             Icons.broken_image_outlined,
             size: 24,
@@ -117,15 +117,12 @@ Widget buildGpsPinMarker({
   final double headInset = pinSize * 0.04;
 
   final Widget innerContent = imageBytes != null
-      ? Padding(
-          padding: const EdgeInsets.all(2),
-          child: Image.memory(
-            imageBytes,
-            fit: BoxFit.contain,
-            gaplessPlayback: true,
-          ),
+      ? Image.memory(
+          imageBytes,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
         )
-      : Icon(fallbackIcon, size: headDiameter * 0.65, color: Colors.white);
+      : Icon(fallbackIcon, size: headDiameter * 0.80, color: Colors.white);
 
   return SizedBox(
     width: pinSize,

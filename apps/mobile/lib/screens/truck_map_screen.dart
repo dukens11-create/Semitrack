@@ -4907,7 +4907,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ]);
     }
     if (!_navSettings.viewExit) {
-      hiddenTypes.addAll([WarningTypes.runawayTruckRamp, WarningTypes.detour]);
+      // runawayTruckRamp is an exit-specific hazard; detour is covered by
+      // viewRoadSign so it is intentionally excluded here to avoid
+      // double-hiding and confusing toggle semantics.
+      hiddenTypes.add(WarningTypes.runawayTruckRamp);
     }
 
     // Single-pass filter: for each sign find the nearest route point index and
@@ -7268,7 +7271,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
     if (_hasActiveDestination) {
       final dest = _selectedDestination ?? _destination;
-      info.writeln('Destination: ${(_selectedDestinationName?.isNotEmpty ?? false) ? _selectedDestinationName! : '${dest.latitude.toStringAsFixed(4)}, ${dest.longitude.toStringAsFixed(4)}'}');
+      final hasName = _selectedDestinationName?.isNotEmpty ?? false;
+      final destLabel = hasName
+          ? _selectedDestinationName!
+          : '${dest.latitude.toStringAsFixed(4)}, '
+              '${dest.longitude.toStringAsFixed(4)}';
+      info.writeln('Destination: $destLabel');
       final miles = _tripProgressInfo.milesRemaining;
       final mins = _tripProgressInfo.durationRemaining.inMinutes;
       if (miles > 0) {

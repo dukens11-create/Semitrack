@@ -2767,14 +2767,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     await _updateRealNavigationCamera(_lastAcceptedPosition!);
   }
 
-  /// Updates the camera for active navigation using real GPS position data.
-  ///
-  /// Delegates to the speed-adaptive follow-camera logic; safe to call from
-  /// async contexts (e.g. [_setFollowCameraFromCurrentPosition]).
-  Future<void> _updateRealNavigationCamera(geo.Position pos) async {
-    _setFollowCamera(pos);
-  }
-
   /// Switches the camera to **free mode** and records the interaction time.
   ///
   /// Convenience wrapper used by gesture callbacks so the naming matches the

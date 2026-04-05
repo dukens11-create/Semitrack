@@ -3006,9 +3006,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns `true` when route progress (nearest-point snapping) should
   /// advance for [pos].  Always returns `true` in [_isSimulationMode].
+  ///
+  /// When GPS speed is available (pos.speed >= 0) and below [_stoppedSpeedMph]
+  /// the vehicle is considered stopped and progress is frozen to prevent
+  /// spurious advancement from parked GPS drift.
+  /// When GPS speed is unavailable (pos.speed < 0 — common on some devices),
+  /// advancement is allowed based on position displacement alone so that the
+  /// Head Out Card and trip strip still update as the driver moves.
   bool _shouldAdvanceRouteProgress(geo.Position pos) {
     if (_isSimulationMode) return true;
-    if (_speedMphFromMps(pos.speed) < _stoppedSpeedMph) return false;
+    // Only block when speed data is valid AND confirms the vehicle is stopped.
+    // If speed is unavailable (negative), fall through to the distance check.
+    if (pos.speed >= 0 && _speedMphFromMps(pos.speed) < _stoppedSpeedMph) {
+      return false;
+    }
     if (_lastAcceptedPosition == null) return false;
     return _distanceMetersBetween(_lastAcceptedPosition!, pos) >=
         _minRouteProgressDistanceMeters;
@@ -11694,8 +11705,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
           const SizedBox(height: 4),
           // ── Large bold distance ──────────────────────────────────────────
+          // Use live distance-to-next-step so this value updates in real time
+          // as the driver advances along the current maneuver segment.
           Text(
-            _formatMilesDisplay(data.distanceMiles),
+            _formatMilesDisplay(_distanceToNextStep() / _metersPerMile),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
@@ -12778,15 +12791,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Only visible during active navigation.  An "expand" chevron on the right
   /// may be wired to open the full trip breakdown sheet.
   ///
-  /// TODO(live-data): values are read from [_tripProgressInfo].  Ensure that
-  /// [_updateTripProgress] is being called on each GPS tick so the strip stays
-  /// current.
+  /// Values are read from [_tripProgressInfo], which is recalculated on every
+  /// GPS tick by [_refreshTripProgress] while [_isNavigating] is true.
   Widget _buildCompactTripStrip() {
     if (!_isNavigating) return const SizedBox.shrink();
 
     // ── Derive display values from live trip progress ──────────────────────
-    // TODO(live-data): _tripProgressInfo is updated by _updateTripProgress();
-    // verify that it is called on every GPS fix.
+    // _tripProgressInfo is updated on every GPS fix by _refreshTripProgress().
     final double milesLeft = _tripProgressInfo.milesRemaining;
     final Duration timeLeft = _tripProgressInfo.durationRemaining;
     final DateTime eta = _tripProgressInfo.etaLocal;

@@ -726,6 +726,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   final List<MapPoi> _mapPois = List<MapPoi>.from(_sampleMapPois);
   final Set<String> _poiAlertShown = {};
 
+  // ── Reverse-geocoding cache ────────────────────────────────────────────────
+  //
+  // Keyed by "lat,lng" (6 decimal places).  A non-null value is the best
+  // address string returned by the Mapbox reverse-geocoding API.  A stored
+  // empty string means the lookup already failed (no address available).
+  // This prevents redundant network requests for the same coordinate.
+  final Map<String, String> _reverseGeocodeCache = {};
+
   // ── Ahead-on-route weigh stations ─────────────────────────────────────────
   //
   // Holds the next 1–2 weigh stations ahead of the truck on the current route,
@@ -2204,20 +2212,75 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// tapped.
   void _showPoiInfoDialog(PoiItem poi) {
     if (!mounted) return;
-    final String subtitle =
-        poi.city.isNotEmpty ? poi.city : poi.category.isNotEmpty ? poi.category : 'POI';
+
+    // Build the best available static fallback from stored model fields so
+    // something meaningful shows immediately before the async lookup completes.
+    String staticFallback;
+    if (poi.city.isNotEmpty && poi.stateOrProvince.isNotEmpty) {
+      staticFallback = '${poi.city}, ${poi.stateOrProvince}';
+    } else if (poi.city.isNotEmpty) {
+      staticFallback = poi.city;
+    } else if (poi.stateOrProvince.isNotEmpty) {
+      staticFallback = poi.stateOrProvince;
+    } else {
+      staticFallback = poi.category.isNotEmpty ? poi.category : 'POI';
+    }
+
+    // Check cache first — if the result is already available, show the dialog
+    // immediately without a loading indicator.
+    final String cacheKey =
+        '${poi.displayLat.toStringAsFixed(6)},${poi.displayLng.toStringAsFixed(6)}';
+    final String? cached = _reverseGeocodeCache.containsKey(cacheKey)
+        ? (_reverseGeocodeCache[cacheKey]!.isEmpty
+            ? null
+            : _reverseGeocodeCache[cacheKey])
+        : null;
+
+    if (_reverseGeocodeCache.containsKey(cacheKey)) {
+      // Result already cached — show dialog without loading spinner.
+      final String addressLabel = cached ?? '$staticFallback (approx)';
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(poi.name),
+          content: Row(
+            children: [
+              const Icon(Icons.location_on, size: 18, color: Colors.grey),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  addressLabel,
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Not cached yet: show dialog with a loading indicator while the reverse-
+    // geocoding request is in flight.  The dialog's content is replaced via
+    // setState on a StatefulBuilder once the result arrives.
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(poi.name),
-        content: Text(subtitle),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+      builder: (ctx) {
+        return _PoiAddressDialog(
+          poiName: poi.name,
+          staticFallback: staticFallback,
+          geocodeFuture:
+              _reverseGeocode(poi.displayLat, poi.displayLng),
+        );
+      },
     );
   }
 
@@ -2245,8 +2308,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Shows an [AlertDialog] warning the driver that they are approaching [poi].
   ///
-  /// The dialog displays the POI name, type label, and status so the driver
-  /// has actionable information (e.g. "Weigh Station – Open") before arrival.
+  /// The dialog displays the POI name, type label, status, and the best
+  /// available street address so the driver has full location context.  A
+  /// reverse-geocoding request is fired for the POI coordinates; if only an
+  /// approximate result is available it is shown with "(approx)".
   void _showPoiAlert(MapPoi poi) {
     if (!mounted) return;
     final String typeLabel;
@@ -2276,50 +2341,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(typeIcon, color: typeColor, size: 28),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                typeLabel,
-                style: TextStyle(
-                  color: typeColor,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-            ),
-          ],
+      builder: (ctx) => _MapPoiAlertDialog(
+        poi: poi,
+        typeLabel: typeLabel,
+        typeIcon: typeIcon,
+        typeColor: typeColor,
+        geocodeFuture: _reverseGeocode(
+          poi.position.latitude,
+          poi.position.longitude,
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              poi.name,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Status: ${poi.status}',
-              style: const TextStyle(fontSize: 14),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Approaching in less than 500 m.',
-              style: TextStyle(fontSize: 13, color: Colors.grey),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Dismiss'),
-          ),
-        ],
       ),
     );
   }
@@ -6970,6 +7000,65 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // The empty list return lets the search sheet show "no results" gracefully.
       print('Geocoding error for "$query": $e');
       return [];
+    }
+  }
+
+  /// Reverse-geocodes [lat]/[lng] to the best available street address using
+  /// the Mapbox Geocoding v5 API.
+  ///
+  /// Returns a human-readable address string on success.  The string is marked
+  /// with "(approx)" when only a place-level (city / neighbourhood) result is
+  /// available rather than a precise street address.
+  ///
+  /// Returns `null` when the network request fails or the API returns no
+  /// features, so callers can fall back to stored city/state fields.
+  ///
+  /// Results are cached in [_reverseGeocodeCache] to avoid redundant requests
+  /// for the same coordinate during a session.
+  Future<String?> _reverseGeocode(double lat, double lng) async {
+    final String key =
+        '${lat.toStringAsFixed(6)},${lng.toStringAsFixed(6)}';
+    if (_reverseGeocodeCache.containsKey(key)) {
+      final cached = _reverseGeocodeCache[key]!;
+      return cached.isEmpty ? null : cached;
+    }
+    try {
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/'
+          '${lng.toStringAsFixed(6)},${lat.toStringAsFixed(6)}.json'
+          '?types=address,place,neighborhood,locality,district,region'
+          '&limit=1'
+          '&access_token=$_mapboxToken';
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        _reverseGeocodeCache[key] = '';
+        return null;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final features = (data['features'] as List?) ?? const [];
+      if (features.isEmpty) {
+        _reverseGeocodeCache[key] = '';
+        return null;
+      }
+      final feature = features.first as Map<String, dynamic>;
+      final String placeName =
+          (feature['place_name'] as String?) ?? '';
+      final String featureType =
+          ((feature['place_type'] as List?)?.first as String?) ?? '';
+
+      String address;
+      if (featureType == 'address') {
+        // Precise street address — use as-is.
+        address = placeName;
+      } else {
+        // Only a neighbourhood / city / region was returned: mark as approximate.
+        address = placeName.isNotEmpty ? '$placeName (approx)' : '';
+      }
+      _reverseGeocodeCache[key] = address;
+      return address.isEmpty ? null : address;
+    } catch (e) {
+      _reverseGeocodeCache[key] = '';
+      return null;
     }
   }
 
@@ -16198,4 +16287,220 @@ class _UsHighwayShieldPainter extends CustomPainter {
   @override
   bool shouldRepaint(_UsHighwayShieldPainter old) =>
       old.number != number || old.fontSize != fontSize;
+}
+
+// ── POI Address Dialog helpers ────────────────────────────────────────────────
+//
+// These stateful widgets handle the asynchronous reverse-geocoding look-up for
+// POI dialogs.  Keeping them as separate StatefulWidgets means the loading
+// spinner / address swap is contained inside the dialog without touching the
+// parent TruckMapScreen state.
+
+/// Dialog shown when a [PoiItem] map marker is tapped.
+///
+/// Displays the POI name immediately, then resolves [geocodeFuture] to show the
+/// best available street address.  Falls back to [staticFallback] (with an
+/// "(approx)" suffix) when reverse geocoding is unavailable.
+class _PoiAddressDialog extends StatefulWidget {
+  const _PoiAddressDialog({
+    required this.poiName,
+    required this.staticFallback,
+    required this.geocodeFuture,
+  });
+
+  final String poiName;
+  final String staticFallback;
+  final Future<String?> geocodeFuture;
+
+  @override
+  State<_PoiAddressDialog> createState() => _PoiAddressDialogState();
+}
+
+class _PoiAddressDialogState extends State<_PoiAddressDialog> {
+  String? _resolvedAddress;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.geocodeFuture.then((addr) {
+      if (mounted) {
+        setState(() {
+          _resolvedAddress = addr;
+          _loading = false;
+        });
+      }
+    }).catchError((_) {
+      if (mounted) setState(() => _loading = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String addressLabel = _loading
+        ? ''
+        : (_resolvedAddress ?? '${widget.staticFallback} (approx)');
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(widget.poiName),
+      content: _loading
+          ? const SizedBox(
+              height: 40,
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.location_on, size: 18, color: Colors.grey),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    addressLabel,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('OK'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Alert dialog shown when the driver is approaching a [MapPoi] (weigh station,
+/// police checkpoint, port of entry, or 511 camera).
+///
+/// Shows the POI type, name, status, and best available address.  The address
+/// row is populated asynchronously from [geocodeFuture].
+class _MapPoiAlertDialog extends StatefulWidget {
+  const _MapPoiAlertDialog({
+    required this.poi,
+    required this.typeLabel,
+    required this.typeIcon,
+    required this.typeColor,
+    required this.geocodeFuture,
+  });
+
+  final MapPoi poi;
+  final String typeLabel;
+  final IconData typeIcon;
+  final Color typeColor;
+  final Future<String?> geocodeFuture;
+
+  @override
+  State<_MapPoiAlertDialog> createState() => _MapPoiAlertDialogState();
+}
+
+class _MapPoiAlertDialogState extends State<_MapPoiAlertDialog> {
+  String? _resolvedAddress;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.geocodeFuture.then((addr) {
+      if (mounted) {
+        setState(() {
+          _resolvedAddress = addr;
+          _loading = false;
+        });
+      }
+    }).catchError((_) {
+      if (mounted) setState(() => _loading = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Fallback: show the coordinate pair if geocoding returned nothing.
+    final String fallback =
+        'near ${widget.poi.position.latitude.toStringAsFixed(4)}, '
+        '${widget.poi.position.longitude.toStringAsFixed(4)} (approx)';
+    final String addressLabel =
+        _loading ? '' : (_resolvedAddress ?? fallback);
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(
+        children: [
+          Icon(widget.typeIcon, color: widget.typeColor, size: 28),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              widget.typeLabel,
+              style: TextStyle(
+                color: widget.typeColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.poi.name,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Status: ${widget.poi.status}',
+            style: const TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 6),
+          if (_loading)
+            const SizedBox(
+              height: 20,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Loading address…',
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+                ],
+              ),
+            )
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.location_on, size: 16, color: Colors.grey),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    addressLabel,
+                    style: const TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+                ),
+              ],
+            ),
+          const SizedBox(height: 12),
+          const Text(
+            'Approaching in less than 500 m.',
+            style: TextStyle(fontSize: 13, color: Colors.grey),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Dismiss'),
+        ),
+      ],
+    );
+  }
 }

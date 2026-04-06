@@ -10794,70 +10794,76 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// A compact bottom-center badge showing the current highway or road name
-  /// the driver is on during active navigation.
+  /// Returns the current road name pill placed below the navigation card.
   ///
-  /// The badge sits at the bottom-center of the map, between the trip strip
-  /// (bottom-left) and the speed panel (bottom-right), mirroring the layout
-  /// used by popular GPS apps.  It updates automatically every time
-  /// [_currentStepIndex] advances to the next route step.
+  /// Shows the name of the road the driver is **currently on** (sourced from
+  /// [_navSteps][_currentStepIndex].name) as a high-contrast dark-background
+  /// pill with large bold white text.  Returns [SizedBox.shrink] when the road
+  /// name is unavailable or empty so the layout remains clean.
   ///
-  /// Returns [SizedBox.shrink] when not navigating or when [_navSteps] is
-  /// empty so that the widget tree is unchanged in non-navigation mode.
-  Widget _buildCurrentRoadNameBadge() {
+  /// This is an inline widget (not [Positioned]) intended to be used inside
+  /// the maneuver-card [Column].
+  Widget _buildCurrentRoadNameLabel() {
     if (!_isNavigating || _navSteps.isEmpty) return const SizedBox.shrink();
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
-    final String roadLabel = step.name.isNotEmpty ? step.name : 'En Route';
-    final _HighwayShield? shield = _parseHighwayShield(roadLabel);
+    final String roadName = step.name.trim();
+    if (roadName.isEmpty || roadName.toLowerCase() == 'unnamed road') {
+      return const SizedBox.shrink();
+    }
+    final _HighwayShield? shield = _parseHighwayShield(roadName);
 
-    return Positioned(
-      bottom: 18,
-      left: 0,
-      right: 0,
-      child: SafeArea(
-        top: false,
-        child: Center(
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.88),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: const [
-                BoxShadow(
-                  color: Colors.black54,
-                  blurRadius: 10,
-                  offset: Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (shield != null) ...[
-                  _buildHighwayShieldWidget(shield, fontSize: 11),
-                  const SizedBox(width: 8),
-                ],
-                Text(
-                  roadLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.3,
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.88),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (shield != null) ...[
+            _buildHighwayShieldWidget(shield, fontSize: 12),
+            const SizedBox(width: 6),
+          ],
+          Flexible(
+            child: Text(
+              roadName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+                shadows: [
+                  Shadow(
+                    color: Colors.black87,
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
+
+  /// @deprecated — replaced by [_buildCurrentRoadNameLabel] which is shown
+  /// directly below the navigation card.  Retained as a no-op so callers
+  /// in the [Stack] compile without changes.
+  Widget _buildCurrentRoadNameBadge() => const SizedBox.shrink();
 
   /// Builds a GPS-style road name + distance info card shown during active
   /// navigation.  The card floats below the [RoadGuidanceBanner] and displays:
@@ -11811,6 +11817,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                             _buildSecondaryThenCard(
                                 _secondaryInstructionData!),
                           ],
+                          // ── Current road name pill ───────────────────────
+                          // Shows the road the driver is currently traveling
+                          // on in a large bold high-contrast pill, directly
+                          // below the navigation card so it is always visible
+                          // on the track.  Updates automatically as each new
+                          // route step is advanced.
+                          const SizedBox(height: 6),
+                          _buildCurrentRoadNameLabel(),
                         ],
                       ),
                     ),

@@ -58,14 +58,15 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
       color: backgroundColor,
       boxShadow: const [
         BoxShadow(
-          color: Colors.black26,
-          blurRadius: 6,
+          color: Colors.black38,
+          blurRadius: 8,
+          spreadRadius: 1,
         ),
       ],
     ),
     child: ClipOval(
       child: Padding(
-        padding: const EdgeInsets.all(2),
+        padding: const EdgeInsets.all(1),
         child: Image.asset(
           asset,
           fit: BoxFit.cover,
@@ -110,11 +111,11 @@ Widget buildGpsPinMarker({
   IconData fallbackIcon = Icons.location_on,
   double pinSize = 72.0,
 }) {
-  // The head of the pin occupies roughly the top 60 % of the icon bounding box.
-  // A larger headDiameter ratio (0.60) maximises the visible logo/icon area.
-  // We leave a small inset so the white circle does not clip the pin outline.
-  final double headDiameter = pinSize * 0.60;
-  final double headInset = pinSize * 0.04;
+  // The head of the pin occupies roughly the top 65 % of the icon bounding box.
+  // A larger headDiameter ratio (0.65) maximises the visible logo/icon area.
+  // We leave a minimal inset so the white circle does not clip the pin outline.
+  final double headDiameter = pinSize * 0.65;
+  final double headInset = pinSize * 0.02;
 
   final Widget innerContent = imageBytes != null
       ? Image.memory(
@@ -122,7 +123,7 @@ Widget buildGpsPinMarker({
           fit: BoxFit.cover,
           gaplessPlayback: true,
         )
-      : Icon(fallbackIcon, size: headDiameter * 0.80, color: Colors.white);
+      : Icon(fallbackIcon, size: headDiameter * 0.85, color: Colors.white);
 
   return SizedBox(
     width: pinSize,
@@ -138,9 +139,12 @@ Widget buildGpsPinMarker({
           child: Container(
             width: headDiameter,
             height: headDiameter,
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white,
+              boxShadow: const [
+                BoxShadow(color: Colors.black26, blurRadius: 4),
+              ],
             ),
             child: ClipOval(child: innerContent),
           ),

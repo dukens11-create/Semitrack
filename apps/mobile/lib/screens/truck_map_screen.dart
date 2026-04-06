@@ -2041,6 +2041,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   • `truck_stop`           → blue   (fuel/parking)
   ///   • `weigh_station`        → orange (regulatory)
   ///   • `rest_area`            → green  (amenity/comfort)
+  ///   • `gas_station`          → green  (fuel — bright green for quick ID)
+  ///   • `fuel_stop`            → green  (fuel — alias for gas_station)
+  ///   • `truck_parking`        → blue   (dedicated truck parking)
+  ///   • `port_of_entry`        → purple (border crossing / regulatory)
+  ///   • `brake_check_area`     → amber  (safety area)
   ///   • `hotel`                → indigo (lodging)
   ///   • `restaurant`           → red    (dining)
   ///   • `gym`                  → teal   (fitness)
@@ -2052,6 +2057,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return Colors.orange;
       case 'rest_area':
         return Colors.green.shade700;
+      case 'gas_station':
+      case 'fuel_stop':
+        return Colors.green.shade600;
+      case 'truck_parking':
+        return Colors.blue.shade800;
+      case 'port_of_entry':
+        return Colors.purple.shade700;
+      case 'brake_check_area':
+        return Colors.amber.shade700;
       case 'hotel':
         return Colors.indigo.shade600;
       case 'restaurant':
@@ -2073,6 +2087,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return Icons.scale;
       case 'rest_area':
         return Icons.local_hotel;
+      case 'gas_station':
+      case 'fuel_stop':
+        return Icons.local_gas_station;
+      case 'truck_parking':
+        return Icons.local_parking;
+      case 'port_of_entry':
+        return Icons.flag;
+      case 'brake_check_area':
+        return Icons.warning_amber_rounded;
       case 'hotel':
         return Icons.hotel;
       case 'restaurant':
@@ -8563,8 +8586,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Called by [MapWidget] once the Mapbox style has finished loading.
   ///
-  /// Triggers [_setupPoiCluster] to register icons and add the clustered POI
-  /// source and layers to the map style.
+  /// Triggers [_setupPoiCluster] to register icons and add the individual POI
+  /// source and layer to the map style.
   void _onStyleLoaded(mbx.StyleLoadedEventData _) {
     _setupPoiCluster();
     _enhanceRoadLabels();
@@ -8634,22 +8657,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
+  /// Sets up the individual (non-clustered) POI GeoJSON source and Mapbox
+  /// style layer, ensuring every POI is always visible at all zoom levels.
   ///
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
   /// Loads [PoiItem]s from `assets/locations.json`, converts them to GeoJSON,
-  /// registers all PNG icons from `assets/logo_brand_markers/`, then adds four
+  /// registers all PNG icons from `assets/logo_brand_markers/`, then adds two
   /// objects to the Mapbox style:
   ///
-  ///   - `poi-source`       — clustered GeoJSON source
-  ///   - `poi-clusters`     — circle layer for grouped cluster rings
-  ///   - `poi-cluster-count`— symbol layer with `{point_count}` text labels
+  ///   - `poi-source`       — non-clustered GeoJSON source
   ///   - `poi-unclustered`  — symbol layer using each POI's icon image
   ///
-  /// Every entry in `locations.json` is converted to a GeoJSON feature
-  /// without any proximity or category filtering, so all truck stops appear
-  /// as markers wherever the user browses the map.
+  /// Clustering is intentionally disabled so that no POI is ever hidden inside
+  /// an aggregate cluster bubble.  `icon-allow-overlap` and
+  /// `icon-ignore-placement` are set to `true` so Mapbox's collision-avoidance
+  /// engine never suppresses any POI icon regardless of density or zoom level.
   ///
+  /// Every entry in `locations.json` is converted to a GeoJSON feature
+  /// without any proximity or category filtering, so all truck stops, rest
+  /// areas, weigh stations, gas stations, truck parking areas, ports of entry,
+  /// and brake-check areas appear as markers wherever the user browses the map.
   /// All rendering is done via Mapbox style layers — no Flutter widget markers
   /// are created, keeping performance O(1) regardless of POI count.
   Future<void> _setupPoiCluster() async {
@@ -8730,90 +8757,40 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       await registerPoiIcons(map.style);
 
-      // 2. Add the clustered GeoJSON source (inline FeatureCollection).
+      // 2. Add the GeoJSON source without clustering so every individual POI
+      //    is always visible and accessible at all zoom levels.  Clustering is
+      //    intentionally disabled here because the requirement is that no POI
+      //    is ever hidden or merged into an aggregate bubble — drivers must be
+      //    able to tap any POI regardless of the current zoom level.
       final Map<String, dynamic> geoJson = poisToGeoJson(pois);
       await map.style.addStyleSource(
         'poi-source',
         jsonEncode({
           'type': 'geojson',
           'data': geoJson,
-          'cluster': true,
-          'clusterMaxZoom': 14,
-          'clusterRadius': 50,
+          'cluster': false, // Clustering disabled — every POI always shown individually.
         }),
       );
 
-      // 3. Cluster circle layer — colour steps by group size.
-      await map.style.addStyleLayer(
-        jsonEncode({
-          'id': 'poi-clusters',
-          'type': 'circle',
-          'source': 'poi-source',
-          'filter': ['has', 'point_count'],
-          'paint': {
-            'circle-color': [
-              'step',
-              ['get', 'point_count'],
-              '#3B82F6', // blue  — small clusters (< 10)
-              10,
-              '#F59E0B', // amber — medium clusters (10–29)
-              30,
-              '#EF4444', // red   — large clusters (≥ 30)
-            ],
-            'circle-radius': [
-              'step',
-              ['get', 'point_count'],
-              18,
-              10,
-              24,
-              30,
-              30,
-            ],
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#ffffff',
-          },
-        }),
-        null,
-      );
-
-      // 4. Cluster count text label layer.
-      await map.style.addStyleLayer(
-        jsonEncode({
-          'id': 'poi-cluster-count',
-          'type': 'symbol',
-          'source': 'poi-source',
-          'filter': ['has', 'point_count'],
-          'layout': {
-            'text-field': '{point_count_abbreviated}',
-            'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
-            'text-size': 13,
-          },
-          'paint': {
-            'text-color': '#ffffff',
-          },
-        }),
-        null,
-      );
-
-      // 5. Unclustered individual POI icon layer.
-      //    Use a coalesce expression so that POIs whose icon was not bundled
-      //    as a PNG in assets/logo_brand_markers/ still render with the generic
-      //    truck_parking fallback icon instead of silently disappearing.
+      // 3. Individual POI icon layer — every POI is rendered at all zoom levels.
+      //    icon-allow-overlap and icon-ignore-placement ensure no icon is hidden
+      //    due to label-collision avoidance, guaranteeing full coverage.
+      //    A coalesce expression falls back to 'truck_parking' for any POI whose
+      //    specific icon PNG is absent, so every entry still renders.
       await map.style.addStyleLayer(
         jsonEncode({
           'id': 'poi-unclustered',
           'type': 'symbol',
           'source': 'poi-source',
-          'filter': ['!', ['has', 'point_count']],
           'layout': {
             'icon-image': [
               'coalesce',
               ['image', ['get', 'icon']],
               ['image', 'truck_parking'],
             ],
-            'icon-size': 0.6,
-            'icon-allow-overlap': true,
-            'icon-ignore-placement': true,
+            'icon-size': 1.0, // Full native size — bold and clearly visible.
+            'icon-allow-overlap': true,   // Show even when icons overlap.
+            'icon-ignore-placement': true, // Never suppress due to placement rules.
           },
         }),
         null,

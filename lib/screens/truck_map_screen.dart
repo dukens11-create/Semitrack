@@ -8567,6 +8567,65 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// source and layers to the map style.
   void _onStyleLoaded(mbx.StyleLoadedEventData _) {
     _setupPoiCluster();
+    _enhanceRoadLabels();
+  }
+
+  /// Boosts the visibility of road and highway name labels on the Mapbox style.
+  ///
+  /// Mapbox Streets v12 ships with road label layers whose default text size is
+  /// modest.  This method increases text size, adds a thick white halo so
+  /// labels are legible over any map background (satellite, dark, light), and
+  /// ensures highway/motorway labels are always shown.  Only existing layers
+  /// are modified — no new layers are added.
+  Future<void> _enhanceRoadLabels() async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+    try {
+      // Layer IDs used by Mapbox Streets v12 for road/highway labels.
+      // Each entry is: (layerId, textSize, haloWidth, haloBlur).
+      const List<(String, double, double, double)> roadLabelLayers = [
+        ('road-label',            14.0, 2.5, 1.0),
+        ('road-label-simple',     14.0, 2.5, 1.0),
+        ('road-number-shield',    13.0, 2.0, 1.0),
+        ('motorway-label',        15.0, 3.0, 1.5),
+        ('motorway-junction',     13.0, 2.5, 1.0),
+        ('road-exit-shield',      13.0, 2.0, 1.0),
+        ('road-intersection',     12.0, 2.0, 1.0),
+        ('road-oneway-arrow-blue',11.0, 1.5, 0.5),
+        ('bridge-label',          13.0, 2.5, 1.0),
+        ('tunnel-label',          13.0, 2.5, 1.0),
+      ];
+
+      for (final (layerId, size, haloWidth, haloBlur) in roadLabelLayers) {
+        if (!await map.style.styleLayerExists(layerId)) continue;
+        // Bold text size
+        await map.style.setStyleLayerProperty(
+          layerId, 'text-size', size);
+        // White halo for legibility over any background
+        await map.style.setStyleLayerProperty(
+          layerId, 'text-halo-color', '#ffffff');
+        await map.style.setStyleLayerProperty(
+          layerId, 'text-halo-width', haloWidth);
+        await map.style.setStyleLayerProperty(
+          layerId, 'text-halo-blur', haloBlur);
+        // Dark text for contrast
+        await map.style.setStyleLayerProperty(
+          layerId, 'text-color', '#1a1a1a');
+      }
+
+      // Motorway labels: white text on the coloured shield background looks
+      // better than dark text, so override colour for that layer only.
+      if (await map.style.styleLayerExists('motorway-label')) {
+        await map.style.setStyleLayerProperty(
+          'motorway-label', 'text-color', '#ffffff');
+        await map.style.setStyleLayerProperty(
+          'motorway-label', 'text-halo-color', '#003399');
+        await map.style.setStyleLayerProperty(
+          'motorway-label', 'text-halo-width', 2.0);
+      }
+    } catch (e) {
+      debugPrint('TruckMapScreen: _enhanceRoadLabels failed: $e');
+    }
   }
 
   /// Sets up the clustered POI GeoJSON source and Mapbox style layers.
@@ -10755,7 +10814,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final step = _navSteps[safeIndex];
     final String roadLabel = step.name.isNotEmpty ? step.name : 'En Route';
-    final String? shield = _extractHighwayShield(roadLabel);
+    final _HighwayShield? shield = _parseHighwayShield(roadLabel);
 
     return Positioned(
       bottom: 18,
@@ -10766,39 +10825,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         child: Center(
           child: Container(
             padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.84),
+              color: Colors.black.withOpacity(0.88),
               borderRadius: BorderRadius.circular(20),
               boxShadow: const [
                 BoxShadow(
                   color: Colors.black54,
-                  blurRadius: 8,
+                  blurRadius: 10,
                   offset: Offset(0, 3),
                 ),
               ],
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 if (shield != null) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1A7340),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      shield,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
+                  _buildHighwayShieldWidget(shield, fontSize: 11),
+                  const SizedBox(width: 8),
                 ],
                 Text(
                   roadLabel,
@@ -10806,8 +10851,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
                   ),
                 ),
               ],
@@ -10840,6 +10886,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final String nextRoad = nextStep != null && nextStep.name.isNotEmpty
         ? nextStep.name
         : '';
+    final _HighwayShield? currentShield = _parseHighwayShield(currentRoad);
+    final _HighwayShield? nextShield =
+        nextRoad.isNotEmpty ? _parseHighwayShield(nextRoad) : null;
 
     return Positioned(
       // Positioned below the RoadGuidanceBanner (~170 px tall) with a small gap.
@@ -10893,16 +10942,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    // Current road name
-                    Text(
-                      currentRoad,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    // Current road name with optional highway shield
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        if (currentShield != null) ...[
+                          _buildHighwayShieldWidget(currentShield,
+                              fontSize: 13),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: Text(
+                            currentRoad,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     // Distance to next maneuver in miles
@@ -10916,7 +10977,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     ),
                     if (nextRoad.isNotEmpty) ...[
                       const SizedBox(height: 6),
-                      // Next road chip
+                      // Next road chip with optional shield
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
@@ -10926,14 +10987,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           color: Colors.white24,
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Text(
-                          nextRoad,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (nextShield != null) ...[
+                              _buildHighwayShieldWidget(nextShield,
+                                  fontSize: 10),
+                              const SizedBox(width: 6),
+                            ],
+                            Flexible(
+                              child: Text(
+                                nextRoad,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -12109,21 +12182,102 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── GPS-style navigation overlay widgets ────────────────────────────────────
 
-  /// Extracts a short highway shield label from [roadName] if it matches a
-  /// known highway pattern (e.g. "I-5" → "5", "US-95" → "95", "CA-88" → "88").
+  /// Parses [roadName] into a structured [_HighwayShield] when it matches a
+  /// known highway pattern.  Returns `null` for non-highway names.
   ///
-  /// Returns `null` when [roadName] is not a recognisable highway reference.
-  ///
-  /// To support additional state/country prefixes, extend the alternation in
-  /// the pattern (e.g. add `|TX-|NY-`).
-  String? _extractHighwayShield(String roadName) {
-    // Supported prefixes: Interstate (I-), US routes (US-), and common state
-    // highway abbreviations.  Add more prefixes here as needed.
-    final r = RegExp(
-        r'^(?:I-|US-|CA-|SR-|OR-|WA-|NV-|AZ-|TX-|FL-|Hwy\s*)(\d{1,3}[A-Z]?)$',
+  /// Recognised patterns:
+  ///   Interstate  — "I-5", "I-90"
+  ///   US Highway  — "US-1", "US-101"
+  ///   State/Provincial — "CA-1", "TX-35", "SR-520", "BC-99", etc.
+  _HighwayShield? _parseHighwayShield(String roadName) {
+    final trimmed = roadName.trim();
+    // Interstate
+    final interstate = RegExp(r'^I-(\d{1,3}[A-Z]?)$', caseSensitive: false);
+    var m = interstate.firstMatch(trimmed);
+    if (m != null) {
+      return _HighwayShield(_HighwayShieldType.interstate, m.group(1)!);
+    }
+    // US Highway
+    final us = RegExp(r'^US-(\d{1,3}[A-Z]?)$', caseSensitive: false);
+    m = us.firstMatch(trimmed);
+    if (m != null) {
+      return _HighwayShield(_HighwayShieldType.usHighway, m.group(1)!);
+    }
+    // State / Provincial Highway — two-letter code followed by hyphen + number
+    final state = RegExp(
+        r'^([A-Z]{2})-(\d{1,3}[A-Z]?)$|^(?:SR|SH|Hwy)\s*-?(\d{1,3}[A-Z]?)$',
         caseSensitive: false);
-    final m = r.firstMatch(roadName.trim());
-    return m?.group(1);
+    m = state.firstMatch(trimmed);
+    if (m != null) {
+      final prefix = (m.group(1) ?? 'ST').toUpperCase();
+      final number = m.group(2) ?? m.group(3) ?? '';
+      return _HighwayShield(
+          _HighwayShieldType.stateHighway, number, stateCode: prefix);
+    }
+    return null;
+  }
+
+  /// Backwards-compatible helper: returns just the route number string, or
+  /// `null` when [roadName] is not a recognisable highway reference.
+  String? _extractHighwayShield(String roadName) =>
+      _parseHighwayShield(roadName)?.number;
+
+  /// Renders an official-style highway shield widget for [shield].
+  ///
+  /// Shape and colours follow US/Canadian signage conventions:
+  ///   • Interstate  — blue shield with red top-band and white text.
+  ///   • US Highway  — black pentagon with white number and "US" label.
+  ///   • State/Prov  — green rectangle with white route number.
+  Widget _buildHighwayShieldWidget(_HighwayShield shield,
+      {double fontSize = 11}) {
+    switch (shield.type) {
+      case _HighwayShieldType.interstate:
+        // Classic blue/red Interstate shield
+        return CustomPaint(
+          size: Size(fontSize * 3.2, fontSize * 3.8),
+          painter: _InterstateShieldPainter(shield.number, fontSize: fontSize),
+        );
+      case _HighwayShieldType.usHighway:
+        // Black pentagon US Highway sign
+        return CustomPaint(
+          size: Size(fontSize * 3.2, fontSize * 3.6),
+          painter: _UsHighwayShieldPainter(shield.number, fontSize: fontSize),
+        );
+      case _HighwayShieldType.stateHighway:
+        // Green rounded-rectangle state sign
+        return Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: fontSize * 0.55, vertical: fontSize * 0.25),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A7340),
+            borderRadius: BorderRadius.circular(fontSize * 0.4),
+            border: Border.all(color: Colors.white, width: 1.5),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                shield.stateCode ?? 'ST',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: fontSize * 0.7,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                ),
+              ),
+              Text(
+                shield.number,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
+        );
+    }
   }
 
   /// GPS-style primary maneuver card shown at the top-left of the map
@@ -15778,4 +15932,226 @@ class _ExitLanePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ExitLanePainter old) => old.exitRight != exitRight;
+}
+
+// ── Highway shield types ──────────────────────────────────────────────────────
+
+/// Classifies the type of highway whose name appears on a road sign.
+enum _HighwayShieldType {
+  /// Red/blue interstate shield (e.g. "I-95").
+  interstate,
+
+  /// Black/white US Highway pentagon (e.g. "US-1").
+  usHighway,
+
+  /// Green state/provincial route sign (e.g. "CA-1", "TX-35").
+  stateHighway,
+}
+
+/// Carries a parsed highway shield — its [type], route [number], and optional
+/// two-letter [stateCode] for state/provincial signs.
+class _HighwayShield {
+  const _HighwayShield(this.type, this.number, {this.stateCode});
+
+  final _HighwayShieldType type;
+
+  /// Route number as a string (e.g. "95", "101", "1A").
+  final String number;
+
+  /// Two-letter state/province code used for [_HighwayShieldType.stateHighway]
+  /// signs (e.g. "CA", "TX").  May be `null` for generic SR/SH/Hwy patterns.
+  final String? stateCode;
+}
+
+// ── Interstate shield painter ─────────────────────────────────────────────────
+
+/// Renders a stylised US Interstate shield:
+///   • Blue body shaped like a classic highway shield (pentagon top cut).
+///   • Red top band with "INTERSTATE" micro-label.
+///   • White route number centred in the blue body.
+class _InterstateShieldPainter extends CustomPainter {
+  const _InterstateShieldPainter(this.number, {this.fontSize = 11});
+
+  final String number;
+  final double fontSize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Shield outline path — pentagon-top shield shape
+    final shieldPath = Path()
+      ..moveTo(w * 0.5, 0)
+      ..lineTo(w, h * 0.18)
+      ..lineTo(w, h * 0.82)
+      ..quadraticBezierTo(w, h, w * 0.78, h)
+      ..lineTo(w * 0.22, h)
+      ..quadraticBezierTo(0, h, 0, h * 0.82)
+      ..lineTo(0, h * 0.18)
+      ..close();
+
+    // Blue body
+    canvas.drawPath(shieldPath, Paint()..color = const Color(0xFF003399));
+
+    // Red top band (roughly top 28% of the shield)
+    final redBandPath = Path()
+      ..moveTo(w * 0.5, 0)
+      ..lineTo(w, h * 0.18)
+      ..lineTo(w, h * 0.30)
+      ..lineTo(0, h * 0.30)
+      ..lineTo(0, h * 0.18)
+      ..close();
+    canvas.drawPath(redBandPath, Paint()..color = const Color(0xFFCC0000));
+
+    // White border
+    canvas.drawPath(
+      shieldPath,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.07,
+    );
+
+    // "INTERSTATE" micro text in red band
+    _paintText(
+      canvas,
+      'INTERSTATE',
+      Offset(w / 2, h * 0.165),
+      fontSize * 0.55,
+      Colors.white,
+      bold: false,
+    );
+
+    // Route number in blue body
+    _paintText(
+      canvas,
+      number,
+      Offset(w / 2, h * 0.66),
+      fontSize * 1.1,
+      Colors.white,
+      bold: true,
+    );
+  }
+
+  void _paintText(
+    Canvas canvas,
+    String text,
+    Offset center,
+    double size,
+    Color color, {
+    bool bold = false,
+  }) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
+          height: 1,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+        canvas, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
+  @override
+  bool shouldRepaint(_InterstateShieldPainter old) =>
+      old.number != number || old.fontSize != fontSize;
+}
+
+// ── US Highway shield painter ─────────────────────────────────────────────────
+
+/// Renders a stylised US Highway sign:
+///   • Black pentagon (cut-corner rectangle) body.
+///   • "US" label in the top portion.
+///   • White route number centred in the black body.
+class _UsHighwayShieldPainter extends CustomPainter {
+  const _UsHighwayShieldPainter(this.number, {this.fontSize = 11});
+
+  final String number;
+  final double fontSize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Pentagon-like shape: flat top with cut corners at bottom
+    final bodyPath = Path()
+      ..moveTo(w * 0.15, 0)
+      ..lineTo(w * 0.85, 0)
+      ..lineTo(w, h * 0.15)
+      ..lineTo(w, h * 0.78)
+      ..quadraticBezierTo(w, h, w * 0.78, h)
+      ..lineTo(w * 0.22, h)
+      ..quadraticBezierTo(0, h, 0, h * 0.78)
+      ..lineTo(0, h * 0.15)
+      ..close();
+
+    // Black fill
+    canvas.drawPath(bodyPath, Paint()..color = Colors.black);
+
+    // White border
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.08,
+    );
+
+    // Inner white border (double-border effect)
+    canvas.save();
+    canvas.translate(w * 0.08, h * 0.08);
+    canvas.scale(0.84, 0.84);
+    canvas.drawPath(
+      bodyPath,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.06,
+    );
+    canvas.restore();
+
+    // "US" label
+    _paintText(canvas, 'US', Offset(w / 2, h * 0.32), fontSize * 0.65,
+        Colors.white);
+
+    // Route number
+    _paintText(canvas, number, Offset(w / 2, h * 0.72), fontSize * 1.05,
+        Colors.white, bold: true);
+  }
+
+  void _paintText(
+    Canvas canvas,
+    String text,
+    Offset center,
+    double size,
+    Color color, {
+    bool bold = false,
+  }) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          fontWeight: bold ? FontWeight.w900 : FontWeight.w700,
+          height: 1,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
+  @override
+  bool shouldRepaint(_UsHighwayShieldPainter old) =>
+      old.number != number || old.fontSize != fontSize;
 }

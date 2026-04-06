@@ -2012,12 +2012,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final bool isApprox = snapped == null;
       final LatLng displayPoint = snapped ?? poi.position;
 
+      // Validate whether this POI's coordinate is near a real road.
+      final bool isSuspect = _isPoiLocationSuspect(poi.position);
+
       Widget pinWidget = buildGpsPinMarker(
         pinColor: isNext ? Colors.deepOrange : Colors.orange,
         imageBytes: weighBytes,
         fallbackIcon: Icons.scale,
         pinSize: size,
       );
+
+      // Apply the suspect badge before adding the glow ring so the badge
+      // stays in the top-right corner regardless of the ring decoration.
+      pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
       if (isNext) {
         pinWidget = Stack(
@@ -2045,17 +2052,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final double baseSize = isNext ? size + 6 : size;
 
-      // Label shown below the pin: green "Entrance Here" when snapped to the
-      // road so drivers know the marker is at the truck access point; dark
-      // "(approx)" when falling back to the imprecise stored coordinate.
+      // Label shown below the pin: orange "Suspect Location" when the POI
+      // fails road-proximity validation; green "Entrance Here" when snapped to
+      // the road; dark "(approx)" when falling back to a stored rough coord.
       final Widget label = Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
-          color: isApprox ? Colors.black54 : Colors.green.shade700,
+          color: isSuspect
+              ? Colors.deepOrange.shade700
+              : (isApprox ? Colors.black54 : Colors.green.shade700),
           borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
-          isApprox ? '(approx)' : 'Entrance Here',
+          isSuspect
+              ? 'Suspect Location'
+              : (isApprox ? '(approx)' : 'Entrance Here'),
           style: const TextStyle(
             color: Colors.white,
             fontSize: 9,
@@ -2162,8 +2173,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const double _kPoiPinSize = 72.0;
 
   // Extra height added to a weigh-station marker's bounding box to accommodate
-  // the "(approx)" / "Entrance Here" label rendered below the pin.
+  // the "(approx)" / "Entrance Here" / "Suspect Location" label below the pin.
   static const double _kPoiLabelHeight = 18.0;
+
+  // Maximum distance (metres) a POI may be from any active-route segment
+  // before it is considered a "suspect location".  50 m is tight enough to
+  // distinguish road-side facilities from field/parcel-centre approximations.
+  static const double _kPoiRoadProximityMeters = 50.0;
 
   /// Builds a GPS teardrop-pin [Widget] for a POI, optionally embedding a
   /// branded logo image inside the pin head.
@@ -2180,6 +2196,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       imageBytes: bytes,
       fallbackIcon: _poiCategoryIcon(category),
       pinSize: _kPoiPinSize,
+    );
+  }
+
+  /// Wraps [child] with a small orange warning-triangle badge in the top-right
+  /// corner when [suspect] is `true`, visually indicating that the POI's map
+  /// location could not be verified against a real road.  Returns [child]
+  /// unchanged when [suspect] is `false`.
+  Widget _withSuspectBadge(Widget child, {required bool suspect}) {
+    if (!suspect) return child;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        Positioned(
+          top: -4,
+          right: -4,
+          child: Container(
+            width: 20,
+            height: 20,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.warning_amber_rounded,
+              size: 16,
+              color: Colors.deepOrange,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2200,6 +2247,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [entranceLat]/[entranceLng] coordinates are treated as exact and receive
   /// no label.
   ///
+  /// **Location suspect validation:** Every POI is evaluated by
+  /// [_isPoiLocationSuspect].  POIs that fail — e.g. coordinates outside the
+  /// North America trucking corridor, suspiciously round placeholder values, or
+  /// coordinates more than [_kPoiRoadProximityMeters] from the active route —
+  /// are rendered with an orange warning-triangle badge and an orange
+  /// "Suspect Location" label so drivers are clearly alerted.  The POI is
+  /// never hidden; it remains visible so drivers can still react to it.
+  ///
   /// Tapping a marker shows a dialog with the POI name.
   List<Marker> _buildAllPoiMarkers() {
     if (_loadedPois.isEmpty) return const [];
@@ -2215,7 +2270,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
       // All POI types use the same GPS pin shape at a uniform size.
-      final Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
+      Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
+
+      // Validate this POI's location.  Coordinates that fail the sanity check
+      // or are too far from the active route receive an orange warning badge.
+      final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
+      final bool isSuspect = _isPoiLocationSuspect(displayCoord);
+      pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
       if (poi.category == 'weigh_station') {
         // ── Weigh-station-specific road-snapping logic ────────────────────────
@@ -2225,10 +2286,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // marker appears at the road entrance rather than a parcel-centre
         // approximation.
         final bool hasEntrance = poi.entranceLat != null;
-        final LatLng basePoint = LatLng(poi.displayLat, poi.displayLng);
+        final LatLng basePoint = displayCoord;
 
         if (hasEntrance) {
-          // Entrance coords are precise — render without any label.
+          // Entrance coords are precise — render without any approx label, but
+          // still show the suspect badge if the coordinate fails validation.
           markers.add(Marker(
             point: basePoint,
             width: _kPoiPinSize,
@@ -2245,14 +2307,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           final bool isApprox = snapped == null;
           final LatLng displayPoint = snapped ?? basePoint;
 
+          // A suspect location takes priority over the approx / snapped labels.
           final Widget label = Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             decoration: BoxDecoration(
-              color: isApprox ? Colors.black54 : Colors.green.shade700,
+              color: isSuspect
+                  ? Colors.deepOrange.shade700
+                  : (isApprox ? Colors.black54 : Colors.green.shade700),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              isApprox ? '(approx)' : 'Entrance Here',
+              isSuspect
+                  ? 'Suspect Location'
+                  : (isApprox ? '(approx)' : 'Entrance Here'),
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 9,
@@ -2278,12 +2345,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ));
         }
       } else {
-        // Non-weigh-station POIs: use existing behaviour unchanged.
+        // Non-weigh-station POIs: render at the best-available coordinate.
+        // If the location is suspect the warning badge (already applied above)
+        // is the driver's visual cue; no additional text label is added so the
+        // map stays uncluttered.
         markers.add(Marker(
-          // Use the most precise coordinate available: entrance point when
-          // entrance_lat/entrance_lng are present in the JSON, otherwise fall
-          // back to the property-centre coordinates.
-          point: LatLng(poi.displayLat, poi.displayLng),
+          point: displayCoord,
           width: _kPoiPinSize,
           height: _kPoiPinSize,
           alignment: Alignment.center,
@@ -5985,7 +6052,74 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return (nearest != null && minDist <= maxDistanceMeters) ? nearest : null;
   }
 
-  // ── Ahead-on-route weigh station logic ──────────────────────────────────────
+  /// Returns `true` when [position] is considered a "suspect location" —
+  /// meaning the coordinate fails basic sanity checks, falls outside the
+  /// North America trucking corridor, is a suspiciously round placeholder
+  /// value, or (when an active route is loaded) lies more than
+  /// [_kPoiRoadProximityMeters] away from every route segment.
+  ///
+  /// When no route is active the method returns `false` for coordinates that
+  /// pass the sanity checks — road-proximity cannot be evaluated without a
+  /// reference polyline.
+  ///
+  /// Suspect POIs are visually flagged in [_buildPoiMarkers] and
+  /// [_buildAllPoiMarkers] with an orange warning badge and label but are
+  /// never hidden so drivers remain aware of them.
+  bool _isPoiLocationSuspect(LatLng position) {
+    // ── 1. WGS-84 validity ────────────────────────────────────────────────────
+    if (position.latitude.isNaN ||
+        position.longitude.isNaN ||
+        position.latitude.isInfinite ||
+        position.longitude.isInfinite ||
+        position.latitude < -90.0 ||
+        position.latitude > 90.0 ||
+        position.longitude < -180.0 ||
+        position.longitude > 180.0) {
+      return true;
+    }
+
+    // ── 2. North America trucking-corridor bounds ─────────────────────────────
+    // The app serves the US / Canada / northern-Mexico trucking market.
+    // Coordinates well outside this region are almost certainly data errors.
+    const double kMinLat = 14.0; // Southern Mexico / Central America border
+    const double kMaxLat = 72.0; // Northern Canada / Alaska
+    const double kMinLng = -170.0; // Western Alaska
+    const double kMaxLng = -50.0; // Eastern Canada coastline
+    if (position.latitude < kMinLat ||
+        position.latitude > kMaxLat ||
+        position.longitude < kMinLng ||
+        position.longitude > kMaxLng) {
+      return true;
+    }
+
+    // ── 3. Suspiciously round placeholder coordinates ─────────────────────────
+    // Integer-degree coordinates (e.g. 45.0, -90.0) are typical of missing or
+    // placeholder data in GIS databases rather than a real facility location.
+    if (position.latitude == position.latitude.truncateToDouble() &&
+        position.longitude == position.longitude.truncateToDouble()) {
+      return true;
+    }
+
+    // ── 4. Road-proximity check (active route only) ───────────────────────────
+    // When the driver is navigating, verify the POI is within
+    // _kPoiRoadProximityMeters of the active route polyline.  POIs placed in
+    // open fields or parking-lot centres will fail this check.
+    if (_routePoints.isNotEmpty) {
+      if (_routePoints.length == 1) {
+        return _distanceBetween(position, _routePoints.first) >
+            _kPoiRoadProximityMeters;
+      }
+      for (int i = 0; i < _routePoints.length - 1; i++) {
+        final d =
+            _crossTrackDistance(position, _routePoints[i], _routePoints[i + 1]);
+        if (d <= _kPoiRoadProximityMeters) return false;
+      }
+      return true;
+    }
+
+    // No route active — cannot perform road-proximity check.
+    return false;
+  }
 
   /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
   /// segment of [routePoints].

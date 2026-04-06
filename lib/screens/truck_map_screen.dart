@@ -12742,9 +12742,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Current map bearing (degrees clockwise from north that is "up" on screen).
     final double bearing = _mapReady ? _mapController.camera.rotation : 0.0;
 
+    // When navigating, hug the top-right corner of the maneuver card
+    // (card: left:16, width:128 → right edge at 144; compass left = 144+8 = 152).
+    // When not navigating, stay in the standard top-right corner position.
+    final bool hugging = _isNavigating && _topInstructionData != null;
+
     return Positioned(
-      top: 18,
-      right: 16,
+      top: hugging ? 16 : 18,
+      left: hugging ? 152 : null,
+      right: hugging ? null : 16,
       child: SafeArea(
         bottom: false,
         child: GestureDetector(

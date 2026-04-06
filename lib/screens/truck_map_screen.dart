@@ -1961,11 +1961,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
-  /// All weigh-station POIs are rendered regardless of whether a route is
-  /// active or how far they are from the route.  If the weigh-station logo
-  /// asset has been loaded into [_brandIconBytes] it is used as the marker
-  /// image; otherwise a visible fallback icon is shown so no marker is
-  /// silently omitted.
+  /// Each weigh-station marker is snapped to the nearest truck-accessible road
+  /// point on the active route (via [_snapToNearestRoutePoint]) so it appears
+  /// at the true entrance drivers approach rather than at a rough parcel-centre
+  /// coordinate.  When snapping succeeds an "Entrance Here" label is shown
+  /// below the pin.  If no active route is available, or the station is too far
+  /// from the polyline, the original stored coordinate is used and an "(approx)"
+  /// label is added so drivers know the position is approximate.
   ///
   /// The next upcoming weigh station during navigation is highlighted with an
   /// orange ring so it stands out from the others.
@@ -1994,11 +1996,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ? _closestWeighStationsAhead.first.poi.id
         : null;
 
-    return weighStations.map((poi) {
+    final List<Marker> markers = [];
+
+    for (final poi in weighStations) {
       final bool isNext = poi.id == nextStationId;
       // All markers use the same uniform pin size; the active-next station gets
       // an additional glow border to stand out from nearby weigh stations.
       final double size = _kPoiPinSize;
+
+      // Snap to the nearest route point so the marker lands at the actual road
+      // entrance.  MapPoi entries carry only a rough coordinate, so snapping is
+      // always attempted.  If no route is active or the station is too far from
+      // the polyline the original position is used and marked as approximate.
+      final LatLng? snapped = _snapToNearestRoutePoint(poi.position);
+      final bool isApprox = snapped == null;
+      final LatLng displayPoint = snapped ?? poi.position;
 
       Widget pinWidget = buildGpsPinMarker(
         pinColor: isNext ? Colors.deepOrange : Colors.orange,
@@ -2031,17 +2043,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         );
       }
 
-      return Marker(
-        point: poi.position,
-        width: isNext ? size + 6 : size,
-        height: isNext ? size + 6 : size,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () => _showPoiAlert(poi),
-          child: pinWidget,
+      final double baseSize = isNext ? size + 6 : size;
+
+      // Label shown below the pin: green "Entrance Here" when snapped to the
+      // road so drivers know the marker is at the truck access point; dark
+      // "(approx)" when falling back to the imprecise stored coordinate.
+      final Widget label = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: isApprox ? Colors.black54 : Colors.green.shade700,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          isApprox ? '(approx)' : 'Entrance Here',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 9,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       );
-    }).toList();
+
+      final Widget markerChild = Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [pinWidget, label],
+      );
+
+      markers.add(Marker(
+        point: displayPoint,
+        width: baseSize,
+        height: baseSize + _kPoiLabelHeight,
+        alignment: Alignment.topCenter,
+        child: GestureDetector(
+          onTap: () => _showPoiAlert(poi),
+          child: markerChild,
+        ),
+      ));
+    }
+
+    return markers;
   }
 
   /// Returns the accent [Color] used for GPS pin markers of the given POI
@@ -2121,6 +2161,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // appear at the same size on the map.
   static const double _kPoiPinSize = 72.0;
 
+  // Extra height added to a weigh-station marker's bounding box to accommodate
+  // the "(approx)" / "Entrance Here" label rendered below the pin.
+  static const double _kPoiLabelHeight = 18.0;
+
   /// Builds a GPS teardrop-pin [Widget] for a POI, optionally embedding a
   /// branded logo image inside the pin head.
   ///
@@ -2148,11 +2192,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Branded logo bytes are embedded in the pin head when available; otherwise
   /// a category-appropriate fallback icon is shown.
   ///
+  /// **Weight-station road snapping:** For [PoiItem]s with category
+  /// `"weigh_station"`, the marker is snapped to the nearest truck-accessible
+  /// road point on the active route via [_snapToNearestRoutePoint].  A green
+  /// "Entrance Here" label is added when snapping succeeds; a dark "(approx)"
+  /// label is shown otherwise.  Weight stations that already carry precise
+  /// [entranceLat]/[entranceLng] coordinates are treated as exact and receive
+  /// no label.
+  ///
   /// Tapping a marker shows a dialog with the POI name.
   List<Marker> _buildAllPoiMarkers() {
     if (_loadedPois.isEmpty) return const [];
 
-    return _loadedPois.map((poi) {
+    final List<Marker> markers = [];
+
+    for (final poi in _loadedPois) {
       // Guard against an empty icon stem so the asset key is never malformed.
       final String? assetKey = poi.icon.isNotEmpty
           ? 'assets/logo_brand_markers/${poi.icon}.png'
@@ -2163,20 +2217,85 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // All POI types use the same GPS pin shape at a uniform size.
       final Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
 
-      return Marker(
-        // Use the most precise coordinate available: entrance point when
-        // entrance_lat/entrance_lng are present in the JSON, otherwise fall
-        // back to the property-centre coordinates.
-        point: LatLng(poi.displayLat, poi.displayLng),
-        width: _kPoiPinSize,
-        height: _kPoiPinSize,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () => _showPoiInfoDialog(poi),
-          child: pinWidget,
-        ),
-      );
-    }).toList();
+      if (poi.category == 'weigh_station') {
+        // ── Weigh-station-specific road-snapping logic ────────────────────────
+        // Use the most precise coordinate available.  When entrance_lat/lng are
+        // set the POI is already at the exact truck-access point; no further
+        // snapping is needed.  Otherwise snap to the nearest route point so the
+        // marker appears at the road entrance rather than a parcel-centre
+        // approximation.
+        final bool hasEntrance = poi.entranceLat != null;
+        final LatLng basePoint = LatLng(poi.displayLat, poi.displayLng);
+
+        if (hasEntrance) {
+          // Entrance coords are precise — render without any label.
+          markers.add(Marker(
+            point: basePoint,
+            width: _kPoiPinSize,
+            height: _kPoiPinSize,
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: () => _showPoiInfoDialog(poi),
+              child: pinWidget,
+            ),
+          ));
+        } else {
+          // No entrance coords — try to snap to the active route.
+          final LatLng? snapped = _snapToNearestRoutePoint(basePoint);
+          final bool isApprox = snapped == null;
+          final LatLng displayPoint = snapped ?? basePoint;
+
+          final Widget label = Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: isApprox ? Colors.black54 : Colors.green.shade700,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              isApprox ? '(approx)' : 'Entrance Here',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          );
+
+          final Widget markerChild = Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [pinWidget, label],
+          );
+
+          markers.add(Marker(
+            point: displayPoint,
+            width: _kPoiPinSize,
+            height: _kPoiPinSize + _kPoiLabelHeight,
+            alignment: Alignment.topCenter,
+            child: GestureDetector(
+              onTap: () => _showPoiInfoDialog(poi),
+              child: markerChild,
+            ),
+          ));
+        }
+      } else {
+        // Non-weigh-station POIs: use existing behaviour unchanged.
+        markers.add(Marker(
+          // Use the most precise coordinate available: entrance point when
+          // entrance_lat/entrance_lng are present in the JSON, otherwise fall
+          // back to the property-centre coordinates.
+          point: LatLng(poi.displayLat, poi.displayLng),
+          width: _kPoiPinSize,
+          height: _kPoiPinSize,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () => _showPoiInfoDialog(poi),
+            child: pinWidget,
+          ),
+        ));
+      }
+    }
+
+    return markers;
   }
 
   /// Builds [Marker]s for every [MapPoi] of type [PoiType.camera511].
@@ -5832,6 +5951,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ),
       ),
     );
+  }
+
+  // ── Weight-station road-snap helper ─────────────────────────────────────────
+
+  /// Snaps [position] to the nearest point on [_routePoints] if one exists
+  /// within [maxDistanceMeters].
+  ///
+  /// Used to move weigh-station markers from their stored (often parcel-centre)
+  /// coordinates to the closest truck-accessible road point so they appear at
+  /// the actual entrance drivers approach.  Returns `null` when no route is
+  /// active or when the nearest route point is farther than [maxDistanceMeters]
+  /// (indicating the station is off the current route).
+  ///
+  /// A 500 m radius is generous enough to snap highway-side stations while
+  /// still excluding stations on a completely different road.
+  LatLng? _snapToNearestRoutePoint(
+    LatLng position, {
+    double maxDistanceMeters = 500.0,
+  }) {
+    if (_routePoints.isEmpty) return null;
+    double minDist = double.infinity;
+    LatLng? nearest;
+    for (final pt in _routePoints) {
+      final d = _distanceBetween(position, pt);
+      if (d < minDist) {
+        minDist = d;
+        nearest = pt;
+        // Early exit: a match this close is already precise enough.
+        if (minDist < 10.0) break;
+      }
+    }
+    return (nearest != null && minDist <= maxDistanceMeters) ? nearest : null;
   }
 
   // ── Ahead-on-route weigh station logic ──────────────────────────────────────

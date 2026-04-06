@@ -6095,6 +6095,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── 3. Suspiciously round placeholder coordinates ─────────────────────────
     // Integer-degree coordinates (e.g. 45.0, -90.0) are typical of missing or
     // placeholder data in GIS databases rather than a real facility location.
+    // Requiring *both* lat and lng to be exact integers makes accidental
+    // false-positives vanishingly unlikely — a real truck facility sitting
+    // precisely on an integer lat/lng intersection is essentially impossible
+    // in any commercial POI dataset.
     if (position.latitude == position.latitude.truncateToDouble() &&
         position.longitude == position.longitude.truncateToDouble()) {
       return true;

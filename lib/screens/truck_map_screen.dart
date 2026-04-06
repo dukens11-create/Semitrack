@@ -7235,39 +7235,42 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is true the button shows a spinner so the driver knows the request is
   /// in flight.
   Widget _buildStartRouteButton() {
-    return Positioned(
-      bottom: 120,
-      left: 16,
-      right: 16,
-      child: ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.deepOrange,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+    return Positioned.fill(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepOrange,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 6,
+            ),
+            icon: _isBuildingRoute
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.directions),
+            label: Text(
+              _isBuildingRoute ? 'Building route…' : 'Start Route',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            onPressed: _isBuildingRoute
+                ? null
+                : () async {
+                    setState(() => _isBuildingRoute = true);
+                    await _startRouteToSelectedDestination();
+                    if (mounted) setState(() => _isBuildingRoute = false);
+                  },
           ),
-          elevation: 6,
         ),
-        icon: _isBuildingRoute
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white),
-              )
-            : const Icon(Icons.directions),
-        label: Text(
-          _isBuildingRoute ? 'Building route…' : 'Start Route',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        onPressed: _isBuildingRoute
-            ? null
-            : () async {
-                setState(() => _isBuildingRoute = true);
-                await _startRouteToSelectedDestination();
-                if (mounted) setState(() => _isBuildingRoute = false);
-              },
       ),
     );
   }
@@ -7380,10 +7383,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
     if (_activeLegIndex >= _tripLegs.length) return const SizedBox.shrink();
     final leg = _tripLegs[_activeLegIndex];
+    // In landscape mode (shorter screen height) use a reduced bottom offset
+    // so the card stays on-screen and does not overlap the top nav card.
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
     return Positioned(
       left: 16,
       right: 16,
-      bottom: 250,
+      bottom: isLandscape ? 140.0 : 250.0,
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -7430,7 +7437,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Shows a modal bottom sheet listing all trip legs with their from/to
-  /// names, distance, duration, and restriction count.  The active leg is
   /// highlighted in green.
   void _showLegBreakdownSheet() {
     if (_tripLegs.isEmpty) return;
@@ -10043,9 +10049,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final bool visible = _shouldShowLaneGuidance(_upcomingManeuverStep);
 
     return Positioned(
-      // top: 118 positions lane guidance below the compact next-step card
-      // (~90 px tall) with a small gap, keeping it clear of the top nav card.
-      top: 118,
+      // SafeArea below ensures lane guidance starts below the status bar.
+      // top: 0 + internal SafeArea keeps it right below the system insets;
+      // the SafeArea(bottom:false) wrapper adds the status-bar offset so the
+      // content is naturally pushed below the compact next-step card (~90 px).
+      top: 0,
       left: 0,
       right: 0,
       child: Center(
@@ -10058,7 +10066,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               ? SafeArea(
                   bottom: false,
                   key: const ValueKey('laneGuidanceOn'),
-                  child: _buildDynamicLaneAssist(_upcomingManeuverStep!),
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 118),
+                    child: _buildDynamicLaneAssist(_upcomingManeuverStep!),
+                  ),
                 )
               : const SizedBox.shrink(key: ValueKey('laneGuidanceOff')),
         ),
@@ -11350,8 +11361,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
+      body: SafeArea(
+        // Apply top inset only during navigation (when AppBar is hidden and
+        // the Stack fills the full screen height from the top).  When the
+        // AppBar is visible the Scaffold already positions the body below it,
+        // so enabling `top` would add redundant padding.
+        top: _isNavigating,
+        child: Column(
+          children: [
           // ── Mapbox map widget (flutter_map) ──────────────────────────────
           Expanded(
             flex: 2,
@@ -11594,13 +11611,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // ── Warning popup stack ───────────────────────────────────
                 // Stacked top-right cards for road-hazard warning signs along
                 // the active route.  Only visible during active navigation.
-                // Positioned at top:220 on the right so it does not conflict
-                // with the compact right-side alert stack (top:120).
+                // Anchored to the right edge with SafeArea so it never sits
+                // behind the status bar or notch in any orientation.
                 if (_isNavigating)
                   Positioned(
-                    top: 220,
+                    top: 0,
+                    bottom: 0,
                     right: 8,
-                    child: WarningPopupStack(manager: _warningManager),
+                    child: SafeArea(
+                      child: Align(
+                        alignment: Alignment.topRight,
+                        child: Padding(
+                          // 176 px below the safe-area top keeps the stack
+                          // clear of the primary nav card (~160 px tall).
+                          padding: const EdgeInsets.only(top: 176),
+                          child: WarningPopupStack(manager: _warningManager),
+                        ),
+                      ),
+                    ),
                   ),
                 // ── Warning sign alert banner ─────────────────────────────
                 // Shown when a truck safety warning sign is within
@@ -11808,7 +11836,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               flex: 1,
               child: _buildRouteInfo(_routeData!),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }

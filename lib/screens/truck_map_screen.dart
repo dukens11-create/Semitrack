@@ -7437,6 +7437,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Shows a modal bottom sheet listing all trip legs with their from/to
+  /// names, distance, duration, and restriction count.  The active leg is
   /// highlighted in green.
   void _showLegBreakdownSheet() {
     if (_tripLegs.isEmpty) return;

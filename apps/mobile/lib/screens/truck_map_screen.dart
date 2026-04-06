@@ -8580,23 +8580,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> _enhanceRoadLabels() async {
     final mbx.MapboxMap? map = _mapboxMap;
     if (map == null) return;
-    try {
-      // Layer IDs used by Mapbox Streets v12 for road/highway labels.
-      // Each entry is: (layerId, textSize, haloWidth, haloBlur).
-      const List<(String, double, double, double)> roadLabelLayers = [
-        ('road-label',            14.0, 2.5, 1.0),
-        ('road-label-simple',     14.0, 2.5, 1.0),
-        ('road-number-shield',    13.0, 2.0, 1.0),
-        ('motorway-label',        15.0, 3.0, 1.5),
-        ('motorway-junction',     13.0, 2.5, 1.0),
-        ('road-exit-shield',      13.0, 2.0, 1.0),
-        ('road-intersection',     12.0, 2.0, 1.0),
-        ('road-oneway-arrow-blue',11.0, 1.5, 0.5),
-        ('bridge-label',          13.0, 2.5, 1.0),
-        ('tunnel-label',          13.0, 2.5, 1.0),
-      ];
+    // Layer IDs used by Mapbox Streets v12 for road/highway labels.
+    // Each entry is: (layerId, textSize, haloWidth, haloBlur).
+    const List<(String, double, double, double)> roadLabelLayers = [
+      ('road-label',            14.0, 2.5, 1.0),
+      ('road-label-simple',     14.0, 2.5, 1.0),
+      ('road-number-shield',    13.0, 2.0, 1.0),
+      ('motorway-label',        15.0, 3.0, 1.5),
+      ('motorway-junction',     13.0, 2.5, 1.0),
+      ('road-exit-shield',      13.0, 2.0, 1.0),
+      ('road-intersection',     12.0, 2.0, 1.0),
+      ('road-oneway-arrow-blue',11.0, 1.5, 0.5),
+      ('bridge-label',          13.0, 2.5, 1.0),
+      ('tunnel-label',          13.0, 2.5, 1.0),
+    ];
 
-      for (final (layerId, size, haloWidth, haloBlur) in roadLabelLayers) {
+    for (final (layerId, size, haloWidth, haloBlur) in roadLabelLayers) {
+      try {
         if (!await map.style.styleLayerExists(layerId)) continue;
         // Bold text size
         await map.style.setStyleLayerProperty(
@@ -8611,10 +8611,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Dark text for contrast
         await map.style.setStyleLayerProperty(
           layerId, 'text-color', '#1a1a1a');
+      } catch (e) {
+        debugPrint(
+          'TruckMapScreen: _enhanceRoadLabels failed for layer "$layerId": $e');
       }
+    }
 
-      // Motorway labels: white text on the coloured shield background looks
-      // better than dark text, so override colour for that layer only.
+    // Motorway labels: white text on the coloured shield background looks
+    // better than dark text, so override colour for that layer only.
+    try {
       if (await map.style.styleLayerExists('motorway-label')) {
         await map.style.setStyleLayerProperty(
           'motorway-label', 'text-color', '#ffffff');
@@ -8624,7 +8629,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'motorway-label', 'text-halo-width', 2.0);
       }
     } catch (e) {
-      debugPrint('TruckMapScreen: _enhanceRoadLabels failed: $e');
+      debugPrint(
+        'TruckMapScreen: _enhanceRoadLabels failed for motorway-label: $e');
     }
   }
 
@@ -12210,14 +12216,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (m != null) {
       return _HighwayShield(_HighwayShieldType.usHighway, m.group(1)!);
     }
-    // State / Provincial Highway — two-letter code followed by hyphen + number
+    // State / Provincial Highway — two-letter code followed by hyphen + number,
+    // or generic SR/SH/Hwy prefix.  Two capture groups are used:
+    //   group(1)/group(2) — for "XX-nnn" patterns (e.g. "CA-1", "TX-35")
+    //   group(3)/group(4) — for "SR/SH/Hwy nnn" patterns (e.g. "SR-520")
+    // stateCode uses the actual matched prefix so the sign label is accurate.
     final state = RegExp(
-        r'^([A-Z]{2})-(\d{1,3}[A-Z]?)$|^(?:SR|SH|Hwy)\s*-?(\d{1,3}[A-Z]?)$',
+        r'^([A-Z]{2})-(\d{1,3}[A-Z]?)$|^(SR|SH|Hwy)\s*-?(\d{1,3}[A-Z]?)$',
         caseSensitive: false);
     m = state.firstMatch(trimmed);
     if (m != null) {
-      final prefix = (m.group(1) ?? 'ST').toUpperCase();
-      final number = m.group(2) ?? m.group(3) ?? '';
+      final prefix = (m.group(1) ?? m.group(3) ?? 'ST').toUpperCase();
+      final number = m.group(2) ?? m.group(4) ?? '';
       return _HighwayShield(
           _HighwayShieldType.stateHighway, number, stateCode: prefix);
     }

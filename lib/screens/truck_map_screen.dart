@@ -9722,13 +9722,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _distanceToNextStep() {
     if (_navSteps.isEmpty) return 0.0;
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
-    final nextStep = _navSteps[safeIndex];
+    // Point to the *upcoming* maneuver (one step ahead of the current step)
+    // so the distance counts DOWN to zero as the driver approaches.
+    // On the final step there is no further maneuver, so we measure the
+    // remaining distance to the destination (the last step's location).
+    final bool isLastStep = safeIndex >= _navSteps.length - 1;
+    final int targetIndex =
+        isLastStep ? safeIndex : safeIndex + 1;
+    final upcomingStep = _navSteps[targetIndex];
     // Use the live truck position when available for real-time accuracy.
     if (_truckPosition != null) {
-      return _distanceBetween(_truckPosition!, nextStep.location);
+      return _distanceBetween(_truckPosition!, upcomingStep.location);
     }
-    // Fallback: use the stored step distance before the first GPS fix.
-    return nextStep.distanceMeters;
+    // Fallback: use the current step's stored distance before the first GPS fix.
+    return _navSteps[safeIndex].distanceMeters;
   }
 
   /// Converts a verbose Mapbox instruction into a concise, GPS-style phrase.

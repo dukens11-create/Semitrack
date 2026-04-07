@@ -1961,13 +1961,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
-  /// Each weigh-station marker is snapped to the nearest truck-accessible road
-  /// point on the active route (via [_snapToNearestRoutePoint]) so it appears
-  /// at the true entrance drivers approach rather than at a rough parcel-centre
-  /// coordinate.  When snapping succeeds an "Entrance Here" label is shown
-  /// below the pin.  If no active route is available, or the station is too far
-  /// from the polyline, the original stored coordinate is used and an "(approx)"
-  /// label is added so drivers know the position is approximate.
+  /// Only weigh stations whose position can be snapped to the active route
+  /// (via [_snapToNearestRoutePoint]) are shown on the map — these have a
+  /// verified, road-accessible coordinate.  Stations that cannot be snapped
+  /// (no active route, or station too far from the polyline) are considered
+  /// approximate / unverified and are hidden from the driver's map view.
+  /// They remain available in the admin maintenance sheet
+  /// ([_showApproxPoiAdminSheet]) so data editors can correct the coordinates.
   ///
   /// The next upcoming weigh station during navigation is highlighted with an
   /// orange ring so it stands out from the others.
@@ -1986,7 +1986,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       );
     }
 
-    // Show all weigh-station POIs — no route or proximity filter.
+    // Only show weigh-station MapPois that can be snapped to the active route
+    // (i.e., have a verified road-accessible position).
     final List<MapPoi> weighStations =
         _mapPois.where((p) => p.type == PoiType.weighStation).toList();
 
@@ -1999,18 +2000,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final List<Marker> markers = [];
 
     for (final poi in weighStations) {
+      // Snap to the nearest route point so the marker lands at the actual road
+      // entrance.  Skip this POI entirely if snapping fails — it means no
+      // active route is available or the stored coordinate is too far from any
+      // road segment (i.e., the location is approximate/unverified).
+      final LatLng? snapped = _snapToNearestRoutePoint(poi.position);
+      if (snapped == null) continue;
+
       final bool isNext = poi.id == nextStationId;
       // All markers use the same uniform pin size; the active-next station gets
       // an additional glow border to stand out from nearby weigh stations.
       final double size = _kPoiPinSize;
-
-      // Snap to the nearest route point so the marker lands at the actual road
-      // entrance.  MapPoi entries carry only a rough coordinate, so snapping is
-      // always attempted.  If no route is active or the station is too far from
-      // the polyline the original position is used and marked as approximate.
-      final LatLng? snapped = _snapToNearestRoutePoint(poi.position);
-      final bool isApprox = snapped == null;
-      final LatLng displayPoint = snapped ?? poi.position;
+      final LatLng displayPoint = snapped;
 
       // Validate whether this POI's coordinate is near a real road.
       final bool isSuspect = _isPoiLocationSuspect(poi.position);
@@ -2054,19 +2055,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // Label shown below the pin: orange "Suspect Location" when the POI
       // fails road-proximity validation; green "Entrance Here" when snapped to
-      // the road; dark "(approx)" when falling back to a stored rough coord.
+      // the road.  The "(approx)" case is no longer reachable here — approx
+      // POIs are skipped above.
       final Widget label = Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
           color: isSuspect
               ? Colors.deepOrange.shade700
-              : (isApprox ? Colors.black54 : Colors.green.shade700),
+              : Colors.green.shade700,
           borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
-          isSuspect
-              ? 'Suspect Location'
-              : (isApprox ? '(approx)' : 'Entrance Here'),
+          isSuspect ? 'Suspect Location' : 'Entrance Here',
           style: const TextStyle(
             color: Colors.white,
             fontSize: 9,
@@ -2235,36 +2235,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
-  /// Every POI — truck stop, hotel, restaurant, rest area, gym, commercial
-  /// vehicle, and weight station — is rendered at a uniform size using the
-  /// GPS teardrop-pin shape so all types look visually consistent on the map.
+  /// **Approx filtering (data quality):** Only POIs that carry verified
+  /// entrance coordinates ([entranceLat]/[entranceLng] are non-null) are
+  /// rendered on the driver's map.  POIs without these precise coordinates are
+  /// considered approximate / unverified — they are silently skipped so drivers
+  /// never see markers for fake or imprecise locations.  All hidden POIs are
+  /// accessible via the admin maintenance sheet ([_showApproxPoiAdminSheet])
+  /// so data editors can identify and correct them.
+  ///
+  /// Every verified POI — truck stop, hotel, restaurant, rest area, gym,
+  /// commercial vehicle, and weight station — is rendered at a uniform size
+  /// using the GPS teardrop-pin shape so all types look visually consistent.
   /// Branded logo bytes are embedded in the pin head when available; otherwise
   /// a category-appropriate fallback icon is shown.
   ///
-  /// **Weight-station road snapping:** For [PoiItem]s with category
-  /// `"weigh_station"`, the marker is snapped to the nearest truck-accessible
-  /// road point on the active route via [_snapToNearestRoutePoint].  A green
-  /// "Entrance Here" label is added when snapping succeeds; a dark "(approx)"
-  /// label is shown otherwise.  Weight stations that already carry precise
-  /// [entranceLat]/[entranceLng] coordinates are treated as exact and receive
-  /// no label.
-  ///
-  /// **Location suspect validation:** Every POI is evaluated by
-  /// [_isPoiLocationSuspect].  POIs that fail — e.g. coordinates outside the
-  /// North America trucking corridor, suspiciously round placeholder values, or
-  /// coordinates more than [_kPoiRoadProximityMeters] from the active route —
-  /// are rendered with an orange warning-triangle badge and an orange
-  /// "Suspect Location" label so drivers are clearly alerted.  The POI is
-  /// never hidden; it remains visible so drivers can still react to it.
+  /// **Location suspect validation:** Every displayed POI is evaluated by
+  /// [_isPoiLocationSuspect].  POIs that fail are rendered with an orange
+  /// warning-triangle badge and an orange "Suspect Location" label.
   ///
   /// Tapping a marker shows a dialog with the POI name.
   List<Marker> _buildAllPoiMarkers() {
     if (_loadedPois.isEmpty) return const [];
 
     final List<Marker> markers = [];
+    int approxCount = 0;
     int suspectCount = 0;
 
     for (final poi in _loadedPois) {
+      // ── Approx / unverified location filter ─────────────────────────────
+      // A POI is considered approximate when it has no entrance_lat/entrance_lng
+      // in the JSON data — meaning only a rough property-centre coordinate is
+      // available rather than the precise truck-access point.  Hide these from
+      // the driver's map; they are listed in the admin maintenance sheet.
+      if (poi.entranceLat == null) {
+        approxCount++;
+        continue;
+      }
+
       // Guard against an empty icon stem so the asset key is never malformed.
       final String? assetKey = poi.icon.isNotEmpty
           ? 'assets/logo_brand_markers/${poi.icon}.png'
@@ -2283,96 +2290,160 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (isSuspect) suspectCount++;
       pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
-      if (poi.category == 'weigh_station') {
-        // ── Weigh-station-specific road-snapping logic ────────────────────────
-        // Use the most precise coordinate available.  When entrance_lat/lng are
-        // set the POI is already at the exact truck-access point; no further
-        // snapping is needed.  Otherwise snap to the nearest route point so the
-        // marker appears at the road entrance rather than a parcel-centre
-        // approximation.
-        final bool hasEntrance = poi.entranceLat != null;
-        final LatLng basePoint = displayCoord;
-
-        if (hasEntrance) {
-          // Entrance coords are precise — render without any approx label, but
-          // still show the suspect badge if the coordinate fails validation.
-          markers.add(Marker(
-            point: basePoint,
-            width: _kPoiPinSize,
-            height: _kPoiPinSize,
-            alignment: Alignment.center,
-            child: GestureDetector(
-              onTap: () => _showPoiInfoDialog(poi),
-              child: pinWidget,
-            ),
-          ));
-        } else {
-          // No entrance coords — try to snap to the active route.
-          final LatLng? snapped = _snapToNearestRoutePoint(basePoint);
-          final bool isApprox = snapped == null;
-          final LatLng displayPoint = snapped ?? basePoint;
-
-          // A suspect location takes priority over the approx / snapped labels.
-          final Widget label = Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            decoration: BoxDecoration(
-              color: isSuspect
-                  ? Colors.deepOrange.shade700
-                  : (isApprox ? Colors.black54 : Colors.green.shade700),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              isSuspect
-                  ? 'Suspect Location'
-                  : (isApprox ? '(approx)' : 'Entrance Here'),
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          );
-
-          final Widget markerChild = Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [pinWidget, label],
-          );
-
-          markers.add(Marker(
-            point: displayPoint,
-            width: _kPoiPinSize,
-            height: _kPoiPinSize + _kPoiLabelHeight,
-            alignment: Alignment.topCenter,
-            child: GestureDetector(
-              onTap: () => _showPoiInfoDialog(poi),
-              child: markerChild,
-            ),
-          ));
-        }
-      } else {
-        // Non-weigh-station POIs: render at the best-available coordinate.
-        // If the location is suspect the warning badge (already applied above)
-        // is the driver's visual cue; no additional text label is added so the
-        // map stays uncluttered.
-        markers.add(Marker(
-          point: displayCoord,
-          width: _kPoiPinSize,
-          height: _kPoiPinSize,
-          alignment: Alignment.center,
-          child: GestureDetector(
-            onTap: () => _showPoiInfoDialog(poi),
-            child: pinWidget,
-          ),
-        ));
-      }
+      // All verified POIs (entrance coords present) render at their precise
+      // entrance coordinate.  Weigh stations and non-weigh-station types alike
+      // use the same uniform pin; no additional "(approx)" label is needed
+      // because approximate POIs are already excluded above.
+      markers.add(Marker(
+        point: displayCoord,
+        width: _kPoiPinSize,
+        height: _kPoiPinSize,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () => _showPoiInfoDialog(poi),
+          child: pinWidget,
+        ),
+      ));
     }
 
     debugPrint('[POI-VALIDATION] ${_loadedPois.length} POIs evaluated: '
-        '$suspectCount suspect, ${_loadedPois.length - suspectCount} valid. '
+        '$approxCount approx (hidden), $suspectCount suspect, '
+        '${_loadedPois.length - approxCount - suspectCount} verified+valid. '
         'Route active: ${_routePoints.isNotEmpty}. '
         'Threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m.');
 
     return markers;
+  }
+
+  /// Returns the subset of [_loadedPois] that are considered approximate /
+  /// unverified — i.e. those missing precise [PoiItem.entranceLat] /
+  /// [PoiItem.entranceLng] coordinates.
+  ///
+  /// Used by [_showApproxPoiAdminSheet] to populate the maintenance list.
+  List<PoiItem> get _approxPois =>
+      _loadedPois.where((p) => p.entranceLat == null).toList();
+
+  /// Opens a bottom sheet listing all POIs that are currently hidden from the
+  /// driver's map due to approximate / unverified location data.
+  ///
+  /// This is a **maintenance / admin view** intended for data editors.  It
+  /// shows each hidden POI's name, category, id, and stored coordinates so
+  /// that the team can identify which entries need precise
+  /// `entrance_lat`/`entrance_lng` values added to `assets/locations.json`.
+  void _showApproxPoiAdminSheet() {
+    final approx = _approxPois;
+
+    // Group by category for a cleaner presentation.
+    final Map<String, List<PoiItem>> byCategory = {};
+    for (final poi in approx) {
+      byCategory.putIfAbsent(poi.category, () => []).add(poi);
+    }
+    final sortedCategories = byCategory.keys.toList()..sort();
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0F1923),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.6,
+        maxChildSize: 0.92,
+        minChildSize: 0.35,
+        builder: (_, scrollCtrl) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Header ──────────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded,
+                      color: Colors.amber, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Hidden Approximate POIs (${approx.length})',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: Text(
+                'These POIs are hidden from the map because they have no '
+                'verified entrance coordinates. Add entrance_lat / '
+                'entrance_lng to assets/locations.json to make them visible '
+                'to drivers.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+            const Divider(color: Color(0xFF253041), height: 1),
+            // ── Grouped list ────────────────────────────────────────────────
+            Expanded(
+              child: ListView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.only(bottom: 24),
+                children: [
+                  for (final cat in sortedCategories) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+                      child: Text(
+                        '${cat.replaceAll('_', ' ').toUpperCase()} '
+                        '(${byCategory[cat]!.length})',
+                        style: const TextStyle(
+                          color: Colors.amber,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    for (final poi in byCategory[cat]!)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.location_off,
+                            color: Colors.orange, size: 20),
+                        title: Text(
+                          poi.name,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13),
+                        ),
+                        subtitle: Text(
+                          'id: ${poi.id}  •  '
+                          '${poi.lat.toStringAsFixed(6)}, '
+                          '${poi.lng.toStringAsFixed(6)}',
+                          style: const TextStyle(
+                              color: Colors.white54, fontSize: 11),
+                        ),
+                      ),
+                  ],
+                  if (approx.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'All POIs have verified entrance coordinates. '
+                        'No data corrections needed.',
+                        style:
+                            TextStyle(color: Colors.white70, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// Builds [Marker]s for every [MapPoi] of type [PoiType.camera511].
@@ -11744,6 +11815,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Pre-compute the approx POI count once per build to avoid the getter
+    // recreating the filtered list multiple times in the AppBar actions list.
+    final int approxPoiCount =
+        _loadedPois.where((p) => p.entranceLat == null).length;
     return Scaffold(
       // AppBar is hidden during active navigation so the full screen is used
       // for the map and turn-by-turn components.
@@ -11774,6 +11849,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             icon: const Icon(Icons.search),
             onPressed: _showDestinationSearch,
           ),
+          // ── Admin / maintenance: approx POI data view ──────────────────
+          // Shows a badge with the number of POIs hidden due to approximate
+          // (unverified) location data.  Tapping opens a maintenance sheet
+          // listing all hidden POIs so data editors can correct the entries.
+          if (approxPoiCount > 0)
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                IconButton(
+                  tooltip: 'POI Data Quality ($approxPoiCount hidden)',
+                  icon: const Icon(Icons.location_off_outlined),
+                  onPressed: _showApproxPoiAdminSheet,
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IgnorePointer(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.amber,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '$approxPoiCount',
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           // Pause / resume navigation tracking.
           // When paused, GPS updates and camera follow are suspended so the
           // driver can review the route without the map moving.

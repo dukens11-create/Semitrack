@@ -468,6 +468,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // started so that any in-flight async animation loop can self-cancel when
   // it detects a stale generation value.
   int _animGeneration = 0;
+  // Generation counter for GPS-driven position interpolation — incremented on
+  // each new GPS fix so any in-flight lerp can self-cancel when a newer fix
+  // arrives before the previous animation completes.
+  int _gpsInterpGeneration = 0;
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
@@ -1121,6 +1125,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _animTimer?.cancel();
     _gestureReturnTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
+    _gpsInterpGeneration++; // cancel any in-flight GPS position interpolation
     _tts.stop();
     _searchController.dispose();
     _searchDebounce?.cancel();
@@ -3706,6 +3711,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hosRemaining =
         (_hosMaxDriveMinutes - _hosDrivingDuration.inMinutes).clamp(0, _hosMaxDriveMinutes);
 
+    // Capture the current truck position as the lerp start point before
+    // updating any state.  Fall back to gpsPoint on the very first fix so
+    // the marker appears at the real location immediately (no LatLng(0,0) jump).
+    final interpFrom = _truckPosition ?? gpsPoint;
+    // Invalidate any in-flight GPS interpolation so the stale loop exits and
+    // the new animation takes over seamlessly.
+    _gpsInterpGeneration++;
+    final interpGen = _gpsInterpGeneration;
+
     // ── Smooth movement: interpolate toward the new fix to prevent jitter ─
     // Navigation checks above use the raw gpsPoint for accuracy; only the
     // displayed marker position is smoothed.
@@ -3747,8 +3761,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     setState(() {
-      // Use the snapped (or smoothed) position for visual rendering.
-      _truckPosition = renderPosition;
+      // _truckPosition is NOT updated here — it is lerped smoothly to
+      // renderPosition by _interpolateToGpsPosition below.
       // Use real device heading for accurate marker rotation.
       _truckBearing = trueBearing;
       // Persist updated speed and speed-limit for the PositionPanel overlay.
@@ -3758,6 +3772,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // card always reflect the actual remaining drive time.
       _intelligence = {..._intelligence, 'driveMinutesLeft': hosRemaining};
     });
+
+    // Smoothly lerp the truck marker from its current rendered position to
+    // the new GPS fix, preventing sudden jumps on each location update.
+    _interpolateToGpsPosition(interpFrom, renderPosition, interpGen);
 
     // Record this fix as the last accepted position for the next filter cycle.
     _lastAcceptedPosition = position;
@@ -4585,6 +4603,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         _truckBearing = bearing;
       });
       // Keep the camera centred on the truck in navigation mode.
+      if (_navigationMode) {
+        _followTruckCamera();
+      }
+    }
+  }
+
+  /// Smoothly interpolates the truck marker from [from] to [to] in response
+  /// to a new GPS fix, preventing sudden jumps on each location update.
+  ///
+  /// Uses linear interpolation (lerp) over ~500 ms with 10 steps of 50 ms
+  /// each — the same cadence as [_moveTruckSmoothly] — so the marker glides
+  /// continuously between GPS updates, matching the feel of professional GPS
+  /// navigation apps.
+  ///
+  /// The [generation] parameter allows early exit when a new GPS fix arrives
+  /// before the current interpolation finishes; the stale animation stops and
+  /// the newer one takes over seamlessly.
+  Future<void> _interpolateToGpsPosition(
+      LatLng from, LatLng to, int generation) async {
+    for (int step = 1; step <= 10; step++) {
+      if (!mounted || _gpsInterpGeneration != generation) return;
+      await Future.delayed(const Duration(milliseconds: 50));
+      if (!mounted || _gpsInterpGeneration != generation) return;
+      final pos = _interpolate(from, to, step / 10.0);
+      setState(() {
+        _truckPosition = pos;
+      });
       if (_navigationMode) {
         _followTruckCamera();
       }

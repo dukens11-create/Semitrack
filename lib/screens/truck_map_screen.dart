@@ -2309,7 +2309,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // in the JSON data — meaning only a rough property-centre coordinate is
       // available rather than the precise truck-access point.  Hide these from
       // the driver's map; they are listed in the admin maintenance sheet.
-      if (poi.entranceLat == null) {
+      if (poi.entranceLat == null || poi.entranceLng == null) {
         approxCount++;
         continue;
       }
@@ -2363,7 +2363,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Used by [_showApproxPoiAdminSheet] to populate the maintenance list.
   List<PoiItem> get _approxPois =>
-      _loadedPois.where((p) => p.entranceLat == null).toList();
+      _loadedPois.where((p) => p.entranceLat == null || p.entranceLng == null).toList();
 
   /// Opens a bottom sheet listing all POIs that are currently hidden from the
   /// driver's map due to approximate / unverified location data.
@@ -9382,16 +9382,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
       // ─────────────────────────────────────────────────────────────────────
 
+      // ── Filter: only verified POIs (entrance coords present) ─────────────
+      // POIs without entrance_lat / entrance_lng are considered approximate /
+      // unverified.  They must not appear on the driver-visible map layer.
+      // The full list (_loadedPois) is still available for the admin/debug
+      // maintenance sheet (_showApproxPoiAdminSheet).
+      final List<PoiItem> verifiedPois = pois
+          .where((p) => p.entranceLat != null && p.entranceLng != null)
+          .toList();
+      debugPrint(
+        '[POI] ${pois.length} total POIs loaded; '
+        '${verifiedPois.length} verified (entrance coords present), '
+        '${pois.length - verifiedPois.length} approximate (hidden from drivers).',
+      );
+
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
       // Expected coordinate ranges for full USA / Canada coverage:
       //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
       //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
       //
-      // Browse mode: ALL POIs are passed to the GeoJSON source so every entry
-      //   appears on the clustered map with no distance filtering applied.
+      // Browse mode: Only verified POIs (with entrance_lat/entrance_lng) are
+      //   passed to the GeoJSON source; approximate POIs are hidden from drivers.
       // Navigation mode: _getClosestTruckStopsAheadOnRoute handles route-aware
-      //   proximity filtering for the ahead-strip; the POI layer still shows
-      //   all POIs for spatial context.
+      //   proximity filtering for the ahead-strip; the POI layer shows only
+      //   verified POIs.
       //   // Navigation-only distance filter (retained for reference):
       //   //   pois = pois.where((p) {
       //   //     final distMeters = geo.Geolocator.distanceBetween(
@@ -9424,12 +9438,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       await registerPoiIcons(map.style);
 
-      // 2. Add the GeoJSON source without clustering so every individual POI
-      //    is always visible and accessible at all zoom levels.  Clustering is
-      //    intentionally disabled here because the requirement is that no POI
-      //    is ever hidden or merged into an aggregate bubble — drivers must be
-      //    able to tap any POI regardless of the current zoom level.
-      final Map<String, dynamic> geoJson = poisToGeoJson(pois);
+      // 2. Add the GeoJSON source without clustering so every individual
+      //    verified POI is always visible and accessible at all zoom levels.
+      //    Only POIs with entrance_lat / entrance_lng are included — approximate
+      //    POIs are excluded from the driver-visible layer.
+      final Map<String, dynamic> geoJson = poisToGeoJson(verifiedPois);
       await map.style.addStyleSource(
         'poi-source',
         jsonEncode({

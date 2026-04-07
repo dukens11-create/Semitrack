@@ -359,6 +359,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// poor before the fix is discarded as noise.
   static const double _minPoorAccuracyJumpMeters = 25.0;
 
+  /// Maximum distance (metres) allowed between two consecutive accepted GPS
+  /// fixes.  Jumps larger than this are treated as unrealistic teleports
+  /// (multipath error, signal bounce) and discarded.
+  static const double _maxPositionJumpMeters = 80.0;
+
+  /// Smoothing weight (0–1) blended between the last accepted display position
+  /// and a new valid fix.  0.5 gives equal weight to both; increase toward 1.0
+  /// to follow new fixes more quickly at the cost of less smoothing.
+  static const double _gpsSmoothingWeight = 0.5;
+
   /// Minimum displacement (metres) from the last accepted fix that triggers
   /// immediate position acceptance regardless of speed.
   static const double _immediateAcceptDistanceMeters = 20.0;
@@ -3393,16 +3403,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Decides whether [newPos] should be accepted as a new truck location.
   ///
   /// Rules applied in order:
-  ///   1. First fix is always accepted.
-  ///   2. Ignore drift < [_minStoppedDriftMeters] when speed is below
+  ///   1. Reject any fix whose accuracy exceeds [_poorAccuracyMeters] (25 m).
+  ///   2. First qualifying fix is always accepted.
+  ///   3. Ignore drift < [_minStoppedDriftMeters] when speed is below
   ///      [_stoppedSpeedMph] (vehicle is stopped).
-  ///   3. Ignore jumps < [_minPoorAccuracyJumpMeters] when GPS accuracy
-  ///      exceeds [_poorAccuracyMeters].
-  ///   4. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
+  ///   4. Reject jumps > [_maxPositionJumpMeters] (80 m) as unrealistic.
+  ///   5. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
   ///      ≥ [_immediateAcceptDistanceMeters].
-  ///   5. Require [_requiredCandidateFixCount] consistent candidate fixes
+  ///   6. Require [_requiredCandidateFixCount] consistent candidate fixes
   ///      for a low-speed position shift.
+  ///
+  /// When a fix is rejected the caller holds [_truckPosition] at its current
+  /// value, effectively keeping the last valid stable position on screen.
   bool _shouldAcceptPosition(geo.Position newPos) {
+    // 1. Always reject fixes with poor accuracy (> 25 m).
+    if (newPos.accuracy > _poorAccuracyMeters) return false;
+
     final speedMph = _speedMphFromMps(newPos.speed);
 
     if (_lastAcceptedPosition == null) {
@@ -3413,16 +3429,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final distanceMeters =
         _distanceMetersBetween(_lastAcceptedPosition!, newPos);
-    final poorAccuracy = newPos.accuracy > _poorAccuracyMeters;
     final stopped = speedMph < _stoppedSpeedMph;
 
     // Ignore tiny drift when the vehicle is stopped.
     if (stopped && distanceMeters < _minStoppedDriftMeters) return false;
 
-    // Ignore small jumps when GPS accuracy is poor.
-    if (poorAccuracy && distanceMeters < _minPoorAccuracyJumpMeters) {
-      return false;
-    }
+    // 2. Reject unrealistic jumps (> 80 m) as multipath / signal errors.
+    if (distanceMeters > _maxPositionJumpMeters) return false;
 
     // Accept immediately when clearly moving or significantly displaced.
     if (speedMph >= _stoppedSpeedMph ||
@@ -3688,19 +3701,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hosRemaining =
         (_hosMaxDriveMinutes - _hosDrivingDuration.inMinutes).clamp(0, _hosMaxDriveMinutes);
 
+    // ── Smooth movement: interpolate toward the new fix to prevent jitter ─
+    // Navigation checks above use the raw gpsPoint for accuracy; only the
+    // displayed marker position is smoothed.
+    final LatLng smoothedPoint;
+    if (_lastAcceptedPosition != null) {
+      smoothedPoint = LatLng(
+        _lastAcceptedPosition!.latitude * (1.0 - _gpsSmoothingWeight) +
+            gpsPoint.latitude * _gpsSmoothingWeight,
+        _lastAcceptedPosition!.longitude * (1.0 - _gpsSmoothingWeight) +
+            gpsPoint.longitude * _gpsSmoothingWeight,
+      );
+    } else {
+      smoothedPoint = gpsPoint;
+    }
+
     // ── Snap-to-route: determine visual truck position ────────────────────
     // Real GPS is always used for distance calculations and off-route
-    // detection above.  For visual rendering, snap the marker to the
-    // nearest point on the active route polyline when the truck is within
+    // detection above.  For visual rendering, snap the smoothed marker
+    // position to the nearest point on the active route polyline when within
     // _snapThresholdMeters so the icon never appears off-road while the
     // driver is still close to the route.
-    LatLng renderPosition = gpsPoint;
+    LatLng renderPosition = smoothedPoint;
     if (_routePoints.length >= 2) {
-      final LatLng? snapped = _nearestPointOnPolyline(gpsPoint);
+      final LatLng? snapped = _nearestPointOnPolyline(smoothedPoint);
       if (snapped != null) {
         final double distToRoute = geo.Geolocator.distanceBetween(
-          gpsPoint.latitude,
-          gpsPoint.longitude,
+          smoothedPoint.latitude,
+          smoothedPoint.longitude,
           snapped.latitude,
           snapped.longitude,
         );
@@ -3714,8 +3742,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     setState(() {
-      // Use the snapped position for visual rendering (on-route) or the raw
-      // GPS fix when the truck is outside the snap corridor (off-route).
+      // Use the snapped (or smoothed) position for visual rendering.
       _truckPosition = renderPosition;
       // Use real device heading for accurate marker rotation.
       _truckBearing = trueBearing;

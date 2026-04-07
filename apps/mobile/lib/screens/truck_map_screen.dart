@@ -12523,6 +12523,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           ),
                       ],
                     ),
+                    // ── Road-label overlay ────────────────────────────────
+                    // Renders road names/numbers on a transparent background
+                    // so they always appear above the blue route polyline.
+                    // Uses dark labels on satellite view, light labels on
+                    // standard map, ensuring readability in both modes.
+                    TileLayer(
+                      urlTemplate: _navSettings.mapType == 1
+                          ? 'https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png'
+                          : 'https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.semitrack.mobile',
+                    ),
                     MarkerLayer(
                       // _buildTruckMarker() + _buildDestinationMarker() are
                       // _buildMarkers() assembles the truck marker, the optional

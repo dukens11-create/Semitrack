@@ -2177,9 +2177,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const double _kPoiLabelHeight = 18.0;
 
   // Maximum distance (metres) a POI may be from any active-route segment
-  // before it is considered a "suspect location".  50 m is tight enough to
-  // distinguish road-side facilities from field/parcel-centre approximations.
-  static const double _kPoiRoadProximityMeters = 50.0;
+  // before it is considered a "suspect location".  100 m is generous enough
+  // to include truck stops and rest areas that sit just off the highway at an
+  // exit ramp while still filtering coordinates that are genuinely in an open
+  // field or parcel centre far from any road.
+  static const double _kPoiRoadProximityMeters = 100.0;
 
   /// Builds a GPS teardrop-pin [Widget] for a POI, optionally embedding a
   /// branded logo image inside the pin head.
@@ -2260,6 +2262,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_loadedPois.isEmpty) return const [];
 
     final List<Marker> markers = [];
+    int suspectCount = 0;
 
     for (final poi in _loadedPois) {
       // Guard against an empty icon stem so the asset key is never malformed.
@@ -2275,7 +2278,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Validate this POI's location.  Coordinates that fail the sanity check
       // or are too far from the active route receive an orange warning badge.
       final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
-      final bool isSuspect = _isPoiLocationSuspect(displayCoord);
+      final bool isSuspect = _isPoiLocationSuspect(displayCoord,
+          poiLabel: '"${poi.name}" (id=${poi.id})');
+      if (isSuspect) suspectCount++;
       pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
       if (poi.category == 'weigh_station') {
@@ -2361,6 +2366,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ));
       }
     }
+
+    debugPrint('[POI-VALIDATION] ${_loadedPois.length} POIs evaluated: '
+        '$suspectCount suspect, ${_loadedPois.length - suspectCount} valid. '
+        'Route active: ${_routePoints.isNotEmpty}. '
+        'Threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m.');
 
     return markers;
   }
@@ -6050,7 +6060,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Suspect POIs are visually flagged in [_buildPoiMarkers] and
   /// [_buildAllPoiMarkers] with an orange warning badge and label but are
   /// never hidden so drivers remain aware of them.
-  bool _isPoiLocationSuspect(LatLng position) {
+  ///
+  /// **Diagnostics:** When a coordinate is flagged the method emits a
+  /// `debugPrint` message tagged `[POI-SUSPECT]` so developers can grep the
+  /// console to audit real data issues without any production overhead (Flutter
+  /// strips `debugPrint` calls in release mode).
+  bool _isPoiLocationSuspect(LatLng position, {String? poiLabel}) {
+    final String label =
+        poiLabel ?? '(${position.latitude}, ${position.longitude})';
+
     // ── 1. WGS-84 validity ────────────────────────────────────────────────────
     if (position.latitude.isNaN ||
         position.longitude.isNaN ||
@@ -6060,6 +6078,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         position.latitude > 90.0 ||
         position.longitude < -180.0 ||
         position.longitude > 180.0) {
+      debugPrint('[POI-SUSPECT] $label — invalid WGS-84 coordinate '
+          '(lat=${position.latitude}, lng=${position.longitude})');
       return true;
     }
 
@@ -6074,6 +6094,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         position.latitude > kMaxLat ||
         position.longitude < kMinLng ||
         position.longitude > kMaxLng) {
+      debugPrint('[POI-SUSPECT] $label — outside North America corridor '
+          '(lat=${position.latitude}, lng=${position.longitude})');
       return true;
     }
 
@@ -6086,24 +6108,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // in any commercial POI dataset.
     if (position.latitude == position.latitude.truncateToDouble() &&
         position.longitude == position.longitude.truncateToDouble()) {
+      debugPrint('[POI-SUSPECT] $label — round integer placeholder coordinates '
+          '(lat=${position.latitude}, lng=${position.longitude})');
       return true;
     }
 
     // ── 4. Road-proximity check (active route only) ───────────────────────────
     // When the driver is navigating, verify the POI is within
-    // _kPoiRoadProximityMeters of the active route polyline.  POIs placed in
-    // open fields or parking-lot centres will fail this check.
+    // _kPoiRoadProximityMeters of the active route polyline.  The threshold
+    // is generous (100 m) so truck stops and rest areas just off the highway
+    // at exit ramps are not incorrectly flagged.  Only coordinates that are
+    // genuinely in an open field or parcel centre — far from any paved road —
+    // will fail this check.
     if (_routePoints.isNotEmpty) {
-      if (_routePoints.length == 1) {
-        return _distanceBetween(position, _routePoints.first) >
-            _kPoiRoadProximityMeters;
-      }
+      double minDist = _routePoints.length == 1
+          ? _distanceBetween(position, _routePoints.first)
+          : double.infinity;
       for (int i = 0; i < _routePoints.length - 1; i++) {
         final d =
             _crossTrackDistance(position, _routePoints[i], _routePoints[i + 1]);
-        if (d <= _kPoiRoadProximityMeters) return false;
+        if (d < minDist) minDist = d;
+        // Early exit once well within threshold.
+        if (minDist <= _kPoiRoadProximityMeters) break;
       }
-      return true;
+      if (minDist > _kPoiRoadProximityMeters) {
+        debugPrint('[POI-SUSPECT] $label — ${minDist.toStringAsFixed(1)} m '
+            'from active route (threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m). '
+            'Check lat=${position.latitude}, lng=${position.longitude} in source data.');
+        return true;
+      }
+      return false;
     }
 
     // No route active — cannot perform road-proximity check.

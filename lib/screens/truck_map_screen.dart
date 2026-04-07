@@ -919,6 +919,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the overlap-dedup pass would otherwise skip them.
   static const int _poiMinAheadForced = 3;
 
+  /// Maximum number of route-point indices to scan ahead of [_truckIndex]
+  /// when searching for each POI's nearest route point.  Limits O(n×m)
+  /// complexity on long routes with many decoded waypoints.
+  static const int _poiRoutePointScanLimit = 2000;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -2435,7 +2440,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         final double poiLng = poi.displayLng;
 
         // Find the nearest route point at or ahead of the truck index.
-        int nearestIdx = -1;
         double nearestDist = double.infinity;
         for (int i = _truckIndex; i < _routePoints.length; i++) {
           final double d = geo.Geolocator.distanceBetween(
@@ -2443,16 +2447,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             _routePoints[i].latitude,
             _routePoints[i].longitude,
           );
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearestIdx = i;
-          }
-          // Stop scanning route points once we're past 100 km of the
-          // truck's current index to keep this O(n) bounded.
-          if (i > _truckIndex + 2000) break;
+          if (d < nearestDist) nearestDist = d;
+          // Stop scanning once we're past [_poiRoutePointScanLimit] indices
+          // ahead of the truck to keep the inner loop O(n) bounded.
+          if (i > _truckIndex + _poiRoutePointScanLimit) break;
         }
 
-        if (nearestIdx < _truckIndex) continue; // POI is behind us.
         if (nearestDist > _poiRouteCorridorMeters) continue; // Off-route.
 
         // Compute straight-line distance from truck to POI in miles.

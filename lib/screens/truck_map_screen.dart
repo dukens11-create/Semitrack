@@ -1961,19 +1961,31 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Builds [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
-  /// Only weigh stations whose position can be snapped to the active route
-  /// (via [_snapToNearestRoutePoint]) are shown on the map — these have a
-  /// verified, road-accessible coordinate.  Stations that cannot be snapped
-  /// (no active route, or station too far from the polyline) are considered
-  /// approximate / unverified and are hidden from the driver's map view.
-  /// They remain available in the admin maintenance sheet
-  /// ([_showApproxPoiAdminSheet]) so data editors can correct the coordinates.
+  /// **Data source:** [_mapPois] is populated from [_sampleMapPois], which is
+  /// DEMO / approximate corridor data used as a fallback before a live API feed
+  /// is available.  These markers are suppressed as soon as [_loadedPois]
+  /// (from `assets/locations.json`) contains verified weigh-station entries,
+  /// so demo markers never appear alongside real-world POIs.
+  ///
+  /// **Marker placement:** Every marker is rendered at the POI's true stored
+  /// [MapPoi.position] coordinate — never at a snapped or shifted route point.
+  /// [_snapToNearestRoutePoint] is called only as a route-proximity filter:
+  /// stations more than 500 m from the active route are skipped during
+  /// navigation to reduce clutter.  The snapped coordinate is discarded and
+  /// must not be used for display.
   ///
   /// The next upcoming weigh station during navigation is highlighted with an
   /// orange ring so it stands out from the others.
   List<Marker> _buildPoiMarkers() {
     // Hidden when the weigh-station layer is toggled off in nav settings.
     if (!_navSettings.viewWeighStation) return const [];
+
+    // DEMO data suppression: when the real JSON dataset has loaded weigh
+    // stations, these sample markers are hidden so drivers only see verified
+    // POIs from locations.json rendered by _buildAllPoiMarkers().
+    final bool realWeighStationsLoaded =
+        _loadedPois.any((p) => p.category == 'weigh_station');
+    if (realWeighStationsLoaded) return const [];
 
     const String weighStationAsset =
         'assets/logo_brand_markers/weight_station.png';
@@ -1986,8 +1998,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       );
     }
 
-    // Only show weigh-station MapPois that can be snapped to the active route
-    // (i.e., have a verified road-accessible position).
+    // DEMO POIs from _sampleMapPois — approximate corridor data only.
+    // These are only reached when _loadedPois has no weigh stations (checked above).
     final List<MapPoi> weighStations =
         _mapPois.where((p) => p.type == PoiType.weighStation).toList();
 
@@ -2000,20 +2012,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final List<Marker> markers = [];
 
     for (final poi in weighStations) {
-      // Snap to the nearest route point so the marker lands at the actual road
-      // entrance.  Skip this POI entirely if snapping fails — it means no
-      // active route is available or the stored coordinate is too far from any
-      // road segment (i.e., the location is approximate/unverified).
-      final LatLng? snapped = _snapToNearestRoutePoint(poi.position);
-      if (snapped == null) continue;
+      // Route-proximity filter only: skip stations that are more than 500 m
+      // from the active route polyline (no active route = all skipped).
+      // The snapped point is intentionally discarded — it must not be used
+      // for rendering. Markers are always placed at the true stored coordinate.
+      final bool isNearRoute = _snapToNearestRoutePoint(poi.position) != null;
+      if (!isNearRoute) continue;
 
       final bool isNext = poi.id == nextStationId;
       // All markers use the same uniform pin size; the active-next station gets
       // an additional glow border to stand out from nearby weigh stations.
       final double size = _kPoiPinSize;
-      final LatLng displayPoint = snapped;
 
-      // Validate whether this POI's coordinate is near a real road.
+      // Always render at the true stored coordinate — never a snapped/shifted
+      // route point. Route snapping is for filtering only (see above).
+      final LatLng displayPoint = poi.position;
+
+      // Validate whether this POI's stored coordinate passes sanity checks.
       final bool isSuspect = _isPoiLocationSuspect(poi.position);
 
       Widget pinWidget = buildGpsPinMarker(
@@ -2053,37 +2068,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final double baseSize = isNext ? size + 6 : size;
 
-      // Label shown below the pin: orange "Suspect Location" when the POI
-      // fails road-proximity validation; green "Entrance Here" when snapped to
-      // the road.  The "(approx)" case is no longer reachable here — approx
-      // POIs are skipped above.
-      final Widget label = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-        decoration: BoxDecoration(
-          color: isSuspect
-              ? Colors.deepOrange.shade700
-              : Colors.green.shade700,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          isSuspect ? 'Suspect Location' : 'Entrance Here',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 9,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
-
-      final Widget markerChild = Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [pinWidget, label],
-      );
+      // Label: only shown when the coordinate fails sanity / road-proximity
+      // checks.  Non-suspect POIs render without a label — they are at their
+      // true stored position and need no qualification.
+      final Widget markerChild = isSuspect
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                pinWidget,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.deepOrange.shade700,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text(
+                    'Suspect Location',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : pinWidget;
 
       markers.add(Marker(
         point: displayPoint,
         width: baseSize,
-        height: baseSize + _kPoiLabelHeight,
+        height: isSuspect ? baseSize + _kPoiLabelHeight : baseSize,
         alignment: Alignment.topCenter,
         child: GestureDetector(
           onTap: () => _showPoiAlert(poi),
@@ -2615,8 +2630,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
   /// loaded from `assets/logos/`.  [_buildAllPoiMarkers] renders every POI
   /// from `assets/locations.json` with a brand logo or a fallback icon —
-  /// no POI is omitted.  [_buildPoiMarkers] adds markers for [MapPoi] weigh
-  /// stations (with fallback icon when the PNG is not loaded).
+  /// no POI is omitted.  [_buildPoiMarkers] adds fallback DEMO [MapPoi] weigh
+  /// station markers only when [_loadedPois] has no weigh stations yet; each
+  /// marker is placed at the POI's true stored coordinate.
   List<Marker> _buildMarkers() {
     return [
       if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
@@ -2624,7 +2640,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Every POI from locations.json — no filtering, with fallback icons.
       ..._buildAllPoiMarkers(),
       ..._buildTruckStopMarkers(),
-      // MapPoi weigh-station markers (with fallback icon).
+      // DEMO MapPoi weigh-station markers — only shown when locations.json
+      // has not yet loaded real weigh stations (suppressed otherwise).
       ..._buildPoiMarkers(),
       // 511 camera markers (gated by view511Camera setting).
       ..._buildCameraMarkers(),
@@ -6086,18 +6103,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  // ── Weight-station road-snap helper ─────────────────────────────────────────
+  // ── Route-proximity snap helper ─────────────────────────────────────────────
 
-  /// Snaps [position] to the nearest point on [_routePoints] if one exists
-  /// within [maxDistanceMeters].
+  /// Returns the nearest point on [_routePoints] within [maxDistanceMeters] of
+  /// [position], or `null` when no route is active or no point is close enough.
   ///
-  /// Used to move weigh-station markers from their stored (often parcel-centre)
-  /// coordinates to the closest truck-accessible road point so they appear at
-  /// the actual entrance drivers approach.  Returns `null` when no route is
-  /// active or when the nearest route point is farther than [maxDistanceMeters]
-  /// (indicating the station is off the current route).
+  /// **Use for filtering and distance calculations only — never for marker
+  /// placement.**  POI markers must always be rendered at their true stored
+  /// coordinates ([MapPoi.position], [PoiItem.displayLat]/[displayLng], etc.).
+  /// This helper is called as a proximity check to decide whether a POI is
+  /// on/near the active route; the returned [LatLng] should be discarded after
+  /// the null check and must not replace the POI's real coordinate.
   ///
-  /// A 500 m radius is generous enough to snap highway-side stations while
+  /// A 500 m radius is generous enough to include highway-side facilities while
   /// still excluding stations on a completely different road.
   LatLng? _snapToNearestRoutePoint(
     LatLng position, {
@@ -14681,15 +14699,23 @@ class MapPoi {
   final String status;
 }
 
+/// DEMO data — approximate corridor positions only; not from verified sources.
+///
 /// Sample [MapPoi] data used when no live feed is available.
 ///
 /// Covers key locations along the Portland OR → Winnemucca NV corridor so
 /// drivers see real-world-style alerts immediately after launch.  Replace or
 /// augment this list with live API data as the backend matures.
+///
+/// **Important:** [_buildPoiMarkers] suppresses these entries as soon as
+/// [_loadedPois] contains real weigh-station data from `assets/locations.json`,
+/// so these approximate coordinates are never shown alongside verified POIs.
+/// Do not use these coordinates for production routing or compliance decisions.
 const List<MapPoi> _sampleMapPois = [
-  // ── Weigh stations ──────────────────────────────────────────────────────
-  // Stations on the Portland OR → Winnemucca NV demo corridor (I-84 → US-95).
-  // Coordinates updated to 6 decimal places for sub-metre map precision.
+  // ── DEMO weigh stations ──────────────────────────────────────────────────
+  // Approximate positions on the Portland OR → Winnemucca NV demo corridor
+  // (I-84 → US-95).  These are sample/demo coordinates — not verified
+  // truck-entrance GPS fixes.  Suppressed at runtime when real data loads.
   MapPoi(
     id: 'ws_woodburn_or',
     position: LatLng(45.155102, -122.855683),

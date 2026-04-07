@@ -298,7 +298,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Minimum seconds that must elapse between automatic reroutes to prevent
   /// rapid repeated API calls in areas with poor GPS accuracy.
-  static const int _rerouteThrottleSeconds = 15;
+  static const int _rerouteThrottleSeconds = 10;
+
+  /// Minimum seconds the driver must be continuously off route before a
+  /// reroute is triggered.  Prevents reacting to brief GPS excursions or noise.
+  static const int _offRouteConfirmationSeconds = 5;
 
   // ── Trip statistics constants ─────────────────────────────────────────────
   /// Metres per mile conversion factor, used to convert GPS distances to miles.
@@ -351,6 +355,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Maximum distance (metres) a position jump can be when GPS accuracy is
   /// poor before the fix is discarded as noise.
   static const double _minPoorAccuracyJumpMeters = 25.0;
+
+  /// Maximum distance (metres) allowed between two consecutive accepted GPS
+  /// fixes.  Jumps larger than this are treated as unrealistic teleports
+  /// (multipath error, signal bounce) and discarded.
+  static const double _maxPositionJumpMeters = 80.0;
+
+  /// Smoothing weight (0–1) blended between the last accepted display position
+  /// and a new valid fix.  0.5 gives equal weight to both; increase toward 1.0
+  /// to follow new fixes more quickly at the cost of less smoothing.
+  static const double _gpsSmoothingWeight = 0.5;
 
   /// Minimum displacement (metres) from the last accepted fix that triggers
   /// immediate position acceptance regardless of speed.
@@ -581,13 +595,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   DateTime? _navigationStartedAt;
 
   /// Timestamp of the last reroute triggered by off-route detection.  Used
-  /// for the 15-second cooldown between consecutive reroutes.
+  /// for the 10-second cooldown between consecutive reroutes.
   DateTime? _lastRerouteAt;
 
-  /// Number of consecutive GPS fixes that have detected the driver to be
-  /// off-route.  A reroute is only triggered after 3 consecutive off-route
-  /// fixes to avoid false positives from momentary GPS drift.
-  int _offRouteConfirmCount = 0;
+  /// Timestamp of when the driver was first detected to be more than
+  /// [_offRouteThresholdMeters] from the route in the current off-route
+  /// episode.  A reroute is only triggered once this has been set for at
+  /// least 5 continuous seconds, preventing false positives from GPS drift.
+  DateTime? _offRouteDetectedAt;
 
   /// True once a stable GPS fix (accuracy &lt; 30 m) has been received after
   /// navigation started.  Reroutes are suppressed until this becomes true.
@@ -3391,16 +3406,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Decides whether [newPos] should be accepted as a new truck location.
   ///
   /// Rules applied in order:
-  ///   1. First fix is always accepted.
-  ///   2. Ignore drift < [_minStoppedDriftMeters] when speed is below
+  ///   1. Reject any fix whose accuracy exceeds [_poorAccuracyMeters] (25 m).
+  ///   2. First qualifying fix is always accepted.
+  ///   3. Ignore drift < [_minStoppedDriftMeters] when speed is below
   ///      [_stoppedSpeedMph] (vehicle is stopped).
-  ///   3. Ignore jumps < [_minPoorAccuracyJumpMeters] when GPS accuracy
-  ///      exceeds [_poorAccuracyMeters].
-  ///   4. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
+  ///   4. Reject jumps > [_maxPositionJumpMeters] (80 m) as unrealistic.
+  ///   5. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
   ///      ≥ [_immediateAcceptDistanceMeters].
-  ///   5. Require [_requiredCandidateFixCount] consistent candidate fixes
+  ///   6. Require [_requiredCandidateFixCount] consistent candidate fixes
   ///      for a low-speed position shift.
+  ///
+  /// When a fix is rejected the caller holds [_truckPosition] at its current
+  /// value, effectively keeping the last valid stable position on screen.
   bool _shouldAcceptPosition(geo.Position newPos) {
+    // 1. Always reject fixes with poor accuracy (> 25 m).
+    if (newPos.accuracy > _poorAccuracyMeters) return false;
+
     final speedMph = _speedMphFromMps(newPos.speed);
 
     if (_lastAcceptedPosition == null) {
@@ -3411,16 +3432,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final distanceMeters =
         _distanceMetersBetween(_lastAcceptedPosition!, newPos);
-    final poorAccuracy = newPos.accuracy > _poorAccuracyMeters;
     final stopped = speedMph < _stoppedSpeedMph;
 
     // Ignore tiny drift when the vehicle is stopped.
     if (stopped && distanceMeters < _minStoppedDriftMeters) return false;
 
-    // Ignore small jumps when GPS accuracy is poor.
-    if (poorAccuracy && distanceMeters < _minPoorAccuracyJumpMeters) {
-      return false;
-    }
+    // 2. Reject unrealistic jumps (> 80 m) as multipath / signal errors.
+    if (distanceMeters > _maxPositionJumpMeters) return false;
 
     // Accept immediately when clearly moving or significantly displaced.
     if (speedMph >= _stoppedSpeedMph ||
@@ -3794,6 +3812,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// from the nearest point on the route polyline.  When off-route, triggers a
   /// full reroute from the current live GPS position to the original destination.
   ///
+  /// Rerouting is not immediate: the driver must be more than
+  /// [_offRouteThresholdMeters] from the route **continuously for at least
+  /// 5 seconds** before a reroute is triggered.  Once on-route again the
+  /// off-route timer is reset, so a brief GPS excursion never causes a reroute.
+  ///
   /// Uses [geo.Geolocator.distanceBetween] for GPS-grade distance measurement and
   /// throttles reroutes to at most one every [_rerouteThrottleSeconds] seconds
   /// to prevent rapid repeated API calls in areas with poor GPS accuracy.
@@ -3821,18 +3844,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final double minDist = _distanceToNearestRouteMeters(current);
 
     if (minDist <= _offRouteThresholdMeters) {
-      // Driver is back on or near the route — reset confirmation counter.
+      // Driver is back on or near the route — reset the off-route timer.
       _resetOffRouteState();
       return;
     }
 
-    // Increment consecutive off-route counter; require 3 confirmations before
-    // acting to filter out momentary GPS noise or drift.
-    _offRouteConfirmCount++;
-    if (_offRouteConfirmCount < 3) return;
-
-    // Enforce 15-second cooldown between consecutive reroutes.
+    // Driver is >80 m off route. Record the time of the first detection in
+    // the current episode; subsequent calls accumulate elapsed time.
     final now = DateTime.now();
+    _offRouteDetectedAt ??= now;
+
+    // Require at least 5 seconds of continuous off-route before rerouting to
+    // avoid reacting to momentary GPS noise or brief deviations.
+    if (now.difference(_offRouteDetectedAt!).inSeconds < _offRouteConfirmationSeconds) return;
+
+    // Enforce 10-second cooldown (debounce) between consecutive reroutes.
     if (_lastRerouteAt != null &&
         now.difference(_lastRerouteAt!).inSeconds < _rerouteThrottleSeconds) {
       return;
@@ -3846,7 +3872,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _isRerouting = true;
     _lastRerouteTime = now;
     _lastRerouteAt = now;
-    _offRouteConfirmCount = 0;
+    _offRouteDetectedAt = null;
     // Show rerouting status indicator and announce the change via TTS.
     setState(() => _navStatus = 'Rerouting...');
     _speak('Rerouting');
@@ -3893,10 +3919,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return _distanceToNearestRouteMeters(pos) > _offRouteThresholdMeters;
   }
 
-  /// Resets the consecutive off-route confirmation counter so that a single
-  /// on-route GPS fix cancels any pending reroute decision.
+  /// Resets the off-route detection timer so that a single on-route GPS fix
+  /// cancels any pending reroute decision.
   void _resetOffRouteState() {
-    _offRouteConfirmCount = 0;
+    _offRouteDetectedAt = null;
   }
 
   // ── Trip statistics logic ──────────────────────────────────────────────────
@@ -4284,7 +4310,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _isNavigating = true;
       _navigationStartedAt = DateTime.now();
       _lastRerouteAt = null;
-      _offRouteConfirmCount = 0;
+      _offRouteDetectedAt = null;
       _hasStableFixForNavigation = false;
     });
     // Notify AppShell (and any other listeners) that navigation is now active

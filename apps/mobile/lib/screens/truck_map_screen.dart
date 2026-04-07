@@ -2399,19 +2399,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _showPoiInfoDialog(PoiItem poi) {
     if (!mounted) return;
 
-    // Build the best available static fallback from stored model fields so
-    // something meaningful shows immediately before the async lookup completes.
-    String staticFallback;
-    if (poi.city.isNotEmpty && poi.stateOrProvince.isNotEmpty) {
-      staticFallback = '${poi.city}, ${poi.stateOrProvince}';
-    } else if (poi.city.isNotEmpty) {
-      staticFallback = poi.city;
-    } else if (poi.stateOrProvince.isNotEmpty) {
-      staticFallback = poi.stateOrProvince;
-    } else {
-      staticFallback = poi.category.isNotEmpty ? poi.category : 'POI';
-    }
-
     // Check cache first — if the result is already available, show the dialog
     // immediately without a loading indicator.
     final String cacheKey =
@@ -2424,7 +2411,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     if (_reverseGeocodeCache.containsKey(cacheKey)) {
       // Result already cached — show dialog without loading spinner.
-      final String addressLabel = cached ?? '$staticFallback (approx)';
+      final String addressLabel = cached ?? 'Address unavailable';
       showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -2462,7 +2449,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       builder: (ctx) {
         return _PoiAddressDialog(
           poiName: poi.name,
-          staticFallback: staticFallback,
           geocodeFuture:
               _reverseGeocode(poi.displayLat, poi.displayLng),
         );
@@ -2494,10 +2480,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Shows an [AlertDialog] warning the driver that they are approaching [poi].
   ///
-  /// The dialog displays the POI name, type label, status, and the best
-  /// available street address so the driver has full location context.  A
-  /// reverse-geocoding request is fired for the POI coordinates; if only an
-  /// approximate result is available it is shown with "(approx)".
+  /// The dialog displays the POI name, type label, status, and the exact
+  /// street address from reverse geocoding.  If no precise street address is
+  /// available, "Address unavailable" is shown instead.
   void _showPoiAlert(MapPoi poi) {
     if (!mounted) return;
     final String typeLabel;
@@ -7294,15 +7279,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Reverse-geocodes [lat]/[lng] to the best available street address using
+  /// Reverse-geocodes [lat]/[lng] to the exact street address using
   /// the Mapbox Geocoding v5 API.
   ///
-  /// Returns a human-readable address string on success.  The string is marked
-  /// with "(approx)" when only a place-level (city / neighbourhood) result is
-  /// available rather than a precise street address.
-  ///
-  /// Returns `null` when the network request fails or the API returns no
-  /// features, so callers can fall back to stored city/state fields.
+  /// Returns a precise street address string on success.  Returns `null` when
+  /// the network request fails, the API returns no features, or the result is
+  /// not a precise street address — so callers display "Address unavailable"
+  /// rather than an approximate fallback.
   ///
   /// Results are cached in [_reverseGeocodeCache] to avoid redundant requests
   /// for the same coordinate during a session.
@@ -7317,7 +7300,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final url =
           'https://api.mapbox.com/geocoding/v5/mapbox.places/'
           '${lng.toStringAsFixed(6)},${lat.toStringAsFixed(6)}.json'
-          '?types=address,place,neighborhood,locality,district,region'
+          '?types=address'
           '&limit=1'
           '&access_token=$_mapboxToken';
       final res = await http.get(Uri.parse(url));
@@ -7337,16 +7320,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final String featureType =
           ((feature['place_type'] as List?)?.first as String?) ?? '';
 
-      String address;
-      if (featureType == 'address') {
-        // Precise street address — use as-is.
-        address = placeName;
-      } else {
-        // Only a neighbourhood / city / region was returned: mark as approximate.
-        address = placeName.isNotEmpty ? '$placeName (approx)' : '';
+      // Only accept a precise street-level address result.
+      if (featureType != 'address' || placeName.isEmpty) {
+        _reverseGeocodeCache[key] = '';
+        return null;
       }
-      _reverseGeocodeCache[key] = address;
-      return address.isEmpty ? null : address;
+      _reverseGeocodeCache[key] = placeName;
+      return placeName;
     } catch (e) {
       _reverseGeocodeCache[key] = '';
       return null;
@@ -16590,17 +16570,15 @@ class _UsHighwayShieldPainter extends CustomPainter {
 /// Dialog shown when a [PoiItem] map marker is tapped.
 ///
 /// Displays the POI name immediately, then resolves [geocodeFuture] to show the
-/// best available street address.  Falls back to [staticFallback] (with an
-/// "(approx)" suffix) when reverse geocoding is unavailable.
+/// exact street address.  Shows "Address unavailable" when the geocoding API
+/// cannot return a precise street-level result.
 class _PoiAddressDialog extends StatefulWidget {
   const _PoiAddressDialog({
     required this.poiName,
-    required this.staticFallback,
     required this.geocodeFuture,
   });
 
   final String poiName;
-  final String staticFallback;
   final Future<String?> geocodeFuture;
 
   @override
@@ -16630,7 +16608,7 @@ class _PoiAddressDialogState extends State<_PoiAddressDialog> {
   Widget build(BuildContext context) {
     final String addressLabel = _loading
         ? ''
-        : (_resolvedAddress ?? '${widget.staticFallback} (approx)');
+        : (_resolvedAddress ?? 'Address unavailable');
 
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -16708,12 +16686,8 @@ class _MapPoiAlertDialogState extends State<_MapPoiAlertDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // Fallback: show the coordinate pair if geocoding returned nothing.
-    final String fallback =
-        'near ${widget.poi.position.latitude.toStringAsFixed(4)}, '
-        '${widget.poi.position.longitude.toStringAsFixed(4)} (approx)';
     final String addressLabel =
-        _loading ? '' : (_resolvedAddress ?? fallback);
+        _loading ? '' : (_resolvedAddress ?? 'Address unavailable');
 
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

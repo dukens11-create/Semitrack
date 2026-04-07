@@ -2421,9 +2421,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   2. Sort by distance (closest first).
   ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
   List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: only POIs with verified entrance coordinates.
+    // Candidates: only POIs with verified entrance coordinates (both lat and lng).
     final List<PoiItem> candidates =
-        _loadedPois.where((p) => p.entranceLat != null).toList();
+        _loadedPois.where((p) => p.entranceLat != null && p.entranceLng != null).toList();
     if (candidates.isEmpty) return const [];
 
     final LatLng? pos = _truckPosition;
@@ -2623,7 +2623,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Used by [_showApproxPoiAdminSheet] to populate the maintenance list.
   List<PoiItem> get _approxPois =>
-      _loadedPois.where((p) => p.entranceLat == null).toList();
+      _loadedPois.where((p) => p.entranceLat == null || p.entranceLng == null).toList();
 
   /// Opens a bottom sheet listing all POIs that are currently hidden from the
   /// driver's map due to approximate / unverified location data.
@@ -9638,6 +9638,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
       // ─────────────────────────────────────────────────────────────────────
 
+      // ── Filter: only verified POIs (entrance coords present) ─────────────
+      // POIs without entrance_lat / entrance_lng are considered approximate /
+      // unverified.  They must not appear on the driver-visible map layer.
+      // The full list (_loadedPois) is still available for the admin/debug
+      // maintenance sheet (_showApproxPoiAdminSheet).
+      final List<PoiItem> verifiedPois = pois
+          .where((p) => p.entranceLat != null && p.entranceLng != null)
+          .toList();
+      debugPrint(
+        '[POI] ${pois.length} total POIs loaded; '
+        '${verifiedPois.length} verified (entrance coords present), '
+        '${pois.length - verifiedPois.length} approximate (hidden from drivers).',
+      );
+
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
       debugPrint('POI dataset loaded: ${pois.length} total entries.');
       if (pois.isNotEmpty) {
@@ -9666,10 +9680,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       await registerPoiIcons(map.style);
 
       // 2. Add the GeoJSON source with clustering enabled.
+      //    Only verified POIs (entrance_lat / entrance_lng present) are included
+      //    so approximate / unverified POIs are hidden from drivers.
       //    cluster: true  → Mapbox groups nearby features at low zoom levels.
       //    clusterMaxZoom: 12 → clusters expand into individuals above zoom 13.
       //    clusterRadius: 50  → pixel radius for grouping neighbours.
-      final Map<String, dynamic> geoJson = poisToGeoJson(pois);
+      final Map<String, dynamic> geoJson = poisToGeoJson(verifiedPois);
       await map.style.addStyleSource(
         'poi-source',
         jsonEncode({

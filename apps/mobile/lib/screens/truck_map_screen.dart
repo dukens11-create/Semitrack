@@ -296,6 +296,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Distance in metres beyond which the truck is considered off-route.
   static const double _offRouteThresholdMeters = 80.0;
 
+  // ── Snap-to-route constants ────────────────────────────────────────────────
+  /// Distance in metres within which the truck marker is snapped to the
+  /// nearest point on the route polyline.  Below this threshold the visual
+  /// marker position is the snapped point; above it the raw GPS fix is used
+  /// (potential off-route condition) and [_checkOffRoute] handles rerouting.
+  static const double _snapThresholdMeters = 40.0;
+
   /// Minimum seconds that must elapse between automatic reroutes to prevent
   /// rapid repeated API calls in areas with poor GPS accuracy.
   static const int _rerouteThrottleSeconds = 10;
@@ -3699,25 +3706,49 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hosRemaining =
         (_hosMaxDriveMinutes - _hosDrivingDuration.inMinutes).clamp(0, _hosMaxDriveMinutes);
 
-    // 3. Smooth movement: interpolate between the last accepted position and
-    // the new valid fix so the truck marker glides rather than teleports.
+    // ── Smooth movement: interpolate toward the new fix to prevent jitter ─
     // Navigation checks above use the raw gpsPoint for accuracy; only the
     // displayed marker position is smoothed.
-    final LatLng displayPoint;
+    final LatLng smoothedPoint;
     if (_lastAcceptedPosition != null) {
-      displayPoint = LatLng(
+      smoothedPoint = LatLng(
         _lastAcceptedPosition!.latitude * (1.0 - _gpsSmoothingWeight) +
             gpsPoint.latitude * _gpsSmoothingWeight,
         _lastAcceptedPosition!.longitude * (1.0 - _gpsSmoothingWeight) +
             gpsPoint.longitude * _gpsSmoothingWeight,
       );
     } else {
-      displayPoint = gpsPoint;
+      smoothedPoint = gpsPoint;
+    }
+
+    // ── Snap-to-route: determine visual truck position ────────────────────
+    // Real GPS is always used for distance calculations and off-route
+    // detection above.  For visual rendering, snap the smoothed marker
+    // position to the nearest point on the active route polyline when within
+    // _snapThresholdMeters so the icon never appears off-road while the
+    // driver is still close to the route.
+    LatLng renderPosition = smoothedPoint;
+    if (_routePoints.length >= 2) {
+      final LatLng? snapped = _nearestPointOnPolyline(smoothedPoint);
+      if (snapped != null) {
+        final double distToRoute = geo.Geolocator.distanceBetween(
+          smoothedPoint.latitude,
+          smoothedPoint.longitude,
+          snapped.latitude,
+          snapped.longitude,
+        );
+        if (distToRoute < _snapThresholdMeters) {
+          // Within snap threshold — place marker on the route line.
+          renderPosition = snapped;
+        }
+        // If distToRoute >= _snapThresholdMeters the truck is potentially
+        // off-route; _checkOffRoute (called above) handles the reroute.
+      }
     }
 
     setState(() {
-      // Use the smoothed position so the marker glides to the new fix.
-      _truckPosition = displayPoint;
+      // Use the snapped (or smoothed) position for visual rendering.
+      _truckPosition = renderPosition;
       // Use real device heading for accurate marker rotation.
       _truckBearing = trueBearing;
       // Persist updated speed and speed-limit for the PositionPanel overlay.
@@ -3905,6 +3936,67 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (d < minDist) minDist = d;
     }
     return minDist;
+  }
+
+  /// Finds the nearest point on the active route polyline to [pos] by
+  /// projecting [pos] onto each route segment and returning the closest
+  /// on-segment projection.
+  ///
+  /// Uses a flat-earth approximation with a cos(lat) longitude scale factor
+  /// that is accurate to within centimetres for the short segment lengths
+  /// (< 1 km) typical in turn-by-turn route polylines.
+  ///
+  /// Returns `null` when [_routePoints] contains fewer than 2 points.
+  LatLng? _nearestPointOnPolyline(LatLng pos) {
+    if (_routePoints.length < 2) {
+      return _routePoints.isNotEmpty ? _routePoints.first : null;
+    }
+
+    // Pre-compute the longitude scale factor once for the current latitude.
+    // 1° latitude  ≈ 110 540 m; 1° longitude ≈ 111 320 * cos(lat) m.
+    final double cosLat = math.cos(pos.latitude * math.pi / 180.0);
+
+    double minDist = double.infinity;
+    LatLng? nearest;
+
+    for (int i = 0; i < _routePoints.length - 1; i++) {
+      final LatLng a = _routePoints[i];
+      final LatLng b = _routePoints[i + 1];
+
+      // Segment vector AB and vector from A to the GPS point, in metres.
+      final double abLat = (b.latitude - a.latitude) * 110540.0;
+      final double abLng = (b.longitude - a.longitude) * 111320.0 * cosLat;
+      final double apLat = (pos.latitude - a.latitude) * 110540.0;
+      final double apLng = (pos.longitude - a.longitude) * 111320.0 * cosLat;
+
+      final double ab2 = abLat * abLat + abLng * abLng;
+      final LatLng candidate;
+      if (ab2 < 1e-10) {
+        // Degenerate segment: A and B are effectively the same point.
+        candidate = a;
+      } else {
+        // Scalar projection parameter t ∈ [0, 1].
+        final double t = ((apLat * abLat) + (apLng * abLng)) / ab2;
+        final double tc = t.clamp(0.0, 1.0);
+        candidate = LatLng(
+          a.latitude + tc * (b.latitude - a.latitude),
+          a.longitude + tc * (b.longitude - a.longitude),
+        );
+      }
+
+      final double d = geo.Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        candidate.latitude,
+        candidate.longitude,
+      );
+      if (d < minDist) {
+        minDist = d;
+        nearest = candidate;
+      }
+    }
+
+    return nearest;
   }
 
   /// Returns true when all conditions for triggering a reroute are met:

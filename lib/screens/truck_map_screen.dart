@@ -883,6 +883,47 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Matches the truck-stop POI display buffer (~10 miles).
   static const double _poiDisplayBufferMeters = 16093.0; // ≈ 10 miles
 
+  // ── Smart POI map-layer filtering constants ──────────────────────────────
+
+  /// Maximum distance ahead (miles) to show map-layer POI markers while
+  /// navigating.  POIs farther than this are not drawn on the route.
+  static const double _poiRouteMaxAheadMiles = 50.0;
+
+  /// Maximum radius (metres) for the nearby-POI filter when not navigating.
+  /// 10 miles ≈ 16,093 m.
+  static const double _poiNearbyRadiusMeters = 16093.0;
+
+  /// Hard cap on the total number of map-layer POI markers rendered at once
+  /// to prevent frame-budget overruns.
+  static const int _poiMaxMarkers = 15;
+
+  /// When not navigating, cap the displayed POI count at this limit.
+  static const int _poiNearbyMaxMarkers = 10;
+
+  /// Minimum separation (metres) between two POI markers.  Any POI closer
+  /// than this to an already-included marker is skipped to avoid overlap.
+  static const double _poiOverlapMinMeters = 200.0;
+
+  /// Map zoom level below which all POI map-layer markers are hidden.
+  static const double _poiHideZoomThreshold = 10.0;
+
+  /// Map zoom levels between [_poiHideZoomThreshold] and this threshold show
+  /// cluster badges instead of individual POI icons.
+  static const double _poiClusterZoomThreshold = 13.0;
+
+  /// Route-corridor half-width (metres) used when checking whether a POI is
+  /// close enough to the active route to be considered "ahead".
+  static const double _poiRouteCorridorMeters = 2000.0;
+
+  /// Minimum number of closest-ahead POIs that are always included even when
+  /// the overlap-dedup pass would otherwise skip them.
+  static const int _poiMinAheadForced = 3;
+
+  /// Maximum number of route-point indices to scan ahead of [_truckIndex]
+  /// when searching for each POI's nearest route point.  Limits O(n×m)
+  /// complexity on long routes with many decoded waypoints.
+  static const int _poiRoutePointScanLimit = 2000;
+
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
@@ -2296,46 +2337,54 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// warning-triangle badge and an orange "Suspect Location" label.
   ///
   /// Tapping a marker shows a dialog with the POI name.
+  ///
+  /// Smart filtering rules (GPS-app style):
+  ///   • zoom < [_poiHideZoomThreshold]  → no markers shown
+  ///   • zoom [_poiHideZoomThreshold]–[_poiClusterZoomThreshold] → cluster badges
+  ///   • zoom > [_poiClusterZoomThreshold] → filtered individual markers
+  ///
+  /// Individual-marker selection:
+  ///   • While navigating: POIs ahead on route within [_poiRouteMaxAheadMiles],
+  ///     always including the [_poiMinAheadForced] closest, capped at
+  ///     [_poiMaxMarkers].
+  ///   • While browsing: POIs within [_poiNearbyRadiusMeters], capped at
+  ///     [_poiNearbyMaxMarkers].
+  ///   • Overlap dedup: markers within [_poiOverlapMinMeters] of an already-
+  ///     included marker are skipped (forced-ahead POIs are exempt).
   List<Marker> _buildAllPoiMarkers() {
-    if (_loadedPois.isEmpty) return const [];
+    if (_loadedPois.isEmpty || !_showTruckStops) return const [];
 
+    // ── Zoom gating ────────────────────────────────────────────────────────
+    final double zoom = _mapReady ? _mapController.camera.zoom : 15.0;
+    if (zoom < _poiHideZoomThreshold) return const [];
+
+    // ── Filtered candidate list ────────────────────────────────────────────
+    final List<PoiItem> filtered = _getFilteredPoisForDisplay();
+
+    // ── Zoom 10–13: cluster badges ─────────────────────────────────────────
+    if (zoom <= _poiClusterZoomThreshold) {
+      return _buildPoiClusterMarkers(filtered);
+    }
+
+    // ── Zoom > 13: individual markers ─────────────────────────────────────
     final List<Marker> markers = [];
-    int approxCount = 0;
     int suspectCount = 0;
 
-    for (final poi in _loadedPois) {
-      // ── Approx / unverified location filter ─────────────────────────────
-      // A POI is considered approximate when it has no entrance_lat/entrance_lng
-      // in the JSON data — meaning only a rough property-centre coordinate is
-      // available rather than the precise truck-access point.  Hide these from
-      // the driver's map; they are listed in the admin maintenance sheet.
-      if (poi.entranceLat == null) {
-        approxCount++;
-        continue;
-      }
-
-      // Guard against an empty icon stem so the asset key is never malformed.
+    for (final poi in filtered) {
       final String? assetKey = poi.icon.isNotEmpty
           ? 'assets/logo_brand_markers/${poi.icon}.png'
           : null;
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      // All POI types use the same GPS pin shape at a uniform size.
       Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
 
-      // Validate this POI's location.  Coordinates that fail the sanity check
-      // or are too far from the active route receive an orange warning badge.
       final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
       final bool isSuspect = _isPoiLocationSuspect(displayCoord,
           poiLabel: '"${poi.name}" (id=${poi.id})');
       if (isSuspect) suspectCount++;
       pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
-      // All verified POIs (entrance coords present) render at their precise
-      // entrance coordinate.  Weigh stations and non-weigh-station types alike
-      // use the same uniform pin; no additional "(approx)" label is needed
-      // because approximate POIs are already excluded above.
       markers.add(Marker(
         point: displayCoord,
         width: _kPoiPinSize,
@@ -2348,13 +2397,226 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ));
     }
 
-    debugPrint('[POI-VALIDATION] ${_loadedPois.length} POIs evaluated: '
-        '$approxCount approx (hidden), $suspectCount suspect, '
-        '${_loadedPois.length - approxCount - suspectCount} verified+valid. '
-        'Route active: ${_routePoints.isNotEmpty}. '
-        'Threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m.');
+    debugPrint('[POI] ${filtered.length} markers shown '
+        '(zoom=${zoom.toStringAsFixed(1)}, '
+        'navigating=$_isNavigating, suspect=$suspectCount).');
 
     return markers;
+  }
+
+  /// Returns the smart-filtered set of [PoiItem]s to render on the map.
+  ///
+  /// **Route priority (navigating):**
+  ///   1. Keep only POIs with verified entrance coords.
+  ///   2. Find each POI's nearest route-point index ≥ [_truckIndex].
+  ///   3. Skip POIs > [_poiRouteCorridorMeters] from the nearest route point.
+  ///   4. Compute miles-ahead along the route; skip if passed or > 50 mi.
+  ///   5. Sort by distance ahead (closest first).
+  ///   6. Always force-include the first [_poiMinAheadForced] entries.
+  ///   7. Dedup: skip POIs < [_poiOverlapMinMeters] from an already-selected
+  ///      marker (forced-ahead entries bypass this check).
+  ///   8. Cap at [_poiMaxMarkers] total.
+  ///
+  /// **Nearby filter (browsing):**
+  ///   1. Keep only POIs with verified entrance coords within
+  ///      [_poiNearbyRadiusMeters] of the current truck position.
+  ///   2. Sort by distance (closest first).
+  ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
+  List<PoiItem> _getFilteredPoisForDisplay() {
+    // Candidates: only POIs with verified entrance coordinates.
+    final List<PoiItem> candidates =
+        _loadedPois.where((p) => p.entranceLat != null).toList();
+    if (candidates.isEmpty) return const [];
+
+    final LatLng? pos = _truckPosition;
+
+    // ── Route-priority mode (navigating) ────────────────────────────────
+    if (_isNavigating && pos != null && _routePoints.isNotEmpty) {
+      // Score each candidate by its route-ahead distance.
+      final List<_ScoredPoi> scored = [];
+
+      for (final poi in candidates) {
+        final double poiLat = poi.displayLat;
+        final double poiLng = poi.displayLng;
+
+        // Find the nearest route point at or ahead of the truck index.
+        double nearestDist = double.infinity;
+        for (int i = _truckIndex; i < _routePoints.length; i++) {
+          final double d = geo.Geolocator.distanceBetween(
+            poiLat, poiLng,
+            _routePoints[i].latitude,
+            _routePoints[i].longitude,
+          );
+          if (d < nearestDist) nearestDist = d;
+          // Stop scanning once we're past [_poiRoutePointScanLimit] indices
+          // ahead of the truck to keep the inner loop O(n) bounded.
+          if (i > _truckIndex + _poiRoutePointScanLimit) break;
+        }
+
+        if (nearestDist > _poiRouteCorridorMeters) continue; // Off-route.
+
+        // Compute straight-line distance from truck to POI in miles.
+        final double milesAhead = _distanceMiles(
+          pos.latitude, pos.longitude, poiLat, poiLng);
+        if (milesAhead < _poiPassedThresholdMiles) continue; // Already passed.
+        if (milesAhead > _poiRouteMaxAheadMiles) continue;   // Too far ahead.
+
+        scored.add(_ScoredPoi(poi, milesAhead));
+      }
+
+      // Sort by distance ahead — closest first.
+      scored.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+
+      // Dedup + cap, always keeping first [_poiMinAheadForced] entries.
+      final List<PoiItem> result = [];
+      final List<LatLng> included = [];
+      final int forceCount = math.min(_poiMinAheadForced, scored.length);
+
+      for (int i = 0; i < scored.length; i++) {
+        if (result.length >= _poiMaxMarkers) break;
+        final PoiItem poi = scored[i].poi;
+        final LatLng coord = LatLng(poi.displayLat, poi.displayLng);
+        final bool forced = i < forceCount;
+
+        if (!forced) {
+          // Overlap check: skip if too close to an already-included marker.
+          bool tooClose = false;
+          for (final LatLng existing in included) {
+            if (geo.Geolocator.distanceBetween(
+                  coord.latitude, coord.longitude,
+                  existing.latitude, existing.longitude,
+                ) <
+                _poiOverlapMinMeters) {
+              tooClose = true;
+              break;
+            }
+          }
+          if (tooClose) continue;
+        }
+
+        result.add(poi);
+        included.add(coord);
+      }
+
+      debugPrint('[POI/Filter] navigating: ${result.length} POIs selected '
+          'from ${scored.length} ahead-on-route candidates '
+          '(${candidates.length} total with verified coords).');
+      return result;
+    }
+
+    // ── Nearby filter (browsing / no route) ──────────────────────────────
+    if (pos == null) return const [];
+
+    final List<_ScoredPoi> nearby = [];
+    for (final poi in candidates) {
+      final double d = geo.Geolocator.distanceBetween(
+        poi.displayLat, poi.displayLng,
+        pos.latitude, pos.longitude,
+      );
+      if (d <= _poiNearbyRadiusMeters) {
+        nearby.add(_ScoredPoi(poi, d / 1609.34)); // store distance in miles
+      }
+    }
+
+    // Sort by distance — closest first.
+    nearby.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+
+    // Dedup and cap.
+    final List<PoiItem> result = [];
+    final List<LatLng> included = [];
+
+    for (final scored in nearby) {
+      if (result.length >= _poiNearbyMaxMarkers) break;
+      final PoiItem poi = scored.poi;
+      final LatLng coord = LatLng(poi.displayLat, poi.displayLng);
+
+      bool tooClose = false;
+      for (final LatLng existing in included) {
+        if (geo.Geolocator.distanceBetween(
+              coord.latitude, coord.longitude,
+              existing.latitude, existing.longitude,
+            ) <
+            _poiOverlapMinMeters) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose) continue;
+
+      result.add(poi);
+      included.add(coord);
+    }
+
+    debugPrint('[POI/Filter] browsing: ${result.length} nearby POIs selected '
+        'from ${nearby.length} within '
+        '${(_poiNearbyRadiusMeters / 1609.34).toStringAsFixed(0)} mi.');
+    return result;
+  }
+
+  /// Builds cluster-badge [Marker]s for [pois] using a geographic bucket
+  /// strategy (0.1° grid ≈ 11 km), mirroring [_buildClusteredWarningMarkers].
+  ///
+  /// Tapping a cluster badge zooms to [_poiClusterZoomThreshold] + 0.5 so
+  /// the user can see individual markers on the next interaction.
+  List<Marker> _buildPoiClusterMarkers(List<PoiItem> pois) {
+    if (pois.isEmpty) return const [];
+
+    const double bucketSize = 0.1; // 0.1° ≈ 11 km per bucket cell
+    final Map<String, List<PoiItem>> clusters = {};
+    for (final poi in pois) {
+      final String key =
+          '${(poi.displayLat / bucketSize).round()},'
+          '${(poi.displayLng / bucketSize).round()}';
+      clusters.putIfAbsent(key, () => []).add(poi);
+    }
+
+    return clusters.values.map((members) {
+      final double lat =
+          members.map((p) => p.displayLat).reduce((a, b) => a + b) /
+              members.length;
+      final double lng =
+          members.map((p) => p.displayLng).reduce((a, b) => a + b) /
+              members.length;
+      final int count = members.length;
+
+      return Marker(
+        point: LatLng(lat, lng),
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: () {
+            _mapController.move(
+                LatLng(lat, lng), _poiClusterZoomThreshold + 0.5);
+          },
+          child: _buildPoiClusterBadge(count),
+        ),
+      );
+    }).toList();
+  }
+
+  /// Returns a circular blue cluster badge with a white count label.
+  Widget _buildPoiClusterBadge(int count) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E90FF),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          count > 99 ? '99+' : '$count',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
   }
 
   /// Returns the subset of [_loadedPois] that are considered approximate /
@@ -9324,28 +9586,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Sets up the individual (non-clustered) POI GeoJSON source and Mapbox
-  /// style layer, ensuring every POI is always visible at all zoom levels.
+  /// Sets up the Mapbox GeoJSON POI source and style layers with smart
+  /// clustering and zoom-based visibility, mirroring the flutter_map
+  /// [_buildAllPoiMarkers] behaviour for the Mapbox SDK layer.
   ///
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
-  /// Loads [PoiItem]s from `assets/locations.json`, converts them to GeoJSON,
-  /// registers all PNG icons from `assets/logo_brand_markers/`, then adds two
-  /// objects to the Mapbox style:
+  /// Adds the following objects to the Mapbox style:
   ///
-  ///   - `poi-source`       — non-clustered GeoJSON source
-  ///   - `poi-unclustered`  — symbol layer using each POI's icon image
+  ///   - `poi-source`        — clustered GeoJSON source (cluster at zoom ≤ 13)
+  ///   - `poi-clusters`      — circle layer for cluster bubbles (zoom ≤ 13)
+  ///   - `poi-cluster-count` — symbol layer for cluster count labels
+  ///   - `poi-unclustered`   — symbol layer for individual POIs (zoom > 13)
   ///
-  /// Clustering is intentionally disabled so that no POI is ever hidden inside
-  /// an aggregate cluster bubble.  `icon-allow-overlap` and
-  /// `icon-ignore-placement` are set to `true` so Mapbox's collision-avoidance
-  /// engine never suppresses any POI icon regardless of density or zoom level.
-  ///
-  /// Every entry in `locations.json` is converted to a GeoJSON feature
-  /// without any proximity or category filtering, so all truck stops, rest
-  /// areas, weigh stations, gas stations, truck parking areas, ports of entry,
-  /// and brake-check areas appear as markers wherever the user browses the map.
-  /// All rendering is done via Mapbox style layers — no Flutter widget markers
-  /// are created, keeping performance O(1) regardless of POI count.
+  /// Zoom-based visibility matches [_buildAllPoiMarkers]:
+  ///   • zoom < 10  → all POI layers hidden (min-zoom 10 on source)
+  ///   • zoom 10–13 → cluster bubbles only
+  ///   • zoom > 13  → individual POI icons
   Future<void> _setupPoiCluster() async {
     final mbx.MapboxMap? map = _mapboxMap;
     if (map == null) return;
@@ -9383,21 +9639,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // ─────────────────────────────────────────────────────────────────────
 
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
-      // Expected coordinate ranges for full USA / Canada coverage:
-      //   Latitude  : 24 – 83 °N  (southern US tip → northern Canada)
-      //   Longitude : –168 – –52 °W  (Alaska west coast → Newfoundland east)
-      //
-      // Browse mode: ALL POIs are passed to the GeoJSON source so every entry
-      //   appears on the clustered map with no distance filtering applied.
-      // Navigation mode: _getClosestTruckStopsAheadOnRoute handles route-aware
-      //   proximity filtering for the ahead-strip; the POI layer still shows
-      //   all POIs for spatial context.
-      //   // Navigation-only distance filter (retained for reference):
-      //   //   pois = pois.where((p) {
-      //   //     final distMeters = geo.Geolocator.distanceBetween(
-      //   //       driverLat, driverLng, p.lat, p.lng);
-      //   //     return distMeters / 1609.34 <= 50.0;
-      //   //   }).toList();
       debugPrint('POI dataset loaded: ${pois.length} total entries.');
       if (pois.isNotEmpty) {
         final int previewCount = math.min(20, pois.length);
@@ -9424,40 +9665,85 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       await registerPoiIcons(map.style);
 
-      // 2. Add the GeoJSON source without clustering so every individual POI
-      //    is always visible and accessible at all zoom levels.  Clustering is
-      //    intentionally disabled here because the requirement is that no POI
-      //    is ever hidden or merged into an aggregate bubble — drivers must be
-      //    able to tap any POI regardless of the current zoom level.
+      // 2. Add the GeoJSON source with clustering enabled.
+      //    cluster: true  → Mapbox groups nearby features at low zoom levels.
+      //    clusterMaxZoom: 12 → clusters expand into individuals above zoom 13.
+      //    clusterRadius: 50  → pixel radius for grouping neighbours.
       final Map<String, dynamic> geoJson = poisToGeoJson(pois);
       await map.style.addStyleSource(
         'poi-source',
         jsonEncode({
           'type': 'geojson',
           'data': geoJson,
-          'cluster': false, // Clustering disabled — every POI always shown individually.
+          'cluster': true,          // Enable Mapbox native clustering.
+          'clusterMaxZoom': 12,     // Clusters dissolve above zoom 13.
+          'clusterRadius': 50,      // Grouping radius in screen pixels.
+          'minzoom': 10,            // Hide all POIs below zoom 10.
         }),
       );
 
-      // 3. Individual POI icon layer — every POI is rendered at all zoom levels.
-      //    icon-allow-overlap and icon-ignore-placement ensure no icon is hidden
-      //    due to label-collision avoidance, guaranteeing full coverage.
-      //    A coalesce expression falls back to 'truck_parking' for any POI whose
-      //    specific icon PNG is absent, so every entry still renders.
+      // 3. Cluster circle layer — visible only at zoom 10–13.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-clusters',
+          'type': 'circle',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'minzoom': 10,
+          'maxzoom': 14,
+          'paint': {
+            'circle-color': '#1E90FF',
+            'circle-radius': [
+              'step', ['get', 'point_count'],
+              16, 10, 22, 50, 28,
+            ],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 4. Cluster count label layer.
+      await map.style.addStyleLayer(
+        jsonEncode({
+          'id': 'poi-cluster-count',
+          'type': 'symbol',
+          'source': 'poi-source',
+          'filter': ['has', 'point_count'],
+          'minzoom': 10,
+          'maxzoom': 14,
+          'layout': {
+            'text-field': '{point_count_abbreviated}',
+            'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+            'text-size': 13,
+          },
+          'paint': {
+            'text-color': '#ffffff',
+          },
+        }),
+        null,
+      );
+
+      // 5. Individual POI icon layer — only visible above zoom 13.
+      //    A coalesce expression falls back to 'truck_parking' for any POI
+      //    whose specific icon PNG is absent, so every entry still renders.
       await map.style.addStyleLayer(
         jsonEncode({
           'id': 'poi-unclustered',
           'type': 'symbol',
           'source': 'poi-source',
+          'filter': ['!', ['has', 'point_count']],
+          'minzoom': 13,
           'layout': {
             'icon-image': [
               'coalesce',
               ['image', ['get', 'icon']],
               ['image', 'truck_parking'],
             ],
-            'icon-size': 1.0, // Full native size — bold and clearly visible.
-            'icon-allow-overlap': true,   // Show even when icons overlap.
-            'icon-ignore-placement': true, // Never suppress due to placement rules.
+            'icon-size': 1.0,
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
           },
         }),
         null,
@@ -17117,4 +17403,13 @@ class _MapPoiAlertDialogState extends State<_MapPoiAlertDialog> {
       ],
     );
   }
+}
+
+// ── POI map-layer filtering helpers ──────────────────────────────────────────
+
+/// Pairs a [PoiItem] with its computed distance (in miles) for sorting.
+class _ScoredPoi {
+  const _ScoredPoi(this.poi, this.distanceMiles);
+  final PoiItem poi;
+  final double distanceMiles;
 }

@@ -2679,7 +2679,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         } else if (cat == 'weigh_station' && weighStationCount < _poiMaxWeighStationsAheadForced) {
           forced.add(poi);
           weighStationCount++;
-        } else if (_poiSafetyCategories.contains(cat) && cat != 'weigh_station' &&
+        } else if (_poiSafetyCategories.contains(cat) &&
             safetyCount < _poiMaxSafetyItemsAheadForced) {
           forced.add(poi);
           safetyCount++;
@@ -9886,7 +9886,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'cluster': true,          // Enable Mapbox native clustering.
           'clusterMaxZoom': 13,     // Clusters dissolve above zoom 13.5.
           'clusterRadius': 50,      // Grouping radius in screen pixels.
-          'minzoom': 10,            // Source tiles hidden below zoom 10.5.
+          'minzoom': 10.5,          // Hide source tiles below _poiHideZoomThreshold.
         }),
       );
 

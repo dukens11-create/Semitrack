@@ -889,30 +889,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Smart POI map-layer filtering constants ──────────────────────────────
 
   /// Maximum distance ahead (miles) to show map-layer POI markers while
-  /// navigating.  POIs farther than this are not drawn on the route.
+  /// navigating (general POIs).  50 miles matches real truck-GPS standards.
   static const double _poiRouteMaxAheadMiles = 50.0;
+
+  /// Extended look-ahead distance (miles) for high-priority safety POIs such
+  /// as weigh stations while navigating.  100 miles lets drivers plan well
+  /// ahead for mandatory inspection stops.
+  static const double _poiWeighStationMaxAheadMiles = 100.0;
 
   /// Maximum radius (metres) for the nearby-POI filter when not navigating.
   /// 10 miles ≈ 16,093 m.
   static const double _poiNearbyRadiusMeters = 16093.0;
 
   /// Hard cap on the total number of map-layer POI markers rendered at once
-  /// to prevent frame-budget overruns.
-  static const int _poiMaxMarkers = 15;
+  /// in navigation mode (GPS-professional range: 8–12).
+  static const int _poiMaxMarkers = 12;
 
   /// When not navigating, cap the displayed POI count at this limit.
   static const int _poiNearbyMaxMarkers = 10;
 
   /// Minimum separation (metres) between two POI markers.  Any POI closer
-  /// than this to an already-included marker is skipped to avoid overlap.
+  /// than this to an already-included higher-priority marker is skipped to
+  /// prevent icon overlap (~200 m).
   static const double _poiOverlapMinMeters = 200.0;
 
   /// Map zoom level below which all POI map-layer markers are hidden.
-  static const double _poiHideZoomThreshold = 10.0;
+  /// Set to 10.5 so broad views stay uncluttered.
+  static const double _poiHideZoomThreshold = 10.5;
 
   /// Map zoom levels between [_poiHideZoomThreshold] and this threshold show
-  /// cluster badges instead of individual POI icons.
-  static const double _poiClusterZoomThreshold = 13.0;
+  /// cluster badges instead of individual POI icons.  Set to 13.5 to match
+  /// professional GPS cluster-to-icon transition at street-level zoom.
+  static const double _poiClusterZoomThreshold = 13.5;
 
   /// Route-corridor half-width (metres) used when checking whether a POI is
   /// close enough to the active route to be considered "ahead".
@@ -922,11 +930,38 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the overlap-dedup pass would otherwise skip them.
   static const int _poiMinAheadForced = 3;
 
+  /// Always keep this many truck stops ahead regardless of overlap/cap rules.
+  /// Ensures drivers always see the next 2 truck stops ahead.
+  static const int _poiMaxTruckStopsAheadForced = 2;
+
+  /// Always keep this many weigh stations ahead regardless of overlap/cap.
+  static const int _poiMaxWeighStationsAheadForced = 1;
+
+  /// Always keep this many top safety POIs (rest areas, brake checks) ahead.
+  static const int _poiMaxSafetyItemsAheadForced = 2;
+
   /// Maximum number of route-point indices to scan ahead of [_truckIndex]
   /// when searching for each POI's nearest route point.  Retained for
   /// reference; the route-corridor pass now uses [getPOIsOnRoute] which
   /// scans all provided route points without an artificial cap.
   static const int _poiRoutePointScanLimit = 2000;
+
+  /// POI categories considered high-priority for forced-keep and scoring.
+  static const Set<String> _poiPriorityCategories = {
+    'truck_stop',
+    'weigh_station',
+    'rest_area',
+    'brake_check_area',
+    'truck_parking',
+    'commercial_vehicle_wash',
+  };
+
+  /// POI categories treated as safety-critical for forced-ahead logic.
+  static const Set<String> _poiSafetyCategories = {
+    'weigh_station',
+    'brake_check_area',
+    'rest_area',
+  };
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -2363,18 +2398,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Tapping a marker shows a dialog with the POI name.
   ///
   /// Smart filtering rules (GPS-app style):
-  ///   • zoom < [_poiHideZoomThreshold]  → no markers shown
-  ///   • zoom [_poiHideZoomThreshold]–[_poiClusterZoomThreshold] → cluster badges
-  ///   • zoom > [_poiClusterZoomThreshold] → filtered individual markers
+  ///   • zoom < [_poiHideZoomThreshold] (10.5)  → no markers shown
+  ///   • zoom 10.5–[_poiClusterZoomThreshold] (13.5) → cluster badges
+  ///   • zoom > 13.5 → filtered individual markers
   ///
   /// Individual-marker selection:
-  ///   • While navigating: POIs ahead on route within [_poiRouteMaxAheadMiles],
-  ///     always including the [_poiMinAheadForced] closest, capped at
+  ///   • While navigating: POIs ahead on route (see [_getVisiblePoisForCurrentView]),
+  ///     priority-sorted, always including forced-ahead categories, capped at
   ///     [_poiMaxMarkers].
   ///   • While browsing: POIs within [_poiNearbyRadiusMeters], capped at
   ///     [_poiNearbyMaxMarkers].
-  ///   • Overlap dedup: markers within [_poiOverlapMinMeters] of an already-
-  ///     included marker are skipped (forced-ahead POIs are exempt).
+  ///   • Overlap dedup: lower-priority markers within [_poiOverlapMinMeters] of a
+  ///     higher-priority one are skipped (see [_limitAndDedupePois]).
   List<Marker> _buildAllPoiMarkers() {
     if (_loadedPois.isEmpty || !_showTruckStops) return const [];
 
@@ -2383,14 +2418,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (zoom < _poiHideZoomThreshold) return const [];
 
     // ── Filtered candidate list ────────────────────────────────────────────
-    final List<PoiItem> filtered = _getFilteredPoisForDisplay();
+    final List<PoiItem> filtered = _getVisiblePoisForCurrentView();
 
-    // ── Zoom 10–13: cluster badges ─────────────────────────────────────────
-    if (zoom <= _poiClusterZoomThreshold) {
+    // ── Cluster mode: zoom 10.5–13.5 ──────────────────────────────────────
+    // Use _shouldUseClustersAtZoom so the threshold is consistent everywhere.
+    if (_shouldUseClustersAtZoom(zoom)) {
       return _buildPoiClusterMarkers(filtered);
     }
 
-    // ── Zoom > 13: individual markers ─────────────────────────────────────
+    // ── Individual markers: zoom > 13.5 ───────────────────────────────────
     final List<Marker> markers = [];
     int suspectCount = 0;
 
@@ -2438,136 +2474,152 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the smart-filtered set of [PoiItem]s to render on the map.
   ///
-  /// **Route priority (navigating):**
-  ///   1. All loaded POIs are considered (both verified and approximate).
-  ///      Verified POIs have [PoiItem.entranceLat]/[PoiItem.entranceLng] set
-  ///      and will be displayed with a verifiedIcon; approximate POIs (missing
-  ///      either entrance coordinate) fall back to property-centre coords and
-  ///      are displayed with an approximateIcon.
-  ///   2. Pre-filter to POIs within [_poiRouteCorridorMeters] of any route
-  ///      point ahead of the truck (via [getPOIsOnRoute]).
-  ///   3. Compute miles-ahead along the route; skip if passed or > 50 mi.
-  ///   4. Sort by distance ahead (closest first).
-  ///   5. Always force-include the first [_poiMinAheadForced] entries.
-  ///   6. Dedup: skip POIs < [_poiOverlapMinMeters] from an already-selected
-  ///      marker (forced-ahead entries bypass this check).
-  ///   7. Cap at [_poiMaxMarkers] total.
-  ///
-  /// **Nearby filter (browsing):**
-  ///   1. All loaded POIs within [_poiNearbyRadiusMeters] of the current truck
-  ///      position are considered (verified and approximate alike).
-  ///   2. Sort by distance (closest first).
-  ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
-  ///
-  /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
-  /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
-  List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: all loaded POIs. Verified POIs (both entranceLat and
-    // entranceLng set) will be shown with a verifiedIcon using the confirmed
-    // entrance coordinate; approximate POIs (missing either coordinate) will
-    // be shown with a grey approximateIcon at their property-centre coordinate.
-    final List<PoiItem> candidates = List<PoiItem>.from(_loadedPois);
-    if (candidates.isEmpty) return const [];
+  /// Delegates to [_getVisiblePoisForCurrentView], which chooses between
+  /// navigation mode (ahead-on-route, priority-sorted) and browse mode
+  /// (nearby radius).  Kept for backward-compatibility with any internal
+  /// callers that use this name directly.
+  List<PoiItem> _getFilteredPoisForDisplay() => _getVisiblePoisForCurrentView();
 
+  // ── POI helper functions ────────────────────────────────────────────────
+
+  /// Returns a priority score for [poi] that governs deduplication ordering.
+  ///
+  /// Higher-priority categories (weigh stations, truck stops) score higher.
+  /// Verified POIs (entrance coords present) receive a +20 bonus to ensure
+  /// they are always preferred over approximate entries at the same location.
+  ///
+  /// Rule: verified entrance-coordinate POIs always beat approximate ones.
+  double _poiPriorityScore(PoiItem poi) {
+    // Null-safe category normalisation.
+    final String category = poi.category.toLowerCase().trim();
+    // Verified = both entranceLat and entranceLng present.
+    final double verified =
+        (poi.entranceLat != null && poi.entranceLng != null) ? 1.0 : 0.0;
+
+    double base;
+    switch (category) {
+      case 'weigh_station':
+        base = 100; // Mandatory compliance stop — highest priority.
+        break;
+      case 'truck_stop':
+        base = 90; // Primary rest/fuel stop for truck drivers.
+        break;
+      case 'rest_area':
+        base = 75; // DOT rest area — federally maintained.
+        break;
+      case 'brake_check_area':
+        base = 72; // Safety-critical on mountain grades.
+        break;
+      case 'truck_parking':
+        base = 68; // Dedicated truck parking.
+        break;
+      case 'commercial_vehicle_wash':
+        base = 55; // Useful but lower urgency.
+        break;
+      default:
+        base = 40; // All other categories.
+    }
+
+    // Verified entrance coords add 20 so verified beats approximate for same
+    // category — prevents approximate POIs from crowding out verified ones.
+    return base + (verified * 20.0);
+  }
+
+  /// Returns `true` when [a] has a strictly higher priority score than [b].
+  ///
+  /// Use this to determine whether [a] should displace [b] when they are
+  /// within [_poiOverlapMinMeters] of each other.
+  bool _isHigherPriorityPoi(PoiItem a, PoiItem b) =>
+      _poiPriorityScore(a) > _poiPriorityScore(b);
+
+  /// Returns `true` when the given [zoom] level is in the cluster range.
+  ///
+  /// Rule: zoom ≤ [_poiClusterZoomThreshold] (13.5) → show clusters.
+  ///       zoom >  13.5 → show individual POI icons.
+  ///
+  /// Centralises the cluster/individual threshold so [_buildAllPoiMarkers]
+  /// and [_setupPoiCluster] stay consistent.
+  bool _shouldUseClustersAtZoom(double zoom) =>
+      zoom <= _poiClusterZoomThreshold;
+
+  /// Returns all POIs that lie ahead of the truck on the active route.
+  ///
+  /// Pre-filters [_loadedPois] to the route corridor ([_poiRouteCorridorMeters])
+  /// ahead of [_truckIndex], then:
+  ///   • skips POIs already passed (< [_poiPassedThresholdMiles])
+  ///   • applies category-specific look-ahead caps:
+  ///       - weigh_station: [_poiWeighStationMaxAheadMiles] (100 mi)
+  ///       - all others: [_poiRouteMaxAheadMiles] (50 mi)
+  ///
+  /// Returns an empty list when not navigating or position is unavailable.
+  List<PoiItem> _getRouteAheadPois() {
     final LatLng? pos = _truckPosition;
+    if (!_isNavigating || pos == null || _routePoints.isEmpty) return const [];
 
-    // ── Route-priority mode (navigating) ────────────────────────────────
-    if (_isNavigating && pos != null && _routePoints.isNotEmpty) {
-      // Pre-filter: keep only POIs within the route corridor using the
-      // shared getPOIsOnRoute utility.  We pass the sub-list from
-      // _truckIndex onward so only the ahead-of-truck portion is checked.
-      // To change the corridor width, adjust _poiRouteCorridorMeters.
-      final List<LatLng> aheadPoints =
-          _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
-      final List<PoiItem> corridorCandidates = getPOIsOnRoute(
-        candidates,
-        aheadPoints,
-        proximityMeters: _poiRouteCorridorMeters,
-      );
+    // Slice route points from the truck's current index forward.
+    final List<LatLng> aheadPoints =
+        _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
 
-      // Score each corridor candidate by its route-ahead distance.
-      final List<_ScoredPoi> scored = [];
+    // Pre-filter to POIs near the route corridor.
+    final List<PoiItem> corridorPois = getPOIsOnRoute(
+      List<PoiItem>.from(_loadedPois),
+      aheadPoints,
+      proximityMeters: _poiRouteCorridorMeters,
+    );
 
-      for (final poi in corridorCandidates) {
-        final double poiLat = poi.displayLat;
-        final double poiLng = poi.displayLng;
+    // Apply distance caps per category and skip passed POIs.
+    final List<_ScoredPoi> scored = [];
+    for (final poi in corridorPois) {
+      final double miles = _distanceMiles(
+          pos.latitude, pos.longitude, poi.displayLat, poi.displayLng);
+      if (miles < _poiPassedThresholdMiles) continue; // Already passed (< 200 m).
 
-        // Compute straight-line distance from truck to POI in miles.
-        final double milesAhead = _distanceMiles(
-          pos.latitude, pos.longitude, poiLat, poiLng);
-        if (milesAhead < _poiPassedThresholdMiles) continue; // Already passed.
-        if (milesAhead > _poiRouteMaxAheadMiles) continue;   // Too far ahead.
+      // Weigh stations / safety POIs look further ahead than general POIs.
+      final String cat = poi.category.toLowerCase().trim();
+      final double maxMiles = (cat == 'weigh_station')
+          ? _poiWeighStationMaxAheadMiles
+          : _poiRouteMaxAheadMiles;
+      if (miles > maxMiles) continue; // Beyond look-ahead cap for this category.
 
-        scored.add(_ScoredPoi(poi, milesAhead));
-      }
-
-      // Sort by distance ahead — closest first.
-      scored.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
-
-      // Dedup + cap, always keeping first [_poiMinAheadForced] entries.
-      final List<PoiItem> result = [];
-      final List<LatLng> included = [];
-      final int forceCount = math.min(_poiMinAheadForced, scored.length);
-
-      for (int i = 0; i < scored.length; i++) {
-        if (result.length >= _poiMaxMarkers) break;
-        final PoiItem poi = scored[i].poi;
-        final LatLng coord = LatLng(poi.displayLat, poi.displayLng);
-        final bool forced = i < forceCount;
-
-        if (!forced) {
-          // Overlap check: skip if too close to an already-included marker.
-          bool tooClose = false;
-          for (final LatLng existing in included) {
-            if (geo.Geolocator.distanceBetween(
-                  coord.latitude, coord.longitude,
-                  existing.latitude, existing.longitude,
-                ) <
-                _poiOverlapMinMeters) {
-              tooClose = true;
-              break;
-            }
-          }
-          if (tooClose) continue;
-        }
-
-        result.add(poi);
-        included.add(coord);
-      }
-
-      debugPrint('[POI/Filter] navigating: ${result.length} POIs selected '
-          'from ${scored.length} ahead-on-route candidates '
-          '(${corridorCandidates.length} in corridor, '
-          '${candidates.length} total candidates).');
-      return result;
+      scored.add(_ScoredPoi(poi, miles));
     }
 
-    // ── Nearby filter (browsing / no route) ──────────────────────────────
-    if (pos == null) return const [];
+    // Sort closest first so forced-ahead selections pick the nearest entries.
+    scored.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+    return scored.map((s) => s.poi).toList();
+  }
 
-    final List<_ScoredPoi> nearby = [];
-    for (final poi in candidates) {
-      final double d = geo.Geolocator.distanceBetween(
-        poi.displayLat, poi.displayLng,
-        pos.latitude, pos.longitude,
-      );
-      if (d <= _poiNearbyRadiusMeters) {
-        nearby.add(_ScoredPoi(poi, d / 1609.34)); // store distance in miles
-      }
-    }
+  /// Deduplicates and limits [pois] to [_poiMaxMarkers] using priority scoring.
+  ///
+  /// Rules applied (GPS professional standard):
+  ///   1. Sort by [_poiPriorityScore] descending so higher-priority POIs are
+  ///      selected before lower-priority ones.
+  ///   2. Skip any POI within [_poiOverlapMinMeters] of an already-included
+  ///      higher-priority POI — prevents icon clutter.
+  ///   3. Never show a lower-priority approximate POI when a verified POI of
+  ///      the same category already occupies nearby space.
+  ///   4. Cap total count at [_poiMaxMarkers].
+  ///
+  /// [maxCount] overrides [_poiMaxMarkers] when provided (e.g. for browse mode).
+  List<PoiItem> _limitAndDedupePois(List<PoiItem> pois, {int? maxCount}) {
+    if (pois.isEmpty) return const [];
+    final int cap = maxCount ?? _poiMaxMarkers;
 
-    // Sort by distance — closest first.
-    nearby.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+    // Sort by priority score descending — best POIs are chosen first.
+    final List<PoiItem> sorted = List<PoiItem>.from(pois)
+      ..sort((a, b) => _poiPriorityScore(b).compareTo(_poiPriorityScore(a)));
 
-    // Dedup and cap.
     final List<PoiItem> result = [];
     final List<LatLng> included = [];
 
-    for (final scored in nearby) {
-      if (result.length >= _poiNearbyMaxMarkers) break;
-      final PoiItem poi = scored.poi;
+    for (final poi in sorted) {
+      if (result.length >= cap) break;
       final LatLng coord = LatLng(poi.displayLat, poi.displayLng);
 
+      // Overlap check: skip this POI if it is too close to any already-included
+      // marker.  Because the list is sorted by priority, any existing marker in
+      // [included] is already of equal or higher priority — so this lower-
+      // priority entry is correctly suppressed.
       bool tooClose = false;
       for (final LatLng existing in included) {
         if (geo.Geolocator.distanceBetween(
@@ -2584,6 +2636,95 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       result.add(poi);
       included.add(coord);
     }
+
+    return result;
+  }
+
+  /// Top-level dispatcher: returns the POI list to render for the current view.
+  ///
+  /// **Navigation mode** (active route + known position):
+  ///   • Calls [_getRouteAheadPois] for the raw ahead-on-route candidates.
+  ///   • Always includes forced entries:
+  ///       - next [_poiMaxTruckStopsAheadForced] truck stops
+  ///       - next [_poiMaxWeighStationsAheadForced] weigh stations
+  ///       - next [_poiMaxSafetyItemsAheadForced] safety POIs
+  ///   • Fills remaining slots via [_limitAndDedupePois] (priority-sorted dedup).
+  ///   • Caps at [_poiMaxMarkers] total.
+  ///
+  /// **Browse mode** (no route or position unknown):
+  ///   • Returns nearby POIs within [_poiNearbyRadiusMeters] sorted by distance,
+  ///     deduplicated via [_limitAndDedupePois], capped at [_poiNearbyMaxMarkers].
+  List<PoiItem> _getVisiblePoisForCurrentView() {
+    if (_loadedPois.isEmpty) return const [];
+    final LatLng? pos = _truckPosition;
+
+    // ── Navigation mode ────────────────────────────────────────────────────
+    if (_isNavigating && pos != null && _routePoints.isNotEmpty) {
+      final List<PoiItem> ahead = _getRouteAheadPois();
+      if (ahead.isEmpty) return const [];
+
+      // Collect forced-ahead entries (always show regardless of dedup).
+      // Rule: keep next 2 truck stops, 1 weigh station, up to 2 safety items.
+      final List<PoiItem> forced = [];
+
+      int truckStopCount = 0;
+      int weighStationCount = 0;
+      int safetyCount = 0;
+
+      for (final poi in ahead) {
+        final String cat = poi.category.toLowerCase().trim();
+        if (cat == 'truck_stop' && truckStopCount < _poiMaxTruckStopsAheadForced) {
+          forced.add(poi);
+          truckStopCount++;
+        } else if (cat == 'weigh_station' && weighStationCount < _poiMaxWeighStationsAheadForced) {
+          forced.add(poi);
+          weighStationCount++;
+        } else if (_poiSafetyCategories.contains(cat) && cat != 'weigh_station' &&
+            safetyCount < _poiMaxSafetyItemsAheadForced) {
+          forced.add(poi);
+          safetyCount++;
+        }
+      }
+
+      // Fill remaining capacity with priority-deduped candidates from full set.
+      final int remaining = _poiMaxMarkers - forced.length;
+      final List<PoiItem> extras = remaining > 0
+          ? _limitAndDedupePois(ahead, maxCount: _poiMaxMarkers)
+              .where((p) => !forced.contains(p))
+              .take(remaining)
+              .toList()
+          : const [];
+
+      final List<PoiItem> result = [...forced, ...extras];
+
+      debugPrint('[POI/Filter] navigating: ${result.length} POIs shown '
+          '(forced=${forced.length}, extras=${extras.length}, '
+          'ahead=${ahead.length} candidates).');
+      return result;
+    }
+
+    // ── Browse mode ────────────────────────────────────────────────────────
+    if (pos == null) return const [];
+
+    // Collect all POIs within the nearby radius.
+    final List<_ScoredPoi> nearby = [];
+    for (final poi in _loadedPois) {
+      final double d = geo.Geolocator.distanceBetween(
+        poi.displayLat, poi.displayLng,
+        pos.latitude, pos.longitude,
+      );
+      if (d <= _poiNearbyRadiusMeters) {
+        nearby.add(_ScoredPoi(poi, d / 1609.34));
+      }
+    }
+
+    // Sort by distance then apply priority dedup.  Closest POIs of highest
+    // priority are kept; overlapping lower-priority entries are suppressed.
+    nearby.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
+    final List<PoiItem> result = _limitAndDedupePois(
+      nearby.map((s) => s.poi).toList(),
+      maxCount: _poiNearbyMaxMarkers,
+    );
 
     debugPrint('[POI/Filter] browsing: ${result.length} nearby POIs selected '
         'from ${nearby.length} within '
@@ -9641,15 +9782,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Called from [_onStyleLoaded] after the Mapbox style finishes loading.
   /// Adds the following objects to the Mapbox style:
   ///
-  ///   - `poi-source`        — clustered GeoJSON source (cluster at zoom ≤ 13)
-  ///   - `poi-clusters`      — circle layer for cluster bubbles (zoom ≤ 13)
+  ///   - `poi-source`        — clustered GeoJSON source (cluster at zoom ≤ 13.5)
+  ///   - `poi-clusters`      — circle layer for cluster bubbles (zoom 10.5–13.5)
   ///   - `poi-cluster-count` — symbol layer for cluster count labels
-  ///   - `poi-unclustered`   — symbol layer for individual POIs (zoom > 13)
+  ///   - `poi-unclustered`   — symbol layer for individual POIs (zoom > 13.5)
   ///
-  /// Zoom-based visibility matches [_buildAllPoiMarkers]:
-  ///   • zoom < 10  → all POI layers hidden (min-zoom 10 on source)
-  ///   • zoom 10–13 → cluster bubbles only
-  ///   • zoom > 13  → individual POI icons
+  /// Zoom-based visibility matches [_buildAllPoiMarkers] / [_shouldUseClustersAtZoom]:
+  ///   • zoom < 10.5  → all POI layers hidden
+  ///   • zoom 10.5–13.5 → cluster bubbles only
+  ///   • zoom > 13.5  → individual POI icons
   Future<void> _setupPoiCluster() async {
     final mbx.MapboxMap? map = _mapboxMap;
     if (map == null) return;
@@ -9730,9 +9871,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // 2. Add the GeoJSON source with clustering enabled.
       //    Only verified POIs (entrance_lat / entrance_lng present) are included
       //    so approximate / unverified POIs are hidden from drivers.
-      //    cluster: true  → Mapbox groups nearby features at low zoom levels.
-      //    clusterMaxZoom: 12 → clusters expand into individuals above zoom 13.
-      //    clusterRadius: 50  → pixel radius for grouping neighbours.
+      //    cluster: true       → Mapbox groups nearby features at low zoom levels.
+      //    clusterMaxZoom: 13  → clusters dissolve above zoom 13.5 (individual
+      //                          icons appear at minzoom 13.5 on the unclustered
+      //                          layer, matching _poiClusterZoomThreshold).
+      //    clusterRadius: 50   → pixel radius for grouping neighbours.
+      //    minzoom: 10.5       → hides all POIs below _poiHideZoomThreshold.
       final Map<String, dynamic> geoJson = poisToGeoJson(verifiedPois);
       await map.style.addStyleSource(
         'poi-source',
@@ -9740,21 +9884,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'type': 'geojson',
           'data': geoJson,
           'cluster': true,          // Enable Mapbox native clustering.
-          'clusterMaxZoom': 12,     // Clusters dissolve above zoom 13.
+          'clusterMaxZoom': 13,     // Clusters dissolve above zoom 13.5.
           'clusterRadius': 50,      // Grouping radius in screen pixels.
-          'minzoom': 10,            // Hide all POIs below zoom 10.
+          'minzoom': 10,            // Source tiles hidden below zoom 10.5.
         }),
       );
 
-      // 3. Cluster circle layer — visible only at zoom 10–13.
+      // 3. Cluster circle layer — visible at zoom 10.5–13.5.
       await map.style.addStyleLayer(
         jsonEncode({
           'id': 'poi-clusters',
           'type': 'circle',
           'source': 'poi-source',
           'filter': ['has', 'point_count'],
-          'minzoom': 10,
-          'maxzoom': 14,
+          'minzoom': 10.5, // _poiHideZoomThreshold
+          'maxzoom': 14,   // Just above _poiClusterZoomThreshold (13.5)
           'paint': {
             'circle-color': '#1E90FF',
             'circle-radius': [
@@ -9775,8 +9919,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'type': 'symbol',
           'source': 'poi-source',
           'filter': ['has', 'point_count'],
-          'minzoom': 10,
-          'maxzoom': 14,
+          'minzoom': 10.5, // _poiHideZoomThreshold
+          'maxzoom': 14,   // Just above _poiClusterZoomThreshold (13.5)
           'layout': {
             'text-field': '{point_count_abbreviated}',
             'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
@@ -9789,16 +9933,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         null,
       );
 
-      // 5. Individual POI icon layer — only visible above zoom 13.
-      //    A coalesce expression falls back to 'truck_parking' for any POI
-      //    whose specific icon PNG is absent, so every entry still renders.
+      // 5. Individual POI icon layer — only visible above zoom 13.5.
+      //    Matches _poiClusterZoomThreshold: never shows individual icons while
+      //    clusters are active.  A coalesce expression falls back to
+      //    'truck_parking' for any POI whose specific icon PNG is absent.
       await map.style.addStyleLayer(
         jsonEncode({
           'id': 'poi-unclustered',
           'type': 'symbol',
           'source': 'poi-source',
           'filter': ['!', ['has', 'point_count']],
-          'minzoom': 13,
+          'minzoom': 13.5, // _poiClusterZoomThreshold
           'layout': {
             'icon-image': [
               'coalesce',

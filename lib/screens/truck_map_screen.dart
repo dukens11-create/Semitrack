@@ -13,6 +13,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
@@ -764,7 +765,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// when the filtered POI list has not materially changed between refreshes.
   String _lastRoutePoiSourceHash = '';
 
-
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -981,7 +981,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Maximum safety/service POIs (rest areas, brake check, port of entry)
   /// surfaced in the route-only layer.
   static const int _routePoiSafetyMax = 2;
-
 
   // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
@@ -1200,6 +1199,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all POIs from locations.json so _buildAllPoiMarkers() can display
     // every POI on the map without requiring the Mapbox style cluster setup.
     _loadPoisForMap();
+    // Restore persisted POI category toggle state so driver preferences survive
+    // app restarts.
+    _loadNavSettings();
+  }
+
+  /// Loads persisted [NavSettingsModel] state from [SharedPreferences].
+  ///
+  /// Called once from [initState].  A [setState] rebuild is requested after
+  /// loading so that any restored category toggle changes take effect on the
+  /// already-visible map.
+  Future<void> _loadNavSettings() async {
+    await _navSettings.loadFromPrefs();
+    if (mounted) setState(() {});
   }
 
   /// Loads every [PoiItem] from `assets/locations.json` into [_loadedPois] so
@@ -2538,12 +2550,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
   /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
   List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: all loaded POIs. Verified POIs (verified=true and both
-    // entranceLat / entranceLng set) will be shown with a verified marker
-    // using the confirmed entrance coordinate; approximate POIs (verified=false
-    // or missing either coordinate) will be shown with a grey approximate
-    // marker at their property-centre coordinate.
-    final List<PoiItem> candidates = List<PoiItem>.from(_loadedPois);
+    // Candidates: all loaded POIs. Verified POIs (both entranceLat and
+    // entranceLng set) will be shown with a verifiedIcon using the confirmed
+    // entrance coordinate; approximate POIs (missing either coordinate) will
+    // be shown with a grey approximateIcon at their property-centre coordinate.
+    // Apply Places Filter category toggles before any further processing so
+    // disabled categories never appear in route-ahead or browse sources.
+    final List<PoiItem> candidates =
+        _applyPoiCategoryFilters(List<PoiItem>.from(_loadedPois));
     if (candidates.isEmpty) return const [];
 
     final LatLng? pos = _truckPosition;
@@ -2648,8 +2662,64 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return result;
   }
 
+  // ── POI category toggle helpers ──────────────────────────────────────────
+
+  /// Returns `true` when [category] is enabled by the driver's Places Filter
+  /// settings in [_navSettings].
+  ///
+  /// [category] values match the `category` field in `assets/locations.json`
+  /// (e.g. `'truck_stop'`, `'weigh_station'`).
+  bool _isPoiCategoryEnabled(String category) {
+    switch (category.toLowerCase().trim()) {
+      case 'truck_stop':
+        return _navSettings.showTruckStops;
+      case 'weigh_station':
+        return _navSettings.showWeighStations;
+      case 'rest_area':
+        return _navSettings.showRestAreas;
+      case 'brake_check_area':
+        return _navSettings.showBrakeCheckAreas;
+      case 'truck_parking':
+        return _navSettings.showTruckParking;
+      case 'commercial_vehicle_wash':
+        return _navSettings.showTruckWash;
+      case 'weather_alert':
+        return _navSettings.showWeatherAlerts;
+      case 'warning_sign':
+        return _navSettings.showWarningSigns;
+      case 'tollbooth':
+        return _navSettings.showTollbooths;
+      case 'camera_511':
+        return _navSettings.show511Cameras;
+      default:
+        return true; // Unknown categories are shown by default.
+    }
+  }
+
+  /// Filters [pois] to only those whose category is currently enabled in the
+  /// driver's Places Filter settings.
+  ///
+  /// Call this before any route-ahead or browse POI source build to ensure
+  /// disabled categories are excluded everywhere.
+  List<PoiItem> _applyPoiCategoryFilters(List<PoiItem> pois) {
+    return pois
+        .where((p) => _isPoiCategoryEnabled(p.category))
+        .toList(growable: false);
+  }
+
+  /// Triggers an immediate map refresh so that changes to the Places Filter
+  /// category toggles take effect without requiring an app restart.
+  ///
+  /// Call this whenever a category toggle changes (e.g. inside the
+  /// [NavSettingsScreen.onChanged] callback).
+  Future<void> _refreshAllPoiSourcesForSettingsChange() async {
+    if (!mounted) return;
+    setState(() {});
+    debugPrint('[POI] Category toggle changed — refreshed all POI sources.');
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
   /// Returns a numeric priority score for [poi] used by [_limitAndDedupePois]
-  /// to decide which POI wins when two POIs overlap or are within the minimum
   /// separation distance.
   ///
   /// Higher-priority categories (safety-critical, high-utility) receive a
@@ -2742,7 +2812,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     return result;
   }
-
 
   /// Builds cluster-badge [Marker]s for [pois] using a geographic bucket
   /// strategy (0.1° grid ≈ 11 km), mirroring [_buildClusteredWarningMarkers].
@@ -8707,7 +8776,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             // Sync _isSatelliteView so the satellite-toggle button stays in step.
             _isSatelliteView = _navSettings.mapType == 1;
             _applyAudioSettings();
-            setState(() {});
+            // Persist the updated settings and immediately refresh all POI
+            // sources so category-toggle changes appear on the map without a
+            // restart.
+            _navSettings.saveToPrefs();
+            _refreshAllPoiSourcesForSettingsChange();
           },
         ),
       ),
@@ -10284,7 +10357,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       debugPrint('TruckMapScreen: _refreshRoutePoiSourceIfNeeded failed: $e');
     }
   }
-
 
   /// Returns a full-screen [MapWidget] using the Mapbox Maps Flutter SDK.
   Widget _buildMap() {

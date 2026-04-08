@@ -13,6 +13,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
@@ -764,7 +765,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// when the filtered POI list has not materially changed between refreshes.
   String _lastRoutePoiSourceHash = '';
 
-
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -1199,6 +1199,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all POIs from locations.json so _buildAllPoiMarkers() can display
     // every POI on the map without requiring the Mapbox style cluster setup.
     _loadPoisForMap();
+    // Restore persisted POI category toggle state so driver preferences survive
+    // app restarts.
+    _loadNavSettings();
+  }
+
+  /// Loads persisted [NavSettingsModel] state from [SharedPreferences].
+  ///
+  /// Called once from [initState].  A [setState] rebuild is requested after
+  /// loading so that any restored category toggle changes take effect on the
+  /// already-visible map.
+  Future<void> _loadNavSettings() async {
+    await _navSettings.loadFromPrefs();
+    if (mounted) setState(() {});
   }
 
   /// Loads every [PoiItem] from `assets/locations.json` into [_loadedPois] so
@@ -2389,6 +2402,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Returns `true` when the map should display POI cluster badges instead of
+  /// individual POI markers at the given [zoom] level.
+  ///
+  /// Clustering is used at lower zoom levels (wider view) to avoid overwhelming
+  /// the driver with dozens of overlapping pins.  Once the driver zooms in past
+  /// the [_poiClusterZoomThreshold] the map switches to individual GPS-pin
+  /// markers so each POI can be tapped and identified precisely.
+  ///
+  /// • zoom < [_poiClusterZoomThreshold]  → `true`  — show cluster badges
+  /// • zoom ≥ [_poiClusterZoomThreshold]  → `false` — show individual POI markers
+  ///
+  /// Used by [_buildAllPoiMarkers] to branch between
+  /// [_buildPoiClusterMarkers] and per-POI [Marker] construction.
+  bool _shouldUseClustersAtZoom(double zoom) => zoom < _poiClusterZoomThreshold;
+
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
@@ -2419,9 +2447,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Tapping a marker shows a dialog with the POI name.
   ///
   /// Smart filtering rules (GPS-app style):
-  ///   • zoom < [_poiHideZoomThreshold]  → no markers shown
-  ///   • zoom [_poiHideZoomThreshold]–[_poiClusterZoomThreshold] → cluster badges
-  ///   • zoom > [_poiClusterZoomThreshold] → filtered individual markers
+  ///   • zoom < [_poiHideZoomThreshold]          → no markers shown
+  ///   • [_shouldUseClustersAtZoom] returns true  → cluster badges
+  ///   • [_shouldUseClustersAtZoom] returns false → filtered individual markers
   ///
   /// Individual-marker selection:
   ///   • While navigating: POIs ahead on route within [_poiRouteMaxAheadMiles],
@@ -2441,12 +2469,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Filtered candidate list ────────────────────────────────────────────
     final List<PoiItem> filtered = _getFilteredPoisForDisplay();
 
-    // ── Zoom 10–13: cluster badges ─────────────────────────────────────────
-    if (zoom <= _poiClusterZoomThreshold) {
+    // ── Zoom 10–13.5: cluster badges ──────────────────────────────────────
+    // _shouldUseClustersAtZoom returns true strictly below 13.5 (zoom < 13.5),
+    // so at exactly 13.5 the map transitions to individual markers.  This is
+    // intentional: the helper implements the user-specified boundary of 13.5.
+    if (_shouldUseClustersAtZoom(zoom)) {
       return _buildPoiClusterMarkers(filtered);
     }
 
-    // ── Zoom > 13: individual markers ─────────────────────────────────────
+    // ── Zoom ≥ 13.5: individual markers ───────────────────────────────────
     final List<Marker> markers = [];
     int suspectCount = 0;
 
@@ -2519,12 +2550,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
   /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
   List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: all loaded POIs. Verified POIs (verified=true and both
-    // entranceLat / entranceLng set) will be shown with a verified marker
-    // using the confirmed entrance coordinate; approximate POIs (verified=false
-    // or missing either coordinate) will be shown with a grey approximate
-    // marker at their property-centre coordinate.
-    final List<PoiItem> candidates = List<PoiItem>.from(_loadedPois);
+    // Candidates: all loaded POIs. Verified POIs (both entranceLat and
+    // entranceLng set) will be shown with a verifiedIcon using the confirmed
+    // entrance coordinate; approximate POIs (missing either coordinate) will
+    // be shown with a grey approximateIcon at their property-centre coordinate.
+    // Apply Places Filter category toggles before any further processing so
+    // disabled categories never appear in route-ahead or browse sources.
+    final List<PoiItem> candidates =
+        _applyPoiCategoryFilters(List<PoiItem>.from(_loadedPois));
     if (candidates.isEmpty) return const [];
 
     final LatLng? pos = _truckPosition;
@@ -2614,34 +2647,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
 
-    // Sort by distance — closest first.
-    nearby.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
-
-    // Dedup and cap.
-    final List<PoiItem> result = [];
-    final List<LatLng> included = [];
-
-    for (final scored in nearby) {
-      if (result.length >= _poiNearbyMaxMarkers) break;
-      final PoiItem poi = scored.poi;
-      final LatLng coord = LatLng(poi.displayLat, poi.displayLng);
-
-      bool tooClose = false;
-      for (final LatLng existing in included) {
-        if (geo.Geolocator.distanceBetween(
-              coord.latitude, coord.longitude,
-              existing.latitude, existing.longitude,
-            ) <
-            _poiOverlapMinMeters) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (tooClose) continue;
-
-      result.add(poi);
-      included.add(coord);
-    }
+    // Priority-aware limit and dedup: sorts by _poiPriorityScore (higher
+    // first), removes lower-priority POIs within _poiOverlapMinMeters of a
+    // higher-priority one, and caps at _poiNearbyMaxMarkers.
+    final List<PoiItem> result = _limitAndDedupePois(
+      nearby.map((s) => s.poi).toList(),
+      maxCount: _poiNearbyMaxMarkers,
+      minDistanceMeters: _poiOverlapMinMeters,
+    );
 
     debugPrint('[POI/Filter] browsing: ${result.length} nearby POIs selected '
         'from ${nearby.length} within '
@@ -2649,6 +2662,63 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return result;
   }
 
+  // ── POI category toggle helpers ──────────────────────────────────────────
+
+  /// Returns `true` when [category] is enabled by the driver's Places Filter
+  /// settings in [_navSettings].
+  ///
+  /// [category] values match the `category` field in `assets/locations.json`
+  /// (e.g. `'truck_stop'`, `'weigh_station'`).
+  bool _isPoiCategoryEnabled(String category) {
+    switch (category.toLowerCase().trim()) {
+      case 'truck_stop':
+        return _navSettings.showTruckStops;
+      case 'weigh_station':
+        return _navSettings.showWeighStations;
+      case 'rest_area':
+        return _navSettings.showRestAreas;
+      case 'brake_check_area':
+        return _navSettings.showBrakeCheckAreas;
+      case 'truck_parking':
+        return _navSettings.showTruckParking;
+      case 'commercial_vehicle_wash':
+        return _navSettings.showTruckWash;
+      case 'weather_alert':
+        return _navSettings.showWeatherAlerts;
+      case 'warning_sign':
+        return _navSettings.showWarningSigns;
+      case 'tollbooth':
+        return _navSettings.showTollbooths;
+      case 'camera_511':
+        return _navSettings.show511Cameras;
+      default:
+        return true; // Unknown categories are shown by default.
+    }
+  }
+
+  /// Filters [pois] to only those whose category is currently enabled in the
+  /// driver's Places Filter settings.
+  ///
+  /// Call this before any route-ahead or browse POI source build to ensure
+  /// disabled categories are excluded everywhere.
+  List<PoiItem> _applyPoiCategoryFilters(List<PoiItem> pois) {
+    return pois
+        .where((p) => _isPoiCategoryEnabled(p.category))
+        .toList(growable: false);
+  }
+
+  /// Triggers an immediate map refresh so that changes to the Places Filter
+  /// category toggles take effect without requiring an app restart.
+  ///
+  /// Call this whenever a category toggle changes (e.g. inside the
+  /// [NavSettingsScreen.onChanged] callback).
+  Future<void> _refreshAllPoiSourcesForSettingsChange() async {
+    if (!mounted) return;
+    setState(() {});
+    debugPrint('[POI] Category toggle changed — refreshed all POI sources.');
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
   /// Returns a numeric priority score for [poi] used by [_limitAndDedupePois]
   /// to decide which POI wins when two POIs overlap or are within the minimum
   /// separation distance.
@@ -4390,7 +4460,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // destination, then clear the rerouting lock and status indicator.
     fetchRoute(fromPosition: current).then((_) {
       _isRerouting = false;
-      if (mounted) setState(() => _navStatus = null);
+      if (mounted) {
+        setState(() => _navStatus = null);
+        // Force-refresh the route-POI source immediately after the reroute
+        // completes so markers reflect the new route geometry without waiting
+        // for the next GPS-update throttle window.
+        _refreshRoutePoiSourceIfNeeded(force: true);
+      }
     });
   }
 
@@ -6891,7 +6967,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Ahead-on-route weigh station logic ──────────────────────────────────────
 
-
   /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
   /// segment of [routePoints].
   ///
@@ -8704,7 +8779,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             // Sync _isSatelliteView so the satellite-toggle button stays in step.
             _isSatelliteView = _navSettings.mapType == 1;
             _applyAudioSettings();
-            setState(() {});
+            // Persist the updated settings and immediately refresh all POI
+            // sources so category-toggle changes appear on the map without a
+            // restart.
+            _navSettings.saveToPrefs();
+            _refreshAllPoiSourcesForSettingsChange();
           },
         ),
       ),
@@ -9740,10 +9819,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Called by [MapWidget] once the Mapbox style has finished loading.
   ///
   /// Triggers [_setupPoiCluster] to register icons and add the individual POI
-  /// source and layer to the map style.
+  /// source and layer to the map style.  Also ensures the navigation-only
+  /// route POI source and layer are present so they are ready before the first
+  /// GPS fix.
   void _onStyleLoaded(mbx.StyleLoadedEventData _) {
     _setupPoiCluster();
     _enhanceRoadLabels();
+    // Set up the route-only POI source and layer immediately so the first
+    // navigation GPS fix can push data without a style-existence check delay.
+    _ensureRoutePoiSourceAndLayer();
   }
 
   /// Boosts the visibility of road and highway name labels on the Mapbox style.
@@ -9998,14 +10082,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   // ── Route-only POI source + layer helpers ────────────────────────────────
-
-  /// Returns true when POI clustering (rather than individual icons) should be
-  /// used at [zoom].  Cluster at zoom < 13.5; show individuals above that.
-  ///
-  /// Use this helper when deciding whether to render cluster badges vs.
-  /// individual POI icons, e.g. in gesture handlers, camera-change callbacks,
-  /// or any code that adjusts layer visibility based on the current map zoom.
-  bool _shouldUseClustersAtZoom(double zoom) => zoom < 13.5;
 
   /// Ensures that the `route-pois-source` GeoJSON source and `route-pois-layer`
   /// symbol layer exist in the current Mapbox style.
@@ -13746,14 +13822,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   //     • Alert list          → populate from _navAlerts
 
   // ── GPS-style navigation overlay widgets ────────────────────────────────────
-
-  /// Extracts a short highway shield label from [roadName] if it matches a
-  /// known highway pattern (e.g. "I-5" → "5", "US-95" → "95", "CA-88" → "88").
-  ///
-  /// Returns `null` when [roadName] is not a recognisable highway reference.
-  ///
-  /// To support additional state/country prefixes, extend the alternation in
-  /// the pattern (e.g. add `|TX-|NY-`).
 
   /// Parses [roadName] into a structured [_HighwayShield] when it matches a
   /// known highway pattern.  Returns `null` for non-highway names.

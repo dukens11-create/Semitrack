@@ -41,8 +41,6 @@ POI data. Entries with an existing non-empty name are never modified.
 **Marker asset:** `assets/logo_brand_markers/truck_stop_default.png` is used as
 the map icon for these generic stops (already bundled in the app).
 
-
-
 ## Production integrations still required
 - HERE / TomTom / Mapbox / custom routing graph
 - real-time traffic

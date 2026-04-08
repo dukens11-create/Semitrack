@@ -2781,81 +2781,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return result;
   }
 
-  /// Top-level dispatcher: returns the POI list to render for the current view.
+  /// Returns the POI list to render for the current view.
   ///
-  /// **Navigation mode** (active route + known position):
-  ///   • Calls [_getRouteAheadPois] for the raw ahead-on-route candidates.
-  ///   • Always includes forced entries:
-  ///       - next [_poiMaxTruckStopsAheadForced] truck stops
-  ///       - next [_poiMaxWeighStationsAheadForced] weigh stations
-  ///       - next [_poiMaxSafetyItemsAheadForced] safety POIs
-  ///   • Fills remaining slots via [_limitAndDedupePois] (priority-sorted dedup).
-  ///   • Caps at [_poiMaxMarkers] total.
-  ///
-  /// **Browse mode** (no route or position unknown):
-  ///   • Returns nearby POIs within [_poiNearbyRadiusMeters] sorted by distance,
-  ///     deduplicated via [_limitAndDedupePois], capped at [_poiNearbyMaxMarkers].
+  /// All POIs within [_poiNearbyRadiusMeters] (≈10 mi) of the current truck
+  /// position are shown at all times — whether or not navigation/route is
+  /// active. Route membership is NOT used as a filter here. The returned list
+  /// is sorted by distance, deduplicated via [_limitAndDedupePois], and capped
+  /// at [_poiNearbyMaxMarkers].
   List<PoiItem> _getVisiblePoisForCurrentView() {
     if (_loadedPois.isEmpty) return const [];
     final LatLng? pos = _truckPosition;
 
-    // ── Navigation mode ────────────────────────────────────────────────────
-    if (_isNavigating && pos != null && _routePoints.isNotEmpty) {
-      final List<PoiItem> ahead = _getRouteAheadPois();
-      if (ahead.isEmpty) return const [];
-
-      // Collect forced-ahead entries (always show regardless of dedup).
-      // Rule: keep next 2 truck stops, 1 weigh station, up to 2 safety items.
-      final List<PoiItem> forced = [];
-
-      int truckStopCount = 0;
-      int weighStationCount = 0;
-      int safetyCount = 0;
-
-      for (final poi in ahead) {
-        final String cat = poi.category.toLowerCase().trim();
-        final bool needsTruckStop =
-            cat == 'truck_stop' && truckStopCount < _poiMaxTruckStopsAheadForced;
-        final bool needsWeighStation =
-            cat == 'weigh_station' && weighStationCount < _poiMaxWeighStationsAheadForced;
-        // Safety slot: rest_area / brake_check_area (weigh_station handled above).
-        final bool needsSafetyPoi =
-            _poiSafetyCategories.contains(cat) && safetyCount < _poiMaxSafetyItemsAheadForced;
-
-        if (needsTruckStop) {
-          forced.add(poi);
-          truckStopCount++;
-        } else if (needsWeighStation) {
-          forced.add(poi);
-          weighStationCount++;
-        } else if (needsSafetyPoi) {
-          forced.add(poi);
-          safetyCount++;
-        }
-      }
-
-      // Fill remaining capacity with priority-deduped candidates from full set.
-      // Use a Set for O(1) membership checks in the where() filter.
-      // Pass `remaining` as maxCount so _limitAndDedupePois only processes
-      // as many POIs as are actually needed (avoids wasted dedup work).
-      final Set<PoiItem> forcedSet = Set<PoiItem>.from(forced);
-      final int remaining = _poiMaxMarkers - forced.length;
-      final List<PoiItem> extras = remaining > 0
-          ? _limitAndDedupePois(ahead, maxCount: remaining)
-              .where((p) => !forcedSet.contains(p))
-              .take(remaining)
-              .toList()
-          : const [];
-
-      final List<PoiItem> result = [...forced, ...extras];
-
-      debugPrint('[POI/Filter] navigating: ${result.length} POIs shown '
-          '(forced=${forced.length}, extras=${extras.length}, '
-          'ahead=${ahead.length} candidates).');
-      return result;
-    }
-
-    // ── Browse mode ────────────────────────────────────────────────────────
     if (pos == null) return const [];
 
     // Collect all POIs within the nearby radius.

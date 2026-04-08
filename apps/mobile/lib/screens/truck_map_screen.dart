@@ -2432,17 +2432,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
-  /// **Verified vs. approximate icons (data quality):** Every POI is shown on
-  /// the driver's map regardless of whether entrance coordinates are present.
-  /// The icon colour communicates data quality:
-  ///   • **verifiedIcon** (category colour) — both [PoiItem.entranceLat] and
-  ///     [PoiItem.entranceLng] are set, so the marker is placed at the
-  ///     confirmed truck-entrance GPS fix.
-  ///   • **approximateIcon** (grey) — one or both entrance coordinates are
-  ///     absent; the marker uses the property-centre coordinate ([PoiItem.lat]
-  ///     / [PoiItem.lng]) and is displayed in grey to signal that the location
-  ///     is an estimate.  Data editors can find these POIs via
-  ///     [_showApproxPoiAdminSheet] to add precise entrance coordinates.
+  /// **Verified vs. approximate markers (data quality):** Every POI is shown
+  /// on the driver's map regardless of whether entrance coordinates are
+  /// present.  The [PoiItem.verified] flag and entrance coordinates determine
+  /// the marker style:
+  ///   • **verified marker** (category colour) — [PoiItem.verified] is `true`
+  ///     and both [PoiItem.entranceLat] / [PoiItem.entranceLng] are set; the
+  ///     marker is placed at the confirmed truck-entrance GPS fix.
+  ///   • **approximate marker** (grey) — [PoiItem.verified] is `false` or
+  ///     either entrance coordinate is absent; the marker uses the
+  ///     property-centre coordinate ([PoiItem.lat]/[PoiItem.lng]) and is
+  ///     displayed in grey to signal that the location is an estimate.  Data
+  ///     editors can find these POIs via [_showApproxPoiAdminSheet] to add
+  ///     precise entrance coordinates and set `verified=true`.
   ///
   /// Every POI — truck stop, hotel, restaurant, rest area, gym, commercial
   /// vehicle, and weight station — is rendered at a uniform size using the GPS
@@ -2945,12 +2947,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Returns the subset of [_loadedPois] that are considered approximate /
-  /// unverified — i.e. those missing precise [PoiItem.entranceLat] /
-  /// [PoiItem.entranceLng] coordinates.
+  /// unverified — i.e. those where [PoiItem.verified] is `false` or either
+  /// entrance coordinate is missing.
   ///
   /// Used by [_showApproxPoiAdminSheet] to populate the maintenance list.
-  List<PoiItem> get _approxPois =>
-      _loadedPois.where((p) => p.entranceLat == null || p.entranceLng == null).toList();
+  List<PoiItem> get _approxPois => _loadedPois
+      .where((p) =>
+          !p.verified || p.entranceLat == null || p.entranceLng == null)
+      .toList();
 
   /// Opens a bottom sheet listing all POIs that are currently shown on the
   /// driver's map with a grey approximateIcon due to missing precise entrance
@@ -3010,11 +3014,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text(
-                'These POIs are displayed on the map with a grey '
-                'approximateIcon because they have no verified entrance '
-                'coordinates. Add entrance_lat / entrance_lng to '
-                'assets/locations.json to upgrade them to a coloured '
-                'verifiedIcon placed at the confirmed truck-entrance GPS fix.',
+                'These POIs are displayed on the map with a grey approximate '
+                'marker because their entrance coordinates are missing or '
+                'unverified (verified=false). Add entrance_lat / entrance_lng '
+                'and set verified=true in assets/locations.json to upgrade '
+                'them to a coloured verified marker at the confirmed '
+                'truck-entrance GPS fix.',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ),
@@ -7026,6 +7031,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return false;
   }
 
+  // ── Ahead-on-route weigh station logic ──────────────────────────────────────
+
   /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
   /// segment of [routePoints].
   ///
@@ -10005,18 +10012,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
       // ─────────────────────────────────────────────────────────────────────
 
-      // ── Filter: only verified POIs (entrance coords present) ─────────────
-      // POIs without entrance_lat / entrance_lng are considered approximate /
-      // unverified.  They must not appear on the driver-visible map layer.
-      // The full list (_loadedPois) is still available for the admin/debug
-      // maintenance sheet (_showApproxPoiAdminSheet).
+      // ── Filter: only POIs with verified entrance coordinates ─────────────
+      // POIs where verified=false or entrance coords are absent use the
+      // property-centre lat/lng with an approximate marker.  Only POIs with
+      // verified=true and both entrance coords are sent to the Mapbox source
+      // for the precise-placement layer; the full list (_loadedPois) remains
+      // available for the admin/debug maintenance sheet.
       final List<PoiItem> verifiedPois = pois
-          .where((p) => p.entranceLat != null && p.entranceLng != null)
+          .where((p) =>
+              p.verified && p.entranceLat != null && p.entranceLng != null)
           .toList();
       debugPrint(
         '[POI] ${pois.length} total POIs loaded; '
-        '${verifiedPois.length} verified (entrance coords present), '
-        '${pois.length - verifiedPois.length} approximate (hidden from drivers).',
+        '${verifiedPois.length} verified (entrance coords confirmed), '
+        '${pois.length - verifiedPois.length} approximate (using primary lat/lng).',
       );
 
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
@@ -10142,14 +10151,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   // ── Route-only POI source + layer helpers ────────────────────────────────
-
-  /// Returns true when POI clustering (rather than individual icons) should be
-  /// used at [zoom].  Cluster at zoom < 13.5; show individuals above that.
-  ///
-  /// Use this helper when deciding whether to render cluster badges vs.
-  /// individual POI icons, e.g. in gesture handlers, camera-change callbacks,
-  /// or any code that adjusts layer visibility based on the current map zoom.
-  bool _shouldUseClustersAtZoom(double zoom) => zoom < 13.5;
 
   /// Ensures that the `route-pois-source` GeoJSON source and `route-pois-layer`
   /// symbol layer exist in the current Mapbox style.
@@ -12982,8 +12983,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget build(BuildContext context) {
     // Pre-compute the approx POI count once per build to avoid the getter
     // recreating the filtered list multiple times in the AppBar actions list.
-    final int approxPoiCount =
-        _loadedPois.where((p) => p.entranceLat == null).length;
+    final int approxPoiCount = _loadedPois
+        .where((p) =>
+            !p.verified || p.entranceLat == null || p.entranceLng == null)
+        .length;
     return Scaffold(
       // AppBar is hidden during active navigation so the full screen is used
       // for the map and turn-by-turn components.

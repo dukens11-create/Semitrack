@@ -26,6 +26,8 @@ import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
 import 'package:semitrack_mobile/utils/marker_widgets.dart'
     show buildGpsPinMarker;
+import 'package:semitrack_mobile/utils/route_utils.dart'
+    show getPOIsOnRoute;
 
 // ── Lane guidance models ───────────────────────────────────────────────────
 
@@ -920,9 +922,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const int _poiMinAheadForced = 3;
 
   /// Maximum number of route-point indices to scan ahead of [_truckIndex]
-  /// when searching for each POI's nearest route point.  Limits O(n×m)
-  /// complexity on long routes with many decoded waypoints.
+  /// when searching for each POI's nearest route point.  Retained for
+  /// reference; the route-corridor pass now uses [getPOIsOnRoute] which
+  /// scans all provided route points without an artificial cap.
   static const int _poiRoutePointScanLimit = 2000;
+
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
   double _currentSpeedMps = -1.0;
@@ -2406,20 +2410,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// **Route priority (navigating):**
   ///   1. Keep only POIs with verified entrance coords.
-  ///   2. Find each POI's nearest route-point index ≥ [_truckIndex].
-  ///   3. Skip POIs > [_poiRouteCorridorMeters] from the nearest route point.
-  ///   4. Compute miles-ahead along the route; skip if passed or > 50 mi.
-  ///   5. Sort by distance ahead (closest first).
-  ///   6. Always force-include the first [_poiMinAheadForced] entries.
-  ///   7. Dedup: skip POIs < [_poiOverlapMinMeters] from an already-selected
+  ///   2. Pre-filter to POIs within [_poiRouteCorridorMeters] of any route
+  ///      point ahead of the truck (via [getPOIsOnRoute]).
+  ///   3. Compute miles-ahead along the route; skip if passed or > 50 mi.
+  ///   4. Sort by distance ahead (closest first).
+  ///   5. Always force-include the first [_poiMinAheadForced] entries.
+  ///   6. Dedup: skip POIs < [_poiOverlapMinMeters] from an already-selected
   ///      marker (forced-ahead entries bypass this check).
-  ///   8. Cap at [_poiMaxMarkers] total.
+  ///   7. Cap at [_poiMaxMarkers] total.
   ///
   /// **Nearby filter (browsing):**
   ///   1. Keep only POIs with verified entrance coords within
   ///      [_poiNearbyRadiusMeters] of the current truck position.
   ///   2. Sort by distance (closest first).
   ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
+  ///
+  /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
+  /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
   List<PoiItem> _getFilteredPoisForDisplay() {
     // Candidates: only POIs with verified entrance coordinates (both lat and lng).
     final List<PoiItem> candidates =
@@ -2430,28 +2437,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Route-priority mode (navigating) ────────────────────────────────
     if (_isNavigating && pos != null && _routePoints.isNotEmpty) {
-      // Score each candidate by its route-ahead distance.
+      // Pre-filter: keep only POIs within the route corridor using the
+      // shared getPOIsOnRoute utility.  We pass the sub-list from
+      // _truckIndex onward so only the ahead-of-truck portion is checked.
+      // To change the corridor width, adjust _poiRouteCorridorMeters.
+      final List<LatLng> aheadPoints =
+          _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
+      final List<PoiItem> corridorCandidates = getPOIsOnRoute(
+        candidates,
+        aheadPoints,
+        proximityMeters: _poiRouteCorridorMeters,
+      );
+
+      // Score each corridor candidate by its route-ahead distance.
       final List<_ScoredPoi> scored = [];
 
-      for (final poi in candidates) {
+      for (final poi in corridorCandidates) {
         final double poiLat = poi.displayLat;
         final double poiLng = poi.displayLng;
-
-        // Find the nearest route point at or ahead of the truck index.
-        double nearestDist = double.infinity;
-        for (int i = _truckIndex; i < _routePoints.length; i++) {
-          final double d = geo.Geolocator.distanceBetween(
-            poiLat, poiLng,
-            _routePoints[i].latitude,
-            _routePoints[i].longitude,
-          );
-          if (d < nearestDist) nearestDist = d;
-          // Stop scanning once we're past [_poiRoutePointScanLimit] indices
-          // ahead of the truck to keep the inner loop O(n) bounded.
-          if (i > _truckIndex + _poiRoutePointScanLimit) break;
-        }
-
-        if (nearestDist > _poiRouteCorridorMeters) continue; // Off-route.
 
         // Compute straight-line distance from truck to POI in miles.
         final double milesAhead = _distanceMiles(
@@ -2498,7 +2501,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       debugPrint('[POI/Filter] navigating: ${result.length} POIs selected '
           'from ${scored.length} ahead-on-route candidates '
-          '(${candidates.length} total with verified coords).');
+          '(${corridorCandidates.length} in corridor, '
+          '${candidates.length} total with verified coords).');
       return result;
     }
 

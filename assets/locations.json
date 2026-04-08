@@ -2824,5 +2824,35 @@
     "country": "CA",
     "stateOrProvince": "ON",
     "city": "London"
+  },
+  {
+    "id": "ta_sparks_nv",
+    "name": "TA Travel Center - Sparks, NV",
+    "icon": "ta_truck_stop.png",
+    "lat": 39.5127,
+    "lng": -119.7235,
+    "entrance_lat": 39.5134,
+    "entrance_lng": -119.7228,
+    "verified": true,
+    "category": "truck_stop",
+    "exit_number": "19",
+    "country": "US",
+    "stateOrProvince": "NV",
+    "city": "Sparks"
+  },
+  {
+    "id": "petro_sparks_nv",
+    "name": "Petro Stopping Center - Sparks, NV",
+    "icon": "petro_truck_stop.png",
+    "lat": 39.5204,
+    "lng": -119.7183,
+    "entrance_lat": 39.5211,
+    "entrance_lng": -119.7176,
+    "verified": true,
+    "category": "truck_stop",
+    "exit_number": "19",
+    "country": "US",
+    "stateOrProvince": "NV",
+    "city": "Sparks"
   }
 ]

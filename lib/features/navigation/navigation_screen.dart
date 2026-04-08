@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -240,6 +241,8 @@ void _updateTopInstructionFromNavigationStep({
 
   // Demonstration output – replace with setState(() { _topInstructionData = data; })
   // when integrating into a StatefulWidget.
-  // ignore: avoid_print
-  print('[NavigationScreen] TopInstruction: $data');
+  // Only log in debug builds to avoid emitting internal state to production logs.
+  if (kDebugMode) {
+    debugPrint('[NavigationScreen] TopInstruction: $data');
+  }
 }

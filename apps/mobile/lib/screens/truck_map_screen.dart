@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -5469,7 +5470,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         durationSeconds: durationSeconds,
       );
     } catch (e) {
-      print('_fetchRouteFromApi error: $e');
+      // Only log internal route-fetch errors in debug builds.
+      if (kDebugMode) debugPrint('_fetchRouteFromApi error: $e');
       return null;
     }
   }
@@ -7121,11 +7123,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
     if (_isLoadingRoute) {
-      print("fetchRoute already in progress – skipping duplicate call");
+      // Only emit diagnostics in debug builds – suppress in release/profile.
+      if (kDebugMode) debugPrint("fetchRoute already in progress – skipping duplicate call");
       return;
     }
     _isLoadingRoute = true;
-    print("fetchRoute started (alternative: $alternative)");
+    if (kDebugMode) debugPrint("fetchRoute started (alternative: $alternative)");
 
     // Hard-reset the route state before fetching to ensure no stale points
     // from a previous route are left in _routePoints or rendered on the map.
@@ -7164,7 +7167,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final res = await http.get(Uri.parse(url)).timeout(
         const Duration(seconds: 10),
       );
-      print("MAPBOX RESPONSE: ${res.body}");
+      // Log the raw Mapbox response only in debug builds to avoid leaking
+      // route data (which may contain user location) to production logs.
+      if (kDebugMode) debugPrint("MAPBOX RESPONSE: ${res.body}");
 
       final data = jsonDecode(res.body);
       final routes = data["routes"] as List;
@@ -7233,7 +7238,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _isLoading = false;
         });
 
-        print("Route points count: ${_routePoints.length}");
+        if (kDebugMode) debugPrint("Route points count: ${_routePoints.length}");
         if (selectedOpt.steps.isNotEmpty) {
           _speak(selectedOpt.steps.first.instruction);
         }
@@ -7272,7 +7277,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // When already on the alternative, we accept the route regardless —
       // no further candidates are available to try.
       if (!_isTruckSafe(newPoints) && !alternative) {
-        print("Route is not truck-safe – fetching alternative route");
+        if (kDebugMode) debugPrint("Route is not truck-safe – fetching alternative route");
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
         _isLoadingRoute = false;
@@ -7343,7 +7348,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       });
 
       // Log the final route point count for debugging route-duplication issues.
-      print("Route points count: ${_routePoints.length}");
+      if (kDebugMode) debugPrint("Route points count: ${_routePoints.length}");
 
       // Speak the first instruction when the route is (re-)loaded.
       if (allSteps.isNotEmpty) {
@@ -7391,7 +7396,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         (route['duration'] as num).toInt(),
       );
     } catch (e) {
-      print('Mapbox error: $e');
+      if (kDebugMode) debugPrint('Mapbox error: $e');
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -7839,8 +7844,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }).toList();
     } catch (e) {
       // Log the error so developers can diagnose API or network failures.
+      // Only emit in debug builds – suppressed in release/profile mode.
       // The empty list return lets the search sheet show "no results" gracefully.
-      print('Geocoding error for "$query": $e');
+      if (kDebugMode) debugPrint('Geocoding error for "$query": $e');
       return [];
     }
   }
@@ -7975,7 +7981,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (res.statusCode != 200) {
         // Log non-200 responses (e.g. 401 bad token, 429 rate limit) to aid
         // debugging without surfacing raw HTTP details to the end user.
-        print('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
+        // Only emit in debug builds to avoid leaking response bodies in production.
+        if (kDebugMode) debugPrint('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
         if (mounted) setState(() => _isSearching = false);
         return;
       }
@@ -8008,7 +8015,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     } catch (e) {
       // Log the error so developers can diagnose network or parsing failures.
-      print('Geocoding error for "$q": $e');
+      // Only emit in debug builds – suppressed in release/profile mode.
+      if (kDebugMode) debugPrint('Geocoding error for "$q": $e');
       if (mounted) {
         setState(() {
           _searchResults = const [];

@@ -11,13 +11,40 @@ import 'dart:convert';
 /// The optional fields [country], [stateOrProvince], [city], and [exitNumber]
 /// default to an empty string / null when absent from the JSON.
 ///
-/// For maximum map accuracy, the optional [entranceLat] and [entranceLng]
-/// fields capture the precise GPS coordinate of the facility's primary truck
-/// entrance or access point.  When present they should be preferred over [lat]
-/// and [lng] (which represent the approximate centre of the property) so that
-/// markers are placed at the true entry point drivers approach on the road.
-/// Use [displayLat] and [displayLng] to obtain the best-available coordinate
-/// automatically.
+/// ## Entrance coordinates and verification
+///
+/// [entranceLat] and [entranceLng] are **optional** fields that capture the
+/// precise GPS coordinate of the facility's primary truck entrance or access
+/// point.  They must be paired with [verified] = `true` to take effect.
+///
+/// [verified] indicates whether the entrance coordinates have been confirmed
+/// against a real road / satellite imagery.  When `true` and both
+/// [entranceLat] and [entranceLng] are present, [displayLat]/[displayLng]
+/// return those precise entrance coordinates and the map shows a **verified**
+/// marker.  Otherwise [displayLat]/[displayLng] fall back to the property-
+/// centre [lat]/[lng] and the map shows an **approximate** marker.
+///
+/// ### JSON schema example
+///
+/// ```json
+/// // Fully verified — entrance coordinates used for map placement:
+/// {
+///   "type": "truck_stop",
+///   "lat": 41.8795,
+///   "lng": -87.6244,
+///   "entrance_lat": 41.8801,
+///   "entrance_lng": -87.6239,
+///   "verified": true
+/// }
+///
+/// // Approximate — primary lat/lng used, approximate marker shown:
+/// {
+///   "type": "truck_stop",
+///   "lat": 41.8795,
+///   "lng": -87.6244,
+///   "verified": false
+/// }
+/// ```
 class PoiItem {
   final String id;
   final String name;
@@ -28,17 +55,32 @@ class PoiItem {
 
   /// Precise latitude of the primary truck entrance / access point.
   ///
-  /// When present, this is more accurate than [lat] (the property centre) and
-  /// should be used for map marker placement.  Sourced from the optional
-  /// `entrance_lat` field in `locations.json`.
+  /// Optional.  Only used for map placement when [verified] is `true` and
+  /// [entranceLng] is also set.  Sourced from the optional `entrance_lat`
+  /// field in `locations.json`.
   final double? entranceLat;
 
   /// Precise longitude of the primary truck entrance / access point.
   ///
-  /// When present, this is more accurate than [lng] (the property centre) and
-  /// should be used for map marker placement.  Sourced from the optional
-  /// `entrance_lng` field in `locations.json`.
+  /// Optional.  Only used for map placement when [verified] is `true` and
+  /// [entranceLat] is also set.  Sourced from the optional `entrance_lng`
+  /// field in `locations.json`.
   final double? entranceLng;
+
+  /// Whether the entrance coordinates ([entranceLat]/[entranceLng]) have been
+  /// verified against a real road or satellite imagery.
+  ///
+  /// When `true` and both entrance coordinates are present, [displayLat] and
+  /// [displayLng] return those precise entrance values and the map renders a
+  /// **verified** marker at the truck entrance.
+  ///
+  /// When `false` (or entrance coordinates are absent), [displayLat] and
+  /// [displayLng] fall back to [lat]/[lng] (the property centre) and the map
+  /// renders an **approximate** marker.
+  ///
+  /// Defaults to `false`.  Set to `true` in `locations.json` only after
+  /// confirming the entrance coordinates against ground-truth data.
+  final bool verified;
 
   final String country;
   final String stateOrProvince;
@@ -56,6 +98,7 @@ class PoiItem {
     required this.lng,
     this.entranceLat,
     this.entranceLng,
+    this.verified = false,
     this.country = '',
     this.stateOrProvince = '',
     this.city = '',
@@ -64,15 +107,23 @@ class PoiItem {
 
   /// Best-available display latitude.
   ///
-  /// Returns [entranceLat] when set (precise truck-entrance GPS fix), falling
-  /// back to [lat] (property centre) otherwise.
-  double get displayLat => entranceLat ?? lat;
+  /// Returns [entranceLat] when [verified] is `true` and both entrance
+  /// coordinates are set (precise truck-entrance GPS fix), falling back to
+  /// [lat] (property centre) otherwise.
+  double get displayLat =>
+      (verified && entranceLat != null && entranceLng != null)
+          ? entranceLat!
+          : lat;
 
   /// Best-available display longitude.
   ///
-  /// Returns [entranceLng] when set (precise truck-entrance GPS fix), falling
-  /// back to [lng] (property centre) otherwise.
-  double get displayLng => entranceLng ?? lng;
+  /// Returns [entranceLng] when [verified] is `true` and both entrance
+  /// coordinates are set (precise truck-entrance GPS fix), falling back to
+  /// [lng] (property centre) otherwise.
+  double get displayLng =>
+      (verified && entranceLat != null && entranceLng != null)
+          ? entranceLng!
+          : lng;
 
   factory PoiItem.fromJson(Map<String, dynamic> json) {
     return PoiItem(
@@ -88,6 +139,7 @@ class PoiItem {
       entranceLng: json['entrance_lng'] != null
           ? (json['entrance_lng'] as num).toDouble()
           : null,
+      verified: (json['verified'] as bool?) ?? false,
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',

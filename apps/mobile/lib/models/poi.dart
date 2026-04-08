@@ -16,10 +16,40 @@ import 'package:semitrack_mobile/models/poi_item.dart';
 /// [icon] is the normalised Mapbox image ID (PNG filename stem) registered via
 /// `registerPoiIcons()`, e.g. `"pilot"`, `"loves"`, `"weight_station"`.
 ///
-/// For maximum geographic precision, the optional [entranceLat] and
-/// [entranceLng] fields capture the GPS coordinate of the facility's primary
-/// truck entrance.  Use [displayLat] and [displayLng] to obtain the
-/// best-available coordinate automatically.
+/// ## Entrance coordinates and verification
+///
+/// [entranceLat] and [entranceLng] are **optional** fields that capture the
+/// GPS coordinate of the facility's primary truck entrance.  They must be
+/// paired with [verified] = `true` to take effect.
+///
+/// [verified] indicates whether the entrance coordinates have been confirmed
+/// against real-world data.  When `true` and both entrance coordinates are
+/// present, [displayLat]/[displayLng] return the entrance values and the map
+/// renders a **verified** marker.  Otherwise [displayLat]/[displayLng] fall
+/// back to [lat]/[lng] (the property centre) and the map renders an
+/// **approximate** marker.
+///
+/// ### JSON schema examples
+///
+/// ```json
+/// // Verified — entrance coords used, verified marker shown:
+/// {
+///   "type": "truck_stop",
+///   "lat": 41.8795,
+///   "lng": -87.6244,
+///   "entrance_lat": 41.8801,
+///   "entrance_lng": -87.6239,
+///   "verified": true
+/// }
+///
+/// // Approximate — primary lat/lng used, approximate marker shown:
+/// {
+///   "type": "truck_stop",
+///   "lat": 41.8795,
+///   "lng": -87.6244,
+///   "verified": false
+/// }
+/// ```
 class Poi {
   final String id;
   final String name;
@@ -32,15 +62,29 @@ class Poi {
 
   /// Precise latitude of the primary truck entrance / access point.
   ///
-  /// When present this is more accurate than [lat] (the property centre) and
-  /// should be used for map marker placement.
+  /// Optional.  Only used for map placement when [verified] is `true` and
+  /// [entranceLng] is also set.
   final double? entranceLat;
 
   /// Precise longitude of the primary truck entrance / access point.
   ///
-  /// When present this is more accurate than [lng] (the property centre) and
-  /// should be used for map marker placement.
+  /// Optional.  Only used for map placement when [verified] is `true` and
+  /// [entranceLat] is also set.
   final double? entranceLng;
+
+  /// Whether the entrance coordinates ([entranceLat]/[entranceLng]) have been
+  /// verified against a real road or satellite imagery.
+  ///
+  /// When `true` and both entrance coordinates are present, [displayLat] and
+  /// [displayLng] return those precise entrance values and the map renders a
+  /// **verified** marker at the truck entrance.
+  ///
+  /// When `false` (or entrance coordinates are absent), [displayLat] and
+  /// [displayLng] fall back to [lat]/[lng] (the property centre) and the map
+  /// renders an **approximate** marker.
+  ///
+  /// Defaults to `false`.
+  final bool verified;
 
   /// Mapbox image ID / asset filename stem for the brand logo marker.
   final String icon;
@@ -66,6 +110,7 @@ class Poi {
     required this.icon,
     this.entranceLat,
     this.entranceLng,
+    this.verified = false,
     this.country = '',
     this.stateOrProvince = '',
     this.city = '',
@@ -74,15 +119,23 @@ class Poi {
 
   /// Best-available display latitude.
   ///
-  /// Returns [entranceLat] when set (precise truck-entrance GPS fix), falling
-  /// back to [lat] (property centre) otherwise.
-  double get displayLat => entranceLat ?? lat;
+  /// Returns [entranceLat] when [verified] is `true` and both entrance
+  /// coordinates are set (precise truck-entrance GPS fix), falling back to
+  /// [lat] (property centre) otherwise.
+  double get displayLat =>
+      (verified && entranceLat != null && entranceLng != null)
+          ? entranceLat!
+          : lat;
 
   /// Best-available display longitude.
   ///
-  /// Returns [entranceLng] when set (precise truck-entrance GPS fix), falling
-  /// back to [lng] (property centre) otherwise.
-  double get displayLng => entranceLng ?? lng;
+  /// Returns [entranceLng] when [verified] is `true` and both entrance
+  /// coordinates are set (precise truck-entrance GPS fix), falling back to
+  /// [lng] (property centre) otherwise.
+  double get displayLng =>
+      (verified && entranceLat != null && entranceLng != null)
+          ? entranceLng!
+          : lng;
 
   /// Deserialises a single POI from a JSON map.
   ///
@@ -100,6 +153,7 @@ class Poi {
       entranceLng: json['entrance_lng'] != null
           ? (json['entrance_lng'] as num).toDouble()
           : null,
+      verified: (json['verified'] as bool?) ?? false,
       icon: json['icon'] as String,
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
@@ -118,6 +172,7 @@ class Poi {
       lng: item.lng,
       entranceLat: item.entranceLat,
       entranceLng: item.entranceLng,
+      verified: item.verified,
       icon: item.icon,
       country: item.country,
       stateOrProvince: item.stateOrProvince,

@@ -103,15 +103,18 @@ Future<List<PoiItem>> loadAllPois() async {
       icon: resolvedIcon,
       lat: (json['lat'] as num).toDouble(),
       lng: (json['lng'] as num).toDouble(),
-      // Optional high-precision entrance coordinates.  When present these
-      // represent the GPS fix of the primary truck access point (more accurate
-      // than the property-centre lat/lng) and are used for map placement.
+      // Optional high-precision entrance coordinates.  Only used for map
+      // placement when `verified` is true and both values are present.
       entranceLat: json['entrance_lat'] != null
           ? (json['entrance_lat'] as num).toDouble()
           : null,
       entranceLng: json['entrance_lng'] != null
           ? (json['entrance_lng'] as num).toDouble()
           : null,
+      // verified: true means entrance_lat/entrance_lng have been confirmed
+      // against real-world data; only then are they used for map placement.
+      // Defaults to false when the field is absent from the JSON.
+      verified: (json['verified'] as bool?) ?? false,
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
@@ -127,9 +130,12 @@ Future<List<PoiItem>> loadAllPois() async {
 /// enabling `["get", "icon"]` expressions in symbol layers.
 ///
 /// The geometry coordinate uses [PoiItem.displayLng] / [PoiItem.displayLat] so
-/// that markers are placed at the most precise GPS fix available — the truck
-/// entrance point when `entrance_lat`/`entrance_lng` are set in the JSON, or
-/// the property-centre coordinates otherwise.
+/// that markers are placed at the most precise GPS fix available:
+///   • When [PoiItem.verified] is `true` and both entrance coordinates are set,
+///     the truck-entrance point is used and `"verified"` is exposed as `true`
+///     in properties.
+///   • Otherwise the property-centre coordinates are used and `"verified"` is
+///     `false` in properties, indicating an approximate placement.
 Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
   return {
     'type': 'FeatureCollection',
@@ -140,8 +146,9 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
             'id': poi.id,
             'geometry': {
               'type': 'Point',
-              // Use the most precise coordinate available: entrance point when
-              // present, property centre otherwise.  GeoJSON uses [lng, lat].
+              // Use the most precise coordinate available: verified entrance
+              // point when present and verified, property centre otherwise.
+              // GeoJSON uses [lng, lat].
               'coordinates': [poi.displayLng, poi.displayLat],
             },
             'properties': {
@@ -149,6 +156,11 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
               'name': poi.name,
               'category': poi.category,
               'icon': poi.icon,
+              // true  → entrance coords used; show a "verified" marker.
+              // false → property-centre coords used; show an "approximate" marker.
+              'verified': poi.verified &&
+                  poi.entranceLat != null &&
+                  poi.entranceLng != null,
             },
           },
         )

@@ -16,7 +16,7 @@ import 'package:latlong2/latlong.dart';
 /// simply rely on this shared variable if only one camera owner is active at a
 /// time.
 ///
-/// Initialised to the epoch so the very first call is never throttled.
+/// Initialized to the epoch so the very first call is never throttled.
 DateTime _lastCameraUpdate = DateTime.fromMillisecondsSinceEpoch(0);
 
 // ---------------------------------------------------------------------------
@@ -146,6 +146,12 @@ LatLng getLookAheadPosition(
 /// - [mapController] – The flutter_map [MapController] that owns the visible
 ///                     map widget.
 ///
+/// ### Returns
+/// The tilt value computed by [getTilt] for the current speed.  flutter_map
+/// ignores tilt (2-D only); the return value lets you forward it to a 3-D SDK
+/// (Mapbox / Google Maps `CameraPosition.tilt`) without an extra call to
+/// [getTilt].  Returns `null` when the update is throttled.
+///
 /// ### Usage
 /// ```dart
 /// // Declare a MapController in your State:
@@ -155,15 +161,25 @@ LatLng getLookAheadPosition(
 /// updateCamera(position, _mapController);
 /// ```
 ///
-/// ### Note on tilt
-/// flutter_map renders a flat 2-D map so the tilt value from [getTilt] is not
-/// applied to the viewport.  It is computed here for completeness; when the
-/// app migrates to a 3-D SDK (Mapbox / Google Maps) pass `tilt` to the SDK's
-/// camera-position API.
-void updateCamera(Position position, MapController mapController) {
+/// ### flutter_map vs Google Maps
+/// flutter_map renders a flat 2-D map, so camera tilt is not applied.  The
+/// equivalent Google Maps call would be:
+/// ```dart
+/// mapController.animateCamera(
+///   CameraUpdate.newCameraPosition(
+///     CameraPosition(
+///       target: target,
+///       zoom: zoom,
+///       tilt: tilt,
+///       bearing: position.heading,
+///     ),
+///   ),
+/// );
+/// ```
+double? updateCamera(Position position, MapController mapController) {
   // ── Throttle ──────────────────────────────────────────────────────────────
   final now = DateTime.now();
-  if (now.difference(_lastCameraUpdate).inMilliseconds < 700) return;
+  if (now.difference(_lastCameraUpdate).inMilliseconds < 700) return null;
   _lastCameraUpdate = now;
 
   // ── Speed ─────────────────────────────────────────────────────────────────
@@ -172,8 +188,10 @@ void updateCamera(Position position, MapController mapController) {
 
   // ── Zoom & tilt ───────────────────────────────────────────────────────────
   final double zoom = getZoom(speedMph);
-  // ignore: unused_local_variable
-  final double tilt = getTilt(speedMph); // informational; see doc-comment above
+  // tilt is computed per spec and returned so callers can forward it to a
+  // 3-D SDK (Mapbox / Google Maps) when available.  flutter_map is 2-D and
+  // does not apply it.
+  final double tilt = getTilt(speedMph);
 
   // ── Look-ahead distance (metres) ─────────────────────────────────────────
   final double lookAhead = speedMph < 5 ? 40.0 : 120.0 + speedMph * 4;
@@ -186,15 +204,9 @@ void updateCamera(Position position, MapController mapController) {
   );
 
   // ── Animate camera ────────────────────────────────────────────────────────
-  // flutter_map equivalent of:
-  //   mapController.animateCamera(
-  //     CameraUpdate.newCameraPosition(
-  //       CameraPosition(target: target, zoom: zoom, tilt: tilt,
-  //                      bearing: position.heading),
-  //     ),
-  //   );
-  //
   // MapController.moveAndRotate combines pan + zoom + bearing rotation.
-  // `tilt` is stored above but not passed here because flutter_map is 2-D.
+  // `tilt` is returned to the caller for use with a 3-D SDK.
   mapController.moveAndRotate(target, zoom, position.heading);
+
+  return tilt;
 }

@@ -2369,21 +2369,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Returns `true` when the map should display POI cluster badges instead of
-  /// individual POI markers at the given [zoom] level.
-  ///
-  /// Clustering is used at lower zoom levels (wider view) to avoid overwhelming
-  /// the driver with dozens of overlapping pins.  Once the driver zooms in past
-  /// the [_poiClusterZoomThreshold] the map switches to individual GPS-pin
-  /// markers so each POI can be tapped and identified precisely.
-  ///
-  /// • zoom < [_poiClusterZoomThreshold]  → `true`  — show cluster badges
-  /// • zoom ≥ [_poiClusterZoomThreshold]  → `false` — show individual POI markers
-  ///
-  /// Used by [_buildAllPoiMarkers] to branch between
-  /// [_buildPoiClusterMarkers] and per-POI [Marker] construction.
-  bool _shouldUseClustersAtZoom(double zoom) => zoom < _poiClusterZoomThreshold;
-
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
@@ -2751,101 +2736,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     debugPrint('[POI/Filter] browsing: ${result.length} nearby POIs selected '
         'from ${nearby.length} within '
         '${(_poiNearbyRadiusMeters / 1609.34).toStringAsFixed(0)} mi.');
-    return result;
-  }
-
-  /// Returns a numeric priority score for [poi] used by [_limitAndDedupePois]
-  /// to decide which POI wins when two POIs overlap or are within the minimum
-  /// separation distance.
-  ///
-  /// Higher-priority categories (safety-critical, high-utility) receive a
-  /// larger base score.  A verified POI — one that has both [PoiItem.entranceLat]
-  /// and [PoiItem.entranceLng] set — gains an additional +20 points, reflecting
-  /// the added confidence of a confirmed truck-entrance GPS fix.
-  double _poiPriorityScore(PoiItem poi) {
-    final String category = (poi.category).toLowerCase().trim();
-    // verifiedBonus is 1.0 for POIs with confirmed entrance coordinates, 0.0 otherwise.
-    final double verifiedBonus =
-        (poi.entranceLat != null && poi.entranceLng != null) ? 1.0 : 0.0;
-
-    double base;
-    switch (category) {
-      case 'weigh_station':
-        base = 100; // Compliance-critical — always highest priority.
-        break;
-      case 'truck_stop':
-        base = 90; // Primary driver service facility.
-        break;
-      case 'rest_area':
-        base = 75; // HOS/fatigue management stop.
-        break;
-      case 'brake_check_area':
-        base = 72; // Safety-critical descents.
-        break;
-      case 'truck_parking':
-        base = 68; // Dedicated overnight/layover parking.
-        break;
-      case 'commercial_vehicle_wash':
-        base = 55; // Maintenance / compliance wash.
-        break;
-      default:
-        base = 40; // Other POI categories.
-    }
-
-    return base + (verifiedBonus * 20);
-  }
-
-  /// Returns a de-duplicated, priority-ranked subset of [pois] suitable for
-  /// map-layer rendering.
-  ///
-  /// Algorithm:
-  ///   1. Sort [pois] by [_poiPriorityScore] — highest score first so that
-  ///      safety-critical / verified POIs are always preferred.
-  ///   2. Iterate the sorted list.  For each candidate POI, check whether any
-  ///      already-accepted POI is within [minDistanceMeters] (default 200 m).
-  ///      If so, the candidate is a lower-priority overlap and is skipped.
-  ///   3. Add the candidate to the result and continue until [maxCount]
-  ///      (default 10) entries have been collected.
-  ///
-  /// Parameters:
-  ///   [pois]               – Candidate POI list (any order).
-  ///   [maxCount]           – Maximum number of POIs to return (default: 10).
-  ///   [minDistanceMeters]  – Minimum separation between returned POIs in
-  ///                          metres (default: 200 m).
-  List<PoiItem> _limitAndDedupePois(
-    List<PoiItem> pois, {
-    int maxCount = 10,
-    double minDistanceMeters = 200,
-  }) {
-    // Step 1 – sort by priority score, highest first, so verified / safety-
-    // critical POIs take precedence when a proximity conflict is resolved.
-    final List<PoiItem> sorted = [...pois];
-    sorted.sort(
-        (a, b) => _poiPriorityScore(b).compareTo(_poiPriorityScore(a)));
-
-    final List<PoiItem> result = [];
-
-    for (final poi in sorted) {
-      // Step 2 – skip this POI if it falls within minDistanceMeters of any
-      // higher-priority POI already accepted into the result list.
-      final bool tooClose = result.any((existing) {
-        final double d = geo.Geolocator.distanceBetween(
-          poi.displayLat,
-          poi.displayLng,
-          existing.displayLat,
-          existing.displayLng,
-        );
-        return d < minDistanceMeters;
-      });
-
-      if (tooClose) continue;
-
-      result.add(poi);
-
-      // Step 3 – stop once the cap is reached.
-      if (result.length >= maxCount) break;
-    }
-
     return result;
   }
 

@@ -2528,8 +2528,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns `true` when the given [zoom] level is in the cluster range.
   ///
-  /// Rule: zoom ≤ [_poiClusterZoomThreshold] (13.5) → show clusters.
+  /// Rule: zoom ≤ [_poiClusterZoomThreshold] (13.5) → show cluster badges.
   ///       zoom >  13.5 → show individual POI icons.
+  ///
+  /// The Dart overlay rendering (not the Mapbox tile layers) uses this to
+  /// branch between [_buildPoiClusterMarkers] and individual markers, so only
+  /// one mode is active at a time — there is no ambiguity at exactly 13.5.
   ///
   /// Centralises the cluster/individual threshold so [_buildAllPoiMarkers]
   /// and [_setupPoiCluster] stay consistent.
@@ -2605,8 +2609,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final int cap = maxCount ?? _poiMaxMarkers;
     final double minDist = minDistanceMeters ?? _poiOverlapMinMeters;
 
-    // Cache priority scores once before sorting to avoid redundant recomputation
-    // (each comparison would otherwise call _poiPriorityScore up to 4 times).
+    // Cache priority scores once before sorting to avoid recomputing them
+    // multiple times during the sort (once per comparison for a and b).
     final Map<PoiItem, double> scores = {
       for (final poi in pois) poi: _poiPriorityScore(poi),
     };
@@ -2701,10 +2705,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       // Fill remaining capacity with priority-deduped candidates from full set.
       // Use a Set for O(1) membership checks in the where() filter.
+      // Pass `remaining` as maxCount so _limitAndDedupePois only processes
+      // as many POIs as are actually needed (avoids wasted dedup work).
       final Set<PoiItem> forcedSet = Set<PoiItem>.from(forced);
       final int remaining = _poiMaxMarkers - forced.length;
       final List<PoiItem> extras = remaining > 0
-          ? _limitAndDedupePois(ahead, maxCount: _poiMaxMarkers)
+          ? _limitAndDedupePois(ahead, maxCount: remaining)
               .where((p) => !forcedSet.contains(p))
               .take(remaining)
               .toList()

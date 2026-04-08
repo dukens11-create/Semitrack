@@ -2522,7 +2522,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns `true` when [a] has a strictly higher priority score than [b].
   ///
   /// Use this to determine whether [a] should displace [b] when they are
-  /// within [_poiOverlapMinMeters] of each other.
+  /// within [_poiOverlapMinMeters] of each other.  Also used internally by
+  /// [_limitAndDedupePois] to establish the sort order before deduplication.
   bool _isHigherPriorityPoi(PoiItem a, PoiItem b) =>
       _poiPriorityScore(a) > _poiPriorityScore(b);
 
@@ -2605,11 +2606,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final int cap = maxCount ?? _poiMaxMarkers;
     final double minDist = minDistanceMeters ?? _poiOverlapMinMeters;
 
-    // Sort by priority score descending — best POIs are chosen first.
+    // Cache priority scores once before sorting to avoid redundant recomputation
+    // (each comparison would otherwise call _poiPriorityScore up to 4 times).
+    final Map<PoiItem, double> scores = {
+      for (final poi in pois) poi: _poiPriorityScore(poi),
+    };
+
+    // Sort by cached score descending — uses _isHigherPriorityPoi semantics.
     final List<PoiItem> sorted = List<PoiItem>.from(pois)
-      // Sort using _isHigherPriorityPoi: highest-priority POIs come first so
-      // they are always selected before lower-priority ones in the dedup pass.
-      ..sort((a, b) => _isHigherPriorityPoi(a, b) ? -1 : (_isHigherPriorityPoi(b, a) ? 1 : 0));
+      ..sort((a, b) => scores[b]!.compareTo(scores[a]!));
 
     final List<PoiItem> result = [];
     final List<LatLng> included = [];
@@ -2696,10 +2701,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
 
       // Fill remaining capacity with priority-deduped candidates from full set.
+      // Use a Set for O(1) membership checks in the where() filter.
+      final Set<PoiItem> forcedSet = Set<PoiItem>.from(forced);
       final int remaining = _poiMaxMarkers - forced.length;
       final List<PoiItem> extras = remaining > 0
           ? _limitAndDedupePois(ahead, maxCount: _poiMaxMarkers)
-              .where((p) => !forced.contains(p))
+              .where((p) => !forcedSet.contains(p))
               .take(remaining)
               .toList()
           : const [];

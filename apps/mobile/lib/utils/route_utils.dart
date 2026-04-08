@@ -1,5 +1,6 @@
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:semitrack_mobile/models/poi_item.dart';
 
 /// A minimal POI (Point of Interest) model used by [filterPOIsNearRoute].
 ///
@@ -87,6 +88,105 @@ List<RoutePoi> filterPOIsNearRoute(
       // Early exit: once the POI is within range there is no need to check
       // the remaining route points for this POI.
       if (distance <= maxDistanceMeters) {
+        filtered.add(poi);
+        break;
+      }
+    }
+  }
+
+  return filtered;
+}
+
+// ── Route-based POI filter for PoiItem ────────────────────────────────────
+
+/// Returns only those [pois] (loaded from `assets/locations.json`) that lie
+/// within [proximityMeters] of **any** point along the [routePoints] polyline.
+///
+/// This is the primary driver-facing filter: call it before building map
+/// markers so that only POIs relevant to the active route are rendered.
+///
+/// ### Algorithm
+/// For every [PoiItem] the function checks the straight-line surface distance
+/// from the POI's best-available display coordinate ([PoiItem.displayLat] /
+/// [PoiItem.displayLng]) to each vertex in [routePoints] using the WGS-84
+/// haversine formula provided by [Geolocator.distanceBetween].  The inner
+/// loop exits as soon as one route point qualifies, so the worst-case
+/// O(n × m) cost is only reached when every POI is off-route.
+///
+/// ### Parameters
+/// - [pois]              – All candidate [PoiItem]s (e.g. from `loadAllPois()`).
+/// - [routePoints]       – Ordered [LatLng] vertices of the active route
+///                         polyline (pass a sub-list starting at the truck's
+///                         current index to restrict checking to the
+///                         _ahead-on-route_ portion only).
+/// - [proximityMeters]   – Corridor half-width in metres.  Defaults to
+///                         **200 m**.  Increase this value to widen the
+///                         corridor (e.g. `proximityMeters: 2000` for a 2 km
+///                         buffer suitable for highway routes); decrease it
+///                         for city driving where only roadside POIs matter.
+///                         The constant [kDefaultPoiProximityMeters] is
+///                         provided for a named reference.
+///
+/// ### Returns
+/// A new `List<PoiItem>` preserving the original order of [pois].  Returns
+/// an empty list when [pois] or [routePoints] is empty.
+///
+/// ### turf_dart (optional enhancement)
+/// The current implementation uses point-to-vertex sampling which is accurate
+/// enough for densely-sampled Mapbox routes (waypoints every ~10–50 m).
+/// If your route is coarser, consider replacing the inner loop with
+/// `turf_dart`'s `nearestPointOnLine` for true point-to-segment distance:
+///
+/// ```yaml
+/// # pubspec.yaml
+/// dependencies:
+///   turf: ^0.0.9   # turf_dart – add if segment-level precision is needed
+/// ```
+///
+/// ### Example
+/// ```dart
+/// // Show POIs within 500 m of the route ahead of the truck:
+/// final ahead = _routePoints.sublist(_truckIndex);
+/// final nearbyPois = getPOIsOnRoute(
+///   _loadedPois,
+///   ahead,
+///   proximityMeters: 500,
+/// );
+/// ```
+///
+/// To adjust the default threshold for the whole app, change
+/// [kDefaultPoiProximityMeters] or pass a custom value at the call site.
+const double kDefaultPoiProximityMeters = 200.0;
+
+List<PoiItem> getPOIsOnRoute(
+  List<PoiItem> pois,
+  List<LatLng> routePoints, {
+  // Proximity threshold in metres.  Increase for wider corridors (e.g. 2000
+  // for highways) or decrease for tighter, city-scale filtering.
+  double proximityMeters = kDefaultPoiProximityMeters,
+}) {
+  // Nothing to filter when inputs are empty.
+  if (pois.isEmpty || routePoints.isEmpty) return const [];
+
+  final List<PoiItem> filtered = [];
+
+  for (final PoiItem poi in pois) {
+    // Use the best-available display coordinate (entrance point if known,
+    // otherwise the property centre).
+    final double poiLat = poi.displayLat;
+    final double poiLng = poi.displayLng;
+
+    for (final LatLng routePoint in routePoints) {
+      final double distanceMeters = Geolocator.distanceBetween(
+        poiLat,
+        poiLng,
+        routePoint.latitude,
+        routePoint.longitude,
+      );
+
+      // Early exit: the POI qualifies as soon as one route point is within
+      // the threshold — no need to check the remaining vertices.
+      if (distanceMeters <= proximityMeters) {
         filtered.add(poi);
         break;
       }

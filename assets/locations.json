@@ -2761,5 +2761,65 @@
     "country": "CA",
     "stateOrProvince": "MB",
     "city": "Emerson"
+  },
+  {
+    "id": "ts_us_iowa_i80_1",
+    "name": "truck_stop_default",
+    "icon": "truck_stop_default.png",
+    "lat": 41.6611,
+    "lng": -91.5301,
+    "category": "truck_stop",
+    "exit_number": "244",
+    "country": "US",
+    "stateOrProvince": "IA",
+    "city": "Iowa City"
+  },
+  {
+    "id": "ts_us_nebraska_i80_1",
+    "name": "truck_stop_default",
+    "icon": "truck_stop_default.png",
+    "lat": 41.2524,
+    "lng": -95.998,
+    "category": "truck_stop",
+    "exit_number": "432",
+    "country": "US",
+    "stateOrProvince": "NE",
+    "city": "Omaha"
+  },
+  {
+    "id": "ts_us_ohio_i70_1",
+    "name": "truck_stop_default",
+    "icon": "truck_stop_default.png",
+    "lat": 39.9612,
+    "lng": -82.9988,
+    "category": "truck_stop",
+    "exit_number": "107",
+    "country": "US",
+    "stateOrProvince": "OH",
+    "city": "Columbus"
+  },
+  {
+    "id": "ts_ca_alberta_hwy2_1",
+    "name": "truck_stop_default",
+    "icon": "truck_stop_default.png",
+    "lat": 52.2681,
+    "lng": -113.8112,
+    "category": "truck_stop",
+    "exit_number": "",
+    "country": "CA",
+    "stateOrProvince": "AB",
+    "city": "Red Deer"
+  },
+  {
+    "id": "ts_ca_ontario_401_1",
+    "name": "truck_stop_default",
+    "icon": "truck_stop_default.png",
+    "lat": 42.9849,
+    "lng": -81.2453,
+    "category": "truck_stop",
+    "exit_number": "",
+    "country": "CA",
+    "stateOrProvince": "ON",
+    "city": "London"
   }
 ]

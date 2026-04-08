@@ -21,6 +21,26 @@
 18. Documents & operations -> documents screen + documents endpoint
 19. Advanced route editing -> routing service extension point
 
+## POI Data – truck_stop_default naming convention
+
+Truck stop entries in `assets/locations.json` that have no `name` (missing key,
+`null`, or empty string) are assigned the sentinel value **`"truck_stop_default"`**.
+
+This applies to both **USA** (`"country": "US"`) and **Canada** (`"country": "CA"`)
+POI data. Entries with an existing non-empty name are never modified.
+
+**Where the rule is enforced:**
+- **Data layer** (`assets/locations.json`): all unnamed truck stop entries carry
+  `"name": "truck_stop_default"` directly in the JSON.  Entries with a proper
+  brand name (e.g. `"Pilot Travel Center - Portland"`) are left unchanged.
+- **Code layer** (`lib/services/poi_service.dart`,
+  `apps/mobile/lib/services/poi_service.dart`): `loadAllPois()` falls back to
+  `'truck_stop_default'` when parsing a JSON entry whose `name` field is absent
+  or empty, so the map always shows a labelled marker even for incomplete data.
+
+**Marker asset:** `assets/logo_brand_markers/truck_stop_default.png` is used as
+the map icon for these generic stops (already bundled in the app).
+
 ## Production integrations still required
 - HERE / TomTom / Mapbox / custom routing graph
 - real-time traffic

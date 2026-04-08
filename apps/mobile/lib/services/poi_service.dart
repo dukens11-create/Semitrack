@@ -76,6 +76,13 @@ Future<List<PoiItem>> loadAllPois() async {
     final String rawIcon = json['icon'] as String;
     final String normalizedId = poiIconId(rawIcon);
 
+    // Resolve the name: truck stops missing a name (null or whitespace-only)
+    // are assigned 'truck_stop_default'. This covers both USA and Canada POI
+    // data. Entries with a non-empty name are used as-is.
+    final String rawName = (json['name'] as String?)?.trim() ?? '';
+    final String resolvedName =
+        rawName.isNotEmpty ? rawName : 'truck_stop_default';
+
     // Validate the normalised icon ID against the bundled PNG set.
     // If the PNG is absent, log a clear error and fall back to the default
     // marker icon so the POI is always visible on the map.
@@ -86,7 +93,7 @@ Future<List<PoiItem>> loadAllPois() async {
       // TODO(production): Keep this error log — it identifies JSON icon values
       // that have no matching PNG in assets/logo_brand_markers/.
       debugPrint(
-        '[POI Load] ✗ Icon not found for "${json['name'] as String}": '
+        '[POI Load] ✗ Icon not found for "$resolvedName": '
         '"$rawIcon" → "$normalizedId" has no matching PNG in '
         'assets/logo_brand_markers/. Using fallback icon "$_kPoiFallbackIcon".',
       );
@@ -96,7 +103,7 @@ Future<List<PoiItem>> loadAllPois() async {
     return PoiItem(
       // Read id and category directly from the standardised JSON schema.
       id: json['id'] as String,
-      name: json['name'] as String,
+      name: resolvedName,
       category: json['category'] as String,
       // Resolved icon: normalised PNG filename if the asset exists, otherwise
       // the fallback icon so the POI still renders as a visible marker.

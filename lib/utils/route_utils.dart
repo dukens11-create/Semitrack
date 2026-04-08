@@ -2,6 +2,280 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
 
+// ── Snap-to-Road ─────────────────────────────────────────────────────────────
+
+/// Distance threshold used by [isOnRoute] and recommended for all
+/// "on-route / off-route" checks: **40 metres**.
+///
+/// A GPS fix within 40 m of the route polyline is considered "on route".
+/// Values above this threshold trigger off-route handling (warnings,
+/// recalculation, etc.).
+///
+/// Adjust the constant here rather than at every call site to keep the
+/// behaviour consistent across the app.
+const double kSnapToRouteThresholdMeters = 40.0;
+
+/// The result returned by [snapToRoad].
+///
+/// Bundles the snapped coordinate, the distance to it, and the original
+/// unmodified coordinate so callers never need to hold onto the original
+/// separately.
+class SnapResult {
+  const SnapResult({
+    required this.snappedPoint,
+    required this.distanceMeters,
+    required this.sourcePoint,
+  });
+
+  /// The nearest vertex on the route polyline to [sourcePoint].
+  ///
+  /// Use this **only for logic** (distance checks, route-matching, filtering).
+  /// Never use it to position a map marker or icon — always use [sourcePoint]
+  /// for any visual / display purpose.
+  final LatLng snappedPoint;
+
+  /// Haversine surface distance in metres from [sourcePoint] to [snappedPoint].
+  ///
+  /// Compare against [kSnapToRouteThresholdMeters] to decide whether the
+  /// vehicle or POI is "on route":
+  ///
+  /// ```dart
+  /// final bool onRoute = result.distanceMeters <= kSnapToRouteThresholdMeters;
+  /// ```
+  final double distanceMeters;
+
+  /// The original, unmodified coordinate that was passed to [snapToRoad].
+  ///
+  /// Use this for **all display purposes** (truck marker, POI icon, etc.) and
+  /// for any distance-remaining / ETA calculations that must reflect the real
+  /// GPS position.
+  final LatLng sourcePoint;
+}
+
+/// Snaps [point] to the nearest vertex on [routePoints] and returns a
+/// [SnapResult] containing the snapped coordinate, the distance to it, and the
+/// original unmodified point.
+///
+/// ---
+/// ⚠️  **Logic use only — never use for display.**
+///
+/// `snapToRoad` is a *routing-logic* primitive.  The [SnapResult.snappedPoint]
+/// it returns is appropriate **only** for:
+///
+/// - Detecting whether the vehicle is "on route" — compare
+///   [SnapResult.distanceMeters] against [kSnapToRouteThresholdMeters] (40 m).
+/// - Filtering or ranking POIs relative to the active route.
+/// - Computing distance-to-route for off-route detection or recalculation.
+///
+/// It is **not** appropriate for:
+///
+/// - Visually placing a truck marker, POI icon, or any map overlay.
+/// - Overriding the stored GPS or entrance coordinates of a POI.
+/// - Any "display" or rendering purpose whatsoever.
+///
+/// For map display, always use the **source** coordinate directly:
+///
+/// - Truck marker → real GPS `LatLng(position.latitude, position.longitude)`.
+/// - POI marker   → `LatLng(poi.displayLat, poi.displayLng)` (entrance when
+///                  available, centre otherwise — see [PoiItem.displayLat]).
+///
+/// See [getPoiDisplayLocation] for the canonical display-coordinate helper.
+///
+/// ---
+/// ### Algorithm
+///
+/// Iterates over every vertex in [routePoints] and tracks the one with the
+/// minimum haversine distance to [point].  O(n) in the number of route
+/// vertices; accurate for densely sampled Mapbox routes (vertices every
+/// 10–50 m).
+///
+/// For coarser routes, consider replacing the vertex loop with a true
+/// point-to-segment projection (e.g. using `turf_dart`'s
+/// `nearestPointOnLine`).
+///
+/// ---
+/// ### Parameters
+///
+/// - [point]       – The coordinate to snap (e.g. current GPS fix or a POI
+///                   coordinate for logic use).
+/// - [routePoints] – Ordered list of [LatLng] vertices from the active route.
+///
+/// ---
+/// ### Returns
+///
+/// A [SnapResult] containing:
+///
+/// - [SnapResult.snappedPoint]    – Nearest route vertex to [point].
+/// - [SnapResult.distanceMeters]  – Distance in metres from [point] to
+///                                  [snappedPoint].
+/// - [SnapResult.sourcePoint]     – The original, unmodified [point]; use
+///                                  this for all display and ETA calculations.
+///
+/// When [routePoints] is empty the function returns a safe no-op fallback:
+/// [SnapResult.snappedPoint] equals [point] and [SnapResult.distanceMeters]
+/// is `0.0`.
+///
+/// ---
+/// ### Example — "on route" check (✅ correct usage)
+///
+/// ```dart
+/// final SnapResult result = snapToRoad(
+///   LatLng(position.latitude, position.longitude),
+///   activeRoutePoints,
+/// );
+///
+/// final bool onRoute =
+///     result.distanceMeters <= kSnapToRouteThresholdMeters; // 40 m
+///
+/// if (!onRoute) _triggerOffRouteWarning();
+///
+/// // Always render the truck at the REAL GPS position, not the snapped one:
+/// renderTruckMarker(result.sourcePoint); // ← sourcePoint, NOT snappedPoint
+/// ```
+///
+/// ### Example — POI filtering (✅ correct usage)
+///
+/// ```dart
+/// final nearbyPois = allPois.where((poi) {
+///   final SnapResult r = snapToRoad(
+///     LatLng(poi.displayLat, poi.displayLng),
+///     routePoints,
+///   );
+///   return r.distanceMeters <= 500; // 500 m corridor
+/// }).toList();
+///
+/// // Render markers at the ORIGINAL POI coordinates, not the snapped ones:
+/// for (final poi in nearbyPois) {
+///   addMarker(getPoiDisplayLocation(poi)); // ← real coord, never snapped
+/// }
+/// ```
+///
+/// ### Example — ❌ wrong usage (never do this)
+///
+/// ```dart
+/// // DON'T snap a POI for display — use the real entrance/centre coords.
+/// final snapped = snapToRoad(LatLng(poi.lat, poi.lng), routePoints);
+/// addMarker(snapped.snappedPoint); // ← WRONG: moves the pin off the property
+/// ```
+SnapResult snapToRoad(LatLng point, List<LatLng> routePoints) {
+  // Defensive fallback: if there is no route to snap to, return the original
+  // point unchanged with a zero distance so callers can proceed safely.
+  if (routePoints.isEmpty) {
+    return SnapResult(
+      snappedPoint: point,
+      distanceMeters: 0.0,
+      sourcePoint: point,
+    );
+  }
+
+  LatLng nearestVertex = routePoints.first;
+  double minDistanceMeters = Geolocator.distanceBetween(
+    point.latitude,
+    point.longitude,
+    nearestVertex.latitude,
+    nearestVertex.longitude,
+  );
+
+  // Walk every vertex and keep track of the one closest to [point].
+  for (int i = 1; i < routePoints.length; i++) {
+    final LatLng vertex = routePoints[i];
+    final double d = Geolocator.distanceBetween(
+      point.latitude,
+      point.longitude,
+      vertex.latitude,
+      vertex.longitude,
+    );
+    if (d < minDistanceMeters) {
+      minDistanceMeters = d;
+      nearestVertex = vertex;
+    }
+  }
+
+  return SnapResult(
+    snappedPoint: nearestVertex,
+    distanceMeters: minDistanceMeters,
+    // Always carry the original point so callers never need to hold onto it
+    // separately — and are not tempted to use the snapped point for display.
+    sourcePoint: point,
+  );
+}
+
+/// Returns `true` when [point] is within [thresholdMeters] of the nearest
+/// vertex on [routePoints].
+///
+/// This is the recommended high-level helper for "on-route / off-route" logic.
+/// Internally it calls [snapToRoad] and compares [SnapResult.distanceMeters]
+/// against [thresholdMeters] (default [kSnapToRouteThresholdMeters] = 40 m).
+///
+/// ### Usage
+///
+/// ```dart
+/// if (!isOnRoute(LatLng(position.latitude, position.longitude), routePoints)) {
+///   _recalculateRoute();
+/// }
+/// ```
+///
+/// For off-route checks that also need the distance value, call [snapToRoad]
+/// directly instead.
+bool isOnRoute(
+  LatLng point,
+  List<LatLng> routePoints, {
+  double thresholdMeters = kSnapToRouteThresholdMeters,
+}) {
+  final SnapResult result = snapToRoad(point, routePoints);
+  return result.distanceMeters <= thresholdMeters;
+}
+
+// ── Display-location helpers ──────────────────────────────────────────────────
+
+/// Returns the best-available **display** coordinate for [poi] — the
+/// coordinate that should be used to place the POI's map marker or icon.
+///
+/// ### Rule: display code must never snap
+///
+/// This function exists to make the correct pattern explicit and
+/// discoverable.  It always returns a **real, stored coordinate**:
+///
+/// 1. If the POI has verified entrance coordinates ([PoiItem.entranceLat] /
+///    [PoiItem.entranceLng]), those are returned — they represent the precise
+///    GPS location of the truck entrance and should be preferred for
+///    marker placement.
+/// 2. Otherwise the property-centre coordinate ([PoiItem.lat] /
+///    [PoiItem.lng]) is returned.
+///
+/// Under **no circumstances** should [snapToRoad] be called inside display
+/// code.  Snapping moves the pin to the nearest road vertex, which may place
+/// the marker on the wrong road or inside a highway divider — far from the
+/// real entrance.  Route-snapping is a logic operation, not a display one.
+///
+/// ### Usage
+///
+/// ```dart
+/// // ✅ Correct: use the real entrance / centre coordinate for the marker.
+/// final LatLng markerPos = getPoiDisplayLocation(poi);
+/// addMarker(markerPos);
+///
+/// // ❌ Wrong: snapping the POI for display moves the pin off the property.
+/// // final snapped = snapToRoad(LatLng(poi.lat, poi.lng), routePoints);
+/// // addMarker(snapped.snappedPoint);
+/// ```
+///
+/// For route-logic purposes (filtering, on-route checks, distance ranking)
+/// call [snapToRoad] or [isOnRoute] separately — those helpers carry both
+/// the snapped and the source coordinates so you can always render from the
+/// source.
+LatLng getPoiDisplayLocation(PoiItem poi) {
+  // 1. Prefer verified entrance coordinates when available — they are the
+  //    most accurate truck-entrance GPS fix for this property.
+  if (poi.entranceLat != null && poi.entranceLng != null) {
+    return LatLng(poi.entranceLat!, poi.entranceLng!);
+  }
+
+  // 2. Fallback: property-centre coordinate stored in the JSON.
+  //    Never snap this to the road — use it as-is.
+  return LatLng(poi.lat, poi.lng);
+}
+
 /// A minimal POI (Point of Interest) model used by [filterPOIsNearRoute].
 ///
 /// In production, substitute your actual domain model

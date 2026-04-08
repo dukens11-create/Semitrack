@@ -84,6 +84,7 @@ Future<List<PoiItem>> loadAllPois() async {
         rawName.isNotEmpty ? rawName : 'truck_stop_default';
 
 
+
     // Validate the normalised icon ID against the bundled PNG set.
     // If the PNG is absent, log a clear error and fall back to the default
     // marker icon so the POI is always visible on the map.

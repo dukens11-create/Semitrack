@@ -42,6 +42,7 @@ POI data. Entries with an existing non-empty name are never modified.
 the map icon for these generic stops (already bundled in the app).
 
 
+
 ## Production integrations still required
 - HERE / TomTom / Mapbox / custom routing graph
 - real-time traffic

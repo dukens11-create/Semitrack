@@ -469,3 +469,23 @@ List<PoiItem> getPOIsOnRoute(
 
   return filtered;
 }
+
+/// Returns the best-available [LatLng] for rendering a POI marker on the map.
+///
+/// Priority:
+///   1. Exact entrance coordinates ([PoiItem.entranceLat] /
+///      [PoiItem.entranceLng]) when present — the verified GPS fix at the
+///      facility's primary truck access point.
+///   2. The stored property-centre coordinates ([PoiItem.lat] /
+///      [PoiItem.lng]) as a fallback.
+///
+/// **Road snapping is never applied.**  Map marker placement must always use
+/// real, stored coordinates — not a point projected onto the nearest road
+/// segment.  Route snapping may only be used for filtering, ranking, or
+/// determining "ahead-on-route" status, never for visual marker position.
+LatLng getDisplayLocation(PoiItem poi) {
+  if (poi.entranceLat != null && poi.entranceLng != null) {
+    return LatLng(poi.entranceLat!, poi.entranceLng!);
+  }
+  return LatLng(poi.lat, poi.lng);
+}

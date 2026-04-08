@@ -2278,9 +2278,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// uniform on the map.  When [bytes] is non-null the decoded PNG is shown
   /// inside the white circular head; otherwise the fallback icon for [category]
   /// (determined by [_poiCategoryIcon]) is displayed inside the head.
-  Widget _buildGpsPinWidget(String category, {Uint8List? bytes}) {
+  ///
+  /// **Verified vs. approximate icon:**
+  /// - [isVerified] `true`  → Both [PoiItem.entranceLat] and
+  ///   [PoiItem.entranceLng] are set, meaning the marker is placed at the
+  ///   confirmed truck-entrance GPS fix.  The pin uses the full category colour
+  ///   (the **verifiedIcon** appearance).
+  /// - [isVerified] `false` → One or both entrance coordinates are absent; the
+  ///   marker falls back to the property-centre coordinate and is rendered in
+  ///   grey (the **approximateIcon** appearance) to signal that the precise
+  ///   entrance location has not yet been confirmed.
+  Widget _buildGpsPinWidget(String category,
+      {Uint8List? bytes, bool isVerified = true}) {
+    // Verified POIs use the category colour (verifiedIcon).
+    // Approximate POIs use grey to signal an unconfirmed entrance location
+    // (approximateIcon).
+    final Color pinColor =
+        isVerified ? _poiCategoryColor(category) : Colors.grey.shade500;
     return buildGpsPinMarker(
-      pinColor: _poiCategoryColor(category),
+      pinColor: pinColor,
       imageBytes: bytes,
       fallbackIcon: _poiCategoryIcon(category),
       pinSize: _kPoiPinSize,
@@ -2321,19 +2337,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
-  /// **Approx filtering (data quality):** Only POIs that carry verified
-  /// entrance coordinates ([entranceLat]/[entranceLng] are non-null) are
-  /// rendered on the driver's map.  POIs without these precise coordinates are
-  /// considered approximate / unverified — they are silently skipped so drivers
-  /// never see markers for fake or imprecise locations.  All hidden POIs are
-  /// accessible via the admin maintenance sheet ([_showApproxPoiAdminSheet])
-  /// so data editors can identify and correct them.
+  /// **Verified vs. approximate icons (data quality):** Every POI is shown on
+  /// the driver's map regardless of whether entrance coordinates are present.
+  /// The icon colour communicates data quality:
+  ///   • **verifiedIcon** (category colour) — both [PoiItem.entranceLat] and
+  ///     [PoiItem.entranceLng] are set, so the marker is placed at the
+  ///     confirmed truck-entrance GPS fix.
+  ///   • **approximateIcon** (grey) — one or both entrance coordinates are
+  ///     absent; the marker uses the property-centre coordinate ([PoiItem.lat]
+  ///     / [PoiItem.lng]) and is displayed in grey to signal that the location
+  ///     is an estimate.  Data editors can find these POIs via
+  ///     [_showApproxPoiAdminSheet] to add precise entrance coordinates.
   ///
-  /// Every verified POI — truck stop, hotel, restaurant, rest area, gym,
-  /// commercial vehicle, and weight station — is rendered at a uniform size
-  /// using the GPS teardrop-pin shape so all types look visually consistent.
-  /// Branded logo bytes are embedded in the pin head when available; otherwise
-  /// a category-appropriate fallback icon is shown.
+  /// Every POI — truck stop, hotel, restaurant, rest area, gym, commercial
+  /// vehicle, and weight station — is rendered at a uniform size using the GPS
+  /// teardrop-pin shape so all types look visually consistent.  Branded logo
+  /// bytes are embedded in the pin head when available; otherwise a
+  /// category-appropriate fallback icon is shown.
   ///
   /// **Location suspect validation:** Every displayed POI is evaluated by
   /// [_isPoiLocationSuspect].  POIs that fail are rendered with an orange
@@ -2380,7 +2400,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
+      // A POI is "verified" when both entrance lat and lng are provided —
+      // i.e. we have a confirmed GPS fix for the truck entrance/access point.
+      // Verified POIs get the category-colour verifiedIcon; those missing
+      // either coordinate are rendered with a grey approximateIcon.
+      final bool isVerified =
+          poi.entranceLat != null && poi.entranceLng != null;
+
+      Widget pinWidget =
+          _buildGpsPinWidget(poi.category, bytes: bytes, isVerified: isVerified);
 
       final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
       final bool isSuspect = _isPoiLocationSuspect(displayCoord,
@@ -2410,7 +2438,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the smart-filtered set of [PoiItem]s to render on the map.
   ///
   /// **Route priority (navigating):**
-  ///   1. Keep only POIs with verified entrance coords.
+  ///   1. All loaded POIs are considered (both verified and approximate).
+  ///      Verified POIs have [PoiItem.entranceLat]/[PoiItem.entranceLng] set
+  ///      and will be displayed with a verifiedIcon; approximate POIs (missing
+  ///      either entrance coordinate) fall back to property-centre coords and
+  ///      are displayed with an approximateIcon.
   ///   2. Pre-filter to POIs within [_poiRouteCorridorMeters] of any route
   ///      point ahead of the truck (via [getPOIsOnRoute]).
   ///   3. Compute miles-ahead along the route; skip if passed or > 50 mi.
@@ -2421,17 +2453,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   7. Cap at [_poiMaxMarkers] total.
   ///
   /// **Nearby filter (browsing):**
-  ///   1. Keep only POIs with verified entrance coords within
-  ///      [_poiNearbyRadiusMeters] of the current truck position.
+  ///   1. All loaded POIs within [_poiNearbyRadiusMeters] of the current truck
+  ///      position are considered (verified and approximate alike).
   ///   2. Sort by distance (closest first).
   ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
   ///
   /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
   /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
   List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: only POIs with verified entrance coordinates (both lat and lng).
-    final List<PoiItem> candidates =
-        _loadedPois.where((p) => p.entranceLat != null && p.entranceLng != null).toList();
+    // Candidates: all loaded POIs. Verified POIs (both entranceLat and
+    // entranceLng set) will be shown with a verifiedIcon using the confirmed
+    // entrance coordinate; approximate POIs (missing either coordinate) will
+    // be shown with a grey approximateIcon at their property-centre coordinate.
+    final List<PoiItem> candidates = List<PoiItem>.from(_loadedPois);
     if (candidates.isEmpty) return const [];
 
     final LatLng? pos = _truckPosition;
@@ -2503,7 +2537,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       debugPrint('[POI/Filter] navigating: ${result.length} POIs selected '
           'from ${scored.length} ahead-on-route candidates '
           '(${corridorCandidates.length} in corridor, '
-          '${candidates.length} total with verified coords).');
+          '${candidates.length} total candidates).');
       return result;
     }
 
@@ -2630,13 +2664,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<PoiItem> get _approxPois =>
       _loadedPois.where((p) => p.entranceLat == null || p.entranceLng == null).toList();
 
-  /// Opens a bottom sheet listing all POIs that are currently hidden from the
-  /// driver's map due to approximate / unverified location data.
+  /// Opens a bottom sheet listing all POIs that are currently shown on the
+  /// driver's map with a grey approximateIcon due to missing precise entrance
+  /// coordinates.
   ///
   /// This is a **maintenance / admin view** intended for data editors.  It
-  /// shows each hidden POI's name, category, id, and stored coordinates so
-  /// that the team can identify which entries need precise
-  /// `entrance_lat`/`entrance_lng` values added to `assets/locations.json`.
+  /// shows each approximate POI's name, category, id, and stored coordinates
+  /// so that the team can identify which entries need precise
+  /// `entrance_lat`/`entrance_lng` values added to `assets/locations.json`
+  /// to upgrade them to a verifiedIcon.
   void _showApproxPoiAdminSheet() {
     final approx = _approxPois;
 
@@ -2672,7 +2708,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Hidden Approximate POIs (${approx.length})',
+                      'Approximate POIs (${approx.length})',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -2686,10 +2722,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text(
-                'These POIs are hidden from the map because they have no '
-                'verified entrance coordinates. Add entrance_lat / '
-                'entrance_lng to assets/locations.json to make them visible '
-                'to drivers.',
+                'These POIs are displayed on the map with a grey '
+                'approximateIcon because they have no verified entrance '
+                'coordinates. Add entrance_lat / entrance_lng to '
+                'assets/locations.json to upgrade them to a coloured '
+                'verifiedIcon placed at the confirmed truck-entrance GPS fix.',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ),
@@ -2738,7 +2775,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       padding: EdgeInsets.all(24),
                       child: Text(
                         'All POIs have verified entrance coordinates. '
-                        'No data corrections needed.',
+                        'Every marker uses the verifiedIcon (category colour).',
                         style:
                             TextStyle(color: Colors.white70, fontSize: 13),
                         textAlign: TextAlign.center,

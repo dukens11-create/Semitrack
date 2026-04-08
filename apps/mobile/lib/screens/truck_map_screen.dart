@@ -2500,11 +2500,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      // A POI is "verified" when entranceLat is provided and verified=true —
-      // i.e. we have a confirmed GPS fix for the truck entrance/access point.
-      // Verified POIs get the category-colour verifiedIcon; those missing
-      // the entrance or not yet verified are rendered with a grey approximateIcon.
-      final bool isVerified = poi.entranceLat != null && poi.verified;
+      // A POI is "verified" when the verified flag is true AND both entrance
+      // lat and lng are provided — i.e. the entrance GPS fix has been
+      // confirmed against real road / satellite imagery.
+      // Verified POIs get the category-colour verifiedIcon; those with
+      // verified=false or missing entrance coordinates are rendered with a
+      // grey approximateIcon.
+      final bool isVerified =
+          poi.verified && poi.entranceLat != null && poi.entranceLng != null;
 
       Widget pinWidget =
           _buildGpsPinWidget(poi.category, bytes: bytes, isVerified: isVerified);
@@ -2611,9 +2614,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _poiPriorityScore(PoiItem poi) {
     // Null-safe category normalisation.
     final String category = poi.category.toLowerCase().trim();
-    // Verified = entranceLat present and verified=true.
+    // Verified = verified flag true and both entranceLat and entranceLng present.
     final double verified =
-        (poi.entranceLat != null && poi.verified) ? 1.0 : 0.0;
+        (poi.verified && poi.entranceLat != null && poi.entranceLng != null)
+            ? 1.0
+            : 0.0;
 
     double base;
     switch (category) {

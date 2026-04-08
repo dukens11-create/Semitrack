@@ -912,7 +912,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Map zoom levels between [_poiHideZoomThreshold] and this threshold show
   /// cluster badges instead of individual POI icons.
-  static const double _poiClusterZoomThreshold = 13.0;
+  static const double _poiClusterZoomThreshold = 13.5;
 
   /// Route-corridor half-width (metres) used when checking whether a POI is
   /// close enough to the active route to be considered "ahead".
@@ -2334,6 +2334,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  /// Returns `true` when the map should display POI cluster badges instead of
+  /// individual POI markers at the given [zoom] level.
+  ///
+  /// Clustering is used at lower zoom levels (wider view) to avoid overwhelming
+  /// the driver with dozens of overlapping pins.  Once the driver zooms in past
+  /// the [_poiClusterZoomThreshold] the map switches to individual GPS-pin
+  /// markers so each POI can be tapped and identified precisely.
+  ///
+  /// • zoom < [_poiClusterZoomThreshold]  → `true`  — show cluster badges
+  /// • zoom ≥ [_poiClusterZoomThreshold]  → `false` — show individual POI markers
+  ///
+  /// Used by [_buildAllPoiMarkers] to branch between
+  /// [_buildPoiClusterMarkers] and per-POI [Marker] construction.
+  bool _shouldUseClustersAtZoom(double zoom) => zoom < _poiClusterZoomThreshold;
+
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
@@ -2362,9 +2377,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Tapping a marker shows a dialog with the POI name.
   ///
   /// Smart filtering rules (GPS-app style):
-  ///   • zoom < [_poiHideZoomThreshold]  → no markers shown
-  ///   • zoom [_poiHideZoomThreshold]–[_poiClusterZoomThreshold] → cluster badges
-  ///   • zoom > [_poiClusterZoomThreshold] → filtered individual markers
+  ///   • zoom < [_poiHideZoomThreshold]          → no markers shown
+  ///   • [_shouldUseClustersAtZoom] returns true  → cluster badges
+  ///   • [_shouldUseClustersAtZoom] returns false → filtered individual markers
   ///
   /// Individual-marker selection:
   ///   • While navigating: POIs ahead on route within [_poiRouteMaxAheadMiles],
@@ -2384,12 +2399,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── Filtered candidate list ────────────────────────────────────────────
     final List<PoiItem> filtered = _getFilteredPoisForDisplay();
 
-    // ── Zoom 10–13: cluster badges ─────────────────────────────────────────
-    if (zoom <= _poiClusterZoomThreshold) {
+    // ── Zoom 10–13.5: cluster badges ──────────────────────────────────────
+    // _shouldUseClustersAtZoom returns true strictly below 13.5 (zoom < 13.5),
+    // so at exactly 13.5 the map transitions to individual markers.  This is
+    // intentional: the helper implements the user-specified boundary of 13.5.
+    if (_shouldUseClustersAtZoom(zoom)) {
       return _buildPoiClusterMarkers(filtered);
     }
 
-    // ── Zoom > 13: individual markers ─────────────────────────────────────
+    // ── Zoom ≥ 13.5: individual markers ───────────────────────────────────
     final List<Marker> markers = [];
     int suspectCount = 0;
 

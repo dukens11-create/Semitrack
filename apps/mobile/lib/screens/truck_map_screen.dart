@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -2277,9 +2278,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// uniform on the map.  When [bytes] is non-null the decoded PNG is shown
   /// inside the white circular head; otherwise the fallback icon for [category]
   /// (determined by [_poiCategoryIcon]) is displayed inside the head.
-  Widget _buildGpsPinWidget(String category, {Uint8List? bytes}) {
+  ///
+  /// **Verified vs. approximate icon:**
+  /// - [isVerified] `true`  → Both [PoiItem.entranceLat] and
+  ///   [PoiItem.entranceLng] are set, meaning the marker is placed at the
+  ///   confirmed truck-entrance GPS fix.  The pin uses the full category colour
+  ///   (the **verifiedIcon** appearance).
+  /// - [isVerified] `false` → One or both entrance coordinates are absent; the
+  ///   marker falls back to the property-centre coordinate and is rendered in
+  ///   grey (the **approximateIcon** appearance) to signal that the precise
+  ///   entrance location has not yet been confirmed.
+  Widget _buildGpsPinWidget(String category,
+      {Uint8List? bytes, bool isVerified = true}) {
+    // Verified POIs use the category colour (verifiedIcon).
+    // Approximate POIs use grey to signal an unconfirmed entrance location
+    // (approximateIcon).
+    final Color pinColor =
+        isVerified ? _poiCategoryColor(category) : Colors.grey.shade500;
     return buildGpsPinMarker(
-      pinColor: _poiCategoryColor(category),
+      pinColor: pinColor,
       imageBytes: bytes,
       fallbackIcon: _poiCategoryIcon(category),
       pinSize: _kPoiPinSize,
@@ -2320,22 +2337,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds [Marker]s for every [PoiItem] in [_loadedPois] (from
   /// `assets/locations.json`).
   ///
-  /// **Marker display logic:** The [PoiItem.verified] flag and entrance
-  /// coordinates determine how each POI is displayed:
-  ///   • When [PoiItem.verified] is `true` and both [PoiItem.entranceLat] /
-  ///     [PoiItem.entranceLng] are set, the marker is placed at the verified
-  ///     truck-entrance point and rendered as a **verified** marker.
-  ///   • Otherwise the marker is placed at [PoiItem.lat]/[PoiItem.lng] (the
-  ///     property centre) and rendered as an **approximate** marker.  These
-  ///     POIs are also listed in the admin maintenance sheet
-  ///     ([_showApproxPoiAdminSheet]) so data editors can add or verify
-  ///     entrance coordinates.
+  /// **Verified vs. approximate markers (data quality):** Every POI is shown
+  /// on the driver's map regardless of whether entrance coordinates are
+  /// present.  The [PoiItem.verified] flag and entrance coordinates determine
+  /// the marker style:
+  ///   • **verified marker** (category colour) — [PoiItem.verified] is `true`
+  ///     and both [PoiItem.entranceLat] / [PoiItem.entranceLng] are set; the
+  ///     marker is placed at the confirmed truck-entrance GPS fix.
+  ///   • **approximate marker** (grey) — [PoiItem.verified] is `false` or
+  ///     either entrance coordinate is absent; the marker uses the
+  ///     property-centre coordinate ([PoiItem.lat]/[PoiItem.lng]) and is
+  ///     displayed in grey to signal that the location is an estimate.  Data
+  ///     editors can find these POIs via [_showApproxPoiAdminSheet] to add
+  ///     precise entrance coordinates and set `verified=true`.
   ///
-  /// Every POI — truck stop, hotel, restaurant, rest area, gym,
-  /// commercial vehicle, and weight station — is rendered at a uniform size
-  /// using the GPS teardrop-pin shape so all types look visually consistent.
-  /// Branded logo bytes are embedded in the pin head when available; otherwise
-  /// a category-appropriate fallback icon is shown.
+  /// Every POI — truck stop, hotel, restaurant, rest area, gym, commercial
+  /// vehicle, and weight station — is rendered at a uniform size using the GPS
+  /// teardrop-pin shape so all types look visually consistent.  Branded logo
+  /// bytes are embedded in the pin head when available; otherwise a
+  /// category-appropriate fallback icon is shown.
   ///
   /// **Location suspect validation:** Every displayed POI is evaluated by
   /// [_isPoiLocationSuspect].  POIs that fail are rendered with an orange
@@ -2382,7 +2402,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      Widget pinWidget = _buildGpsPinWidget(poi.category, bytes: bytes);
+      // A POI is "verified" when both entrance lat and lng are provided —
+      // i.e. we have a confirmed GPS fix for the truck entrance/access point.
+      // Verified POIs get the category-colour verifiedIcon; those missing
+      // either coordinate are rendered with a grey approximateIcon.
+      final bool isVerified =
+          poi.entranceLat != null && poi.entranceLng != null;
+
+      Widget pinWidget =
+          _buildGpsPinWidget(poi.category, bytes: bytes, isVerified: isVerified);
 
       final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
       final bool isSuspect = _isPoiLocationSuspect(displayCoord,
@@ -2412,8 +2440,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the smart-filtered set of [PoiItem]s to render on the map.
   ///
   /// **Route priority (navigating):**
-  ///   1. Keep only POIs with verified entrance coords
-  ///      ([PoiItem.verified] is `true` and both entrance coordinates set).
+  ///   1. All loaded POIs are considered (both verified and approximate).
+  ///      A POI with [PoiItem.verified] = `true` and both entrance coordinates
+  ///      set is verified and will be displayed with a verified marker at the
+  ///      entrance GPS fix; approximate POIs (verified=false or missing
+  ///      entrance coords) fall back to property-centre coords and a grey
+  ///      approximate marker.
   ///   2. Pre-filter to POIs within [_poiRouteCorridorMeters] of any route
   ///      point ahead of the truck (via [getPOIsOnRoute]).
   ///   3. Compute miles-ahead along the route; skip if passed or > 50 mi.
@@ -2424,20 +2456,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   7. Cap at [_poiMaxMarkers] total.
   ///
   /// **Nearby filter (browsing):**
-  ///   1. Keep only POIs with verified entrance coords within
-  ///      [_poiNearbyRadiusMeters] of the current truck position.
+  ///   1. All loaded POIs within [_poiNearbyRadiusMeters] of the current truck
+  ///      position are considered (verified and approximate alike).
   ///   2. Sort by distance (closest first).
   ///   3. Dedup and cap at [_poiNearbyMaxMarkers].
   ///
   /// The route-corridor step uses [getPOIsOnRoute] from `route_utils.dart`.
   /// Adjust [_poiRouteCorridorMeters] to widen or narrow the route corridor.
   List<PoiItem> _getFilteredPoisForDisplay() {
-    // Candidates: only POIs with verified == true and both entrance coordinates
-    // set.  These use the precise truck-entrance GPS fix for display.
-    final List<PoiItem> candidates = _loadedPois
-        .where((p) =>
-            p.verified && p.entranceLat != null && p.entranceLng != null)
-        .toList();
+    // Candidates: all loaded POIs. Verified POIs (verified=true and both
+    // entranceLat / entranceLng set) will be shown with a verified marker
+    // using the confirmed entrance coordinate; approximate POIs (verified=false
+    // or missing either coordinate) will be shown with a grey approximate
+    // marker at their property-centre coordinate.
+    final List<PoiItem> candidates = List<PoiItem>.from(_loadedPois);
     if (candidates.isEmpty) return const [];
 
     final LatLng? pos = _truckPosition;
@@ -2509,7 +2541,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       debugPrint('[POI/Filter] navigating: ${result.length} POIs selected '
           'from ${scored.length} ahead-on-route candidates '
           '(${corridorCandidates.length} in corridor, '
-          '${candidates.length} total with verified coords).');
+          '${candidates.length} total candidates).');
       return result;
     }
 
@@ -2638,13 +2670,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           !p.verified || p.entranceLat == null || p.entranceLng == null)
       .toList();
 
-  /// Opens a bottom sheet listing all POIs that are currently hidden from the
-  /// driver's map due to approximate / unverified location data.
+  /// Opens a bottom sheet listing all POIs that are currently shown on the
+  /// driver's map with a grey approximateIcon due to missing precise entrance
+  /// coordinates.
   ///
   /// This is a **maintenance / admin view** intended for data editors.  It
-  /// shows each hidden POI's name, category, id, and stored coordinates so
-  /// that the team can identify which entries need precise
-  /// `entrance_lat`/`entrance_lng` values added to `assets/locations.json`.
+  /// shows each approximate POI's name, category, id, and stored coordinates
+  /// so that the team can identify which entries need precise
+  /// `entrance_lat`/`entrance_lng` values added to `assets/locations.json`
+  /// to upgrade them to a verifiedIcon.
   void _showApproxPoiAdminSheet() {
     final approx = _approxPois;
 
@@ -2680,7 +2714,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Hidden Approximate POIs (${approx.length})',
+                      'Approximate POIs (${approx.length})',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -2694,11 +2728,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text(
-                'These POIs are hidden from the verified-placement layer '
-                'because their entrance coordinates are missing or unverified '
-                '(verified=false). Add entrance_lat / entrance_lng and set '
-                'verified=true in assets/locations.json to enable precise '
-                'truck-entrance placement for drivers.',
+                'These POIs are displayed on the map with a grey approximate '
+                'marker because their entrance coordinates are missing or '
+                'unverified (verified=false). Add entrance_lat / entrance_lng '
+                'and set verified=true in assets/locations.json to upgrade '
+                'them to a coloured verified marker at the confirmed '
+                'truck-entrance GPS fix.',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
             ),
@@ -2747,7 +2782,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       padding: EdgeInsets.all(24),
                       child: Text(
                         'All POIs have verified entrance coordinates. '
-                        'No data corrections needed.',
+                        'Every marker uses the verifiedIcon (category colour).',
                         style:
                             TextStyle(color: Colors.white70, fontSize: 13),
                         textAlign: TextAlign.center,
@@ -5479,7 +5514,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         durationSeconds: durationSeconds,
       );
     } catch (e) {
-      print('_fetchRouteFromApi error: $e');
+      // Only log internal route-fetch errors in debug builds.
+      if (kDebugMode) debugPrint('_fetchRouteFromApi error: $e');
       return null;
     }
   }
@@ -7131,11 +7167,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
     if (_isLoadingRoute) {
-      print("fetchRoute already in progress – skipping duplicate call");
+      // Only emit diagnostics in debug builds – suppress in release/profile.
+      if (kDebugMode) debugPrint("fetchRoute already in progress – skipping duplicate call");
       return;
     }
     _isLoadingRoute = true;
-    print("fetchRoute started (alternative: $alternative)");
+    if (kDebugMode) debugPrint("fetchRoute started (alternative: $alternative)");
 
     // Hard-reset the route state before fetching to ensure no stale points
     // from a previous route are left in _routePoints or rendered on the map.
@@ -7174,7 +7211,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final res = await http.get(Uri.parse(url)).timeout(
         const Duration(seconds: 10),
       );
-      print("MAPBOX RESPONSE: ${res.body}");
+      // Log the raw Mapbox response only in debug builds to avoid leaking
+      // route data (which may contain user location) to production logs.
+      if (kDebugMode) debugPrint("MAPBOX RESPONSE: ${res.body}");
 
       final data = jsonDecode(res.body);
       final routes = data["routes"] as List;
@@ -7243,7 +7282,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _isLoading = false;
         });
 
-        print("Route points count: ${_routePoints.length}");
+        if (kDebugMode) debugPrint("Route points count: ${_routePoints.length}");
         if (selectedOpt.steps.isNotEmpty) {
           _speak(selectedOpt.steps.first.instruction);
         }
@@ -7282,7 +7321,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // When already on the alternative, we accept the route regardless —
       // no further candidates are available to try.
       if (!_isTruckSafe(newPoints) && !alternative) {
-        print("Route is not truck-safe – fetching alternative route");
+        if (kDebugMode) debugPrint("Route is not truck-safe – fetching alternative route");
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
         _isLoadingRoute = false;
@@ -7353,7 +7392,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       });
 
       // Log the final route point count for debugging route-duplication issues.
-      print("Route points count: ${_routePoints.length}");
+      if (kDebugMode) debugPrint("Route points count: ${_routePoints.length}");
 
       // Speak the first instruction when the route is (re-)loaded.
       if (allSteps.isNotEmpty) {
@@ -7401,7 +7440,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         (route['duration'] as num).toInt(),
       );
     } catch (e) {
-      print('Mapbox error: $e');
+      if (kDebugMode) debugPrint('Mapbox error: $e');
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -7849,8 +7888,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }).toList();
     } catch (e) {
       // Log the error so developers can diagnose API or network failures.
+      // Only emit in debug builds – suppressed in release/profile mode.
       // The empty list return lets the search sheet show "no results" gracefully.
-      print('Geocoding error for "$query": $e');
+      if (kDebugMode) debugPrint('Geocoding error for "$query": $e');
       return [];
     }
   }
@@ -7985,7 +8025,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (res.statusCode != 200) {
         // Log non-200 responses (e.g. 401 bad token, 429 rate limit) to aid
         // debugging without surfacing raw HTTP details to the end user.
-        print('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
+        // Only emit in debug builds to avoid leaking response bodies in production.
+        if (kDebugMode) debugPrint('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
         if (mounted) setState(() => _isSearching = false);
         return;
       }
@@ -8018,7 +8059,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     } catch (e) {
       // Log the error so developers can diagnose network or parsing failures.
-      print('Geocoding error for "$q": $e');
+      // Only emit in debug builds – suppressed in release/profile mode.
+      if (kDebugMode) debugPrint('Geocoding error for "$q": $e');
       if (mounted) {
         setState(() {
           _searchResults = const [];

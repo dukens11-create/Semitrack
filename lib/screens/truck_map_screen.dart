@@ -946,19 +946,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// scans all provided route points without an artificial cap.
   static const int _poiRoutePointScanLimit = 2000;
 
-  /// POI categories considered high-priority for forced-keep and scoring.
-  static const Set<String> _poiPriorityCategories = {
-    'truck_stop',
-    'weigh_station',
-    'rest_area',
-    'brake_check_area',
-    'truck_parking',
-    'commercial_vehicle_wash',
-  };
-
-  /// POI categories treated as safety-critical for forced-ahead logic.
+  /// POI categories treated as safety-critical for the forced-ahead logic in
+  /// [_getVisiblePoisForCurrentView].  Weigh stations are excluded here because
+  /// they have their own dedicated forced slot ([_poiMaxWeighStationsAheadForced])
+  /// and must not double-count into the safety quota.
   static const Set<String> _poiSafetyCategories = {
-    'weigh_station',
     'brake_check_area',
     'rest_area',
   };
@@ -2615,7 +2607,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Sort by priority score descending — best POIs are chosen first.
     final List<PoiItem> sorted = List<PoiItem>.from(pois)
-      ..sort((a, b) => _poiPriorityScore(b).compareTo(_poiPriorityScore(a)));
+      // Sort using _isHigherPriorityPoi: highest-priority POIs come first so
+      // they are always selected before lower-priority ones in the dedup pass.
+      ..sort((a, b) => _isHigherPriorityPoi(a, b) ? -1 : (_isHigherPriorityPoi(b, a) ? 1 : 0));
 
     final List<PoiItem> result = [];
     final List<LatLng> included = [];
@@ -2681,14 +2675,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       for (final poi in ahead) {
         final String cat = poi.category.toLowerCase().trim();
-        if (cat == 'truck_stop' && truckStopCount < _poiMaxTruckStopsAheadForced) {
+        final bool needsTruckStop =
+            cat == 'truck_stop' && truckStopCount < _poiMaxTruckStopsAheadForced;
+        final bool needsWeighStation =
+            cat == 'weigh_station' && weighStationCount < _poiMaxWeighStationsAheadForced;
+        // Safety slot: rest_area / brake_check_area (weigh_station handled above).
+        final bool needsSafetyPoi =
+            _poiSafetyCategories.contains(cat) && safetyCount < _poiMaxSafetyItemsAheadForced;
+
+        if (needsTruckStop) {
           forced.add(poi);
           truckStopCount++;
-        } else if (cat == 'weigh_station' && weighStationCount < _poiMaxWeighStationsAheadForced) {
+        } else if (needsWeighStation) {
           forced.add(poi);
           weighStationCount++;
-        } else if (_poiSafetyCategories.contains(cat) &&
-            safetyCount < _poiMaxSafetyItemsAheadForced) {
+        } else if (needsSafetyPoi) {
           forced.add(poi);
           safetyCount++;
         }

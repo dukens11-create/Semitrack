@@ -2500,12 +2500,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           assetKey != null ? _brandIconBytes[assetKey] : null;
 
-      // A POI is "verified" when both entrance lat and lng are provided —
+      // A POI is "verified" when entranceLat is provided and verified=true —
       // i.e. we have a confirmed GPS fix for the truck entrance/access point.
       // Verified POIs get the category-colour verifiedIcon; those missing
-      // either coordinate are rendered with a grey approximateIcon.
-      final bool isVerified =
-          poi.entranceLat != null && poi.entranceLng != null;
+      // the entrance or not yet verified are rendered with a grey approximateIcon.
+      final bool isVerified = poi.entranceLat != null && poi.verified;
 
       Widget pinWidget =
           _buildGpsPinWidget(poi.category, bytes: bytes, isVerified: isVerified);
@@ -2612,9 +2611,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _poiPriorityScore(PoiItem poi) {
     // Null-safe category normalisation.
     final String category = poi.category.toLowerCase().trim();
-    // Verified = both entranceLat and entranceLng present.
+    // Verified = entranceLat present and verified=true.
     final double verified =
-        (poi.entranceLat != null && poi.entranceLng != null) ? 1.0 : 0.0;
+        (poi.entranceLat != null && poi.verified) ? 1.0 : 0.0;
 
     double base;
     switch (category) {
@@ -10010,20 +10009,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
       // ─────────────────────────────────────────────────────────────────────
 
-      // ── Filter: only POIs with verified entrance coordinates ─────────────
-      // POIs where verified=false or entrance coords are absent use the
-      // property-centre lat/lng with an approximate marker.  Only POIs with
-      // verified=true and both entrance coords are sent to the Mapbox source
-      // for the precise-placement layer; the full list (_loadedPois) remains
-      // available for the admin/debug maintenance sheet.
-      final List<PoiItem> verifiedPois = pois
-          .where((p) =>
-              p.verified && p.entranceLat != null && p.entranceLng != null)
-          .toList();
+      // ── Log: breakdown of verified vs approximate POIs ──────────────────
+      // All POIs are included in the Mapbox source — verified ones (entranceLat
+      // present + verified=true) show a colored marker; approximate ones show
+      // a grey marker.  No POIs are hidden due to missing entrance coordinates.
+      final int verifiedCount =
+          pois.where((p) => p.entranceLat != null && p.verified).length;
       debugPrint(
         '[POI] ${pois.length} total POIs loaded; '
-        '${verifiedPois.length} verified (entrance coords confirmed), '
-        '${pois.length - verifiedPois.length} approximate (using primary lat/lng).',
+        '$verifiedCount verified (colored marker), '
+        '${pois.length - verifiedCount} approximate (grey marker).',
       );
 
       // ── Diagnostic logging — verify dataset coverage ──────────────────────
@@ -10054,15 +10049,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       await registerPoiIcons(map.style);
 
       // 2. Add the GeoJSON source with clustering enabled.
-      //    Only verified POIs (entrance_lat / entrance_lng present) are included
-      //    so approximate / unverified POIs are hidden from drivers.
+      //    All POIs are included — verified ones (entranceLat + verified=true)
+      //    are placed at their precise entrance coords; approximate POIs use
+      //    property-centre lat/lng.  The `verified` GeoJSON property controls
+      //    marker styling (colored vs grey) in the style layers.
       //    cluster: true       → Mapbox groups nearby features at low zoom levels.
       //    clusterMaxZoom: 13  → clusters dissolve above zoom 13.5 (individual
       //                          icons appear at minzoom 13.5 on the unclustered
       //                          layer, matching _poiClusterZoomThreshold).
       //    clusterRadius: 50   → pixel radius for grouping neighbours.
       //    minzoom: 10.5       → hides all POIs below _poiHideZoomThreshold.
-      final Map<String, dynamic> geoJson = poisToGeoJson(verifiedPois);
+      final Map<String, dynamic> geoJson = poisToGeoJson(pois);
       await map.style.addStyleSource(
         'poi-source',
         jsonEncode({

@@ -3,6 +3,11 @@
 // Stores the toggle/selection state for every item on the "More" settings
 // page.  All values default to a sensible initial state.  The actual feature
 // logic is wired separately; this class is UI-state only.
+//
+// Call [saveToPrefs] to persist all settings and [loadFromPrefs] to restore
+// them on startup.  Both methods require the `shared_preferences` package.
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NavSettingsModel {
   // ── Shortcut toggles ────────────────────────────────────────────────────
@@ -45,4 +50,67 @@ class NavSettingsModel {
   bool view511Camera = false;
   bool viewRoadSign = true;
   bool viewTollbooth = true;
+
+  // ── Places Filter (POI category toggles) ────────────────────────────────
+  // Controls which POI categories are rendered on the map in both browse and
+  // navigation modes.  Toggling a category off removes its markers instantly;
+  // toggling it on restores them without an app restart.
+  bool showTruckStops = true;
+  bool showWeighStations = true;
+  bool showRestAreas = true;
+  bool showBrakeCheckAreas = true;
+  bool showTruckParking = true;
+  bool showTruckWash = false;
+  bool showWeatherAlerts = true;
+  bool showWarningSigns = true;
+  bool showTollbooths = true;
+  bool show511Cameras = false;
+
+  // ── Persistence ──────────────────────────────────────────────────────────
+
+  static const String _kPrefix = 'nav_settings_';
+
+  /// Persist all settings to [SharedPreferences].
+  Future<void> saveToPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Places Filter
+    await prefs.setBool('${_kPrefix}showTruckStops', showTruckStops);
+    await prefs.setBool('${_kPrefix}showWeighStations', showWeighStations);
+    await prefs.setBool('${_kPrefix}showRestAreas', showRestAreas);
+    await prefs.setBool('${_kPrefix}showBrakeCheckAreas', showBrakeCheckAreas);
+    await prefs.setBool('${_kPrefix}showTruckParking', showTruckParking);
+    await prefs.setBool('${_kPrefix}showTruckWash', showTruckWash);
+    await prefs.setBool('${_kPrefix}showWeatherAlerts', showWeatherAlerts);
+    await prefs.setBool('${_kPrefix}showWarningSigns', showWarningSigns);
+    await prefs.setBool('${_kPrefix}showTollbooths', showTollbooths);
+    await prefs.setBool('${_kPrefix}show511Cameras', show511Cameras);
+  }
+
+  /// Restore persisted settings from [SharedPreferences].
+  /// Fields that have never been saved retain their default values.
+  Future<void> loadFromPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Places Filter — use literal defaults as fallbacks so repeated calls
+    // always fall back to the intended initial value, not any prior state.
+    showTruckStops =
+        prefs.getBool('${_kPrefix}showTruckStops') ?? true;
+    showWeighStations =
+        prefs.getBool('${_kPrefix}showWeighStations') ?? true;
+    showRestAreas =
+        prefs.getBool('${_kPrefix}showRestAreas') ?? true;
+    showBrakeCheckAreas =
+        prefs.getBool('${_kPrefix}showBrakeCheckAreas') ?? true;
+    showTruckParking =
+        prefs.getBool('${_kPrefix}showTruckParking') ?? true;
+    showTruckWash =
+        prefs.getBool('${_kPrefix}showTruckWash') ?? false;
+    showWeatherAlerts =
+        prefs.getBool('${_kPrefix}showWeatherAlerts') ?? true;
+    showWarningSigns =
+        prefs.getBool('${_kPrefix}showWarningSigns') ?? true;
+    showTollbooths =
+        prefs.getBool('${_kPrefix}showTollbooths') ?? true;
+    show511Cameras =
+        prefs.getBool('${_kPrefix}show511Cameras') ?? false;
+  }
 }

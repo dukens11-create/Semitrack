@@ -93,6 +93,8 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           _buildMapTypeSection(),
           const SizedBox(height: 14),
           _buildViewOnMapSection(),
+          const SizedBox(height: 14),
+          _buildPlacesFilterSection(),
           const SizedBox(height: 24),
         ],
       ),
@@ -498,6 +500,85 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           label: 'Tollbooth',
           value: _s.viewTollbooth,
           onChanged: (v) => _update(() => _s.viewTollbooth = v),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlacesFilterSection() {
+    return _SectionCard(
+      title: 'Places Filter',
+      icon: Icons.filter_list,
+      iconColor: const Color(0xFF4CAF50),
+      children: [
+        _ToggleRow(
+          icon: Icons.local_gas_station,
+          label: 'Truck Stops',
+          value: _s.showTruckStops,
+          onChanged: (v) => _update(() => _s.showTruckStops = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.scale_outlined,
+          label: 'Weigh Stations',
+          value: _s.showWeighStations,
+          onChanged: (v) => _update(() => _s.showWeighStations = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.chair_outlined,
+          label: 'Rest Areas',
+          value: _s.showRestAreas,
+          onChanged: (v) => _update(() => _s.showRestAreas = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.warning_amber_outlined,
+          label: 'Brake Check Areas',
+          value: _s.showBrakeCheckAreas,
+          onChanged: (v) => _update(() => _s.showBrakeCheckAreas = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.local_parking,
+          label: 'Truck Parking',
+          value: _s.showTruckParking,
+          onChanged: (v) => _update(() => _s.showTruckParking = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.local_car_wash_outlined,
+          label: 'Commercial Vehicle Wash',
+          value: _s.showTruckWash,
+          onChanged: (v) => _update(() => _s.showTruckWash = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.thunderstorm_outlined,
+          label: 'Weather Alerts',
+          value: _s.showWeatherAlerts,
+          onChanged: (v) => _update(() => _s.showWeatherAlerts = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.sign_language_outlined,
+          label: 'Warning Signs',
+          value: _s.showWarningSigns,
+          onChanged: (v) => _update(() => _s.showWarningSigns = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.toll_outlined,
+          label: 'Tollbooths',
+          value: _s.showTollbooths,
+          onChanged: (v) => _update(() => _s.showTollbooths = v),
+        ),
+        _dividerLine(),
+        _ToggleRow(
+          icon: Icons.videocam_outlined,
+          label: '511 Cameras',
+          value: _s.show511Cameras,
+          onChanged: (v) => _update(() => _s.show511Cameras = v),
         ),
       ],
     );

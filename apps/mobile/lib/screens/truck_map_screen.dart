@@ -13,6 +13,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
@@ -741,6 +742,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // corridor covered by _mockTruckStops.
   List<PoiItem> _loadedPois = const [];
 
+  // ── Route-only POI source state ──────────────────────────────────────────
+  //
+  // These fields are used by the throttled _refreshRoutePoiSourceIfNeeded()
+  // system to decide whether the route-pois-source needs updating and to
+  // record when the last update was performed.
+
+  /// Wall-clock time of the most recent route-POI source refresh.  Null until
+  /// the first refresh occurs.
+  DateTime? _lastRoutePoiRefreshAt;
+
+  /// Route-progress miles at the time of the last route-POI source refresh.
+  /// Compared against [_currentRouteProgressMiles] to detect significant advance.
+  double _lastRoutePoiRefreshMiles = 0.0;
+
+  /// Current driver route-progress in miles, updated on every accepted GPS fix.
+  /// Derived from the cumulative route-segment distance up to [_truckIndex].
+  double _currentRouteProgressMiles = 0.0;
+
+  /// Lightweight content hash of the last route-POI GeoJSON sent to Mapbox.
+  /// A sorted, joined string of POI IDs; used to skip no-op source updates
+  /// when the filtered POI list has not materially changed between refreshes.
+  String _lastRoutePoiSourceHash = '';
+
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -955,6 +979,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'rest_area',
   };
 
+  // ── Route-only POI source constants ─────────────────────────────────────
+
+  /// Mapbox source ID for the navigation-only filtered POI GeoJSON source.
+  static const String _routePoisSourceId = 'route-pois-source';
+
+  /// Mapbox layer ID for the navigation-only POI symbol layer.
+  static const String _routePoisLayerId = 'route-pois-layer';
+
+  /// Minimum elapsed time between route-POI source refreshes during navigation.
+  /// Forced refreshes (reroute, filter/settings change, nav start/stop) bypass
+  /// this limit.
+  static const Duration _routePoiMinRefreshInterval = Duration(seconds: 2);
+
+  /// Minimum route-progress advance (miles) required before the route-POI
+  /// source is refreshed on a normal GPS update.
+  static const double _routePoiRefreshMilesThreshold = 0.2;
+
+  /// Maximum number of high-priority POIs shown in the route-only layer.
+  static const int _routePoiMaxCount = 10;
+
+  /// Maximum truck stops surfaced in the route-only layer.
+  static const int _routePoiTruckStopMax = 2;
+
+  /// Maximum weigh stations surfaced in the route-only layer.
+  static const int _routePoiWeighStationMax = 1;
+
+  /// Maximum safety/service POIs (rest areas, brake check, port of entry)
+  /// surfaced in the route-only layer.
+  static const int _routePoiSafetyMax = 2;
+
+  // ── Speed monitoring state ─────────────────────────────────────────────────
   /// Current truck speed in metres per second, sourced from the GPS stream.
   /// Negative (-1.0) when speed is unavailable (e.g. cold start or stationary).
   double _currentSpeedMps = -1.0;
@@ -1171,6 +1226,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all POIs from locations.json so _buildAllPoiMarkers() can display
     // every POI on the map without requiring the Mapbox style cluster setup.
     _loadPoisForMap();
+    // Restore persisted POI category toggle state so driver preferences survive
+    // app restarts.
+    _loadNavSettings();
+  }
+
+  /// Loads persisted [NavSettingsModel] state from [SharedPreferences].
+  ///
+  /// Called once from [initState].  A [setState] rebuild is requested after
+  /// loading so that any restored category toggle changes take effect on the
+  /// already-visible map.
+  Future<void> _loadNavSettings() async {
+    await _navSettings.loadFromPrefs();
+    if (mounted) setState(() {});
   }
 
   /// Loads every [PoiItem] from `assets/locations.json` into [_loadedPois] so
@@ -2471,7 +2539,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// navigation mode (ahead-on-route, priority-sorted) and browse mode
   /// (nearby radius).  Kept for backward-compatibility with any internal
   /// callers that use this name directly.
-  List<PoiItem> _getFilteredPoisForDisplay() => _getVisiblePoisForCurrentView();
+  /// Returns the smart-filtered set of [PoiItem]s to render on the map.
+  ///
+  /// Delegates to [_getVisiblePoisForCurrentView], which chooses between
+  /// navigation mode (ahead-on-route, priority-sorted) and browse mode
+  /// (nearby radius).  Category toggles from the driver's Places Filter are
+  /// applied via [_applyPoiCategoryFilters] before the result is returned.
+  List<PoiItem> _getFilteredPoisForDisplay() =>
+      _applyPoiCategoryFilters(_getVisiblePoisForCurrentView());
 
   // ── POI helper functions ────────────────────────────────────────────────
 
@@ -2482,6 +2557,62 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// they are always preferred over approximate entries at the same location.
   ///
   /// Rule: verified entrance-coordinate POIs always beat approximate ones.
+
+  // ── POI category toggle helpers ──────────────────────────────────────────
+
+  /// Returns `true` when [category] is enabled by the driver's Places Filter
+  /// settings in [_navSettings].
+  ///
+  /// [category] values match the `category` field in `assets/locations.json`
+  /// (e.g. `'truck_stop'`, `'weigh_station'`).
+  bool _isPoiCategoryEnabled(String category) {
+    switch (category.toLowerCase().trim()) {
+      case 'truck_stop':
+        return _navSettings.showTruckStops;
+      case 'weigh_station':
+        return _navSettings.showWeighStations;
+      case 'rest_area':
+        return _navSettings.showRestAreas;
+      case 'brake_check_area':
+        return _navSettings.showBrakeCheckAreas;
+      case 'truck_parking':
+        return _navSettings.showTruckParking;
+      case 'commercial_vehicle_wash':
+        return _navSettings.showTruckWash;
+      case 'weather_alert':
+        return _navSettings.showWeatherAlerts;
+      case 'warning_sign':
+        return _navSettings.showWarningSigns;
+      case 'tollbooth':
+        return _navSettings.showTollbooths;
+      case 'camera_511':
+        return _navSettings.show511Cameras;
+      default:
+        return true; // Unknown categories are shown by default.
+    }
+  }
+
+  /// Filters [pois] to only those whose category is currently enabled in the
+  /// driver's Places Filter settings.
+  ///
+  /// Call this before any route-ahead or browse POI source build to ensure
+  /// disabled categories are excluded everywhere.
+  List<PoiItem> _applyPoiCategoryFilters(List<PoiItem> pois) {
+    return pois
+        .where((p) => _isPoiCategoryEnabled(p.category))
+        .toList(growable: false);
+  }
+
+  /// Triggers an immediate map refresh so that changes to the Places Filter
+  /// category toggles take effect without requiring an app restart.
+  ///
+  /// Call this whenever a category toggle changes (e.g. inside the
+  /// [NavSettingsScreen.onChanged] callback).
+  Future<void> _refreshAllPoiSourcesForSettingsChange() async {
+    if (!mounted) return;
+    setState(() {});
+    debugPrint('[POI] Category toggle changed — refreshed all POI sources.');
+  }
   double _poiPriorityScore(PoiItem poi) {
     // Null-safe category normalisation.
     final String category = poi.category.toLowerCase().trim();
@@ -4286,6 +4417,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _refreshTripProgress();
       // Refresh the exit preview card based on the current step and distance.
       _refreshExitPreview();
+      // Throttled refresh of the route-only POI Mapbox source.  Only pushes a
+      // new GeoJSON payload when the driver has advanced ≥ 0.2 miles, the
+      // filtered POI list has changed, or at least 2 s have elapsed.
+      _refreshRoutePoiSourceIfNeeded();
     }
   }
 
@@ -4392,7 +4527,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // destination, then clear the rerouting lock and status indicator.
     fetchRoute(fromPosition: current).then((_) {
       _isRerouting = false;
-      if (mounted) setState(() => _navStatus = null);
+      if (mounted) {
+        setState(() => _navStatus = null);
+        // Force-refresh the route-POI source immediately after the reroute
+        // completes so markers reflect the new route geometry without waiting
+        // for the next GPS-update throttle window.
+        _refreshRoutePoiSourceIfNeeded(force: true);
+      }
     });
   }
 
@@ -4577,6 +4718,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Reset warning manager so the next navigation session starts clean.
     _warningManager.reset();
     _warningAlertShown.clear();
+    // Reset route-POI tracking state so the next navigation session starts
+    // with a clean slate and the first GPS fix triggers a fresh source push.
+    _lastRoutePoiRefreshAt = null;
+    _lastRoutePoiRefreshMiles = 0.0;
+    _currentRouteProgressMiles = 0.0;
+    _lastRoutePoiSourceHash = '';
+    // Clear the route-only POI source so stale markers are removed from the
+    // map immediately when the driver cancels navigation.
+    _refreshRoutePoiSourceIfNeeded(force: true);
     // Notify other widgets (e.g. AppShell) that navigation has ended so the
     // bottom navigation bar and other planning UI are restored.
     TruckMapScreen.isNavigatingNotifier.value = false;
@@ -4899,6 +5049,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Start the warning manager so it evaluates proximity on each GPS fix.
     _warningManager.startNavigation();
     _startRouteAnimation();
+    // Force an immediate route-POI source push so navigation-relevant markers
+    // appear on the map right when the driver taps "Start Navigation" without
+    // waiting for the first GPS fix.
+    _refreshRoutePoiSourceIfNeeded(force: true);
 
     // Seed the top instruction card with the first navigation step so the
     // card is visible immediately when the driver starts.  Falls back to
@@ -6878,8 +7032,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return false;
   }
 
-  // ── Ahead-on-route weigh station logic ──────────────────────────────────────
-
   /// Returns `true` when [poi] is within [_weighStationProximityMeters] of any
   /// segment of [routePoints].
   ///
@@ -8692,7 +8844,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             // Sync _isSatelliteView so the satellite-toggle button stays in step.
             _isSatelliteView = _navSettings.mapType == 1;
             _applyAudioSettings();
-            setState(() {});
+            // Persist the updated settings and immediately refresh all POI
+            // sources so category-toggle changes appear on the map without a
+            // restart.
+            _navSettings.saveToPrefs();
+            _refreshAllPoiSourcesForSettingsChange();
           },
         ),
       ),
@@ -9728,10 +9884,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Called by [MapWidget] once the Mapbox style has finished loading.
   ///
   /// Triggers [_setupPoiCluster] to register icons and add the individual POI
-  /// source and layer to the map style.
+  /// source and layer to the map style.  Also ensures the navigation-only
+  /// route POI source and layer are present so they are ready before the first
+  /// GPS fix.
   void _onStyleLoaded(mbx.StyleLoadedEventData _) {
     _setupPoiCluster();
     _enhanceRoadLabels();
+    // Set up the route-only POI source and layer immediately so the first
+    // navigation GPS fix can push data without a style-existence check delay.
+    _ensureRoutePoiSourceAndLayer();
   }
 
   /// Boosts the visibility of road and highway name labels on the Mapbox style.
@@ -9983,6 +10144,294 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     } catch (e) {
       // POI cluster setup failed — map remains usable without the POI overlay.
       debugPrint('TruckMapScreen: _setupPoiCluster failed: $e');
+    }
+  }
+
+  // ── Route-only POI source + layer helpers ────────────────────────────────
+
+  /// Returns true when POI clustering (rather than individual icons) should be
+  /// used at [zoom].  Cluster at zoom < 13.5; show individuals above that.
+  ///
+  /// Use this helper when deciding whether to render cluster badges vs.
+  /// individual POI icons, e.g. in gesture handlers, camera-change callbacks,
+  /// or any code that adjusts layer visibility based on the current map zoom.
+  bool _shouldUseClustersAtZoom(double zoom) => zoom < 13.5;
+
+  /// Ensures that the `route-pois-source` GeoJSON source and `route-pois-layer`
+  /// symbol layer exist in the current Mapbox style.
+  ///
+  /// Called from [_onStyleLoaded] and defensively from
+  /// [_refreshRoutePoiSourceIfNeeded] so they are created lazily if the style
+  /// reloaded after initial setup.  The layer is configured with slightly
+  /// larger icons than the browse `poi-unclustered` layer (icon-size 1.3 vs
+  /// 1.0) and [icon-allow-overlap] true, because the source is already
+  /// filtered down to ≤10 high-priority POIs.
+  Future<void> _ensureRoutePoiSourceAndLayer() async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+    try {
+      // Create the GeoJSON source with an initially-empty feature collection
+      // if it does not exist yet.  Subsequent calls to
+      // _refreshRoutePoiSourceIfNeeded will update the source data in-place.
+      if (!await map.style.styleSourceExists(_routePoisSourceId)) {
+        await map.style.addStyleSource(
+          _routePoisSourceId,
+          jsonEncode({
+            'type': 'geojson',
+            'data': {'type': 'FeatureCollection', 'features': []},
+          }),
+        );
+      }
+
+      // Create the symbol layer if it does not exist yet.
+      if (!await map.style.styleLayerExists(_routePoisLayerId)) {
+        await map.style.addStyleLayer(
+          jsonEncode({
+            'id': _routePoisLayerId,
+            'type': 'symbol',
+            'source': _routePoisSourceId,
+            // Show only while navigating (minzoom 10 keeps markers hidden at
+            // overview zoom levels where the browse cluster layer already
+            // provides adequate context).
+            'minzoom': 10,
+            'layout': {
+              // Prefer the POI-specific icon; fall back to the generic truck
+              // parking icon so every feature always renders.
+              'icon-image': [
+                'coalesce',
+                ['image', ['get', 'icon']],
+                ['image', 'truck_parking'],
+              ],
+              // Slightly larger than the browse layer (1.0) so route-ahead
+              // POIs stand out as visually prominent.
+              'icon-size': 1.3,
+              // Allow overlap because the list is already filtered to ≤10
+              // high-priority POIs — clutter is controlled by filter rules,
+              // not by Mapbox placement collision.
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': false,
+            },
+          }),
+          null,
+        );
+      }
+    } catch (e) {
+      debugPrint('TruckMapScreen: _ensureRoutePoiSourceAndLayer failed: $e');
+    }
+  }
+
+  /// Returns `true` when the route-POI source should be refreshed.
+  ///
+  /// Refresh is needed when ANY of the following is true:
+  ///   1. The source has never been refreshed (_lastRoutePoiRefreshAt is null).
+  ///   2. The driver has advanced ≥ [_routePoiRefreshMilesThreshold] miles
+  ///      since the last refresh.
+  ///   3. At least [_routePoiMinRefreshInterval] has elapsed since the last
+  ///      refresh AND the driver's position has changed at all.
+  ///
+  /// The method returns `false` while not navigating so the source is only
+  /// populated during active navigation.
+  bool _shouldRefreshRoutePois() {
+    if (!_isNavigating) return false;
+    if (_lastRoutePoiRefreshAt == null) return true;
+
+    final double progressDelta =
+        (_currentRouteProgressMiles - _lastRoutePoiRefreshMiles).abs();
+    if (progressDelta >= _routePoiRefreshMilesThreshold) return true;
+
+    final Duration elapsed =
+        DateTime.now().difference(_lastRoutePoiRefreshAt!);
+    if (elapsed >= _routePoiMinRefreshInterval && progressDelta > 0) return true;
+
+    return false;
+  }
+
+  /// Records that a route-POI refresh just completed.
+  ///
+  /// Updates [_lastRoutePoiRefreshAt] and [_lastRoutePoiRefreshMiles] to the
+  /// current wall-clock time and route-progress miles respectively.
+  void _markRoutePoiRefresh() {
+    _lastRoutePoiRefreshAt = DateTime.now();
+    _lastRoutePoiRefreshMiles = _currentRouteProgressMiles;
+  }
+
+  /// Builds the filtered list of up to [_routePoiMaxCount] high-priority POIs
+  /// that are ahead of the driver on the active route.
+  ///
+  /// Selection rules (applied in order):
+  ///   1. Prefer **verified** POIs (both [PoiItem.entranceLat] and
+  ///      [PoiItem.entranceLng] set) over approximate ones.
+  ///   2. Category quotas (ahead-of-truck only, sorted by distance):
+  ///      • Up to [_routePoiTruckStopMax] truck stops.
+  ///      • Up to [_routePoiWeighStationMax] weigh stations.
+  ///      • Up to [_routePoiSafetyMax] safety/service POIs (rest areas, brake
+  ///        check areas, ports of entry).
+  ///   3. Hard cap of [_routePoiMaxCount] total.
+  ///   4. A POI already within [_poiPassedThresholdMiles] of the driver is
+  ///      considered passed and excluded.
+  ///   5. POIs beyond [_poiRouteMaxAheadMiles] are excluded.
+  ///
+  /// Returns an empty list when not navigating or when no route / position is
+  /// available.
+  List<PoiItem> _buildRouteRelevantPois() {
+    if (!_isNavigating ||
+        _truckPosition == null ||
+        _routePoints.isEmpty ||
+        _loadedPois.isEmpty) {
+      return const [];
+    }
+
+    final LatLng pos = _truckPosition!;
+
+    // Pre-filter: keep only POIs within the route corridor ahead of the truck.
+    final List<LatLng> aheadPoints =
+        _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
+    final List<PoiItem> corridorCandidates = getPOIsOnRoute(
+      _loadedPois,
+      aheadPoints,
+      proximityMeters: _poiRouteCorridorMeters,
+    );
+
+    // Score each candidate by straight-line distance ahead in miles.
+    final List<_ScoredPoi> scored = [];
+    for (final poi in corridorCandidates) {
+      final double milesAhead = _distanceMiles(
+          pos.latitude, pos.longitude, poi.displayLat, poi.displayLng);
+      if (milesAhead < _poiPassedThresholdMiles) continue; // Already passed.
+      if (milesAhead > _poiRouteMaxAheadMiles) continue;   // Too far ahead.
+      scored.add(_ScoredPoi(poi, milesAhead));
+    }
+
+    // Sort: verified POIs first within each category; then by distance.
+    // Verified = both entranceLat and entranceLng present.
+    scored.sort((a, b) {
+      final int vA = (a.poi.entranceLat != null && a.poi.entranceLng != null)
+          ? 0
+          : 1;
+      final int vB = (b.poi.entranceLat != null && b.poi.entranceLng != null)
+          ? 0
+          : 1;
+      if (vA != vB) return vA.compareTo(vB); // verified first
+      return a.distanceMiles.compareTo(b.distanceMiles); // closer first
+    });
+
+    // Apply per-category quotas.
+    int truckStopCount = 0;
+    int weighStationCount = 0;
+    int safetyCount = 0;
+    const Set<String> safetyCategories = {
+      'rest_area',
+      'brake_check_area',
+      'port_of_entry',
+    };
+
+    final List<PoiItem> result = [];
+    for (final sp in scored) {
+      if (result.length >= _routePoiMaxCount) break;
+      final String cat = sp.poi.category;
+      if (cat == 'truck_stop') {
+        if (truckStopCount >= _routePoiTruckStopMax) continue;
+        truckStopCount++;
+      } else if (cat == 'weigh_station') {
+        if (weighStationCount >= _routePoiWeighStationMax) continue;
+        weighStationCount++;
+      } else if (safetyCategories.contains(cat)) {
+        if (safetyCount >= _routePoiSafetyMax) continue;
+        safetyCount++;
+      } else {
+        // Other categories (gas_station, truck_parking, etc.) are skipped;
+        // they are already visible in the browse poi-source cluster layer.
+        continue;
+      }
+      result.add(sp.poi);
+    }
+
+    debugPrint('[RoutePOI] ${result.length} route POIs selected '
+        '(truckStops=$truckStopCount, weighStations=$weighStationCount, '
+        'safety=$safetyCount) from ${scored.length} ahead-on-route '
+        'candidates (${corridorCandidates.length} in corridor).');
+    return result;
+  }
+
+  /// Builds a GeoJSON FeatureCollection string from [pois].
+  ///
+  /// Each Feature carries `id`, `name`, `category`, and `icon` properties,
+  /// matching the schema used by `poi-source` so the same registered Mapbox
+  /// images work for both layers.
+  String _routePoiSourceGeoJson(List<PoiItem> pois) {
+    final features = pois.map((poi) => {
+          'type': 'Feature',
+          'id': poi.id,
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [poi.displayLng, poi.displayLat],
+          },
+          'properties': {
+            'id': poi.id,
+            'name': poi.name,
+            'category': poi.category,
+            'icon': poi.icon,
+          },
+        }).toList();
+    return jsonEncode({
+      'type': 'FeatureCollection',
+      'features': features,
+    });
+  }
+
+  /// Refreshes the `route-pois-source` with the current navigation-relevant
+  /// POI list, subject to time/distance throttle rules.
+  ///
+  /// Pass `force: true` to bypass the throttle and always push a fresh update
+  /// (used after reroutes, filter/settings changes, and nav start/stop).
+  ///
+  /// Skips the Mapbox API call when the filtered POI list is identical to the
+  /// previously pushed list (same set of IDs), preventing unnecessary style
+  /// updates even when the throttle permits a refresh.
+  Future<void> _refreshRoutePoiSourceIfNeeded({bool force = false}) async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+
+    // Update the current route-progress counter before checking the throttle
+    // so _shouldRefreshRoutePois() has an accurate value.
+    if (_routePoints.isNotEmpty) {
+      final routePts = _routePoints
+          .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
+          .toList(growable: false);
+      _currentRouteProgressMiles = _routeDistanceMilesBetweenIndices(
+          routePts, 0, _truckIndex.clamp(0, routePts.length - 1));
+    }
+
+    if (!force && !_shouldRefreshRoutePois()) return;
+
+    // Ensure source and layer exist (e.g. after a style reload).
+    await _ensureRoutePoiSourceAndLayer();
+
+    final List<PoiItem> pois = _buildRouteRelevantPois();
+
+    // Build a lightweight content hash to detect no-op updates.
+    final List<String> sortedIds = pois.map((p) => p.id).toList()..sort();
+    final String hash = sortedIds.join(',');
+    if (!force && hash == _lastRoutePoiSourceHash) {
+      // POI list unchanged — skip Mapbox update but still record the refresh
+      // time/miles so the throttle window advances correctly.
+      _markRoutePoiRefresh();
+      debugPrint('[RoutePOI] Source unchanged (hash match) — skipping update.');
+      return;
+    }
+
+    try {
+      final String geoJson = _routePoiSourceGeoJson(pois);
+      await map.style.setStyleSourceProperty(
+        _routePoisSourceId,
+        'data',
+        geoJson,
+      );
+      _lastRoutePoiSourceHash = hash;
+      _markRoutePoiRefresh();
+      debugPrint('[RoutePOI] Source updated with ${pois.length} POI(s).');
+    } catch (e) {
+      debugPrint('TruckMapScreen: _refreshRoutePoiSourceIfNeeded failed: $e');
     }
   }
 
@@ -13446,13 +13895,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── GPS-style navigation overlay widgets ────────────────────────────────────
 
-  /// Extracts a short highway shield label from [roadName] if it matches a
-  /// known highway pattern (e.g. "I-5" → "5", "US-95" → "95", "CA-88" → "88").
-  ///
-  /// Returns `null` when [roadName] is not a recognisable highway reference.
-  ///
-  /// To support additional state/country prefixes, extend the alternation in
-  /// the pattern (e.g. add `|TX-|NY-`).
   /// Parses [roadName] into a structured [_HighwayShield] when it matches a
   /// known highway pattern.  Returns `null` for non-highway names.
   ///

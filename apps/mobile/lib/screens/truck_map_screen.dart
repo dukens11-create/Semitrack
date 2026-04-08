@@ -2537,26 +2537,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Delegates to [_getVisiblePoisForCurrentView], which chooses between
   /// navigation mode (ahead-on-route, priority-sorted) and browse mode
-  /// (nearby radius).  Kept for backward-compatibility with any internal
-  /// callers that use this name directly.
-  /// Returns the smart-filtered set of [PoiItem]s to render on the map.
-  ///
-  /// Delegates to [_getVisiblePoisForCurrentView], which chooses between
-  /// navigation mode (ahead-on-route, priority-sorted) and browse mode
   /// (nearby radius).  Category toggles from the driver's Places Filter are
   /// applied via [_applyPoiCategoryFilters] before the result is returned.
   List<PoiItem> _getFilteredPoisForDisplay() =>
       _applyPoiCategoryFilters(_getVisiblePoisForCurrentView());
-
-  // ── POI helper functions ────────────────────────────────────────────────
-
-  /// Returns a priority score for [poi] that governs deduplication ordering.
-  ///
-  /// Higher-priority categories (weigh stations, truck stops) score higher.
-  /// Verified POIs (entrance coords present) receive a +20 bonus to ensure
-  /// they are always preferred over approximate entries at the same location.
-  ///
-  /// Rule: verified entrance-coordinate POIs always beat approximate ones.
 
   // ── POI category toggle helpers ──────────────────────────────────────────
 
@@ -2613,6 +2597,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() {});
     debugPrint('[POI] Category toggle changed — refreshed all POI sources.');
   }
+
+  // ── POI helper functions ────────────────────────────────────────────────
+
+  /// Returns a priority score for [poi] that governs deduplication ordering.
+  ///
+  /// Higher-priority categories (weigh stations, truck stops) score higher.
+  /// Verified POIs (entrance coords present) receive a +20 bonus to ensure
+  /// they are always preferred over approximate entries at the same location.
+  ///
+  /// Rule: verified entrance-coordinate POIs always beat approximate ones.
   double _poiPriorityScore(PoiItem poi) {
     // Null-safe category normalisation.
     final String category = poi.category.toLowerCase().trim();

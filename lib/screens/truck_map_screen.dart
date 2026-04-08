@@ -2542,16 +2542,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<PoiItem> _getFilteredPoisForDisplay() =>
       _applyPoiCategoryFilters(_getVisiblePoisForCurrentView());
 
-  // ── POI helper functions ────────────────────────────────────────────────
-
-  /// Returns a priority score for [poi] that governs deduplication ordering.
-  ///
-  /// Higher-priority categories (weigh stations, truck stops) score higher.
-  /// Verified POIs (entrance coords present) receive a +20 bonus to ensure
-  /// they are always preferred over approximate entries at the same location.
-  ///
-  /// Rule: verified entrance-coordinate POIs always beat approximate ones.
-
   // ── POI category toggle helpers ──────────────────────────────────────────
 
   /// Returns `true` when [category] is enabled by the driver's Places Filter
@@ -2607,6 +2597,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() {});
     debugPrint('[POI] Category toggle changed — refreshed all POI sources.');
   }
+
+  // ── POI helper functions ────────────────────────────────────────────────
+
+  /// Returns a priority score for [poi] that governs deduplication ordering.
+  ///
+  /// Higher-priority categories (weigh stations, truck stops) score higher.
+  /// Verified POIs (entrance coords present) receive a +20 bonus to ensure
+  /// they are always preferred over approximate entries at the same location.
+  ///
+  /// Rule: verified entrance-coordinate POIs always beat approximate ones.
   double _poiPriorityScore(PoiItem poi) {
     // Null-safe category normalisation.
     final String category = poi.category.toLowerCase().trim();

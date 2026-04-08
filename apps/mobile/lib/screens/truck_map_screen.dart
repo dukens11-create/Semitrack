@@ -9903,6 +9903,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns true when POI clustering (rather than individual icons) should be
   /// used at [zoom].  Cluster at zoom < 13.5; show individuals above that.
+  ///
+  /// Use this helper when deciding whether to render cluster badges vs.
+  /// individual POI icons, e.g. in gesture handlers, camera-change callbacks,
+  /// or any code that adjusts layer visibility based on the current map zoom.
   bool _shouldUseClustersAtZoom(double zoom) => zoom < 13.5;
 
   /// Ensures that the `route-pois-source` GeoJSON source and `route-pois-layer`

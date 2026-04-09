@@ -2314,6 +2314,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return Colors.teal.shade700;
       case 'commercial_vehicle':
         return Colors.brown.shade600;
+      case 'walmart_store':
+        return const Color(0xFF0071CE); // Walmart brand blue
       default:
         return Colors.blue.shade700;
     }
@@ -2344,6 +2346,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return Icons.fitness_center;
       case 'commercial_vehicle':
         return Icons.local_shipping;
+      case 'walmart_store':
+        return Icons.store;
       default:
         return Icons.local_shipping;
     }
@@ -2636,6 +2640,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         break;
       case 'truck_parking':
         base = 68; // Dedicated truck parking.
+        break;
+      case 'walmart_store':
+        base = 60; // Walmart Supercenter — shopping, parking, overnight.
         break;
       case 'commercial_vehicle_wash':
         base = 55; // Useful but lower urgency.

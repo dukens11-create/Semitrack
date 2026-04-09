@@ -48,7 +48,12 @@ flutter:
   #
   # assets/locations.json
   #   POI dataset used to populate truck-stop markers on the map.
+  #
+  # assets/walmart_locations.json
+  #   Walmart Supercenter POI dataset (verified addresses, driver-visible).
+  #   Loaded alongside locations.json by loadAllPois() in poi_service.dart.
   assets:
     - assets/icons/truck_top.png
     - assets/logo_brand_markers/
     - assets/locations.json
+    - assets/walmart_locations.json

@@ -4197,6 +4197,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // ── GPS watchdog: record fix arrival time and clear stale flag ────────
     // Must run before the acceptance filter so even rejected fixes (noise,
     // poor accuracy) reset the watchdog — the stream is still alive.
+    //
+    // Wall-clock time (DateTime.now()) is used intentionally rather than
+    // position.timestamp, which reflects when the GPS chip computed the fix.
+    // position.timestamp can be delayed by GNSS buffering, OS caching, or
+    // Geolocator batching, and may even be null on some Android configurations.
+    // The watchdog goal is to detect "has the app received any fix recently?"
+    // not "when did the hardware last lock on to satellites?" — so measuring
+    // the time each callback actually arrives at the application layer is the
+    // correct approach.
     final fixArrivalTime = DateTime.now();
     final bool wasStale = _gpsStale;
     if (_gpsStale) {

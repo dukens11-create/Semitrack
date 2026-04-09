@@ -2465,14 +2465,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Smart filtering rules (GPS-app style):
   ///   • zoom < [_poiHideZoomThreshold] (10.5)   → no markers shown
   ///   • [_shouldUseClustersAtZoom] returns true  → cluster badges (zoom 10.5–13.5)
-  ///   • [_shouldUseClustersAtZoom] returns false → filtered individual markers
+  ///   • [_shouldUseClustersAtZoom] returns false → individual markers
   ///
-  /// Individual-marker selection:
-  ///   • While navigating: POIs ahead on route (see [_getVisiblePoisForCurrentView]),
-  ///     priority-sorted, always including forced-ahead categories, capped at
-  ///     [_poiMaxMarkers].
-  ///   • While browsing: POIs within [_poiNearbyRadiusMeters], capped at
-  ///     [_poiNearbyMaxMarkers].
+  /// POI selection (both modes):
+  ///   • POIs are selected from the current map **viewport bounds** via
+  ///     [_getVisiblePoisForCurrentView], so every POI on screen is included
+  ///     regardless of the truck's GPS position.
   ///   • Overlap dedup: lower-priority markers within [_poiOverlapMinMeters] of a
   ///     higher-priority one are skipped (see [_limitAndDedupePois]).
   List<Marker> _buildAllPoiMarkers() {
@@ -2790,41 +2788,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the POI list to render for the current view.
   ///
-  /// All POIs within [_poiNearbyRadiusMeters] (≈10 mi) of the current truck
-  /// position are shown at all times — whether or not navigation/route is
-  /// active. Route membership is NOT used as a filter here. The returned list
-  /// is sorted by distance, deduplicated via [_limitAndDedupePois], and capped
-  /// at [_poiNearbyMaxMarkers].
+  /// Uses the current map **viewport bounds** so that every POI visible on
+  /// screen is included — regardless of the truck's GPS position.  This
+  /// ensures that all walmart_store (and any other category) entries are
+  /// returned when the driver pans or zooms to their location, fixing the
+  /// issue where only the 10 nearest POIs within a 10-mile radius were shown.
+  ///
+  /// When the map is not yet ready the full [_loadedPois] list is returned so
+  /// that cluster badges are available immediately on first render.
   List<PoiItem> _getVisiblePoisForCurrentView() {
     if (_loadedPois.isEmpty) return const [];
-    final LatLng? pos = _truckPosition;
 
-    if (pos == null) return const [];
+    // ── Map-viewport filter ──────────────────────────────────────────────
+    // Prefer the live camera bounds so any POI currently on screen is
+    // included.  A small padding (15% of the visible span) pre-loads POIs
+    // that are just outside the visible edge so they appear without a
+    // noticeable pop-in as the driver pans.
+    if (_mapReady) {
+      final LatLngBounds bounds = _mapController.camera.visibleBounds;
+      final double latPad = (bounds.north - bounds.south) * 0.15;
+      final double lngPad = (bounds.east - bounds.west) * 0.15;
 
-    // Collect all POIs within the nearby radius.
-    final List<_ScoredPoi> nearby = [];
-    for (final poi in _loadedPois) {
-      final double d = geo.Geolocator.distanceBetween(
-        poi.displayLat, poi.displayLng,
-        pos.latitude, pos.longitude,
-      );
-      if (d <= _poiNearbyRadiusMeters) {
-        nearby.add(_ScoredPoi(poi, d / 1609.34));
-      }
+      final List<PoiItem> inView = _loadedPois.where((poi) {
+        return poi.displayLat >= bounds.south - latPad &&
+            poi.displayLat <= bounds.north + latPad &&
+            poi.displayLng >= bounds.west - lngPad &&
+            poi.displayLng <= bounds.east + lngPad;
+      }).toList();
+
+      debugPrint('[POI/Filter] viewport: ${inView.length} POIs in view '
+          '(total loaded: ${_loadedPois.length}).');
+      return inView;
     }
 
-    // Sort by distance then apply priority dedup.  Closest POIs of highest
-    // priority are kept; overlapping lower-priority entries are suppressed.
-    nearby.sort((a, b) => a.distanceMiles.compareTo(b.distanceMiles));
-    final List<PoiItem> result = _limitAndDedupePois(
-      nearby.map((s) => s.poi).toList(),
-      maxCount: _poiNearbyMaxMarkers,
-    );
-
-    debugPrint('[POI/Filter] browsing: ${result.length} nearby POIs selected '
-        'from ${nearby.length} within '
-        '${(_poiNearbyRadiusMeters / 1609.34).toStringAsFixed(0)} mi.');
-    return result;
+    // Fallback — map not yet initialised: return everything so cluster
+    // badges are available on first render.
+    debugPrint('[POI/Filter] fallback: returning all ${_loadedPois.length} POIs.');
+    return List<PoiItem>.from(_loadedPois);
   }
 
   /// Builds cluster-badge [Marker]s for [pois] using a geographic bucket

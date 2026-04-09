@@ -32,7 +32,8 @@ String poiIconId(String filename) {
 /// in the folder so it is registered by [registerPoiIcons].
 const String _kPoiFallbackIcon = 'truck_parking';
 
-/// Loads every [PoiItem] from `assets/locations.json`.
+/// Loads every [PoiItem] from `assets/locations.json` **and**
+/// `assets/walmart_locations.json`, returning the combined list.
 ///
 /// The JSON entries use the standardised schema with five required fields:
 /// `id`, `name`, `icon` (PNG filename, e.g. `"pilot.png"`), `lat`, `lng`,
@@ -47,7 +48,12 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// matching PNG is found, an error is logged and the icon falls back to
 /// [_kPoiFallbackIcon] so the POI is still rendered as a visible marker.
 ///
-/// No proximity or category filter is applied; every entry in the file is
+/// **Walmart POIs:** entries from `assets/walmart_locations.json` are
+/// loaded via [loadWalmartPois] and appended to the result.  All Walmart
+/// entries have `verified=true` and entrance coordinates set, so they are
+/// always rendered as driver-visible markers (category colour, not grey).
+///
+/// No proximity or category filter is applied; every entry in both files is
 /// returned so that all USA and Canada POIs appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
@@ -71,7 +77,7 @@ Future<List<PoiItem>> loadAllPois() async {
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
 
-  return data.map((entry) {
+  final List<PoiItem> basePois = data.map((entry) {
     final Map<String, dynamic> json = entry as Map<String, dynamic>;
     final String rawIcon = json['icon'] as String;
     final String normalizedId = poiIconId(rawIcon);
@@ -128,6 +134,55 @@ Future<List<PoiItem>> loadAllPois() async {
       exitNumber: json['exit_number'] as String?,
     );
   }).toList();
+
+  // Append Walmart Supercenter POIs from the dedicated asset file.
+  // All Walmart entries are verified (real addresses, entrance coords set),
+  // so they appear as driver-visible markers on the main navigation map.
+  final List<PoiItem> walmartPois = await loadWalmartPois();
+  return [...basePois, ...walmartPois];
+}
+
+/// Loads every Walmart Supercenter [PoiItem] from
+/// `assets/walmart_locations.json`.
+///
+/// All entries in this file have `verified=true` and matched
+/// `entrance_lat`/`entrance_lng` coordinates so they are rendered as
+/// driver-visible markers (category colour, not grey) on the main
+/// navigation map.
+///
+/// The `icon` field defaults to `"walmart_store"` (matching
+/// `assets/logo_brand_markers/walmart_store.png`) and the category is
+/// `"walmart_store"`.
+Future<List<PoiItem>> loadWalmartPois() async {
+  try {
+    final String jsonString =
+        await rootBundle.loadString('assets/walmart_locations.json');
+    final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
+    return data.map((entry) {
+      final Map<String, dynamic> json = entry as Map<String, dynamic>;
+      return PoiItem(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        category: json['category'] as String? ?? 'walmart_store',
+        icon: poiIconId((json['icon'] as String?) ?? 'walmart_store.png'),
+        lat: (json['lat'] as num).toDouble(),
+        lng: (json['lng'] as num).toDouble(),
+        entranceLat: json['entrance_lat'] != null
+            ? (json['entrance_lat'] as num).toDouble()
+            : null,
+        entranceLng: json['entrance_lng'] != null
+            ? (json['entrance_lng'] as num).toDouble()
+            : null,
+        verified: (json['verified'] as bool?) ?? false,
+        country: (json['country'] as String?) ?? 'US',
+        stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
+        city: (json['city'] as String?) ?? '',
+      );
+    }).toList();
+  } catch (e) {
+    debugPrint('[POI Load] Could not load walmart_locations.json: $e');
+    return [];
+  }
 }
 
 /// Converts [pois] to a GeoJSON FeatureCollection map.

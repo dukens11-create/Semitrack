@@ -402,6 +402,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// 5 s window is independent of the broader route-fetch guard.
   static const int _directionsThrottleSeconds = 5;
 
+  // ── GPS watchdog constants ─────────────────────────────────────────────────
+  /// Seconds of silence from the GPS stream before the fix is declared stale.
+  /// If no position update arrives within this window the watchdog fires,
+  /// marks the session as stale, resets speed to an unavailable state, and
+  /// shows a GPS-signal-loss indicator in the UI.
+  static const int _gpsStalenessThresholdSeconds = 10;
+
+  /// Interval (seconds) at which the watchdog timer polls to check whether
+  /// a fresh GPS fix has arrived within [_gpsStalenessThresholdSeconds].
+  static const int _gpsWatchdogIntervalSeconds = 5;
+
   // ── Route restriction constants ────────────────────────────────────────────
   /// Radius in metres around each restricted zone within which a route point
   /// is considered to violate the restriction.  Used by
@@ -479,6 +490,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // True while the GPS stream is delivering real position fixes so that the
   // periodic animation timer defers to the GPS-driven updates.
   bool _gpsActive = false;
+
+  // ── GPS watchdog state ────────────────────────────────────────────────────
+  // The watchdog timer fires every [_gpsWatchdogIntervalSeconds] seconds and
+  // checks whether a fresh fix arrived within [_gpsStalenessThresholdSeconds].
+  // When the GPS stream goes silent (signal loss, permissions revoked, device
+  // sleep) the watchdog marks the session stale, resets speed to -1.0, and
+  // triggers a UI indicator so the driver knows the displayed speed is stale.
+  Timer? _gpsWatchdogTimer;
+
+  /// True when the GPS stream has not delivered a fix within the staleness
+  /// threshold.  Cleared on the next successful [_onGpsPosition] call.
+  bool _gpsStale = false;
+
+  /// Wall-clock time of the most recently accepted GPS fix.  Updated at the
+  /// start of [_onGpsPosition] (after passing the acceptance filter) so the
+  /// watchdog can compute how long the stream has been silent.
+  DateTime? _lastGpsFixTime;
 
   // When true the smooth route-animation loop is allowed to auto-advance the
   // truck along the route without real GPS movement (useful for demo/testing).
@@ -1261,6 +1289,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   @override
   void dispose() {
     _gpsSubscription?.cancel();
+    _gpsWatchdogTimer?.cancel();
     _animTimer?.cancel();
     _gestureReturnTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
@@ -4066,23 +4095,80 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// device location when available.
   Future<void> _startGps() async {
     bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) return;
+    if (!serviceEnabled) {
+      debugPrint('[GPS] Location service disabled — GPS stream not started.');
+      return;
+    }
 
     geo.LocationPermission permission = await geo.Geolocator.checkPermission();
     if (permission == geo.LocationPermission.denied) {
       permission = await geo.Geolocator.requestPermission();
-      if (permission == geo.LocationPermission.denied) return;
+      if (permission == geo.LocationPermission.denied) {
+        debugPrint('[GPS] Location permission denied — GPS stream not started.');
+        return;
+      }
     }
-    if (permission == geo.LocationPermission.deniedForever) return;
+    if (permission == geo.LocationPermission.deniedForever) {
+      debugPrint('[GPS] Location permission permanently denied.');
+      return;
+    }
 
     const locationSettings = geo.LocationSettings(
       accuracy: geo.LocationAccuracy.high,
       distanceFilter: 10,
     );
 
+    debugPrint('[GPS] Starting position stream (high accuracy, 10 m filter).');
     _gpsSubscription = geo.Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(_onGpsPosition);
+
+    _startGpsWatchdog();
+  }
+
+  /// Starts a periodic watchdog timer that detects GPS signal loss.
+  ///
+  /// The watchdog fires every [_gpsWatchdogIntervalSeconds] seconds and
+  /// checks whether a fresh fix was received within the last
+  /// [_gpsStalenessThresholdSeconds] seconds.  When the stream is silent
+  /// longer than the threshold the session is marked stale:
+  ///   • [_gpsStale] is set to `true` so the UI can show a signal-loss badge.
+  ///   • [_currentSpeedMps] is reset to `-1.0` (unavailable) to prevent a
+  ///     frozen speed value from misleading the driver.
+  ///   • A diagnostic log entry is emitted with the time since the last fix.
+  ///
+  /// The watchdog clears [_gpsStale] and logs a recovery message as soon as
+  /// [_onGpsPosition] is called again with a valid fix.
+  void _startGpsWatchdog() {
+    _gpsWatchdogTimer?.cancel();
+    _gpsWatchdogTimer = Timer.periodic(
+      Duration(seconds: _gpsWatchdogIntervalSeconds),
+      (_) {
+        if (!mounted) return;
+        final now = DateTime.now();
+        final lastFix = _lastGpsFixTime;
+        if (lastFix == null) return; // no fix yet — nothing to check
+        final silentSeconds = now.difference(lastFix).inSeconds;
+        if (silentSeconds >= _gpsStalenessThresholdSeconds) {
+          if (!_gpsStale) {
+            debugPrint(
+              '[GPS] ⚠ Signal lost — no fix for ${silentSeconds}s '
+              '(threshold: ${_gpsStalenessThresholdSeconds}s). '
+              'Last fix: $lastFix. Resetting speed to unavailable.',
+            );
+            setState(() {
+              _gpsStale = true;
+              _currentSpeedMps = -1.0; // reset: speed unknown during signal loss
+            });
+          } else {
+            // Already stale — emit a periodic reminder for diagnostics.
+            debugPrint(
+              '[GPS] ⚠ Still no fix — silent for ${silentSeconds}s.',
+            );
+          }
+        }
+      },
+    );
   }
 
   /// Handles a new GPS position: updates the truck marker to the real device
@@ -4108,12 +4194,50 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
 
+    // ── GPS watchdog: record fix arrival time and clear stale flag ────────
+    // Must run before the acceptance filter so even rejected fixes (noise,
+    // poor accuracy) reset the watchdog — the stream is still alive.
+    final fixArrivalTime = DateTime.now();
+    final bool wasStale = _gpsStale;
+    if (_gpsStale) {
+      // GPS just recovered — log it and clear the stale state.
+      final staleSince = _lastGpsFixTime;
+      final gapSeconds = staleSince != null
+          ? fixArrivalTime.difference(staleSince).inSeconds
+          : null;
+      debugPrint(
+        '[GPS] ✅ Signal recovered after ${gapSeconds != null ? "${gapSeconds}s" : "unknown duration"}. '
+        'accuracy=${position.accuracy.toStringAsFixed(1)}m '
+        'speed=${position.speed.toStringAsFixed(1)}m/s',
+      );
+      if (mounted) setState(() => _gpsStale = false);
+    }
+    _lastGpsFixTime = fixArrivalTime;
+
     // ── GPS drift / noise filter ───────────────────────────────────────────
     // Apply the position acceptance filter: ignores stopped drift, poor-
     // accuracy jitter, and low-speed fluctuations until confirmed stable.
     // This replaces the old hard 20 m accuracy cut-off with a richer logic
     // that handles all cases described in the GPS-drift spec.
-    if (!_shouldAcceptPosition(position)) return;
+    if (!_shouldAcceptPosition(position)) {
+      debugPrint(
+        '[GPS] Fix rejected by drift filter — '
+        'accuracy=${position.accuracy.toStringAsFixed(1)}m '
+        'speed=${position.speed.toStringAsFixed(1)}m/s '
+        'lat=${position.latitude.toStringAsFixed(6)} '
+        'lng=${position.longitude.toStringAsFixed(6)}',
+      );
+      return;
+    }
+
+    // Diagnostic log every accepted fix for easier field debugging.
+    debugPrint(
+      '[GPS] Fix accepted — '
+      'accuracy=${position.accuracy.toStringAsFixed(1)}m '
+      'speed=${(_speedMphFromMps(position.speed)).toStringAsFixed(1)}mph '
+      'heading=${position.heading.toStringAsFixed(1)}° '
+      'staleRecovered=$wasStale',
+    );
 
     // Mark whether the vehicle is currently stopped for all downstream logic.
     _isStopped = _speedMphFromMps(position.speed) < _stoppedSpeedMph;
@@ -4661,6 +4785,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _closestWeighStationsAhead = const [];
       _upcomingAlerts = const [];
       _topInstructionData = null;
+      // Reset GPS watchdog staleness so the stale indicator is cleared
+      // between navigation sessions when the route is cancelled.
+      _gpsStale = false;
     });
     _restrictionAlertShown.clear();
     _poiAlertShown.clear();
@@ -4871,9 +4998,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Invalidate any in-flight smooth animation loop.
       _animGeneration++;
     });
-    // Cancel GPS subscription — all tracking ceases after arrival.
+    // Cancel GPS subscription and watchdog — all tracking ceases after arrival.
     _gpsSubscription?.cancel();
     _gpsSubscription = null;
+    _gpsWatchdogTimer?.cancel();
+    _gpsWatchdogTimer = null;
     // Speak the arrival announcement (interrupts any in-progress TTS).
     _speakAlert('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.
@@ -12837,25 +12966,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   • Current speed in mph (computed from GPS m/s via [_mpsToMph]).
   ///   • Estimated speed limit badge (from [_estimateSpeedLimit] mock logic).
   ///   • Red text + red border when the driver exceeds the speed limit.
+  ///   • Orange border + "GPS" warning label when [_gpsStale] is true.
   ///
-  /// "0" is shown when speed data is not yet available (e.g. cold GPS start).
+  /// "--" is shown when speed data is unavailable (cold start or signal loss).
   Widget _buildSpeedPanel() {
-    // Convert m/s → mph; clamp to 0 when speed is unavailable.
-    final double speedMph =
-        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    // Convert m/s → mph; show "--" when speed is unavailable (stale or cold).
+    final bool speedAvailable = _currentSpeedMps >= 0 && !_gpsStale;
+    final double speedMph = speedAvailable ? _currentSpeedMps * _mpsToMph : 0.0;
+    final String speedLabel = speedAvailable ? speedMph.toStringAsFixed(0) : '--';
     // Overspeed flag: only active when we have a valid speed reading.
-    final bool overLimit =
-        _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
+    final bool overLimit = speedAvailable && speedMph > _speedLimitMph;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black87,
         borderRadius: BorderRadius.circular(10),
-        // Highlight the panel border in red when the driver is over the limit.
-        border: overLimit
-            ? Border.all(color: Colors.red, width: 2)
-            : Border.all(color: Colors.transparent, width: 2),
+        // Orange border on GPS signal loss; red border when over speed limit.
+        border: _gpsStale
+            ? Border.all(color: Colors.orange, width: 2)
+            : overLimit
+                ? Border.all(color: Colors.red, width: 2)
+                : Border.all(color: Colors.transparent, width: 2),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.35),
@@ -12867,12 +12999,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── GPS signal-loss indicator ─────────────────────────────────────
+          if (_gpsStale)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.gps_off, color: Colors.orange, size: 12),
+                  SizedBox(width: 3),
+                  Text(
+                    'GPS',
+                    style: TextStyle(
+                      color: Colors.orange,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // ── Current speed ─────────────────────────────────────────────────
-          // Red text when over the limit; white otherwise.
+          // Red text when over the limit; orange when stale; white otherwise.
           Text(
-            speedMph.toStringAsFixed(0),
+            speedLabel,
             style: TextStyle(
-              color: overLimit ? Colors.red : Colors.white,
+              color: _gpsStale
+                  ? Colors.orange
+                  : overLimit
+                      ? Colors.red
+                      : Colors.white,
               fontSize: 28,
               fontWeight: FontWeight.bold,
               height: 1.0,
@@ -13514,6 +13670,53 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // popular GPS apps.  Updates automatically as the driver
                 // advances to each new route step.
                 _buildCurrentRoadNameBadge(),
+                // ── GPS signal-loss banner ────────────────────────────────
+                // Shown across the top of the map whenever the GPS watchdog
+                // declares the position stream stale (no fix for ≥ 10 s).
+                // The banner is dismissible by the driver but reappears if
+                // the GPS remains silent so it serves as a persistent warning.
+                if (_gpsStale)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: SafeArea(
+                      bottom: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xEE1A1A1A),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                  color: Colors.orange.shade600, width: 1.5),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.gps_off,
+                                    color: Colors.orange.shade400, size: 18),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text(
+                                    'GPS signal lost — speed and position may be out of date',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -14237,18 +14440,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// speed limit (e.g. 55 mph in California).  Speed text turns red when
   /// the driver exceeds the truck limit.
   Widget _buildCompactSpeedPanel() {
-    final double speedMph =
-        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    final bool speedAvailable = _currentSpeedMps >= 0 && !_gpsStale;
+    final double speedMph = speedAvailable ? _currentSpeedMps * _mpsToMph : 0.0;
+    final String speedLabel = speedAvailable ? speedMph.round().toString() : '--';
     final double lat = _truckPosition?.latitude ?? 0.0;
     final double lng = _truckPosition?.longitude ?? 0.0;
     final double truckLimit = _getTruckSpeedLimit(_speedLimitMph, lat, lng);
-    final bool isOver = _currentSpeedMps >= 0 && speedMph > truckLimit;
+    final bool isOver = speedAvailable && speedMph > truckLimit;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.84),
         borderRadius: BorderRadius.circular(14),
+        // Orange border on GPS signal loss; no extra border otherwise.
+        border: _gpsStale
+            ? Border.all(color: Colors.orange, width: 2)
+            : null,
         boxShadow: const [
           BoxShadow(
               color: Colors.black45, blurRadius: 8, offset: Offset(0, 3)),
@@ -14257,11 +14465,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── GPS signal-loss indicator ─────────────────────────────────
+          if (_gpsStale)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.gps_off, color: Colors.orange, size: 12),
+                  SizedBox(width: 3),
+                  Text(
+                    'GPS',
+                    style: TextStyle(
+                      color: Colors.orange,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // ── Current speed ─────────────────────────────────────────────
           Text(
-            speedMph.round().toString(),
+            speedLabel,
             style: TextStyle(
-              color: isOver ? Colors.red : Colors.white,
+              color: _gpsStale
+                  ? Colors.orange
+                  : isOver
+                      ? Colors.red
+                      : Colors.white,
               fontSize: 32,
               fontWeight: FontWeight.w800,
               height: 1,

@@ -49,9 +49,10 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// [_kPoiFallbackIcon] so the POI is still rendered as a visible marker.
 ///
 /// **Walmart POIs:** entries from `assets/walmart_locations.json` are
-/// loaded via [loadWalmartPois] and appended to the result.  All Walmart
-/// entries have `verified=true` and entrance coordinates set, so they are
-/// always rendered as driver-visible markers (category colour, not grey).
+/// loaded via [loadWalmartPois] and appended to the result.  Entries with
+/// `verified=true` and entrance coordinates are coloured with the Walmart
+/// brand blue; entries without them appear as approximate grey markers at
+/// the zip-code centroid.  Either way every valid entry is rendered.
 ///
 /// No proximity or category filter is applied; every entry in both files is
 /// returned so that all USA and Canada POIs appear as markers on the map.
@@ -145,22 +146,44 @@ Future<List<PoiItem>> loadAllPois() async {
 /// Loads every Walmart Supercenter [PoiItem] from
 /// `assets/walmart_locations.json`.
 ///
-/// All entries in this file have `verified=true` and matched
-/// `entrance_lat`/`entrance_lng` coordinates so they are rendered as
-/// driver-visible markers (category colour, not grey) on the main
-/// navigation map.
+/// Entries may set `verified=true` with matched `entrance_lat`/`entrance_lng`
+/// coordinates for a coloured driver-visible marker, or omit them (verified
+/// remains `false`) for an approximate grey marker at the zip-code centroid.
+/// Either way, **every** valid entry appears on the map.
+///
+/// Parsing is done entry-by-entry so a single malformed record is logged and
+/// skipped without preventing the rest from loading.
 ///
 /// The `icon` field defaults to `"walmart_store"` (matching
 /// `assets/logo_brand_markers/walmart_store.png`) and the category is
 /// `"walmart_store"`.
 Future<List<PoiItem>> loadWalmartPois() async {
+  final String jsonString;
   try {
-    final String jsonString =
+    jsonString =
         await rootBundle.loadString('assets/walmart_locations.json');
-    final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
-    return data.map((entry) {
-      final Map<String, dynamic> json = entry as Map<String, dynamic>;
-      return PoiItem(
+  } catch (e) {
+    debugPrint('[POI Load] Could not load walmart_locations.json: $e');
+    return [];
+  }
+
+  final List<dynamic> data;
+  try {
+    data = jsonDecode(jsonString) as List<dynamic>;
+  } catch (e) {
+    debugPrint('[POI Load] Failed to parse walmart_locations.json: $e');
+    return [];
+  }
+
+  // Parse entries one-by-one so a single malformed entry never stops the
+  // rest from loading.  Every error is logged with the entry index so it
+  // can be corrected in the source JSON without disrupting the app.
+  final List<PoiItem> result = [];
+  for (int i = 0; i < data.length; i++) {
+    try {
+      final Map<String, dynamic> json =
+          data[i] as Map<String, dynamic>;
+      result.add(PoiItem(
         id: json['id'] as String,
         name: json['name'] as String,
         category: json['category'] as String? ?? 'walmart_store',
@@ -177,12 +200,20 @@ Future<List<PoiItem>> loadWalmartPois() async {
         country: (json['country'] as String?) ?? 'US',
         stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
         city: (json['city'] as String?) ?? '',
+      ));
+    } catch (e) {
+      // Log malformed entry but continue loading the rest.
+      debugPrint(
+        '[POI Load] Skipping malformed walmart_locations.json entry '
+        'at index $i: $e',
       );
-    }).toList();
-  } catch (e) {
-    debugPrint('[POI Load] Could not load walmart_locations.json: $e');
-    return [];
+    }
   }
+  debugPrint(
+    '[POI Load] Loaded ${result.length} of ${data.length} Walmart '
+    'store entries from walmart_locations.json.',
+  );
+  return result;
 }
 
 /// Converts [pois] to a GeoJSON FeatureCollection map.

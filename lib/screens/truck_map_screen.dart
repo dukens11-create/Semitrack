@@ -2481,7 +2481,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (zoom < _poiHideZoomThreshold) return const [];
 
     // ── Filtered candidate list ────────────────────────────────────────────
-    final List<PoiItem> filtered = _getVisiblePoisForCurrentView();
+    // Apply category-filter settings (Places Filter) so toggling a category
+    // off in nav settings removes its markers here too.
+    final List<PoiItem> filtered = _getFilteredPoisForDisplay();
 
     // ── Cluster mode: zoom 10.5–13.5 ──────────────────────────────────────
     // _shouldUseClustersAtZoom returns true at/below 13.5, so at exactly 13.5
@@ -2577,6 +2579,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return _navSettings.showTollbooths;
       case 'camera_511':
         return _navSettings.show511Cameras;
+      // Restaurant and walmart_store are always enabled in the Places Filter —
+      // they have no dedicated category toggle.  They can still be hidden by
+      // the global POI FAB toggle (_showTruckStops), but when POIs are visible
+      // these categories are always included.
+      case 'restaurant':
+      case 'walmart_store':
+        return true;
       default:
         return true; // Unknown categories are shown by default.
     }
@@ -13411,8 +13420,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     child: FloatingActionButton.small(
                       heroTag: 'poi_toggle',
                       tooltip: _showTruckStops
-                          ? 'Hide truck stops'
-                          : 'Show truck stops',
+                          ? 'Hide all POIs'
+                          : 'Show all POIs',
                       backgroundColor: _showTruckStops
                           ? Colors.blue.shade700
                           : Colors.grey.shade700,

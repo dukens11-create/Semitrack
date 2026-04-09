@@ -373,9 +373,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const double _maxPositionJumpMeters = 80.0;
 
   /// Smoothing weight (0–1) blended between the last accepted display position
-  /// and a new valid fix.  0.5 gives equal weight to both; increase toward 1.0
-  /// to follow new fixes more quickly at the cost of less smoothing.
-  static const double _gpsSmoothingWeight = 0.5;
+  /// and a new valid fix.  0.2 keeps 80% of the old position and blends in
+  /// 20% of the new fix — together with distanceFilter:1 this produces smooth,
+  /// lag-free movement that matches a professional GPS feel.  Increase toward
+  /// 1.0 to follow new fixes more quickly at the cost of more jitter.
+  static const double _gpsSmoothingWeight = 0.2;
 
   /// Minimum displacement (metres) from the last accepted fix that triggers
   /// immediate position acceptance regardless of speed.
@@ -4122,12 +4124,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return;
     }
 
+    // distanceFilter:1 triggers a GPS callback every ~1 metre, providing the
+    // high-frequency position stream needed for smooth map matching, bearing
+    // calculation, and camera follow.  The increased battery usage is acceptable
+    // for professional truck navigation where the vehicle is always running.
     const locationSettings = geo.LocationSettings(
-      accuracy: geo.LocationAccuracy.high,
-      distanceFilter: 10,
+      accuracy: geo.LocationAccuracy.bestForNavigation,
+      distanceFilter: 1,
     );
 
-    debugPrint('[GPS] Starting position stream (high accuracy, 10 m filter).');
+    debugPrint('[GPS] Starting position stream (best-for-navigation accuracy, 1 m filter).');
     _gpsSubscription = geo.Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(_onGpsPosition);

@@ -2642,8 +2642,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case 'walmart_store':
         base = 60; // Walmart Supercenter — shopping, parking, overnight.
         break;
+      case 'restaurant':
+        base = 55; // Restaurant — dining stop for drivers.
+        break;
       case 'commercial_vehicle_wash':
-        base = 55; // Useful but lower urgency.
+        base = 50; // Useful but lower urgency.
         break;
       default:
         base = 40; // All other categories.

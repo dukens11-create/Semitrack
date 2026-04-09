@@ -32,8 +32,9 @@ String poiIconId(String filename) {
 /// in the folder so it is registered by [registerPoiIcons].
 const String _kPoiFallbackIcon = 'truck_parking';
 
-/// Loads every [PoiItem] from `assets/locations.json` **and**
-/// `assets/walmart_locations.json`, returning the combined list.
+/// Loads every [PoiItem] from `assets/locations.json`,
+/// `assets/walmart_locations.json`, and `assets/restaurants.json`,
+/// returning the combined list.
 ///
 /// The JSON entries use the standardised schema with five required fields:
 /// `id`, `name`, `icon` (PNG filename, e.g. `"pilot.png"`), `lat`, `lng`,
@@ -54,7 +55,11 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// brand blue; entries without them appear as approximate grey markers at
 /// the zip-code centroid.  Either way every valid entry is rendered.
 ///
-/// No proximity or category filter is applied; every entry in both files is
+/// **Restaurant POIs:** entries from `assets/restaurants.json` are loaded
+/// via [loadRestaurantPois] and appended to the result.  Every valid entry
+/// is rendered with the `restaurant.png` marker.
+///
+/// No proximity or category filter is applied; every entry in all files is
 /// returned so that all USA and Canada POIs appear as markers on the map.
 Future<List<PoiItem>> loadAllPois() async {
   final String jsonString =
@@ -140,7 +145,12 @@ Future<List<PoiItem>> loadAllPois() async {
   // All Walmart entries are verified (real addresses, entrance coords set),
   // so they appear as driver-visible markers on the main navigation map.
   final List<PoiItem> walmartPois = await loadWalmartPois();
-  return [...basePois, ...walmartPois];
+
+  // Append restaurant POIs from assets/restaurants.json.
+  // Every valid entry is loaded with the restaurant.png marker.
+  final List<PoiItem> restaurantPois = await loadRestaurantPois();
+
+  return [...basePois, ...walmartPois, ...restaurantPois];
 }
 
 /// Loads every Walmart Supercenter [PoiItem] from
@@ -216,8 +226,99 @@ Future<List<PoiItem>> loadWalmartPois() async {
   return result;
 }
 
-/// Converts [pois] to a GeoJSON FeatureCollection map.
+/// Loads every restaurant [PoiItem] from `assets/restaurants.json`.
 ///
+/// The file uses a MongoDB-sample JSON schema where each entry contains:
+///   • `_id.$oid`           — unique string identifier
+///   • `name`               — restaurant name
+///   • `contact.location`   — `[lng, lat]` coordinate pair
+///   • `stars`              — optional rating (integer)
+///   • `categories`         — optional list of cuisine strings
+///   • `grades`             — optional list of inspection scores
+///
+/// Entries are parsed one-by-one so a single malformed record is logged and
+/// skipped without preventing the rest from loading.  Every valid entry is
+/// rendered on the map using the `restaurant.png` marker icon and the
+/// `restaurant` category.
+///
+/// Returns an empty list (with a warning) if the asset cannot be loaded or
+/// the JSON is not a valid array, ensuring the rest of the app continues
+/// to function normally.
+Future<List<PoiItem>> loadRestaurantPois() async {
+  final String jsonString;
+  try {
+    jsonString = await rootBundle.loadString('assets/restaurants.json');
+  } catch (e) {
+    debugPrint('[POI Load] Could not load restaurants.json: $e');
+    return [];
+  }
+
+  final List<dynamic> data;
+  try {
+    data = jsonDecode(jsonString) as List<dynamic>;
+  } catch (e) {
+    debugPrint('[POI Load] Failed to parse restaurants.json: $e');
+    return [];
+  }
+
+  // Parse entries one-by-one so a single malformed entry never stops the
+  // rest from loading.  Every error is logged with the entry index so it
+  // can be corrected in the source JSON without disrupting the app.
+  final List<PoiItem> result = [];
+  for (int i = 0; i < data.length; i++) {
+    try {
+      final Map<String, dynamic> json =
+          data[i] as Map<String, dynamic>;
+
+      // Extract the MongoDB OID as the unique POI id.
+      final Map<String, dynamic> idMap =
+          json['_id'] as Map<String, dynamic>;
+      final String id = idMap['\$oid'] as String;
+
+      final String name = (json['name'] as String?)?.trim() ?? '';
+      if (name.isEmpty) {
+        debugPrint(
+          '[POI Load] Skipping restaurants.json entry at index $i: '
+          'missing name.',
+        );
+        continue;
+      }
+
+      // contact.location is [lng, lat] per GeoJSON convention.
+      final Map<String, dynamic> contact =
+          json['contact'] as Map<String, dynamic>;
+      final List<dynamic> location = contact['location'] as List<dynamic>;
+      final double lng = (location[0] as num).toDouble();
+      final double lat = (location[1] as num).toDouble();
+
+      result.add(PoiItem(
+        id: id,
+        name: name,
+        category: 'restaurant',
+        icon: 'restaurant',
+        lat: lat,
+        lng: lng,
+        verified: false,
+        country: 'US',
+        stateOrProvince: '',
+        city: '',
+      ));
+    } catch (e) {
+      // Log malformed entry but continue loading the rest.
+      debugPrint(
+        '[POI Load] Skipping malformed restaurants.json entry '
+        'at index $i: $e',
+      );
+    }
+  }
+  debugPrint(
+    '[POI Load] Loaded ${result.length} of ${data.length} restaurant '
+    'entries from restaurants.json.',
+  );
+  return result;
+}
+
+
 /// Each feature carries the core [PoiItem] fields as GeoJSON properties.  The
 /// `icon` property matches a Mapbox image ID registered via [registerPoiIcons],
 /// enabling `["get", "icon"]` expressions in symbol layers.

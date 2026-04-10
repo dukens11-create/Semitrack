@@ -84,67 +84,88 @@ Future<List<PoiItem>> loadAllPois() async {
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
 
-  final List<PoiItem> basePois = data.map((entry) {
-    final Map<String, dynamic> json = entry as Map<String, dynamic>;
-    final String rawIcon = json['icon'] as String;
-    final String normalizedId = poiIconId(rawIcon);
+  final List<PoiItem> basePois = data
+      .cast<Map<String, dynamic>>()
+      .where((json) {
+        // Defensively exclude any walmart_store entries from locations.json.
+        // All Walmart POIs must come exclusively from assets/walmart-stores.json
+        // via loadWalmartPois(). If a walmart_store entry is found here it is a
+        // data error — log it and drop it so no legacy/hardcoded Walmart
+        // locations ever appear on the map from this file.
+        final category = (json['category'] as String?) ?? '';
+        if (category == 'walmart_store') {
+          debugPrint(
+            '[POI Load] ✗ Rejected walmart_store entry in locations.json '
+            '(id="${json['id']}"): Walmart POIs must only come from '
+            'assets/walmart-stores.json.',
+          );
+          return false;
+        }
+        return true;
+      })
+      .map((json) {
+        final String rawIcon = json['icon'] as String;
+        final String normalizedId = poiIconId(rawIcon);
 
-    // Resolve the name: truck stops missing a name (null or whitespace-only)
-    // are assigned 'truck_stop_default'. This covers both USA and Canada POI
-    // data. Entries with a non-empty name are used as-is.
-    final String rawName = (json['name'] as String?)?.trim() ?? '';
-    final String resolvedName =
-        rawName.isNotEmpty ? rawName : 'truck_stop_default';
+        // Resolve the name: truck stops missing a name (null or whitespace-only)
+        // are assigned 'truck_stop_default'. This covers both USA and Canada POI
+        // data. Entries with a non-empty name are used as-is.
+        final String rawName = (json['name'] as String?)?.trim() ?? '';
+        final String resolvedName =
+            rawName.isNotEmpty ? rawName : 'truck_stop_default';
 
-    // Validate the normalised icon ID against the bundled PNG set.
-    // If the PNG is absent, log a clear error and fall back to the default
-    // marker icon so the POI is always visible on the map.
-    final String resolvedIcon;
-    if (bundledIconIds.contains(normalizedId)) {
-      resolvedIcon = normalizedId;
-    } else {
-      // TODO(production): Keep this error log — it identifies JSON icon values
-      // that have no matching PNG in assets/logo_brand_markers/.
-      debugPrint(
-        '[POI Load] ✗ Icon not found for "$resolvedName": '
-        '"$rawIcon" → "$normalizedId" has no matching PNG in '
-        'assets/logo_brand_markers/. Using fallback icon "$_kPoiFallbackIcon".',
-      );
-      resolvedIcon = _kPoiFallbackIcon;
-    }
+        // Validate the normalised icon ID against the bundled PNG set.
+        // If the PNG is absent, log a clear error and fall back to the default
+        // marker icon so the POI is always visible on the map.
+        final String resolvedIcon;
+        if (bundledIconIds.contains(normalizedId)) {
+          resolvedIcon = normalizedId;
+        } else {
+          // TODO(production): Keep this error log — it identifies JSON icon values
+          // that have no matching PNG in assets/logo_brand_markers/.
+          debugPrint(
+            '[POI Load] ✗ Icon not found for "$resolvedName": '
+            '"$rawIcon" → "$normalizedId" has no matching PNG in '
+            'assets/logo_brand_markers/. Using fallback icon "$_kPoiFallbackIcon".',
+          );
+          resolvedIcon = _kPoiFallbackIcon;
+        }
 
-    return PoiItem(
-      // Read id and category directly from the standardised JSON schema.
-      id: json['id'] as String,
-      name: resolvedName,
-      category: json['category'] as String,
-      // Resolved icon: normalised PNG filename if the asset exists, otherwise
-      // the fallback icon so the POI still renders as a visible marker.
-      icon: resolvedIcon,
-      lat: (json['lat'] as num).toDouble(),
-      lng: (json['lng'] as num).toDouble(),
-      // Optional high-precision entrance coordinates.  Only used for map
-      // placement when `verified` is true and both values are present.
-      entranceLat: json['entrance_lat'] != null
-          ? (json['entrance_lat'] as num).toDouble()
-          : null,
-      entranceLng: json['entrance_lng'] != null
-          ? (json['entrance_lng'] as num).toDouble()
-          : null,
-      // verified: true means entrance_lat/entrance_lng have been confirmed
-      // against real-world data; only then are they used for map placement.
-      // Defaults to false when the field is absent from the JSON.
-      verified: (json['verified'] as bool?) ?? false,
-      country: (json['country'] as String?) ?? '',
-      stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
-      city: (json['city'] as String?) ?? '',
-      exitNumber: json['exit_number'] as String?,
-    );
-  }).toList();
+        return PoiItem(
+          // Read id and category directly from the standardised JSON schema.
+          id: json['id'] as String,
+          name: resolvedName,
+          category: json['category'] as String,
+          // Resolved icon: normalised PNG filename if the asset exists, otherwise
+          // the fallback icon so the POI still renders as a visible marker.
+          icon: resolvedIcon,
+          lat: (json['lat'] as num).toDouble(),
+          lng: (json['lng'] as num).toDouble(),
+          // Optional high-precision entrance coordinates.  Only used for map
+          // placement when `verified` is true and both values are present.
+          entranceLat: json['entrance_lat'] != null
+              ? (json['entrance_lat'] as num).toDouble()
+              : null,
+          entranceLng: json['entrance_lng'] != null
+              ? (json['entrance_lng'] as num).toDouble()
+              : null,
+          // verified: true means entrance_lat/entrance_lng have been confirmed
+          // against real-world data; only then are they used for map placement.
+          // Defaults to false when the field is absent from the JSON.
+          verified: (json['verified'] as bool?) ?? false,
+          country: (json['country'] as String?) ?? '',
+          stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
+          city: (json['city'] as String?) ?? '',
+          exitNumber: json['exit_number'] as String?,
+        );
+      })
+      .toList();
 
   // Append Walmart Supercenter POIs from the dedicated asset file.
-  // All Walmart entries are verified (real addresses, entrance coords set),
-  // so they appear as driver-visible markers on the main navigation map.
+  // assets/walmart-stores.json is the single source of truth for ALL Walmart
+  // store locations. Any previous source (e.g. walmart_locations.json, hardcoded
+  // addresses, or locations.json entries) has been removed. Only these entries
+  // appear as Walmart markers on the map.
   final List<PoiItem> walmartPois = await loadWalmartPois();
 
   // Append restaurant POIs from assets/restaurants.json.

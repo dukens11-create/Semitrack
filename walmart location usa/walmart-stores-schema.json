@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Walmart Stores USA",
+  "description": "Raw address reference dataset for US Walmart store locations. This is the upstream source from which assets/walmart-stores.json (the full app POI dataset) is derived.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "title": "WalmartStore",
+    "description": "A single US Walmart store entry.",
+    "required": ["store_id", "postal_code", "address"],
+    "additionalProperties": false,
+    "properties": {
+      "store_id": {
+        "type": "string",
+        "description": "Walmart's internal store identifier (numeric string).",
+        "pattern": "^[0-9]+$",
+        "examples": ["1158", "423"]
+      },
+      "postal_code": {
+        "type": "string",
+        "description": "US ZIP code of the store location (5 digits).",
+        "pattern": "^[0-9]{5}$",
+        "examples": ["35214", "90210"]
+      },
+      "address": {
+        "type": "string",
+        "description": "Full or partial street address of the store. When full, follows the format: '<street>, <city>, <state> <zip>'.",
+        "minLength": 5,
+        "examples": [
+          "2473 Hackworth Rd, Adamsville, AL 35214",
+          "630 Colonial Promenade Pkwy"
+        ]
+      }
+    }
+  }
+}

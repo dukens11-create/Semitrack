@@ -5,11 +5,14 @@ class PoiScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Walmart store locations are NOT listed here as hardcoded entries.
+    // All Walmart markers come exclusively from assets/walmart-stores.json
+    // via loadWalmartPois() in poi_service.dart and are rendered on the map.
     const items = [
       ('Pilot Travel Center', 'Showers • Parking • Diesel • Food'),
       ("Love's Travel Stop", 'Laundry • DEF • Parking'),
       ('TA Truck Service', 'Repair • Parking • Fuel'),
-      ('Walmart Overnight', 'Parking possibility'),
+      ('Walmart Store', 'Loaded from walmart-stores.json'),
       ('Weigh Station', 'Open / Closed status'),
     ];
 

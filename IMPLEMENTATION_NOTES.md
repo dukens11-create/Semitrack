@@ -35,7 +35,6 @@ hardcode them anywhere in the application code.
 | File | Purpose |
 |---|---|
 | `assets/walmart-stores.json` | **Single source of truth.** Full POI schema loaded by the app. Contains 4,640 US Walmart store entries with `id`, `store_id`, `name`, `address`, `postal_code`, `lat`, `lng`, `verified`, `country`, `stateOrProvince`, and `city`. |
-| `walmart-stores.json` (repo root) | Raw address reference data (`store_id`, `postal_code`, `address`). All addresses in `assets/walmart-stores.json` are derived from this file. Do not load this file directly from the app. |
 
 ### Schema
 
@@ -69,9 +68,7 @@ Walmart entries are rendered as `walmart_store` category POIs using the
 
 To add, remove, or correct a Walmart location:
 1. Edit `assets/walmart-stores.json` directly (it is the authoritative POI asset).
-2. If you also update the raw reference file (`walmart-stores.json` at the repo root),
-   ensure the `address` and `postal_code` fields stay in sync with the assets file.
-3. Do **not** add Walmart entries to any other file (`assets/locations.json`,
+2. Do **not** add Walmart entries to any other file (`assets/locations.json`,
    hardcoded Dart lists, or any other JSON asset).
 
 ---

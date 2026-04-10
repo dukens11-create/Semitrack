@@ -54,7 +54,7 @@ flutter:
   #   This is the ONLY file the app loads for Walmart map markers and addresses.
   #   Do NOT add Walmart entries to locations.json or hardcode them anywhere.
   #   Contains: id, store_id, name, address, postal_code, lat, lng, verified,
-  #   country, stateOrProvince, city — derived from walmart-stores.json (root).
+  #   country, stateOrProvince, city.
   #   Loaded exclusively by loadWalmartPois() in poi_service.dart.
   #
   # assets/restaurants.json

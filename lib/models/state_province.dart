@@ -1,5 +1,5 @@
 /// Represents a US state or Canadian province loaded from
-/// `assets/data/states_provinces.json`.
+/// `assets/welcome-states-pack/states_provinces.json`.
 class StateProvince {
   final String code;
   final String country;

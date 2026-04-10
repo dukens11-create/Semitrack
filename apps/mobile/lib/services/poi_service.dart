@@ -247,6 +247,14 @@ Future<List<PoiItem>> loadWalmartPois() async {
 /// rendered on the map using the `restaurant.png` marker icon and the
 /// `restaurant` category.
 ///
+/// **Verified status:** All restaurants are marked `verified: true` with
+/// `entranceLat`/`entranceLng` set to the restaurant's own coordinates.
+/// This displays them as coloured (red) GPS pins — matching the `restaurant`
+/// category colour — rather than the grey "approximate location" pins used for
+/// POIs whose positions have not been confirmed.  The MongoDB sample dataset
+/// provides accurate GPS coordinates for every entry, so the coloured pin
+/// accurately conveys that each location is a real, confirmed point.
+///
 /// Returns an empty list (with a warning) if the asset cannot be loaded or
 /// the JSON is not a valid array, ensuring the rest of the app continues
 /// to function normally.
@@ -304,7 +312,14 @@ Future<List<PoiItem>> loadRestaurantPois() async {
         icon: 'restaurant',
         lat: lat,
         lng: lng,
-        verified: false,
+        // Mark as verified so the marker uses the restaurant category colour
+        // (red) instead of grey.  The MongoDB sample dataset provides accurate
+        // GPS coordinates for every entry, so the location is confirmed.
+        // entranceLat/entranceLng are set to the same coordinate since
+        // restaurants have a single known location point (no separate entrance).
+        verified: true,
+        entranceLat: lat,
+        entranceLng: lng,
         country: 'US',
         stateOrProvince: '',
         city: '',

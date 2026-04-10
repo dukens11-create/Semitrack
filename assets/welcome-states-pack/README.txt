@@ -2,14 +2,14 @@ State Welcome Pack
 ===================
 
 Files included:
-- states_provinces.json  →  deployed to assets/data/states_provinces.json
+- states_provinces.json  →  deployed to assets/welcome-states-pack/states_provinces.json
 
 Integration status: ACTIVE
 --------------------------
 The data in this pack is fully integrated into the Semitrack app:
 
 1. Asset registration (pubspec.yaml)
-   assets/data/states_provinces.json is declared under flutter: assets:
+   assets/welcome-states-pack/states_provinces.json is declared under flutter: assets:
    so Flutter bundles it at build time.
 
 2. Model (lib/models/state_province.dart)

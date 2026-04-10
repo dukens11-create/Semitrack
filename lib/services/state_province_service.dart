@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:semitrack_mobile/models/state_province.dart';
 
 /// Loads the list of US states and Canadian provinces from the bundled JSON
-/// asset `assets/data/states_provinces.json` (from the *welcome states pack*).
+/// asset `assets/welcome-states-pack/states_provinces.json` (from the *welcome states pack*).
 ///
 /// Usage:
 /// ```dart
@@ -15,7 +15,7 @@ import 'package:semitrack_mobile/models/state_province.dart';
 class StateProvinceService {
   StateProvinceService._();
 
-  static const String _assetPath = 'assets/data/states_provinces.json';
+  static const String _assetPath = 'assets/welcome-states-pack/states_provinces.json';
 
   /// Parses and returns every entry in the bundled JSON asset.
   static Future<List<StateProvince>> load() async {

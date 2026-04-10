@@ -70,4 +70,4 @@ flutter:
     - assets/walmart-stores.json
     - assets/restaurants.json
     # US states and Canadian provinces reference data (from welcome states pack)
-    - assets/data/states_provinces.json
+    - assets/welcome-states-pack/states_provinces.json

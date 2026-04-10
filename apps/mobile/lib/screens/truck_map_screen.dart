@@ -1805,16 +1805,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       assetLogo: 'assets/logo_brand_markers/petro_canada_truck_stop.png',
       description: 'Petro-Canada with high-volume diesel, DEF, driver lounge, and full parking.',
     ),
-    TruckStop(
-      id: '27',
-      name: 'Walmart Supercenter',
-      brand: 'Walmart',
-      position: const LatLng(36.362, -94.209),
-      address: 'Bentonville, AR',
-      icon: 'walmart',
-      assetLogo: 'assets/logo_brand_markers/walmart_store.png',
-      description: 'Walmart Supercenter with designated truck parking, overnight stays, and full shopping access.',
-    ),
+    // NOTE: Walmart Supercenter locations are NOT listed here.
+    // All Walmart store POIs are sourced exclusively from
+    // assets/walmart-stores.json via loadWalmartPois() in poi_service.dart.
+    // Do NOT add hardcoded Walmart addresses to this list — use the JSON file.
     TruckStop(
       id: '28',
       name: 'Trucker Hotel & Lodging',
@@ -2095,7 +2089,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     'quicktrip':    'assets/logo_brand_markers/quicktrip_truck_stop.png',
     'esso':         'assets/logo_brand_markers/truck_parking.png',
     'petrocanada':  'assets/logo_brand_markers/petro_canada_truck_stop.png',
-    'walmart':      'assets/logo_brand_markers/walmart_store.png',
+    // NOTE: 'walmart' is intentionally omitted here.
+    // Walmart store locations are sourced exclusively from
+    // assets/walmart-stores.json and rendered via the POI cluster layer
+    // (_buildAllPoiMarkers / loadWalmartPois). Do NOT add Walmart to this map.
     'hotel':        'assets/logo_brand_markers/hotel_default.png',
     'restaurant':   'assets/logo_brand_markers/restaurant.png',
     'truckwash':    'assets/logo_brand_markers/commercial_vehicle_wash.png',
@@ -2120,17 +2117,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
 
-      // Resolve the brand key so Walmart entries get their brand blue colour
-      // while all other truck stops use the standard orange pin.
-      final String brand =
-          stop.icon ?? _normalizeTruckStopBrand(stop.brand);
-      final Color pinColor = brand == 'walmart'
-          ? const Color(0xFF0071CE) // Walmart brand blue
-          : Colors.orange.shade700;
+      // Use orange for all mock truck-stop pins.
+      // NOTE: Walmart store markers are NOT rendered here — they come
+      // exclusively from assets/walmart-stores.json via loadWalmartPois() and
+      // are displayed by the POI cluster layer (_buildAllPoiMarkers).
+      final Color pinColor = Colors.orange.shade700;
 
-      // Render every truck stop — including Walmart — as a GPS teardrop-pin
-      // shape so they are visually consistent with PoiItem-based markers built
-      // by _buildAllPoiMarkers().  The brand logo PNG is embedded inside the
+      // Render every truck stop as a GPS teardrop-pin shape so they are
+      // visually consistent with PoiItem-based markers built by
+      // _buildAllPoiMarkers().  The brand logo PNG is embedded inside the
       // circular pin head when available; otherwise a fallback icon is shown.
       final Widget pinWidget = buildGpsPinMarker(
         pinColor: pinColor,

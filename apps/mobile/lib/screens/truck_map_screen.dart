@@ -2120,36 +2120,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final Uint8List? bytes =
           stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
 
-      final Widget iconWidget = bytes != null
-          ? Image.memory(
-              bytes,
-              width: 40,
-              height: 40,
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
-            )
-          : Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Colors.blue.shade700,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.local_gas_station,
-                color: Colors.white,
-                size: 22,
-              ),
-            );
+      // Resolve the brand key so Walmart entries get their brand blue colour
+      // while all other truck stops use the standard orange pin.
+      final String brand =
+          stop.icon ?? _normalizeTruckStopBrand(stop.brand);
+      final Color pinColor = brand == 'walmart'
+          ? const Color(0xFF0071CE) // Walmart brand blue
+          : Colors.orange.shade700;
+
+      // Render every truck stop — including Walmart — as a GPS teardrop-pin
+      // shape so they are visually consistent with PoiItem-based markers built
+      // by _buildAllPoiMarkers().  The brand logo PNG is embedded inside the
+      // circular pin head when available; otherwise a fallback icon is shown.
+      final Widget pinWidget = buildGpsPinMarker(
+        pinColor: pinColor,
+        imageBytes: bytes,
+        fallbackIcon: Icons.local_gas_station,
+        pinSize: _kPoiPinSize,
+      );
 
       markers.add(Marker(
         point: stop.position,
-        width: 40,
-        height: 40,
+        width: _kPoiPinSize,
+        height: _kPoiPinSize,
         alignment: Alignment.center,
         child: GestureDetector(
           onTap: () => _showTruckStopSheet(stop),
-          child: iconWidget,
+          child: pinWidget,
         ),
       ));
     }

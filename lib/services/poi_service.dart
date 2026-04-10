@@ -33,7 +33,7 @@ String poiIconId(String filename) {
 const String _kPoiFallbackIcon = 'truck_parking';
 
 /// Loads every [PoiItem] from `assets/locations.json`,
-/// `assets/walmart_locations.json`, and `assets/restaurants.json`,
+/// `assets/walmart-stores.json`, and `assets/restaurants.json`,
 /// returning the combined list.
 ///
 /// The JSON entries use the standardised schema with five required fields:
@@ -49,8 +49,9 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// matching PNG is found, an error is logged and the icon falls back to
 /// [_kPoiFallbackIcon] so the POI is still rendered as a visible marker.
 ///
-/// **Walmart POIs:** entries from `assets/walmart_locations.json` are
-/// loaded via [loadWalmartPois] and appended to the result.  Entries with
+/// **Walmart POIs:** entries from `assets/walmart-stores.json` are
+/// loaded via [loadWalmartPois] and appended to the result.  This file is
+/// the single source of truth for all Walmart store locations.  Entries with
 /// `verified=true` and entrance coordinates are coloured with the Walmart
 /// brand blue; entries without them appear as approximate grey markers at
 /// the zip-code centroid.  Either way every valid entry is rendered.
@@ -153,8 +154,12 @@ Future<List<PoiItem>> loadAllPois() async {
   return [...basePois, ...walmartPois, ...restaurantPois];
 }
 
-/// Loads every Walmart Supercenter [PoiItem] from
-/// `assets/walmart_locations.json`.
+/// Loads every Walmart store [PoiItem] from `assets/walmart-stores.json`.
+///
+/// **This file is the single source of truth for all Walmart store locations.**
+/// It contains `store_id`, `address`, `postal_code`, `lat`, `lng`, `name`,
+/// `stateOrProvince`, and `city` fields merged from the canonical
+/// `walmart-stores.json` dataset (repository root).
 ///
 /// Entries may set `verified=true` with matched `entrance_lat`/`entrance_lng`
 /// coordinates for a coloured driver-visible marker, or omit them (verified
@@ -168,12 +173,13 @@ Future<List<PoiItem>> loadAllPois() async {
 /// `assets/logo_brand_markers/walmart_store.png`) and the category is
 /// `"walmart_store"`.
 Future<List<PoiItem>> loadWalmartPois() async {
+  // assets/walmart-stores.json is the single source of truth for Walmart POIs.
   final String jsonString;
   try {
     jsonString =
-        await rootBundle.loadString('assets/walmart_locations.json');
+        await rootBundle.loadString('assets/walmart-stores.json');
   } catch (e) {
-    debugPrint('[POI Load] Could not load walmart_locations.json: $e');
+    debugPrint('[POI Load] Could not load walmart-stores.json: $e');
     return [];
   }
 
@@ -181,7 +187,7 @@ Future<List<PoiItem>> loadWalmartPois() async {
   try {
     data = jsonDecode(jsonString) as List<dynamic>;
   } catch (e) {
-    debugPrint('[POI Load] Failed to parse walmart_locations.json: $e');
+    debugPrint('[POI Load] Failed to parse walmart-stores.json: $e');
     return [];
   }
 
@@ -214,14 +220,14 @@ Future<List<PoiItem>> loadWalmartPois() async {
     } catch (e) {
       // Log malformed entry but continue loading the rest.
       debugPrint(
-        '[POI Load] Skipping malformed walmart_locations.json entry '
+        '[POI Load] Skipping malformed walmart-stores.json entry '
         'at index $i: $e',
       );
     }
   }
   debugPrint(
     '[POI Load] Loaded ${result.length} of ${data.length} Walmart '
-    'store entries from walmart_locations.json.',
+    'store entries from walmart-stores.json.',
   );
   return result;
 }

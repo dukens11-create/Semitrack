@@ -21,6 +21,61 @@
 18. Documents & operations -> documents screen + documents endpoint
 19. Advanced route editing -> routing service extension point
 
+## Walmart Store POIs – Single Source of Truth
+
+**All Walmart store locations are sourced exclusively from `assets/walmart-stores.json`.**
+
+No other file, hardcoded list, or legacy dataset is used for Walmart map markers,
+POIs, or address lookups. Any previous source (e.g. `assets/walmart_locations.json`)
+has been removed. Do **not** add Walmart addresses to `assets/locations.json` or
+hardcode them anywhere in the application code.
+
+### Data files
+
+| File | Purpose |
+|---|---|
+| `assets/walmart-stores.json` | **Single source of truth.** Full POI schema loaded by the app. Contains 4,640 US Walmart store entries with `id`, `store_id`, `name`, `address`, `postal_code`, `lat`, `lng`, `verified`, `country`, `stateOrProvince`, and `city`. |
+| `walmart-stores.json` (repo root) | Raw address reference data (`store_id`, `postal_code`, `address`). All addresses in `assets/walmart-stores.json` are derived from this file. Do not load this file directly from the app. |
+
+### Schema
+
+```json
+{
+  "id": "walmart_1158",
+  "store_id": "1158",
+  "name": "Walmart - Adamsville, AL",
+  "address": "2473 Hackworth Rd, Adamsville, AL 35214",
+  "postal_code": "35214",
+  "category": "walmart_store",
+  "icon": "walmart_store.png",
+  "lat": 33.5786,
+  "lng": -86.8939,
+  "verified": false,
+  "country": "US",
+  "stateOrProvince": "AL",
+  "city": "Adamsville"
+}
+```
+
+### Code path
+
+`loadAllPois()` → `loadWalmartPois()` → `rootBundle.loadString('assets/walmart-stores.json')`
+(in `lib/services/poi_service.dart` and `apps/mobile/lib/services/poi_service.dart`)
+
+Walmart entries are rendered as `walmart_store` category POIs using the
+`assets/logo_brand_markers/walmart_store.png` marker icon (Walmart brand blue `#0071CE`).
+
+### Updating store data
+
+To add, remove, or correct a Walmart location:
+1. Edit `assets/walmart-stores.json` directly (it is the authoritative POI asset).
+2. If you also update the raw reference file (`walmart-stores.json` at the repo root),
+   ensure the `address` and `postal_code` fields stay in sync with the assets file.
+3. Do **not** add Walmart entries to any other file (`assets/locations.json`,
+   hardcoded Dart lists, or any other JSON asset).
+
+---
+
 ## POI Data – truck_stop_default naming convention
 
 Truck stop entries in `assets/locations.json` that have no `name` (missing key,

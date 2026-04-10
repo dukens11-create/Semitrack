@@ -50,10 +50,12 @@ flutter:
   #   POI dataset used to populate truck-stop markers on the map.
   #
   # assets/walmart-stores.json
-  #   Single source of truth for all Walmart store locations.
-  #   Contains store_id, address, postal_code, lat, lng, name, and state/city
-  #   derived by merging walmart-stores.json (root) with coordinate data.
-  #   Loaded by loadWalmartPois() in poi_service.dart.
+  #   SINGLE SOURCE OF TRUTH for all Walmart store POI locations (4,640 entries).
+  #   This is the ONLY file the app loads for Walmart map markers and addresses.
+  #   Do NOT add Walmart entries to locations.json or hardcode them anywhere.
+  #   Contains: id, store_id, name, address, postal_code, lat, lng, verified,
+  #   country, stateOrProvince, city — derived from walmart-stores.json (root).
+  #   Loaded exclusively by loadWalmartPois() in poi_service.dart.
   #
   # assets/restaurants.json
   #   Restaurant POI dataset (10 000 entries, MongoDB sample format).

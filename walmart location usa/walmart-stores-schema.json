@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Walmart Stores USA",
   "description": "Raw address reference dataset for US Walmart store locations. This is the upstream source from which assets/walmart-stores.json (the full app POI dataset) is derived.",
   "type": "array",

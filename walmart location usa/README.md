@@ -43,7 +43,8 @@ Each entry in the JSON array has the following fields:
 See [`example.js`](./example.js) for a complete loading and filtering example.
 
 ```js
-const stores = require('./walmart-stores.json');
+import { readFileSync } from 'fs';
+const stores = JSON.parse(readFileSync('./walmart-stores.json', 'utf8'));
 console.log(`Total stores: ${stores.length}`);
 ```
 

@@ -179,8 +179,7 @@ Future<List<PoiItem>> loadAllPois() async {
 ///
 /// **This file is the single source of truth for all Walmart store locations.**
 /// It contains `store_id`, `address`, `postal_code`, `lat`, `lng`, `name`,
-/// `stateOrProvince`, and `city` fields merged from the canonical
-/// `walmart-stores.json` dataset (repository root).
+/// `stateOrProvince`, and `city` fields for all US Walmart stores.
 ///
 /// Entries may set `verified=true` with matched `entrance_lat`/`entrance_lng`
 /// coordinates for a coloured driver-visible marker, or omit them (verified

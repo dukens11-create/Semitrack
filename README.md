@@ -1,5 +1,31 @@
 # Semitrack Phase 5 Backend Pack
 
+## Firebase Setup
+
+This project uses [FlutterFire](https://firebase.flutter.dev/) for Firebase integration.
+
+The files `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` are currently populated with **placeholder values**. Before running the app you must replace them with real credentials from your Firebase project.
+
+### Regenerate configs with the FlutterFire CLI
+
+```bash
+# Install the CLI (one-time)
+dart pub global activate flutterfire_cli
+
+# From the project root, configure all platforms
+flutterfire configure --project=semitrack
+```
+
+This will overwrite `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` with real values tied to your `semitrack` Firebase project.
+
+After regenerating, run:
+
+```bash
+flutter clean
+flutter pub get
+flutter run
+```
+
 ## Downloading the Android APK
 
 Every push and pull request automatically triggers a GitHub Actions workflow that builds a release APK.

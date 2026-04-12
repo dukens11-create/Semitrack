@@ -57,3 +57,9 @@ app.*.map.json
 **/ios/Flutter/flutter_export_environment.sh
 **/ios/Pods/
 **/ios/.symlinks/
+
+# Generated plugin registrant files
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+ios/Flutter/ephemeral/
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Runner/GeneratedPluginRegistrant.m

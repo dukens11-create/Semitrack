@@ -46,6 +46,11 @@ android {
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        // Mapbox public access token injected from env var or local.properties
+        def mapboxToken = System.getenv("MAPBOX_ACCESS_TOKEN")
+                ?: localProperties.getProperty("MAPBOX_ACCESS_TOKEN")
+                ?: ""
+        resValue "string", "mapbox_access_token", mapboxToken
     }
 
     buildTypes {

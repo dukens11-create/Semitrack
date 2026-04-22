@@ -67,7 +67,6 @@ flutter:
   #   restaurant appears on the map with a restaurant.png marker.
   assets:
     - assets/icons/
-    - assets/icons/truck_top.png
     - assets/data/truck_stops.json
     - assets/logo_brand_markers/
     - assets/locations.json

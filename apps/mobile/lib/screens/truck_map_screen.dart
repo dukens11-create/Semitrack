@@ -782,6 +782,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<TruckPoi> _truckPois = const [];
   List<TruckPoi> _visibleTruckPois = const [];
   mbx.PointAnnotationManager? _truckPoiAnnotationManager;
+  final Map<String, Uint8List> _truckPoiBrandIcons = {};
 
   // POI entries are now rendered via the Mapbox GeoJSON cluster source
   // (poi-source) and associated style layers set up in _setupPoiCluster().
@@ -1990,6 +1991,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   Future<Uint8List?> loadBrandIcon(String brand) async {
     final String normalized = brand.toLowerCase().replaceAll(' ', '_');
+    final Uint8List? cached = _truckPoiBrandIcons[normalized];
+    if (cached != null) return cached;
     final List<String> paths = [
       'assets/icons/$normalized.png',
       'assets/icons/truck_top.png',
@@ -1997,7 +2000,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     for (final path in paths) {
       try {
         final ByteData bytes = await rootBundle.load(path);
-        return bytes.buffer.asUint8List();
+        final Uint8List icon = bytes.buffer.asUint8List();
+        _truckPoiBrandIcons[normalized] = icon;
+        return icon;
       } catch (_) {
         // Try next icon candidate.
       }

@@ -754,14 +754,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Expand this section later to support real API data, weigh stations, etc.
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
-  List<TruckPoi> _allTruckPois = const [];
-  List<TruckPoi> _visibleTruckPois = const [];
-  mbx.PointAnnotationManager? _poiAnnotationManager;
-  final Map<TruckPoiCategory, Uint8List> _poiCategoryIconBytes = {};
-
-  static const int _maxTruckStopRoutePois = 5;
-  static const int _maxWalmartRoutePois = 3;
-  static const double _poiRouteDistanceKm = 10.0;
 
   // POI entries are now rendered via the Mapbox GeoJSON cluster source
   // (poi-source) and associated style layers set up in _setupPoiCluster().
@@ -1265,8 +1257,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all POIs from locations.json so _buildAllPoiMarkers() can display
     // every POI on the map without requiring the Mapbox style cluster setup.
     _loadPoisForMap();
-    // Load route-scoped truck-stop and Walmart POIs used by PointAnnotations.
-    loadPois();
     // Restore persisted POI category toggle state so driver preferences survive
     // app restarts.
     _loadNavSettings();
@@ -1311,11 +1301,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _searchController.dispose();
     _searchDebounce?.cancel();
     _warningManager.dispose();
-    final poiAnnotationManager = _poiAnnotationManager;
-    _poiAnnotationManager = null;
-    if (poiAnnotationManager != null) {
-      unawaited(poiAnnotationManager.deleteAll());
-    }
     super.dispose();
   }
 
@@ -1866,178 +1851,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       description: 'On-site gym with showers, locker rooms, and 24/7 access for professional truck drivers.',
     ),
   ];
-
-  // ── Truck Stop POI methods ─────────────────────────────────────────────────
-
-  /// Loads route POIs from dedicated truck-stop and Walmart assets.
-  Future<void> loadPois() async {
-    const truckStopsPath = 'assets/data/truck_stops.json';
-    const walmartPath = 'assets/data/walmart.json';
-    try {
-      final truckStopsRaw = await rootBundle.loadString(truckStopsPath);
-      final walmartRaw = await rootBundle.loadString(walmartPath);
-
-      final List<dynamic> truckStopsJson = jsonDecode(truckStopsRaw) as List<dynamic>;
-      final List<dynamic> walmartJson = jsonDecode(walmartRaw) as List<dynamic>;
-
-      final truckStops = truckStopsJson
-          .whereType<Map>()
-          .map((json) => TruckPoi.fromJson(
-              Map<String, dynamic>.from(json), TruckPoiCategory.truckStop))
-          .toList(growable: false);
-      final walmarts = walmartJson
-          .whereType<Map>()
-          .map((json) => TruckPoi.fromJson(
-              Map<String, dynamic>.from(json), TruckPoiCategory.walmart))
-          .toList(growable: false);
-
-      if (!mounted) return;
-      setState(() => _allTruckPois = [...truckStops, ...walmarts]);
-      if (_routePoints.isNotEmpty) {
-        unawaited(updatePoisForRoute(_routePoints));
-      }
-    } catch (e) {
-      debugPrint(
-        '[TruckPOI] Failed to load route POIs from '
-        '"$truckStopsPath" / "$walmartPath": $e',
-      );
-    }
-  }
-
-  /// Loads and caches the marker icon bytes for a POI category.
-  Future<Uint8List?> loadBrandIcon(TruckPoiCategory category) async {
-    final cached = _poiCategoryIconBytes[category];
-    if (cached != null) return cached;
-
-    final String assetPath = category == TruckPoiCategory.walmart
-        ? 'assets/icons/walmart.png'
-        : 'assets/icons/truck_top.png';
-    try {
-      final bytes = (await rootBundle.load(assetPath)).buffer.asUint8List();
-      _poiCategoryIconBytes[category] = bytes;
-      return bytes;
-    } catch (e) {
-      debugPrint('[TruckPOI] Failed to load icon "$assetPath": $e');
-      return null;
-    }
-  }
-
-  /// Returns great-circle distance in kilometres between two coordinates.
-  double calculateDistanceKm(
-    double lat1,
-    double lng1,
-    double lat2,
-    double lng2,
-  ) {
-    return geo.Geolocator.distanceBetween(lat1, lng1, lat2, lng2) / 1000.0;
-  }
-
-  /// Finds POIs of a specific [category] near [routePoints].
-  List<TruckPoi> findPoisNearRoute(
-    List<LatLng> routePoints, {
-    required TruckPoiCategory category,
-    required int maxPois,
-    double maxDistanceKm = _poiRouteDistanceKm,
-  }) {
-    if (routePoints.isEmpty || _allTruckPois.isEmpty) return const [];
-    final candidates =
-        _allTruckPois.where((poi) => poi.category == category).toList(growable: false);
-    final List<TruckPoi> nearRoute = [];
-    for (final poi in candidates) {
-      for (final point in routePoints) {
-        final double d = calculateDistanceKm(
-          poi.latitude,
-          poi.longitude,
-          point.latitude,
-          point.longitude,
-        );
-        if (d <= maxDistanceKm) {
-          nearRoute.add(poi);
-          break;
-        }
-      }
-    }
-
-    final LatLng userPos = _truckPosition ?? routePoints.first;
-    nearRoute.sort((a, b) {
-      final da = calculateDistanceKm(
-        a.latitude,
-        a.longitude,
-        userPos.latitude,
-        userPos.longitude,
-      );
-      final db = calculateDistanceKm(
-        b.latitude,
-        b.longitude,
-        userPos.latitude,
-        userPos.longitude,
-      );
-      return da.compareTo(db);
-    });
-    return nearRoute.length > maxPois ? nearRoute.sublist(0, maxPois) : nearRoute;
-  }
-
-  /// Renders POI markers on the Mapbox map via [PointAnnotationManager].
-  Future<void> showPoisOnMap(List<TruckPoi> pois) async {
-    final map = _mapboxMap;
-    if (map == null) {
-      if (mounted) setState(() => _visibleTruckPois = pois);
-      return;
-    }
-
-    try {
-      _poiAnnotationManager ??= await map.annotations.createPointAnnotationManager();
-      await _poiAnnotationManager!.deleteAll();
-      final Map<TruckPoiCategory, Uint8List?> icons = {
-        TruckPoiCategory.truckStop:
-            await loadBrandIcon(TruckPoiCategory.truckStop),
-        TruckPoiCategory.walmart: await loadBrandIcon(TruckPoiCategory.walmart),
-      };
-      final futures = <Future<void>>[];
-      for (final poi in pois) {
-        final icon = icons[poi.category];
-        if (icon == null) continue;
-        futures.add(
-          _poiAnnotationManager!
-              .create(
-                mbx.PointAnnotationOptions(
-                  geometry: mbx.Point(
-                    coordinates: mbx.Position(poi.longitude, poi.latitude),
-                  ),
-                  image: icon,
-                  iconSize: poi.category == TruckPoiCategory.walmart ? 0.95 : 0.80,
-                ),
-              )
-              .then((_) {}),
-        );
-      }
-      if (futures.isNotEmpty) {
-        await Future.wait(futures);
-      }
-      if (mounted) setState(() => _visibleTruckPois = pois);
-    } catch (e) {
-      debugPrint('[TruckPOI] Failed to render POI annotations: $e');
-    }
-  }
-
-  /// Updates route POIs (truck stops + Walmart) after a route is available.
-  Future<void> updatePoisForRoute(List<LatLng> routePoints) async {
-    if (routePoints.isEmpty) {
-      await showPoisOnMap(const []);
-      return;
-    }
-    final truckStops = findPoisNearRoute(
-      routePoints,
-      category: TruckPoiCategory.truckStop,
-      maxPois: _maxTruckStopRoutePois,
-    );
-    final walmarts = findPoisNearRoute(
-      routePoints,
-      category: TruckPoiCategory.walmart,
-      maxPois: _maxWalmartRoutePois,
-    );
-    await showPoisOnMap([...truckStops, ...walmarts]);
-  }
 
   /// Filters [allStops] to only those within [maxDistanceMeters] of any point
   /// on [routePoints].  Call this after a new route loads to refresh the POI
@@ -5044,7 +4857,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Clear the route-only POI source so stale markers are removed from the
     // map immediately when the driver cancels navigation.
     _refreshRoutePoiSourceIfNeeded(force: true);
-    unawaited(updatePoisForRoute(const []));
     // Notify other widgets (e.g. AppShell) that navigation has ended so the
     // bottom navigation bar and other planning UI are restored.
     TruckMapScreen.isNavigatingNotifier.value = false;
@@ -5470,7 +5282,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _isLoading = false;
     });
 
-    unawaited(updatePoisForRoute(_routePoints));
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();
   }
@@ -7921,7 +7732,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // the map isn't cluttered with globally-distant stops.
         setState(() => _truckStops =
             _filterStopsNearRoute(_mockTruckStops, newPoints));
-        unawaited(updatePoisForRoute(newPoints));
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
         // Seed trip progress with the full-route distance and duration so
@@ -8038,7 +7848,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       setState(() {
         _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
       });
-      unawaited(updatePoisForRoute(newPoints));
 
       // ── Evaluate truck restrictions along the new route ────────────────────
       // Use smart rerouting to attempt to find a restriction-free route before
@@ -8118,7 +7927,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // within 10 km of this specific polyline are displayed.
       _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
     });
-    unawaited(updatePoisForRoute(newPoints));
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();
     // Keep trip-progress strip in sync with the newly selected route option.
@@ -10204,9 +10012,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// add POI sources and layers once the style finishes loading.
   void _onMapCreated(mbx.MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
-    if (_routePoints.isNotEmpty) {
-      unawaited(updatePoisForRoute(_routePoints));
-    }
   }
 
   /// Called by [MapWidget] once the Mapbox style has finished loading.
@@ -15856,48 +15661,6 @@ class RoutePoint {
   final double lng;
 
   const RoutePoint({required this.lat, required this.lng});
-}
-
-enum TruckPoiCategory { truckStop, walmart }
-
-/// Shared POI model for route-scoped truck-stop and Walmart map annotations.
-class TruckPoi {
-  final String id;
-  final String name;
-  final double latitude;
-  final double longitude;
-  final TruckPoiCategory category;
-
-  const TruckPoi({
-    required this.id,
-    required this.name,
-    required this.latitude,
-    required this.longitude,
-    required this.category,
-  });
-
-  factory TruckPoi.fromJson(
-    Map<String, dynamic> json,
-    TruckPoiCategory category,
-  ) {
-    final dynamic latValue = json['latitude'] ?? json['lat'];
-    final dynamic lngValue = json['longitude'] ?? json['lng'];
-    if (latValue == null || lngValue == null) {
-      throw FormatException(
-        'Missing latitude/longitude for POI '
-        'id=${json['id'] ?? json['store_id']} '
-        'name=${json['name']}',
-      );
-    }
-    final dynamic rawId = json['id'] ?? json['store_id'] ?? json['name'];
-    return TruckPoi(
-      id: rawId?.toString() ?? '',
-      name: (json['name'] ?? '').toString(),
-      latitude: (latValue as num).toDouble(),
-      longitude: (lngValue as num).toDouble(),
-      category: category,
-    );
-  }
 }
 
 /// A truck-stop point of interest used by the closest-stops-ahead system.

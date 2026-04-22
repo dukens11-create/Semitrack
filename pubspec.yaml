@@ -19,7 +19,6 @@ dependencies:
   shared_preferences: ^2.3.0
   geolocator: ^13.0.2
   flutter_tts: ^4.0.2
-  firebase_core: ^3.6.0
   # turf: ^0.0.9
   # Optional: add `turf` (turf_dart) if you need true point-to-*segment*
   # distance in getPOIsOnRoute (lib/utils/route_utils.dart) instead of
@@ -69,8 +68,6 @@ flutter:
     - assets/icons/
     - assets/logo_brand_markers/
     - assets/locations.json
-    - assets/data/truck_stops.json
-    - assets/data/walmart.json
     - assets/walmart-stores.json
     - assets/restaurants.json
     # US states and Canadian provinces reference data (from welcome states pack)

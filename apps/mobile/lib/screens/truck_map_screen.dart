@@ -1870,10 +1870,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Loads route POIs from dedicated truck-stop and Walmart assets.
   Future<void> loadPois() async {
+    const truckStopsPath = 'assets/data/truck_stops.json';
+    const walmartPath = 'assets/data/walmart.json';
     try {
-      final truckStopsRaw =
-          await rootBundle.loadString('assets/data/truck_stops.json');
-      final walmartRaw = await rootBundle.loadString('assets/data/walmart.json');
+      final truckStopsRaw = await rootBundle.loadString(truckStopsPath);
+      final walmartRaw = await rootBundle.loadString(walmartPath);
 
       final List<dynamic> truckStopsJson = jsonDecode(truckStopsRaw) as List<dynamic>;
       final List<dynamic> walmartJson = jsonDecode(walmartRaw) as List<dynamic>;
@@ -1895,7 +1896,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         unawaited(updatePoisForRoute(_routePoints));
       }
     } catch (e) {
-      debugPrint('[TruckPOI] Failed to load route POIs: $e');
+      debugPrint(
+        '[TruckPOI] Failed to load route POIs from '
+        '"$truckStopsPath" / "$walmartPath": $e',
+      );
     }
   }
 
@@ -1953,8 +1957,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       }
     }
 
-    final LatLng userPos =
-        _truckPosition ?? (routePoints.isNotEmpty ? routePoints.first : const LatLng(0, 0));
+    final LatLng userPos = _truckPosition ?? routePoints.first;
     nearRoute.sort((a, b) {
       final da = calculateDistanceKm(
         a.latitude,
@@ -1984,8 +1987,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     try {
       _poiAnnotationManager ??= await map.annotations.createPointAnnotationManager();
       await _poiAnnotationManager!.deleteAll();
+      final Map<TruckPoiCategory, Uint8List?> icons = {
+        TruckPoiCategory.truckStop:
+            await loadBrandIcon(TruckPoiCategory.truckStop),
+        TruckPoiCategory.walmart: await loadBrandIcon(TruckPoiCategory.walmart),
+      };
       for (final poi in pois) {
-        final icon = await loadBrandIcon(poi.category);
+        final icon = icons[poi.category];
         if (icon == null) continue;
         await _poiAnnotationManager!.create(
           mbx.PointAnnotationOptions(
@@ -15826,7 +15834,11 @@ class TruckPoi {
     final dynamic latValue = json['latitude'] ?? json['lat'];
     final dynamic lngValue = json['longitude'] ?? json['lng'];
     if (latValue == null || lngValue == null) {
-      throw FormatException('Missing latitude/longitude');
+      throw FormatException(
+        'Missing latitude/longitude for POI '
+        'id=${json['id'] ?? json['store_id']} '
+        'name=${json['name']}',
+      );
     }
     final dynamic rawId = json['id'] ?? json['store_id'] ?? json['name'];
     return TruckPoi(

@@ -66,8 +66,7 @@ flutter:
   #   poi_service.dart and appended to the combined POI list so every
   #   restaurant appears on the map with a restaurant.png marker.
   assets:
-    - assets/icons/truck_top.png
-    - assets/icons/walmart.png
+    - assets/icons/
     - assets/logo_brand_markers/
     - assets/locations.json
     - assets/data/truck_stops.json

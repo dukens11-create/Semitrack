@@ -31,6 +31,7 @@ import 'package:semitrack_mobile/utils/marker_widgets.dart'
 import 'package:semitrack_mobile/utils/route_utils.dart'
     show getPOIsOnRoute;
 
+
 // ── Lane guidance models ───────────────────────────────────────────────────
 
 /// The direction an individual lane arrow can point.

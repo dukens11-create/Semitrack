@@ -4325,7 +4325,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     ).listen(
       _onGpsPosition,
       onError: (Object error, StackTrace stackTrace) {
-        debugPrint('[GPS] Position stream error: $error');
+        // Keep the stream/watchdog active; a subsequent fix callback resumes
+        // normal updates automatically without resetting map/route state.
+        debugPrint('[GPS] Position stream error: $error\n$stackTrace');
       },
       cancelOnError: false,
     );
@@ -4334,9 +4336,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final current = await geo.Geolocator.getCurrentPosition(
         locationSettings: locationSettings,
       );
-      _onGpsPosition(current);
+      if (_lastGpsFixTime == null) {
+        _onGpsPosition(current);
+      }
     } catch (e) {
-      debugPrint('[GPS] Failed to fetch initial position: $e');
+      debugPrint('[GPS] Failed to fetch initial position: ${e.toString()}');
     }
 
     _startGpsWatchdog();
@@ -4404,15 +4408,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the heading is unavailable (stationary, cold start, or no sensor).  We
   /// use the true heading when ≥ 0, falling back to the bearing derived from
   /// the route geometry when not available.
+  ///
+  /// After arrival, GPS updates still refresh the live position/speed UI so
+  /// the map never appears frozen; only arrival-specific navigation logic is
+  /// skipped by the `_hasActiveDestination && !_isArrived` guard below.
   void _onGpsPosition(geo.Position position) {
-    debugPrint(
-      '[GPS] New update — '
-      'lat=${position.latitude.toStringAsFixed(6)} '
-      'lng=${position.longitude.toStringAsFixed(6)} '
-      'accuracy=${position.accuracy.toStringAsFixed(1)}m '
-      'speed=${position.speed.toStringAsFixed(1)}m/s '
-      'heading=${position.heading.toStringAsFixed(1)}°',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[GPS] New update — '
+        'lat=${position.latitude.toStringAsFixed(6)} '
+        'lng=${position.longitude.toStringAsFixed(6)} '
+        'accuracy=${position.accuracy.toStringAsFixed(1)}m '
+        'speed=${position.speed.toStringAsFixed(1)}m/s '
+        'heading=${position.heading.toStringAsFixed(1)}°',
+      );
+    }
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
 
@@ -5230,8 +5240,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Invalidate any in-flight smooth animation loop.
       _animGeneration++;
     });
-    // Keep the GPS stream alive after arrival so the live location panel and
-    // map marker continue to reflect the latest device position.
+    // Keep the GPS stream and watchdog alive after arrival so the live
+    // location panel and map marker continue to reflect the latest device
+    // position and still report stale-signal conditions.
     // Speak the arrival announcement (interrupts any in-progress TTS).
     _speakAlert('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.

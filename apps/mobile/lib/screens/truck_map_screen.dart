@@ -31,6 +31,32 @@ import 'package:semitrack_mobile/utils/marker_widgets.dart'
 import 'package:semitrack_mobile/utils/route_utils.dart'
     show getPOIsOnRoute;
 
+class TruckPoi {
+  const TruckPoi({
+    required this.id,
+    required this.name,
+    required this.brand,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final String id;
+  final String name;
+  final String brand;
+  final double latitude;
+  final double longitude;
+
+  factory TruckPoi.fromJson(Map<String, dynamic> json) {
+    return TruckPoi(
+      id: json['id'].toString(),
+      name: (json['name'] ?? '').toString(),
+      brand: (json['brand'] ?? '').toString(),
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+    );
+  }
+}
+
 // ── Lane guidance models ───────────────────────────────────────────────────
 
 /// The direction an individual lane arrow can point.
@@ -753,6 +779,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Expand this section later to support real API data, weigh stations, etc.
   List<TruckStop> _truckStops = const [];
   bool _showTruckStops = true;
+  List<TruckPoi> _truckPois = const [];
+  List<TruckPoi> _visibleTruckPois = const [];
+  mbx.PointAnnotationManager? _truckPoiAnnotationManager;
+  final Map<String, Uint8List> _truckPoiBrandIcons = {};
 
   // POI entries are now rendered via the Mapbox GeoJSON cluster source
   // (poi-source) and associated style layers set up in _setupPoiCluster().
@@ -1256,6 +1286,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Load all POIs from locations.json so _buildAllPoiMarkers() can display
     // every POI on the map without requiring the Mapbox style cluster setup.
     _loadPoisForMap();
+    loadPois();
     // Restore persisted POI category toggle state so driver preferences survive
     // app restarts.
     _loadNavSettings();
@@ -1290,6 +1321,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   @override
   void dispose() {
+    if (_truckPoiAnnotationManager != null) {
+      unawaited(_truckPoiAnnotationManager!.deleteAll());
+    }
     _gpsSubscription?.cancel();
     _gpsWatchdogTimer?.cancel();
     _animTimer?.cancel();
@@ -1936,6 +1970,114 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
 
     return result;
+  }
+
+  Future<void> loadPois() async {
+    try {
+      final String raw = await rootBundle.loadString(
+        'assets/data/truck_stops.json',
+      );
+      final List<dynamic> data = jsonDecode(raw) as List<dynamic>;
+      final List<TruckPoi> pois = data
+          .whereType<Map<String, dynamic>>()
+          .map(TruckPoi.fromJson)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() => _truckPois = pois);
+    } catch (e) {
+      debugPrint('[TruckPoi] Failed to load assets/data/truck_stops.json: $e');
+    }
+  }
+
+  Future<Uint8List?> loadBrandIcon(String brand) async {
+    final String normalized = brand.toLowerCase().replaceAll(' ', '_');
+    final Uint8List? cached = _truckPoiBrandIcons[normalized];
+    if (cached != null) return cached;
+    final List<String> paths = [
+      'assets/icons/$normalized.png',
+      'assets/icons/truck_top.png',
+    ];
+    for (final path in paths) {
+      try {
+        final ByteData bytes = await rootBundle.load(path);
+        final Uint8List icon = bytes.buffer.asUint8List();
+        _truckPoiBrandIcons[normalized] = icon;
+        return icon;
+      } catch (_) {
+        // Try next icon candidate.
+      }
+    }
+    return null;
+  }
+
+  double calculateDistanceKm(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double r = 6371.0;
+    final double dLat = (lat2 - lat1) * (math.pi / 180.0);
+    final double dLon = (lon2 - lon1) * (math.pi / 180.0);
+    final double a = math.pow(math.sin(dLat / 2), 2).toDouble() +
+        math.cos(lat1 * (math.pi / 180.0)) *
+            math.cos(lat2 * (math.pi / 180.0)) *
+            math.pow(math.sin(dLon / 2), 2).toDouble();
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return r * c;
+  }
+
+  List<TruckPoi> findPoisNearRoute(
+    List<LatLng> routePoints, {
+    double maxDistanceKm = 10,
+  }) {
+    if (_truckPois.isEmpty || routePoints.isEmpty) return const [];
+    final List<(TruckPoi, double)> ranked = [];
+    for (final poi in _truckPois) {
+      double bestKm = double.infinity;
+      for (final routePoint in routePoints) {
+        final double km = calculateDistanceKm(
+          poi.latitude,
+          poi.longitude,
+          routePoint.latitude,
+          routePoint.longitude,
+        );
+        if (km < bestKm) bestKm = km;
+      }
+      if (bestKm <= maxDistanceKm) {
+        ranked.add((poi, bestKm));
+      }
+    }
+    ranked.sort((a, b) => a.$2.compareTo(b.$2));
+    return ranked.take(5).map((e) => e.$1).toList(growable: false);
+  }
+
+  Future<void> showPoisOnMap(List<TruckPoi> pois) async {
+    final mbx.MapboxMap? map = _mapboxMap;
+    if (map == null) return;
+    _truckPoiAnnotationManager ??=
+        await map.annotations.createPointAnnotationManager();
+    await _truckPoiAnnotationManager!.deleteAll();
+    for (final poi in pois) {
+      final Uint8List? icon = await loadBrandIcon(poi.brand);
+      if (icon == null) continue;
+      await _truckPoiAnnotationManager!.create(
+        mbx.PointAnnotationOptions(
+          geometry: mbx.Point(
+            coordinates: mbx.Position(poi.longitude, poi.latitude),
+          ),
+          image: icon,
+          iconSize: 0.75,
+        ),
+      );
+    }
+    if (!mounted) return;
+    setState(() => _visibleTruckPois = pois);
+  }
+
+  Future<void> updatePoisForRoute(List<LatLng> routePoints) async {
+    final List<TruckPoi> nearRoutePois = findPoisNearRoute(routePoints);
+    await showPoisOnMap(nearRoutePois);
   }
 
   /// Returns the number of fuel stops (non-rest-area truck stops) within
@@ -7693,6 +7835,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // the map isn't cluttered with globally-distant stops.
         setState(() => _truckStops =
             _filterStopsNearRoute(_mockTruckStops, newPoints));
+        unawaited(updatePoisForRoute(newPoints));
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
         // Seed trip progress with the full-route distance and duration so
@@ -7809,6 +7952,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       setState(() {
         _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
       });
+      unawaited(updatePoisForRoute(newPoints));
 
       // ── Evaluate truck restrictions along the new route ────────────────────
       // Use smart rerouting to attempt to find a restriction-free route before
@@ -7888,6 +8032,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // within 10 km of this specific polyline are displayed.
       _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
     });
+    unawaited(updatePoisForRoute(newPoints));
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();
     // Keep trip-progress strip in sync with the newly selected route option.
@@ -9973,6 +10118,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// add POI sources and layers once the style finishes loading.
   void _onMapCreated(mbx.MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
+    if (_routePoints.isNotEmpty) {
+      unawaited(updatePoisForRoute(_routePoints));
+    }
   }
 
   /// Called by [MapWidget] once the Mapbox style has finished loading.

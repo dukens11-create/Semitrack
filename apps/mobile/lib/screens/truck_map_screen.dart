@@ -4283,15 +4283,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// ahead of the current position, so the marker always follows the real
   /// device location when available.
   Future<void> _startGps() async {
+    if (_gpsSubscription != null) {
+      debugPrint('[GPS] Position stream already active.');
+      return;
+    }
+
     bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+    debugPrint('[GPS] Location services enabled: $serviceEnabled');
     if (!serviceEnabled) {
       debugPrint('[GPS] Location service disabled — GPS stream not started.');
       return;
     }
 
     geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+    debugPrint('[GPS] Permission status before request: $permission');
     if (permission == geo.LocationPermission.denied) {
       permission = await geo.Geolocator.requestPermission();
+      debugPrint('[GPS] Permission status after request: $permission');
       if (permission == geo.LocationPermission.denied) {
         debugPrint('[GPS] Location permission denied — GPS stream not started.');
         return;
@@ -4314,7 +4322,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     debugPrint('[GPS] Starting position stream (best-for-navigation accuracy, 1 m filter).');
     _gpsSubscription = geo.Geolocator.getPositionStream(
       locationSettings: locationSettings,
-    ).listen(_onGpsPosition);
+    ).listen(
+      _onGpsPosition,
+      onError: (Object error, StackTrace stackTrace) {
+        // Keep the stream/watchdog active; a subsequent fix callback resumes
+        // normal updates automatically without resetting map/route state.
+        debugPrint('[GPS] Position stream error: $error\n$stackTrace');
+      },
+      cancelOnError: false,
+    );
+
+    try {
+      final current = await geo.Geolocator.getCurrentPosition(
+        locationSettings: locationSettings,
+      );
+      if (_lastGpsFixTime == null) {
+        _onGpsPosition(current);
+      }
+    } catch (e) {
+      debugPrint('[GPS] Failed to fetch initial position: ${e.toString()}');
+    }
 
     _startGpsWatchdog();
   }
@@ -4381,9 +4408,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the heading is unavailable (stationary, cold start, or no sensor).  We
   /// use the true heading when ≥ 0, falling back to the bearing derived from
   /// the route geometry when not available.
+  ///
+  /// After arrival, GPS updates still refresh the live position/speed UI so
+  /// the map never appears frozen; only arrival-specific navigation logic is
+  /// skipped by the `_hasActiveDestination && !_isArrived` guard below.
   void _onGpsPosition(geo.Position position) {
-    // Ignore all GPS updates once the driver has arrived — the trip is done.
-    if (_isArrived) return;
+    if (kDebugMode) {
+      debugPrint(
+        '[GPS] New update — '
+        'lat=${position.latitude.toStringAsFixed(6)} '
+        'lng=${position.longitude.toStringAsFixed(6)} '
+        'accuracy=${position.accuracy.toStringAsFixed(1)}m '
+        'speed=${position.speed.toStringAsFixed(1)}m/s '
+        'heading=${position.heading.toStringAsFixed(1)}°',
+      );
+    }
     // Pause guard: skip all tracking updates while navigation is paused.
     if (_navigationPaused) return;
 
@@ -4462,7 +4501,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // a live navigation session.  In plain GPS-tracking mode (no destination
     // selected) the truck marker and speed panel still update, but no
     // turn-by-turn, rerouting, TTS, or POI-alert behaviour fires.
-    if (_hasActiveDestination) {
+    if (_hasActiveDestination && !_isArrived) {
       // Arrival detection: check proximity to destination first.
       // Always evaluated before step/off-route logic so arrival wins immediately.
       _checkArrival(gpsPoint);
@@ -5201,11 +5240,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Invalidate any in-flight smooth animation loop.
       _animGeneration++;
     });
-    // Cancel GPS subscription and watchdog — all tracking ceases after arrival.
-    _gpsSubscription?.cancel();
-    _gpsSubscription = null;
-    _gpsWatchdogTimer?.cancel();
-    _gpsWatchdogTimer = null;
+    // Keep the GPS stream and watchdog alive after arrival so the live
+    // location panel and map marker continue to reflect the latest device
+    // position and still report stale-signal conditions.
     // Speak the arrival announcement (interrupts any in-progress TTS).
     _speakAlert('You have arrived at your destination');
     // Show the trip-complete sheet after the current frame is fully drawn.
@@ -5317,6 +5354,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _offRouteDetectedAt = null;
       _hasStableFixForNavigation = false;
     });
+    // Re-check permission/service state when navigation starts and ensure
+    // the GPS stream is active (important after previous trips).
+    unawaited(_startGps());
     // Notify AppShell (and any other listeners) that navigation is now active
     // so the bottom navigation bar is hidden during the driving session.
     TruckMapScreen.isNavigatingNotifier.value = true;

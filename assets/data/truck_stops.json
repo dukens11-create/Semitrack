@@ -1,0 +1,50 @@
+[
+  {
+    "id": "pilot_portland_or",
+    "name": "Pilot Travel Center",
+    "brand": "pilot",
+    "lat": 45.5956,
+    "lng": -122.6784,
+    "iconAssetName": "truck_top.png"
+  },
+  {
+    "id": "loves_troutdale_or",
+    "name": "Love's Travel Stop",
+    "brand": "loves",
+    "lat": 45.5318,
+    "lng": -122.4069,
+    "iconAssetName": "truck_top.png"
+  },
+  {
+    "id": "ta_pendleton_or",
+    "name": "TA Truck Service",
+    "brand": "ta",
+    "lat": 45.6727,
+    "lng": -118.7886,
+    "iconAssetName": "truck_top.png"
+  },
+  {
+    "id": "flyingj_boise_id",
+    "name": "Flying J Travel Center",
+    "brand": "flying_j",
+    "lat": 43.6032,
+    "lng": -116.2078,
+    "iconAssetName": "truck_top.png"
+  },
+  {
+    "id": "petro_winnemucca_nv",
+    "name": "Petro Truck Stop",
+    "brand": "petro",
+    "lat": 40.9709,
+    "lng": -117.7355,
+    "iconAssetName": "truck_top.png"
+  },
+  {
+    "id": "pilot_sparks_nv",
+    "name": "Pilot Travel Center Sparks",
+    "brand": "pilot",
+    "lat": 39.5465,
+    "lng": -119.7239,
+    "iconAssetName": "truck_top.png"
+  }
+]

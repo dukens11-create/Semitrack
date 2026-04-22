@@ -1,0 +1,72 @@
+[
+  {
+    "id": "1",
+    "name": "Pilot Travel Center",
+    "brand": "pilot",
+    "latitude": 45.581,
+    "longitude": -122.571
+  },
+  {
+    "id": "2",
+    "name": "Love's Travel Stop",
+    "brand": "loves",
+    "latitude": 44.057,
+    "longitude": -123.092
+  },
+  {
+    "id": "3",
+    "name": "TA Travel Center",
+    "brand": "ta",
+    "latitude": 42.328,
+    "longitude": -122.875
+  },
+  {
+    "id": "4",
+    "name": "Petro Stopping Center",
+    "brand": "petro",
+    "latitude": 41.74,
+    "longitude": -122.637
+  },
+  {
+    "id": "5",
+    "name": "Flying J Travel Center",
+    "brand": "flyingj",
+    "latitude": 40.77,
+    "longitude": -122.388
+  },
+  {
+    "id": "6",
+    "name": "Pilot Travel Center",
+    "brand": "pilot",
+    "latitude": 39.724,
+    "longitude": -121.836
+  },
+  {
+    "id": "7",
+    "name": "Maverik Adventure's First Stop",
+    "brand": "maverik",
+    "latitude": 40.76,
+    "longitude": -111.891
+  },
+  {
+    "id": "8",
+    "name": "QuikTrip Travel Center",
+    "brand": "quicktrip",
+    "latitude": 33.749,
+    "longitude": -84.388
+  },
+  {
+    "id": "9",
+    "name": "AmBest Travel Center",
+    "brand": "ambest",
+    "latitude": 35.227,
+    "longitude": -80.843
+  },
+  {
+    "id": "10",
+    "name": "Road Ranger Fuel Center",
+    "brand": "roadranger",
+    "latitude": 41.88,
+    "longitude": -87.63
+  }
+]

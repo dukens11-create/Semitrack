@@ -1992,18 +1992,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             await loadBrandIcon(TruckPoiCategory.truckStop),
         TruckPoiCategory.walmart: await loadBrandIcon(TruckPoiCategory.walmart),
       };
+      final futures = <Future<void>>[];
       for (final poi in pois) {
         final icon = icons[poi.category];
         if (icon == null) continue;
-        await _poiAnnotationManager!.create(
-          mbx.PointAnnotationOptions(
-            geometry: mbx.Point(
-              coordinates: mbx.Position(poi.longitude, poi.latitude),
-            ),
-            image: icon,
-            iconSize: poi.category == TruckPoiCategory.walmart ? 0.95 : 0.80,
-          ),
+        futures.add(
+          _poiAnnotationManager!
+              .create(
+                mbx.PointAnnotationOptions(
+                  geometry: mbx.Point(
+                    coordinates: mbx.Position(poi.longitude, poi.latitude),
+                  ),
+                  image: icon,
+                  iconSize: poi.category == TruckPoiCategory.walmart ? 0.95 : 0.80,
+                ),
+              )
+              .then((_) {}),
         );
+      }
+      if (futures.isNotEmpty) {
+        await Future.wait(futures);
       }
       if (mounted) setState(() => _visibleTruckPois = pois);
     } catch (e) {

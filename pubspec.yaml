@@ -67,8 +67,11 @@ flutter:
   #   restaurant appears on the map with a restaurant.png marker.
   assets:
     - assets/icons/truck_top.png
+    - assets/icons/walmart.png
     - assets/logo_brand_markers/
     - assets/locations.json
+    - assets/data/truck_stops.json
+    - assets/data/walmart.json
     - assets/walmart-stores.json
     - assets/restaurants.json
     # US states and Canadian provinces reference data (from welcome states pack)

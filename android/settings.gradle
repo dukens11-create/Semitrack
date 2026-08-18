@@ -22,4 +22,28 @@ plugins {
     id "org.jetbrains.kotlin.android" version "2.2.20" apply false
 }
 
+def mapboxDownloadsToken = providers
+    .gradleProperty("MAPBOX_DOWNLOADS_TOKEN")
+    .orElse(providers.environmentVariable("MAPBOX_DOWNLOADS_TOKEN"))
+    .orNull
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+        if (mapboxDownloadsToken != null && !mapboxDownloadsToken.trim().isEmpty()) {
+            maven {
+                url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
+                authentication { basic(BasicAuthentication) }
+                credentials {
+                    username = "mapbox"
+                    password = mapboxDownloadsToken
+                }
+            }
+        }
+    }
+}
+
 include ":app"

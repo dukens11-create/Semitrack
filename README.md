@@ -26,6 +26,33 @@ flutter pub get
 flutter run
 ```
 
+## Mapbox setup
+
+Map rendering uses two different Mapbox credentials. Never commit either
+credential to this repository.
+
+- `MAPBOX_ACCESS_TOKEN` is the public `pk.` token supplied to Flutter with
+  `--dart-define`.
+- `MAPBOX_DOWNLOADS_TOKEN` is a secret `sk.` token with `Downloads:Read`, kept
+  in the user's Gradle properties or CI secrets so Gradle can download the
+  native Mapbox Maps SDK.
+
+For a local Windows build, save the secret token in
+`C:\Users\<username>\.gradle\gradle.properties`:
+
+```properties
+MAPBOX_DOWNLOADS_TOKEN=YOUR_PRIVATE_SK_TOKEN
+```
+
+Then build with the public token:
+
+```powershell
+flutter build apk --debug --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
+```
+
+GitHub Actions requires repository secrets named `MAPBOX_ACCESS_TOKEN` and
+`MAPBOX_DOWNLOADS_TOKEN`.
+
 ## Downloading the Android APK
 
 Every push and pull request automatically triggers a GitHub Actions workflow that builds a release APK.

@@ -26,10 +26,10 @@ h1, h2, h3, p { margin-top: 0; }
 .shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 25px 18px; background: rgba(5, 18, 29, .96); border-right: 1px solid var(--line); display: flex; flex-direction: column; z-index: 20; }
 .brand { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
-.brand-logo { display: block; width: 220px; max-width: 100%; height: auto; object-fit: contain; }
+.brand-logo { display: block; width: 104px; max-width: 100%; height: auto; object-fit: contain; filter: drop-shadow(0 12px 24px rgba(255, 76, 20, .18)); }
 .brand small { font-size: 10px; letter-spacing: .2em; color: var(--orange); }
 .brand.compact { padding: 0 8px 26px; border-bottom: 1px solid var(--line); }
-.brand.compact .brand-logo { width: 168px; }
+.brand.compact .brand-logo { width: 64px; }
 .sidebar nav { display: grid; gap: 7px; margin-top: 28px; }
 .nav-item { border: 0; color: #afbfcb; background: transparent; border-radius: 10px; padding: 12px 14px; text-align: left; display: flex; align-items: center; gap: 13px; font-weight: 650; }
 .nav-item span { width: 24px; font-size: 20px; text-align: center; }

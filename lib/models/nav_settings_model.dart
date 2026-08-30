@@ -9,6 +9,14 @@
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum DistanceUnit {
+  miles,
+  kilometers;
+
+  String get label => this == DistanceUnit.miles ? 'Miles' : 'Kilometers';
+  String get shortLabel => this == DistanceUnit.miles ? 'mi' : 'km';
+}
+
 class NavSettingsModel {
   // ── Shortcut toggles ────────────────────────────────────────────────────
   bool shortcutReroute = true;
@@ -35,6 +43,11 @@ class NavSettingsModel {
   // ── Map type ─────────────────────────────────────────────────────────────
   /// 0 = Map, 1 = Satellite
   int mapType = 0;
+
+  // ── Distance units ───────────────────────────────────────────────────────
+  DistanceUnit distanceUnit = DistanceUnit.miles;
+
+  bool get usesMetric => distanceUnit == DistanceUnit.kilometers;
 
   // ── View On Map toggles ──────────────────────────────────────────────────
   bool viewJunctionView = true;
@@ -73,6 +86,12 @@ class NavSettingsModel {
   /// Persist all settings to [SharedPreferences].
   Future<void> saveToPrefs() async {
     final prefs = await SharedPreferences.getInstance();
+    // Audio
+    await prefs.setInt('${_kPrefix}audioMode', audioMode);
+    await prefs.setString('${_kPrefix}voicePackage', voicePackage);
+    await prefs.setDouble('${_kPrefix}audioPitch', audioPitch);
+    await prefs.setDouble('${_kPrefix}audioSpeechRate', audioSpeechRate);
+    await prefs.setString('${_kPrefix}distanceUnit', distanceUnit.name);
     // Places Filter
     await prefs.setBool('${_kPrefix}showTruckStops', showTruckStops);
     await prefs.setBool('${_kPrefix}showWeighStations', showWeighStations);
@@ -90,27 +109,32 @@ class NavSettingsModel {
   /// Fields that have never been saved retain their default values.
   Future<void> loadFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
+    // Audio
+    audioMode = (prefs.getInt('${_kPrefix}audioMode') ?? 2).clamp(0, 2).toInt();
+    voicePackage = prefs.getString('${_kPrefix}voicePackage') ?? 'Default';
+    audioPitch = (prefs.getDouble('${_kPrefix}audioPitch') ?? 1.0).clamp(
+      0.5,
+      2.0,
+    );
+    audioSpeechRate = (prefs.getDouble('${_kPrefix}audioSpeechRate') ?? 0.5)
+        .clamp(0.25, 1.0);
+    final storedDistanceUnit = prefs.getString('${_kPrefix}distanceUnit');
+    distanceUnit = DistanceUnit.values.firstWhere(
+      (unit) => unit.name == storedDistanceUnit,
+      orElse: () => DistanceUnit.miles,
+    );
     // Places Filter — use literal defaults as fallbacks so repeated calls
     // always fall back to the intended initial value, not any prior state.
-    showTruckStops =
-        prefs.getBool('${_kPrefix}showTruckStops') ?? true;
-    showWeighStations =
-        prefs.getBool('${_kPrefix}showWeighStations') ?? true;
-    showRestAreas =
-        prefs.getBool('${_kPrefix}showRestAreas') ?? true;
+    showTruckStops = prefs.getBool('${_kPrefix}showTruckStops') ?? true;
+    showWeighStations = prefs.getBool('${_kPrefix}showWeighStations') ?? true;
+    showRestAreas = prefs.getBool('${_kPrefix}showRestAreas') ?? true;
     showBrakeCheckAreas =
         prefs.getBool('${_kPrefix}showBrakeCheckAreas') ?? true;
-    showTruckParking =
-        prefs.getBool('${_kPrefix}showTruckParking') ?? true;
-    showTruckWash =
-        prefs.getBool('${_kPrefix}showTruckWash') ?? false;
-    showWeatherAlerts =
-        prefs.getBool('${_kPrefix}showWeatherAlerts') ?? true;
-    showWarningSigns =
-        prefs.getBool('${_kPrefix}showWarningSigns') ?? true;
-    showTollbooths =
-        prefs.getBool('${_kPrefix}showTollbooths') ?? true;
-    show511Cameras =
-        prefs.getBool('${_kPrefix}show511Cameras') ?? false;
+    showTruckParking = prefs.getBool('${_kPrefix}showTruckParking') ?? true;
+    showTruckWash = prefs.getBool('${_kPrefix}showTruckWash') ?? false;
+    showWeatherAlerts = prefs.getBool('${_kPrefix}showWeatherAlerts') ?? true;
+    showWarningSigns = prefs.getBool('${_kPrefix}showWarningSigns') ?? true;
+    showTollbooths = prefs.getBool('${_kPrefix}showTollbooths') ?? true;
+    show511Cameras = prefs.getBool('${_kPrefix}show511Cameras') ?? false;
   }
 }

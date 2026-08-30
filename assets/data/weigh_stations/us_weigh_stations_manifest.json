@@ -1,0 +1,458 @@
+{
+  "datasetVersion": "0.1.0-pending",
+  "generatedAt": "2026-08-20T06:35:56.833Z",
+  "sourcePolicy": "Only authoritative government/FHWA/FMCSA sources. Empty states are intentionally PENDING.",
+  "officialSourceDirectory": "https://www.fhwa.dot.gov/about/webstate.cfm",
+  "states": [
+    {
+      "state": "AL",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "AK",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "AZ",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "AR",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "CA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "CO",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "CT",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "DE",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "FL",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "GA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "HI",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "ID",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "IL",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "IN",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "IA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "KS",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "KY",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "LA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "ME",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MD",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MI",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MN",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MS",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MO",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "MT",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NE",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NV",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NH",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NJ",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NM",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NY",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "NC",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "ND",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "OH",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "OK",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "OR",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "PA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "RI",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "SC",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "SD",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "TN",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "TX",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "UT",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "VT",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "VA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "WA",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "WV",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "WI",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    },
+    {
+      "state": "WY",
+      "stationCount": 0,
+      "source": "PENDING — authoritative state dataset not imported",
+      "sourceUrl": "https://www.fhwa.dot.gov/about/webstate.cfm",
+      "lastVerified": null,
+      "datasetVersion": "0.1.0-pending",
+      "imported": false
+    }
+  ]
+}

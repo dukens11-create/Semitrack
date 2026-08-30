@@ -1,0 +1,12 @@
+analyzer:
+  # Licensed local SDKs are separate packages with their own dependency graph.
+  # App imports from them remain type-checked during normal analysis.
+  exclude:
+    - plugins/**
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**

@@ -59,7 +59,7 @@ hardcode them anywhere in the application code.
 ### Code path
 
 `loadAllPois()` → `loadWalmartPois()` → `rootBundle.loadString('assets/walmart-stores.json')`
-(in `lib/services/poi_service.dart` and `apps/mobile/lib/services/poi_service.dart`)
+(in `lib/services/poi_service.dart`)
 
 Walmart entries are rendered as `walmart_store` category POIs using the
 `assets/logo_brand_markers/walmart_store.png` marker icon (Walmart brand blue `#0071CE`).
@@ -86,7 +86,7 @@ POI data. Entries with an existing non-empty name are never modified.
   `"name": "truck_stop_default"` directly in the JSON.  Entries with a proper
   brand name (e.g. `"Pilot Travel Center - Portland"`) are left unchanged.
 - **Code layer** (`lib/services/poi_service.dart`,
-  `apps/mobile/lib/services/poi_service.dart`): `loadAllPois()` falls back to
+  `lib/services/poi_service.dart`): `loadAllPois()` falls back to
   `'truck_stop_default'` when parsing a JSON entry whose `name` field is absent
   or empty, so the map always shows a labelled marker even for incomplete data.
 

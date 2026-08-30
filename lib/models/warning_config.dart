@@ -44,6 +44,12 @@ class WarningTypes {
     narrowBridge,
     railroadCrossing,
     animalCrossing,
+    constructionZone,
+    accidentAhead,
+    laneClosure,
+    roadClosed,
+    chainRequirement,
+    highWindArea,
   };
 }
 
@@ -82,8 +88,7 @@ class WarningConfig {
 
   /// Returns the [WarningStyle] for [type], or a generic fallback style when
   /// the type has not yet been registered in [styles].
-  static WarningStyle styleFor(String type) =>
-      styles[type] ?? _fallback;
+  static WarningStyle styleFor(String type) => styles[type] ?? _fallback;
 
   /// Returns the banner/marker [Color] for [severity].
   ///

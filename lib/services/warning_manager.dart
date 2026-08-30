@@ -41,10 +41,10 @@ enum WarningTriggerStage {
 /// Used by both [WarningManager.update] and the map marker emphasis logic in
 /// [TruckMapScreen] to compute the correct visual emphasis level for each sign.
 const Map<WarningTriggerStage, double> kHighwayWarningTriggers = {
-  WarningTriggerStage.preload:     2.0,
-  WarningTriggerStage.visible:     1.0,
+  WarningTriggerStage.preload: 2.0,
+  WarningTriggerStage.visible: 1.0,
   WarningTriggerStage.highlighted: 0.5,
-  WarningTriggerStage.urgent:      0.2,
+  WarningTriggerStage.urgent: 0.2,
 };
 
 /// City / low-speed road trigger-distance defaults (in miles) keyed by stage.
@@ -53,10 +53,10 @@ const Map<WarningTriggerStage, double> kHighwayWarningTriggers = {
 /// Used by both [WarningManager.update] and the map marker emphasis logic in
 /// [TruckMapScreen] to compute the correct visual emphasis level for each sign.
 const Map<WarningTriggerStage, double> kCityWarningTriggers = {
-  WarningTriggerStage.preload:     1.0,
-  WarningTriggerStage.visible:     0.5,
+  WarningTriggerStage.preload: 1.0,
+  WarningTriggerStage.visible: 0.5,
   WarningTriggerStage.highlighted: 0.25,
-  WarningTriggerStage.urgent:      0.1,
+  WarningTriggerStage.urgent: 0.1,
 };
 
 /// Returns the trigger-distance map for [sign] based on its [WarningSign.roadType].
@@ -240,6 +240,20 @@ class WarningManager extends ChangeNotifier {
     }
   }
 
+  /// Replaces the source-backed signs without recreating the manager.
+  /// Removed signs also lose popup and trigger state so stale provider data
+  /// cannot remain visible after a corridor refresh.
+  void replaceSigns(List<WarningSign> signs) {
+    final ids = signs.map((sign) => sign.id).toSet();
+    _signs
+      ..clear()
+      ..addAll(signs);
+    _firedStages.removeWhere((id, _) => !ids.contains(id));
+    _dismissed.removeWhere((id) => !ids.contains(id));
+    _activePopups.removeWhere((warning) => !ids.contains(warning.sign.id));
+    notifyListeners();
+  }
+
   /// Dismisses the popup for [signId] when the driver closes the card.
   ///
   /// The sign is not shown again in this navigation session.
@@ -267,7 +281,10 @@ class WarningManager extends ChangeNotifier {
     if (_routePoints.isEmpty) return false;
     for (final point in _routePoints) {
       if (_rawDistanceMetres(
-            point.latitude, point.longitude, sign.lat, sign.lng,
+            point.latitude,
+            point.longitude,
+            sign.lat,
+            sign.lng,
           ) <=
           _kRouteProximityMetres) {
         return true;
@@ -281,12 +298,16 @@ class WarningManager extends ChangeNotifier {
 
   /// Haversine distance in metres between two WGS-84 coordinates.
   static double _rawDistanceMetres(
-    double lat1, double lng1, double lat2, double lng2,
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
   ) {
     const double r = 6371000.0;
     final double dLat = _toRad(lat2 - lat1);
     final double dLng = _toRad(lng2 - lng1);
-    final double a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+    final double a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(_toRad(lat1)) *
             math.cos(_toRad(lat2)) *
             math.sin(dLng / 2) *
@@ -333,8 +354,9 @@ class WarningManager extends ChangeNotifier {
 
   void _sortPopups() {
     _activePopups.sort((a, b) {
-      final int sev = _severityOrder(a.sign.severity)
-          .compareTo(_severityOrder(b.sign.severity));
+      final int sev = _severityOrder(
+        a.sign.severity,
+      ).compareTo(_severityOrder(b.sign.severity));
       if (sev != 0) return sev;
       return a.distanceMiles.compareTo(b.distanceMiles);
     });

@@ -14,35 +14,67 @@ import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:semitrack_mobile/data/warning_signs_data.dart';
 import 'package:semitrack_mobile/models/truck_restriction.dart';
 import 'package:semitrack_mobile/models/poi_item.dart';
 import 'package:semitrack_mobile/models/poi.dart';
 import 'package:semitrack_mobile/models/warning_config.dart';
 import 'package:semitrack_mobile/models/warning_sign.dart';
 import 'package:semitrack_mobile/models/nav_settings_model.dart';
+import 'package:semitrack_mobile/models/navigation_maneuver.dart';
+import 'package:semitrack_mobile/models/navigation_state.dart';
+import 'package:semitrack_mobile/models/street_guidance.dart';
+import 'package:semitrack_mobile/models/route_progress.dart';
+import 'package:semitrack_mobile/models/live_road_data.dart';
+import 'package:semitrack_mobile/screens/active_navigation_menu_screen.dart';
 import 'package:semitrack_mobile/screens/nav_settings_screen.dart';
 import 'package:semitrack_mobile/services/poi_service.dart';
+import 'package:semitrack_mobile/services/native_navigation_service.dart';
 import 'package:semitrack_mobile/services/warning_manager.dart';
+import 'package:semitrack_mobile/services/voice_destination_service.dart';
 import 'package:semitrack_mobile/widgets/road_guidance_banner.dart';
 import 'package:semitrack_mobile/widgets/warning_popup_stack.dart';
 import 'package:semitrack_mobile/utils/marker_widgets.dart'
-    show buildGpsPinMarker;
-import 'package:semitrack_mobile/utils/route_utils.dart'
-    show getPOIsOnRoute;
+    show buildGpsPinClusterMarker, buildGpsPinMarker;
+import 'package:semitrack_mobile/utils/route_utils.dart' show getPOIsOnRoute;
+import 'package:semitrack_mobile/utils/route_corridor.dart';
+import 'package:semitrack_mobile/core/api_client.dart';
+import 'package:semitrack_mobile/models/truck_profile.dart';
+import 'package:semitrack_mobile/models/weigh_station.dart' as live_ws;
+import 'package:semitrack_mobile/services/live_road_data_service.dart';
+import 'package:semitrack_mobile/services/here_places_service.dart';
+import 'package:semitrack_mobile/services/destination_time_zone_service.dart';
+import 'package:semitrack_mobile/services/weigh_station_service.dart';
+import 'package:semitrack_mobile/services/analytics_service.dart';
+import 'package:semitrack_mobile/services/latest_request_coordinator.dart';
+import 'package:semitrack_mobile/theme/semitrack_theme.dart';
+import 'package:semitrack_mobile/utils/navigation_utils.dart' as nav_utils;
+import 'package:semitrack_mobile/widgets/semitrack_ui.dart';
 
 // ── Lane guidance models ───────────────────────────────────────────────────
 
 /// The direction an individual lane arrow can point.
 ///
 /// Used by [LaneInfo] to describe each lane's allowed movements.
-enum LaneDirection {
-  left,
-  slightLeft,
-  straight,
-  slightRight,
-  right,
-  uTurn,
+enum LaneDirection { left, slightLeft, straight, slightRight, right, uTurn }
+
+enum _LocationRecoveryAction { retry, enableServices, appSettings }
+
+enum _RouteCalculationKind { backend, native, restriction }
+
+class _RouteCalculationRequest {
+  const _RouteCalculationRequest({
+    required this.kind,
+    required this.reason,
+    required this.destination,
+    this.origin,
+    this.alternative = false,
+  });
+
+  final _RouteCalculationKind kind;
+  final String reason;
+  final LatLng destination;
+  final LatLng? origin;
+  final bool alternative;
 }
 
 /// Data for a single lane in the dynamic lane guidance panel.
@@ -52,10 +84,7 @@ enum LaneDirection {
 /// two.  [isRecommended] is true when the driver should use this lane to
 /// follow the current route; recommended lanes are highlighted blue.
 class LaneInfo {
-  const LaneInfo({
-    required this.directions,
-    required this.isRecommended,
-  });
+  const LaneInfo({required this.directions, required this.isRecommended});
 
   final List<LaneDirection> directions;
   final bool isRecommended;
@@ -64,9 +93,9 @@ class LaneInfo {
 /// Snapshot of the upcoming navigation maneuver that drives the lane guidance
 /// panel.
 ///
-/// Created by [_TruckMapScreenState._updateUpcomingManeuver] from live SDK
-/// data (or sample data when the SDK does not yet provide lane information)
-/// and stored in [_TruckMapScreenState._upcomingManeuverStep].
+/// Created by [_TruckMapScreenState._updateUpcomingManeuver] from live native
+/// guidance data and stored in
+/// [_TruckMapScreenState._upcomingManeuverStep].
 class UpcomingManeuverStep {
   const UpcomingManeuverStep({
     required this.maneuverType,
@@ -90,8 +119,8 @@ class UpcomingManeuverStep {
   /// Human-readable name of the road at the maneuver point (may be null).
   final String? roadName;
 
-  /// Per-lane data for the dynamic lane guidance panel.  Falls back to a
-  /// sample four-lane array when the SDK does not provide lane data.
+  /// Per-lane data for the dynamic lane guidance panel. Empty when the native
+  /// provider does not supply lane data; recommendations are never invented.
   final List<LaneInfo> lanes;
 }
 
@@ -118,10 +147,7 @@ enum LaneArrowType {
 /// one arrow, but shared lanes (e.g. straight-or-right) carry two.
 /// [isActive] is true when the driver should use this lane to follow the route.
 class LaneGuidanceData {
-  const LaneGuidanceData({
-    required this.arrows,
-    required this.isActive,
-  });
+  const LaneGuidanceData({required this.arrows, required this.isActive});
 
   final List<LaneArrowType> arrows;
   final bool isActive;
@@ -198,6 +224,7 @@ class TopInstructionData {
     required this.distanceMiles,
     this.bottomChipText,
     this.exitNumber,
+    this.towardRoadName,
   });
 
   /// Icon category derived from maneuver type + modifier.
@@ -217,6 +244,9 @@ class TopInstructionData {
 
   /// Optional exit number shown in the green chip (e.g. "13").
   final String? exitNumber;
+
+  /// The next named street or route shown beneath the primary instruction.
+  final String? towardRoadName;
 }
 
 // ── Exit Preview / Junction View model ───────────────────────────────────
@@ -249,7 +279,9 @@ class ExitPreviewData {
 /// displays dynamic ETA / distance / maneuver information together with the
 /// Phase 5 intelligence overlay (driveMinutesLeft, weather, riskScore).
 class TruckMapScreen extends StatefulWidget {
-  const TruckMapScreen({super.key});
+  const TruckMapScreen({super.key, required this.api});
+
+  final ApiClient api;
 
   /// Broadcasts the live navigation state to other widgets (e.g. [AppShell])
   /// so they can hide/show the bottom navigation bar without requiring a
@@ -263,7 +295,17 @@ class TruckMapScreen extends StatefulWidget {
   State<TruckMapScreen> createState() => _TruckMapScreenState();
 }
 
-class _TruckMapScreenState extends State<TruckMapScreen> {
+class _TruckMapScreenState extends State<TruckMapScreen>
+    with WidgetsBindingObserver {
+  // Extra clearance for Android devices whose three-button navigation bar is
+  // drawn over the Flutter surface instead of being reported as a safe-area
+  // inset. Keep every bottom driving card on the same raised baseline.
+  static const double _drivingBottomCardLift = 40.0;
+
+  static const MethodChannel _screenAwakeChannel = MethodChannel(
+    'com.semitrax/screen_awake',
+  );
+
   // ── Navigation banner constants ────────────────────────────────────────────
   /// Distance threshold below which the banner shows "Now" instead of metres.
   static const double _imminentManeuverThresholdMeters = 30.0;
@@ -327,22 +369,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is continuously exceeding the speed limit.  Prevents constant repetition.
   static const int _slowDownThrottleSeconds = 30;
 
-  // ── Truck speed limit constants (CA bounding box) ─────────────────────────
-  /// Truck-specific speed limit in California (mph).
-  static const double _caTruckSpeedLimitMph = 55.0;
-
-  /// Southern latitude boundary of the California bounding box check.
-  static const double _caMinLat = 32.0;
-
-  /// Northern latitude boundary of the California bounding box check.
-  static const double _caMaxLat = 42.5;
-
-  /// Western longitude boundary of the California bounding box check.
-  static const double _caMinLng = -125.0;
-
-  /// Eastern longitude boundary of the California bounding box check.
-  static const double _caMaxLng = -114.0;
-
   /// Minimum GPS speed (mph) that counts as real vehicle movement.
   /// Route progress and step advancement are frozen below this threshold.
   static const double _minMovingSpeedMph = 1.5;
@@ -359,25 +385,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// fix is accepted — prevents drift from being recorded as real movement.
   static const double _minStoppedDriftMeters = 15.0;
 
-  /// GPS accuracy threshold (metres) above which small position jumps are
-  /// ignored to suppress noise from low-quality satellites.
-  static const double _poorAccuracyMeters = 25.0;
+  /// GPS fixes worse than this accuracy are not reliable enough to place a
+  /// commercial vehicle on a specific road. Android's fused provider often
+  /// reports 25–50 m while acquiring satellites, so the former 25 m cutoff
+  /// incorrectly froze otherwise valid movement.
+  static const double _poorAccuracyMeters = 65.0;
 
   /// Maximum distance (metres) a position jump can be when GPS accuracy is
   /// poor before the fix is discarded as noise.
   static const double _minPoorAccuracyJumpMeters = 25.0;
 
-  /// Maximum distance (metres) allowed between two consecutive accepted GPS
-  /// fixes.  Jumps larger than this are treated as unrealistic teleports
-  /// (multipath error, signal bounce) and discarded.
-  static const double _maxPositionJumpMeters = 80.0;
-
-  /// Smoothing weight (0–1) blended between the last accepted display position
-  /// and a new valid fix.  0.2 keeps 80% of the old position and blends in
-  /// 20% of the new fix — together with distanceFilter:1 this produces smooth,
-  /// lag-free movement that matches a professional GPS feel.  Increase toward
-  /// 1.0 to follow new fixes more quickly at the cost of more jitter.
-  static const double _gpsSmoothingWeight = 0.2;
+  /// Baseline distance (metres) allowed between consecutive fixes. The actual
+  /// limit is expanded from elapsed time, reported speed, and accuracy so a
+  /// delayed highway fix is not mistaken for a teleport.
+  static const double _maxPositionJumpMeters = 160.0;
 
   /// Minimum displacement (metres) from the last accepted fix that triggers
   /// immediate position acceptance regardless of speed.
@@ -395,10 +416,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// before a slow-speed position shift is accepted.
   static const int _requiredCandidateFixCount = 3;
 
-  /// Maximum number of route-index points the truck can jump in a single GPS
-  /// fix.  Larger jumps are suppressed as GPS noise in real-device mode.
-  static const int _maxRouteIndexJump = 3;
-
   /// Minimum seconds that must elapse between automatic directions (reroute)
   /// API calls.  Separate from [_rerouteThrottleSeconds] so the per-directions
   /// 5 s window is independent of the broader route-fetch guard.
@@ -409,7 +426,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// If no position update arrives within this window the watchdog fires,
   /// marks the session as stale, resets speed to an unavailable state, and
   /// shows a GPS-signal-loss indicator in the UI.
-  static const int _gpsStalenessThresholdSeconds = 10;
+  static const int _gpsStalenessThresholdSeconds = 20;
+
+  /// Minimum interval between requests to restart Android's location updates
+  /// after the watchdog detects a silent native stream.
+  static const int _gpsRecoveryRetrySeconds = 30;
 
   /// Interval (seconds) at which the watchdog timer polls to check whether
   /// a fresh GPS fix has arrived within [_gpsStalenessThresholdSeconds].
@@ -426,28 +447,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// radius ensures the red overlay visually leads into the restricted zone.
   static const double _restrictionSegmentThresholdMultiplier = 3.0;
 
-  // ── California truck speed-limit constants ─────────────────────────────────
-  /// California state law maximum speed for trucks (mph).
-  static const double _californiaTruckSpeedLimitMph = 55.0;
-
-  /// Southern latitude boundary of the California bounding box.
-  static const double _californiaMinLat = 32.0;
-
-  /// Northern latitude boundary of the California bounding box.
-  static const double _californiaMaxLat = 42.5;
-
-  /// Western longitude boundary of the California bounding box.
-  static const double _californiaMinLng = -125.0;
-
-  /// Eastern longitude boundary of the California bounding box.
-  static const double _californiaMaxLng = -114.0;
-
   // ── Loading / error ────────────────────────────────────────────────────────
   bool _isLoading = false;
+  final LatestRequestCoordinator<_RouteCalculationRequest>
+  _routeCalculationCoordinator =
+      LatestRequestCoordinator<_RouteCalculationRequest>();
   String? _error;
 
   // ── Map ready state ────────────────────────────────────────────────────────
   bool _mapReady = false;
+
+  // Camera updates are serialized and use latest-wins semantics. This avoids
+  // overlapping native camera animations when GPS fixes arrive faster than an
+  // earlier easeTo call can finish.
+  bool _cameraUpdateInProgress = false;
+  geo.Position? _pendingCameraPosition;
+  int _cameraUpdateGeneration = 0;
+
+  // Navigation survives short background/foreground transitions without
+  // rebuilding the map or route. On resume the native location request and
+  // last known navigation state are refreshed in place.
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
+  bool _resumeRecoveryInProgress = false;
 
   // ── Full route response ────────────────────────────────────────────────────
   Map<String, dynamic>? _routeData;
@@ -461,6 +482,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Map route points (from GeoJSON coordinates) ────────────────────────────
   List<LatLng> _routePoints = const [];
+
+  /// Changes whenever the authoritative route geometry changes. Async POI,
+  /// weigh-station, and road-data responses must match this revision before
+  /// they are allowed to mutate route-specific map state.
+  int _activeRouteRevision = 0;
 
   // ── Truck marker position, bearing, and current route index ───────────────
   //
@@ -479,6 +505,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // route animation is now driven by _runSmoothRouteAnimation.  The GPS
   // stream takes priority when real device location fixes are available.
   StreamSubscription<geo.Position>? _gpsSubscription;
+  StreamSubscription<NativeNavigationState>? _nativeNavigationSubscription;
+  bool _screenAwake = false;
+  NativeNavigationPhase _nativeNavigationPhase = NativeNavigationPhase.idle;
+  NativeNavigationStatus? _nativeNavigationStatus;
+  bool _nativeNavigationStatusLoading = true;
   Timer? _animTimer; // kept for dispose / GPS-mode cancellation
 
   // Generation counter — incremented each time a new smooth animation is
@@ -510,6 +541,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// watchdog can compute how long the stream has been silent.
   DateTime? _lastGpsFixTime;
 
+  /// Last time the watchdog asked the native fused provider to restart.
+  DateTime? _lastGpsRecoveryAttempt;
+
+  /// Time at which Android location tracking successfully started. This lets
+  /// the watchdog detect a cold start that never produces its first fix.
+  DateTime? _gpsTrackingStartedAt;
+
+  /// Prevents overlapping one-shot GPS requests when the driver taps Build
+  /// truck route repeatedly while Android is still acquiring satellites.
+  bool _isAcquiringGpsFix = false;
+  _LocationRecoveryAction? _locationRecoveryAction;
+
   // When true the smooth route-animation loop is allowed to auto-advance the
   // truck along the route without real GPS movement (useful for demo/testing).
   // When false (the default) the animation loop is suppressed and route
@@ -522,9 +565,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // driver's current position can be compared to the next waypoint.
   List<_NavStep> _navSteps = const [];
   int _currentStepIndex = 0;
+  int? _halfMileAnnouncedStepIndex;
+  int? _nearTurnAnnouncedStepIndex;
+
+  /// Road matched to the latest live GPS position using the current HERE
+  /// route's maneuver offsets. This is available in route preview as well as
+  /// active navigation, unlike licensed turn-by-turn guidance state.
+  String? _liveRoadName;
+  int _liveRoadStepIndex = 0;
 
   // ── Flutter TTS engine for voice guidance ────────────────────────────────
   final FlutterTts _tts = FlutterTts();
+  final VoiceDestinationService _voiceDestinationService =
+      VoiceDestinationService();
+  String? _lastNativeSpokenInstruction;
 
   // ── Arrival state ─────────────────────────────────────────────────────────
   //
@@ -605,18 +659,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ExitPreviewData? _exitPreviewData;
 
   // ── Navigation alert state ─────────────────────────────────────────────────
-  // Sample alerts shown during active navigation.  In production these would
-  // be populated from live weather/traffic/restriction APIs.
+  // Alerts assembled from authenticated safety-provider corridor responses.
   late List<NavigationAlert> _navAlerts;
 
-  // Sample trip progress info for the TripSummaryStrip.
+  // Route progress updated from authoritative native navigation events.
   late TripProgressInfo _tripProgressInfo;
+  late final DestinationTimeZoneService _destinationTimeZoneService;
+  late final AnalyticsService _analyticsService;
+  DestinationTimeZone? _destinationTimeZone;
+  LatLng? _destinationTimeZoneCoordinate;
+  int _destinationTimeZoneRequestGeneration = 0;
 
   // ── Wind alert visibility state ────────────────────────────────────────────
   /// Controls whether the bottom wind advisory card is visible.
   /// Starts true so the card shows as soon as navigation begins; the driver
   /// can dismiss it with the close button.
-  bool _showWindAlert = true;
+  bool _showWindAlert = false;
 
   // ── Satellite view toggle ──────────────────────────────────────────────────
   /// When true the map tile layer switches to satellite imagery.
@@ -687,6 +745,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── Route-fetch guard (prevents simultaneous or repeated API calls) ────────
   bool _isLoadingRoute = false;
 
+  /// Permanent safety gate for the retired direct Mapbox driving-route code.
+  /// Mapbox's passenger-car profile must never be presented as truck-safe.
+  bool _legacyPassengerRoutingDisabled = true;
+
   // ── Movement filter: track last position used for route checks ────────────
   /// Latitude of the last GPS fix that triggered a route-update check.
   double _lastRouteCheckLat = 0.0;
@@ -729,6 +791,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   List<RouteOption> _routeOptions = const [];
   int _selectedRouteOptionIndex = 0;
 
+  /// Receives hit-test results from the route polyline layer so a driver can
+  /// select an alternative directly on the map instead of having to use the
+  /// route cards. The hit value is the matching [_routeOptions] index.
+  final LayerHitNotifier<int> _routeHitNotifier = ValueNotifier(null);
+
+  /// Keeps route controls compact so most of the map remains available for
+  /// panning and zooming. Drivers can expand the drawer to compare routes.
+  bool _previewPanelExpanded = false;
+  bool _routePreviewActive = false;
+
   // ── Destination picker state ──────────────────────────────────────────────
   //
   // Set by long-pressing the map.  _startRouteToSelectedDestination() uses
@@ -768,8 +840,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // Full POI dataset loaded from assets/locations.json once the Mapbox style
   // is ready.  Used by _refreshClosestTruckStopsAhead as the primary data
-  // source so the navigation strip works for any route, not only the I-5
-  // corridor covered by _mockTruckStops.
+  // source so the navigation strip works for any route.
   List<PoiItem> _loadedPois = const [];
 
   // ── Route-only POI source state ──────────────────────────────────────────
@@ -795,6 +866,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// when the filtered POI list has not materially changed between refreshes.
   String _lastRoutePoiSourceHash = '';
 
+  /// Invalidates older Mapbox source writes when several GPS/reroute refreshes
+  /// overlap. The newest refresh is the only one allowed to update the source.
+  int _routePoiRequestGeneration = 0;
+
   // Holds each brand's PNG decoded as raw bytes so markers can render via
   // Image.memory() — the flutter_map equivalent of Mapbox style.addImage().
   // Keyed by canonical brand key (e.g. 'pilot', 'loves', 'default').
@@ -806,7 +881,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // shown as coloured map markers.  _poiAlertShown tracks which POI ids have
   // already triggered a proximity alert during this session so the same POI
   // does not spam repeated dialogs.
-  final List<MapPoi> _mapPois = List<MapPoi>.from(_sampleMapPois);
+  final List<MapPoi> _mapPois = <MapPoi>[];
   final Set<String> _poiAlertShown = {};
 
   // ── Reverse-geocoding cache ────────────────────────────────────────────────
@@ -842,6 +917,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // the Stack overlay.
   List<UpcomingAlertItem> _upcomingAlerts = const [];
 
+  // Latest authenticated commercial parking/fuel snapshot for the active
+  // route. These records are used only to enrich a tapped truck-stop card;
+  // an unknown or stale provider value is never presented as availability.
+  List<LiveParkingLocation> _liveParkingLocations = const [];
+  List<LiveDieselStation> _liveDieselStations = const [];
+
   // ── Truck profile (height / weight / length / hazmat) ─────────────────────
   //
   // These defaults represent a standard 5-axle semi.  In a production build
@@ -860,6 +941,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// True when the truck is carrying hazardous materials (HAZMAT placard).
   bool _hasHazmat = false;
+  TruckProfile? _activeTruckProfile;
+  late final WeighStationService _weighStationService;
+  late final LiveRoadDataService _liveRoadDataService;
+  late final HerePlacesService _herePlacesService;
+  bool _isLoadingLivePois = false;
+  LatLng? _lastLivePoiCenter;
+  bool _isLoadingRouteWeighStations = false;
+  bool _routeWeighStationsAvailable = false;
 
   // ── Truck restriction state ────────────────────────────────────────────────
   //
@@ -868,8 +957,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // deduplicates proximity alerts so the same restriction does not re-alert
   // during a session.  _restrictionAhead holds the nearest upcoming violation
   // so the in-route alert card can display its details.
-  final List<TruckRestriction> _restrictions =
-      List<TruckRestriction>.from(_sampleRestrictions);
+  final List<TruckRestriction> _restrictions = <TruckRestriction>[];
   final Set<String> _restrictionAlertShown = {};
   TruckRestriction? _restrictionAhead;
 
@@ -880,7 +968,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // It is seeded from the static [warningSigns] list; in production this list
   // would be replaced by API-loaded data matching the active route corridor.
   late final WarningManager _warningManager;
-
 
   // _isRestrictionRerouting is true while an automatic avoid-restriction
   // reroute is in progress so the UI can show the rerouting banner.
@@ -897,14 +984,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _warningAlertShown deduplicates proximity banners within a session.
   // _warningAhead holds the highest-priority warning currently ahead on the
   // route so the alert banner can display it.
-  final List<WarningSign> _warningSigns =
-      List<WarningSign>.from(_sampleWarningSigns);
+  final List<WarningSign> _warningSigns = <WarningSign>[];
   final Set<String> _warningAlertShown = {};
   WarningSign? _warningAhead;
 
+  // Provider-backed physical road controls. These are loaded around the
+  // visible map/truck and never substituted for authoritative truck routing.
+  List<RoadFeature> _roadFeatures = const [];
+  final Set<String> _roadFeatureAlerted = <String>{};
+  final Map<String, int> _roadFeatureRouteIndices = <String, int>{};
+  final Map<String, double> _roadFeatureCrossTrackMeters = <String, double>{};
+  final Map<String, double> _roadFeatureRouteOffsetsMeters = <String, double>{};
+  List<double> _routeCumulativeMeters = const [];
+  int _roadFeatureRouteSignature = 0;
+  RoadFeature? _roadFeatureAhead;
+  double? _roadFeatureAheadMeters;
+  LatLng? _lastRoadFeatureCenter;
+  DateTime? _lastRoadFeatureLoadedAt;
+  Timer? _roadFeatureRefreshTimer;
+  int _roadFeatureRequestGeneration = 0;
+
+  static const double _roadFeatureMinZoom = 14.2;
+  static const double _roadFeatureRouteCorridorMeters = 30.0;
+
   /// Radius in metres within which a warning sign is considered "on the route"
   /// for route-proximity detection.
-  static const double _warningProximityMeters = 200.0;
+  static const double _warningProximityMeters = 75.0;
 
   /// Radius in metres within which an ahead-on-route warning triggers the
   /// top alert banner (and TTS) for the driver.
@@ -925,10 +1030,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// and removed from the chips.  200 m ≈ 0.124 mi.
   static const double _poiPassedThresholdMiles = 0.124;
 
-  /// Distance buffer (metres) used when deciding which warning signs are
-  /// shown as map markers.  Wider than [_warningProximityMeters] so the driver
-  /// can see upcoming hazards well in advance (~10 miles).
-  static const double _warningDisplayBufferMeters = 16093.0; // ≈ 10 miles
+  /// Maximum distance ahead along the selected route for warning markers.
+  /// Cross-track eligibility remains limited by [_warningProximityMeters].
+  static const double _warningDisplayLookaheadMeters = 16093.0; // ≈ 10 miles
 
   /// Map zoom level below which warning markers are grouped into cluster badges
   /// to avoid clutter.  Above this threshold every eligible sign is shown
@@ -1045,59 +1149,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   double _currentSpeedMps = -1.0;
 
   /// Estimated speed limit in mph for the current road segment.
-  /// Updated on every GPS position event using [_estimateSpeedLimit].
-  double _speedLimitMph = 65.0;
+  /// Posted speed limit in mph. Zero means the active provider has not supplied
+  /// one; the UI must show unknown and must not infer an overspeed warning.
+  double _speedLimitMph = 0.0;
 
   /// Timestamp of the last "Slow down" TTS announcement.  Used to throttle
   /// repeated announcements so the driver is not nagged every few seconds.
   DateTime? _lastSlowDownAnnouncementTime;
 
-  // ── Phase 5 intelligence (driveMinutesLeft, weather, riskScore) ────────────
-  // Initialised with the FMCSA 11-hour driving limit (660 min).  driveMinutesLeft
-  // is recalculated on every GPS fix based on actual driving time so it
-  // decreases in real-time and resets after a 10-hour off-duty break.
-  Map<String, dynamic> _intelligence = {
-    'driveMinutesLeft': 660, // FMCSA 11-hour limit; updated from GPS in real-time
-    'weather': 'Clear',      // placeholder weather condition
-    'riskScore': 92.0,       // 92 → "Low" risk bucket
-  };
-
-  // ── HOS (Hours of Service) tracking ──────────────────────────────────────
-  // Implements a simplified FMCSA property-carrying driver HOS model:
-  //   • 11-hour driving limit per duty cycle (_hosMaxDriveMinutes = 660).
-  //   • Driving time (_hosDrivingDuration) accumulates whenever GPS speed
-  //     is ≥ 1 m/s; remaining = 660 − driving minutes.
-  //   • Break time (_hosCurrentBreakDuration) accumulates when stopped.
-  //   • After 10 consecutive off-duty hours the drive clock fully resets.
-  //   • After 8 hours of accumulated driving _hosBreakDue is set true to
-  //     surface a 30-minute break reminder in the UI.
-
-  /// Maximum driving minutes per duty cycle (FMCSA 11-hour rule).
-  static const int _hosMaxDriveMinutes = 660;
-
-  /// Driving minutes after which a 30-minute break is required (FMCSA 8-hour rule).
-  static const int _hosBreakDueMinutes = 480;
-
-  /// Consecutive off-duty minutes required to fully reset the drive clock (FMCSA 10-hour rule).
-  static const int _hosResetBreakMinutes = 600;
-
-  /// Accumulated driving time since the last 10-hour off-duty reset.
-  Duration _hosDrivingDuration = Duration.zero;
-
-  /// Accumulated consecutive off-duty (stopped) time since the truck last moved.
-  /// Resets to zero each time the driver resumes driving.
-  Duration _hosCurrentBreakDuration = Duration.zero;
-
-  /// True when accumulated driving has reached the 8-hour mark, indicating a
-  /// 30-minute break is required before any additional driving.
-  bool _hosBreakDue = false;
-
-  /// Timestamp of the GPS fix used for the most recent HOS delta calculation.
-  /// Null until the first GPS fix is received after the screen is mounted.
-  DateTime? _hosLastFixTime;
+  // Provider-backed intelligence only. Missing HOS/weather/risk values remain
+  // absent; SemiTrack does not estimate or fabricate legal ELD information.
+  Map<String, dynamic> _intelligence = const {};
+  bool _eldHosAvailable = false;
+  Timer? _eldHosRefreshTimer;
 
   // ── Map controller ─────────────────────────────────────────────────────────
   final MapController _mapController = MapController();
+  static const double _minimumMapZoom = 3.0;
+  static const double _maximumMapZoom = 19.0;
 
   // ── Navigation vs overview mode ────────────────────────────────────────────
   // When true the camera stays close to the truck (navigation zoom 12.5–15).
@@ -1108,6 +1177,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // Primary mode driver for the GPS camera system.  All camera behaviour
   // (follow, overview, free/gesture) is derived from this field.
   NavigationCameraMode _cameraMode = NavigationCameraMode.follow;
+
+  /// Prevents automatic close-follow after the driver explicitly requests a
+  /// full-route overview. A new route or recenter tap clears the pin.
+  bool _overviewPinnedByUser = false;
 
   // Convenience getter: true while the camera actively locks onto the truck.
   bool get _followTruck => _cameraMode == NavigationCameraMode.follow;
@@ -1141,6 +1214,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool get _hasActiveDestination =>
       _selectedDestination != null && _navigationActive;
 
+  /// True while live GPS is being evaluated against an authenticated HERE
+  /// truck route. This includes licensed native guidance and the online
+  /// Explore/REST-assisted preview fallback, but never plain map browsing.
+  bool get _isLiveRouteAssistanceActive =>
+      _selectedDestination != null &&
+      _routePoints.isNotEmpty &&
+      (_isNavigating || _routePreviewActive);
+
+  /// Controls the professional full-screen driving layout.
+  ///
+  /// This is intentionally separate from [_isNavigating]. The latter means a
+  /// licensed native guidance engine is running, while HERE Explore route
+  /// assistance is also a real, live driving session. Both must use the same
+  /// uncluttered driving UI without implying that Explore is HERE Navigate.
+  bool get _drivingUiActive => _isLiveRouteAssistanceActive && !_isArrived;
+
   // ── Navigation pause state ─────────────────────────────────────────────────
   // When true, live GPS tracking and camera follow updates are suspended.
   // Useful when the driver needs to review the route without the map moving.
@@ -1155,9 +1244,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _searchDebounce throttles geocoding calls to one per 400 ms so typing
   // a destination does not flood the Mapbox API with a request per keystroke.
   final TextEditingController _searchController = TextEditingController();
+  // The full-screen destination sheet keeps a controller for the lifetime of
+  // this screen. A modal route's Future completes when pop starts, before its
+  // reverse animation and inherited widgets have fully deactivated. Disposing
+  // a sheet-owned controller at that point can tear down the TextField during
+  // the same frame and trigger framework lifecycle assertions.
+  final TextEditingController _destinationSearchController =
+      TextEditingController();
   List<PlaceSuggestion> _searchResults = const [];
   bool _isSearching = false;
+  String? _searchError;
   Timer? _searchDebounce;
+  bool _destinationSearchOpen = false;
+  int _destinationSearchRequestGeneration = 0;
 
   // ── Route restriction violations ───────────────────────────────────────────
   // Populated by _updateRouteViolationWarnings() after a route loads.
@@ -1194,62 +1293,41 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _navigationCameraAnimationDurationMs = 650;
 
   // ── Mapbox public tile access token ──────────────────────────────────────────
-  static const _mapboxToken =
-      'pk.eyJ1Ijoic2VtaXRyYWNrLTExIiwiYSI6ImNtbmFoeHRoNjBqcjcycXE2ZWk5cGpzNGMifQ.09eo4qJKyLZq_3aUEXWiAA';
+  static const _mapboxToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
 
   @override
   void initState() {
     super.initState();
-    _navAlerts = [
-      NavigationAlert(
-        id: 'alert_wind_1',
-        type: AlertType.windAdvisory,
-        severity: AlertSeverity.high,
-        title: 'Wind Advisory',
-        subtitle: 'Gusts up to 60 mph',
-        message: 'High crosswinds reported — reduce speed and use caution.',
-        distanceMiles: 12.0,
-        roadName: 'I-80 Westbound',
-        suggestedAction: 'Reduce speed, grip steering firmly.',
-      ),
-      NavigationAlert(
-        id: 'alert_fuel_1',
-        type: AlertType.fuelDistance,
-        severity: AlertSeverity.low,
-        title: 'Fuel Ahead',
-        subtitle: 'Flying J Truck Stop',
-        distanceMiles: 143.0,
-        roadName: 'US-95 N',
-        suggestedAction: 'Plan fuel stop at next exit.',
-      ),
-      NavigationAlert(
-        id: 'alert_restriction_1',
-        type: AlertType.restrictionDistance,
-        severity: AlertSeverity.medium,
-        title: 'Truck Restriction',
-        subtitle: 'Weight limit 80,000 lbs',
-        message: 'Bridge weight restriction ahead — verify gross vehicle weight.',
-        distanceMiles: 139.0,
-        roadName: 'NV-227',
-        suggestedAction: 'Confirm vehicle weight or use alternate route.',
-      ),
-    ];
-    _tripProgressInfo = TripProgressInfo(
-      milesRemaining: 318.0,
-      durationRemaining: const Duration(hours: 5, minutes: 12),
-      etaLocal: DateTime.now().add(const Duration(hours: 5, minutes: 12)),
-      timezoneLabel: 'PDT',
+    WidgetsBinding.instance.addObserver(this);
+    TruckMapScreen.isNavigatingNotifier.addListener(
+      _handleNavigationScreenAwake,
     );
-    _initTts();
+    _handleNavigationScreenAwake();
+    _weighStationService = WeighStationService(widget.api);
+    _liveRoadDataService = LiveRoadDataService(widget.api);
+    _herePlacesService = HerePlacesService(widget.api);
+    _destinationTimeZoneService = DestinationTimeZoneService(widget.api);
+    _analyticsService = AnalyticsService(widget.api);
+    unawaited(_refreshEldHos());
+    _eldHosRefreshTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => unawaited(_refreshEldHos()),
+    );
+    _navAlerts = <NavigationAlert>[];
+    _tripProgressInfo = TripProgressInfo(
+      milesRemaining: 0,
+      durationRemaining: Duration.zero,
+      etaLocal: DateTime.now(),
+      timezoneLabel: DateTime.now().timeZoneName,
+      arrivalDayOffset: 0,
+    );
     _startGps();
-    // Initialise the warning manager with the pre-seeded sign list.
-    // In production, replace [warningSigns] with API-loaded data for the
-    // active route corridor.
-    _warningManager = WarningManager(signs: warningSigns);
+    // Start empty; authoritative corridor warnings are loaded after routing.
+    _warningManager = WarningManager(signs: const <WarningSign>[]);
     // On initial load there is no active route yet, so show all stops so the
     // map is useful before the driver sets a destination.  Once a route is
     // fetched, _truckStops is replaced by the filtered list.
-    _truckStops = _filterStopsNearRoute(_mockTruckStops, _routePoints);
+    _truckStops = const <TruckStop>[];
     // Load all brand logo PNGs as raw bytes so that _buildTruckStopMarkers()
     // can render them via Image.memory() — equivalent to Mapbox addImage().
     _preloadBrandIcons();
@@ -1258,7 +1336,487 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _loadPoisForMap();
     // Restore persisted POI category toggle state so driver preferences survive
     // app restarts.
-    _loadNavSettings();
+    unawaited(_loadNavSettings());
+    unawaited(_loadActiveTruckProfile());
+    unawaited(_refreshNativeNavigationStatus());
+    _nativeNavigationSubscription = NativeNavigationService.instance.states
+        .listen(
+          _onNativeNavigationState,
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint(
+              '[Navigation] Native state stream error: $error\n$stackTrace',
+            );
+          },
+          cancelOnError: false,
+        );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_resumeNavigationAfterBackground());
+      return;
+    }
+
+    // Do not tear down the active route or native foreground location service.
+    // Only invalidate UI-bound work that must not complete against a paused or
+    // detached map surface.
+    _invalidateCameraUpdates();
+    _gestureReturnTimer?.cancel();
+    _gestureReturnTimer = null;
+  }
+
+  Future<void> _resumeNavigationAfterBackground() async {
+    if (_resumeRecoveryInProgress || !mounted) return;
+    _resumeRecoveryInProgress = true;
+    try {
+      await _refreshNativeNavigationStatus();
+      if (!mounted || _appLifecycleState != AppLifecycleState.resumed) return;
+
+      await _setNavigationScreenAwake(
+        TruckMapScreen.isNavigatingNotifier.value,
+      );
+      if (!mounted || _appLifecycleState != AppLifecycleState.resumed) return;
+
+      if (_gpsSubscription == null) {
+        await _startGps();
+      } else if (_isLiveRouteAssistanceActive) {
+        await _restartNativeGpsUpdates();
+      }
+      if (!mounted || _appLifecycleState != AppLifecycleState.resumed) return;
+
+      if (_isLiveRouteAssistanceActive) {
+        _refreshRoutePoiSourceIfNeeded(force: true);
+        final position = _lastAcceptedPosition;
+        if (position != null && _cameraMode == NavigationCameraMode.follow) {
+          await _updateBestNavigationCamera(position);
+        }
+      }
+      debugPrint('[Navigation] Foreground state restored without route reset.');
+    } on Object catch (error, stackTrace) {
+      debugPrint(
+        '[Navigation] Foreground recovery failed: $error\n$stackTrace',
+      );
+    } finally {
+      _resumeRecoveryInProgress = false;
+    }
+  }
+
+  void _invalidateCameraUpdates() {
+    _cameraUpdateGeneration++;
+    _pendingCameraPosition = null;
+  }
+
+  void _handleNavigationScreenAwake() {
+    unawaited(
+      _setNavigationScreenAwake(TruckMapScreen.isNavigatingNotifier.value),
+    );
+  }
+
+  Future<void> _setNavigationScreenAwake(bool enabled) async {
+    if (_screenAwake == enabled) return;
+    _screenAwake = enabled;
+    try {
+      await _screenAwakeChannel.invokeMethod<void>('setKeepScreenOn', {
+        'enabled': enabled,
+      });
+    } on MissingPluginException {
+      // Non-Android builds do not currently expose this optional channel.
+    } on PlatformException catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Navigation] Screen-awake update failed: $error');
+      }
+    }
+  }
+
+  Future<void> _refreshNativeNavigationStatus() async {
+    if (mounted) {
+      setState(() => _nativeNavigationStatusLoading = true);
+    }
+    try {
+      final status = await NativeNavigationService.instance.status();
+      if (!mounted) return;
+      setState(() {
+        _nativeNavigationStatus = status;
+        _nativeNavigationStatusLoading = false;
+      });
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Navigation] Unable to read native status: $error');
+      }
+      if (!mounted) return;
+      setState(() {
+        _nativeNavigationStatus = null;
+        _nativeNavigationStatusLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadActiveTruckProfile() async {
+    try {
+      final response = await widget.api.getJson('/trucks');
+      final profiles = (response['items'] as List? ?? const [])
+          .map((item) => TruckProfile.fromJson(item as Map<String, dynamic>))
+          .toList(growable: false);
+      if (profiles.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _error = 'Create and select a truck profile before routing.';
+          });
+        }
+        return;
+      }
+      final profile =
+          profiles.where((item) => item.isDefault).firstOrNull ??
+          profiles.first;
+      if (mounted) {
+        setState(() {
+          _activeTruckProfile = profile;
+          _truckHeightFt = profile.heightFt;
+          _truckWeightTons = profile.weightLbs / 2000;
+          _truckLengthFt = profile.lengthFt;
+          _hasHazmat = profile.hazmatEnabled;
+        });
+      }
+      await NativeNavigationService.instance.setTruckProfile(
+        NativeTruckProfile(
+          heightMeters: profile.heightFt * 0.3048,
+          widthMeters: profile.widthFt * 0.3048,
+          lengthMeters: profile.lengthFt * 0.3048,
+          grossWeightKg: profile.weightLbs * 0.45359237,
+          axleCount: profile.axleCount,
+          axleWeightsKg: profile.weightPerAxleLbs == null
+              ? const []
+              : List.filled(
+                  profile.axleCount,
+                  profile.weightPerAxleLbs! * 0.45359237,
+                ),
+          hazmatEnabled: profile.hazmatEnabled,
+          hazmatClasses: profile.hazardousGoods,
+          trailerType: profile.trailerType,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = 'Unable to load the active truck profile: $error';
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshLiveWeighStations() async {
+    if (_routePoints.length < 2) return;
+    final routeRevision = _activeRouteRevision;
+    final route = List<LatLng>.unmodifiable(_routePoints);
+    try {
+      final upcoming = await _weighStationService.getUpcomingWeighStations(
+        route: route,
+        currentRouteOffsetMeters: 0,
+        routeBearing: _truckBearing,
+      );
+      if (!mounted || routeRevision != _activeRouteRevision) {
+        debugPrint(
+          '[RouteData] Discarded stale weigh-station response '
+          'revision=$routeRevision current=$_activeRouteRevision',
+        );
+        return;
+      }
+      setState(() {
+        _mapPois.removeWhere(
+          (poi) =>
+              !poi.id.startsWith('here:') &&
+              (poi.type == PoiType.weighStation ||
+                  poi.type == PoiType.portOfEntry),
+        );
+        _mapPois.addAll(
+          upcoming.map(
+            (match) => MapPoi(
+              id: match.station.id,
+              position: match.station.position,
+              type: match.station.type == live_ws.WeighStationType.portOfEntry
+                  ? PoiType.portOfEntry
+                  : PoiType.weighStation,
+              name: match.station.name,
+              status: match.station.status.name.toUpperCase(),
+              weighStation: match.station,
+            ),
+          ),
+        );
+      });
+      _refreshClosestWeighStationsAhead();
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[WeighStations] Live corridor refresh failed: $error');
+      }
+    }
+  }
+
+  Future<void> _refreshEldHos() async {
+    try {
+      final response = await widget.api.getJson('/eld/hos/current');
+      final items = (response['items'] as List? ?? const [])
+          .cast<Map<String, dynamic>>();
+      final current = items.where(
+        (item) => item['remainingDriveSeconds'] is num,
+      );
+      if (!mounted) return;
+      if (current.isEmpty) {
+        setState(() => _eldHosAvailable = false);
+        return;
+      }
+      final seconds = (current.first['remainingDriveSeconds'] as num).toInt();
+      setState(() {
+        _eldHosAvailable = true;
+        _intelligence = {
+          ..._intelligence,
+          'driveMinutesLeft': (seconds / 60).floor(),
+        };
+      });
+    } catch (_) {
+      // Missing provider HOS remains unavailable; never fabricate it locally.
+      if (mounted) setState(() => _eldHosAvailable = false);
+    }
+  }
+
+  Future<void> _refreshLiveRoadData() async {
+    if (_routePoints.length < 2) return;
+    final routeRevision = _activeRouteRevision;
+    final route = List<LatLng>.unmodifiable(_routePoints);
+    late final DriverSafetySnapshot snapshot;
+    try {
+      snapshot = await _liveRoadDataService.loadCorridor(
+        route: route,
+        routeBearing: _truckBearing,
+      );
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[RouteData] Live-road refresh failed: $error');
+      }
+      return;
+    }
+    if (!mounted || routeRevision != _activeRouteRevision) {
+      debugPrint(
+        '[RouteData] Discarded stale live-road response '
+        'revision=$routeRevision current=$_activeRouteRevision',
+      );
+      return;
+    }
+    final liveAlerts = <NavigationAlert>[];
+    final liveWarningSigns = snapshot.events
+        .map((event) {
+          final type = switch (event.type) {
+            'ROAD_CLOSURE' => WarningTypes.roadClosed,
+            'CONSTRUCTION' => WarningTypes.constructionZone,
+            'CRASH' || 'INCIDENT' => WarningTypes.accidentAhead,
+            'HIGH_WIND' => WarningTypes.highWindArea,
+            'CHAIN_RESTRICTION' ||
+            'SNOW' ||
+            'ICE' => WarningTypes.chainRequirement,
+            'TRUCK_RESTRICTION' => WarningTypes.noTrucksAllowed,
+            'MOUNTAIN_PASS' => WarningTypes.steepGrade,
+            _ => WarningTypes.detour,
+          };
+          final severity = switch (event.severity) {
+            'CRITICAL' || 'SEVERE' => 'high',
+            'MODERATE' => 'medium',
+            _ => 'low',
+          };
+          return WarningSign(
+            id: 'dot-${event.provider}-${event.id}',
+            type: type,
+            title: event.title,
+            lat: event.position.latitude,
+            lng: event.position.longitude,
+            severity: severity,
+            message:
+                '${event.provider}${event.description == null ? '' : ' • ${event.description}'}',
+            icon: type,
+          );
+        })
+        .toList(growable: false);
+    for (final restriction in snapshot.restrictions) {
+      if (!(restriction.authoritative ||
+          (restriction.verified && restriction.confidence >= 0.7))) {
+        continue;
+      }
+      liveAlerts.add(
+        NavigationAlert(
+          id: 'live-restriction-${restriction.id}',
+          type: restriction.type == 'HEIGHT'
+              ? AlertType.lowBridge
+              : restriction.type == 'HAZMAT'
+              ? AlertType.hazmat
+              : AlertType.restrictionDistance,
+          severity: AlertSeverity.high,
+          title: restriction.type.replaceAll('_', ' '),
+          subtitle: restriction.roadName,
+          message:
+              '${restriction.authoritative ? 'Authoritative' : 'Verified'} ${restriction.source} data • updated ${restriction.lastUpdated.toLocal()}',
+          distanceMiles: restriction.routeDistanceAheadMeters / _metersPerMile,
+          roadName: restriction.roadName,
+          suggestedAction: 'Review restriction before continuing',
+        ),
+      );
+    }
+    for (final event in snapshot.events.where(
+      (event) => event.severity == 'SEVERE' || event.severity == 'CRITICAL',
+    )) {
+      liveAlerts.add(
+        NavigationAlert(
+          id: 'live-event-${event.id}',
+          type: switch (event.type) {
+            'ROAD_CLOSURE' => AlertType.roadClosure,
+            'CONSTRUCTION' => AlertType.construction,
+            'CRASH' || 'INCIDENT' => AlertType.accident,
+            'HIGH_WIND' => AlertType.highWind,
+            _ => AlertType.weather,
+          },
+          severity: event.severity == 'CRITICAL'
+              ? AlertSeverity.high
+              : AlertSeverity.medium,
+          title: event.title,
+          subtitle: event.affectedRoad,
+          message:
+              '${event.provider} • updated ${event.lastUpdated.toLocal()}${event.description == null ? '' : ' • ${event.description}'}',
+          distanceMiles: event.routeDistanceAheadMeters / _metersPerMile,
+          roadName: event.affectedRoad,
+          suggestedAction: event.type == 'ROAD_CLOSURE'
+              ? 'Recalculate route'
+              : 'Use caution ahead',
+        ),
+      );
+    }
+    for (final parking in snapshot.parking.take(2)) {
+      final status = parking.availability.replaceAll('_', ' ');
+      liveAlerts.add(
+        NavigationAlert(
+          id: 'live-parking-${parking.id}',
+          type: AlertType.truckParking,
+          severity: AlertSeverity.low,
+          title: 'Truck parking: $status',
+          subtitle: parking.name,
+          message: parking.source == 'UNKNOWN'
+              ? 'Availability unknown — no fresh provider or community report'
+              : '${parking.source} • confidence ${(parking.confidence * 100).round()}%${parking.lastReportedAt == null ? '' : ' • updated ${parking.lastReportedAt!.toLocal()}'}',
+          distanceMiles: parking.routeDistanceAheadMeters / _metersPerMile,
+          suggestedAction: 'Review parking option ahead',
+        ),
+      );
+    }
+    final pricedFuel =
+        snapshot.fuel
+            .where((station) => station.cashPrice != null)
+            .toList(growable: false)
+          ..sort((a, b) => a.cashPrice!.compareTo(b.cashPrice!));
+    for (final station in pricedFuel.take(2)) {
+      liveAlerts.add(
+        NavigationAlert(
+          id: 'live-fuel-${station.id}',
+          type: AlertType.fuelDistance,
+          severity: AlertSeverity.low,
+          title: 'Diesel \$${station.cashPrice!.toStringAsFixed(3)}/gal',
+          subtitle: station.name,
+          message:
+              '${station.verified ? 'Verified' : 'Reported'} ${station.source ?? 'community'} price${station.observedAt == null ? '' : ' • updated ${station.observedAt!.toLocal()}'}',
+          distanceMiles: station.routeDistanceAheadMeters / _metersPerMile,
+          suggestedAction: 'Review fuel stop ahead',
+        ),
+      );
+    }
+    setState(() {
+      _liveParkingLocations = snapshot.parking;
+      _liveDieselStations = snapshot.fuel;
+      _mapPois.removeWhere((poi) => poi.type == PoiType.camera511);
+      _mapPois.addAll(
+        snapshot.cameras.map(
+          (camera) => MapPoi(
+            id: camera.id,
+            position: camera.position,
+            type: PoiType.camera511,
+            name: camera.name,
+            status: 'Updated ${camera.lastUpdated.toLocal()}',
+          ),
+        ),
+      );
+      _navAlerts.removeWhere((alert) => alert.id.startsWith('live-'));
+      _navAlerts.addAll(liveAlerts);
+      _warningSigns
+        ..clear()
+        ..addAll(liveWarningSigns);
+    });
+    _refreshClosestTruckStopsAhead();
+    _warningManager.replaceSigns(liveWarningSigns);
+    if (snapshot.errors.isNotEmpty && kDebugMode) {
+      debugPrint('[RoadSafety] ${snapshot.errors.join(' | ')}');
+    }
+  }
+
+  Future<void> _reportWeighStationStatus(MapPoi poi) async {
+    final position = _truckPosition;
+    if (position == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('A GPS fix is required to report status.'),
+        ),
+      );
+      return;
+    }
+    final status = await showModalBottomSheet<live_ws.WeighStationStatus>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(poi.name, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              const Text(
+                'Report only what you can currently observe. Reports expire automatically.',
+              ),
+              const SizedBox(height: 12),
+              for (final item in const [
+                (live_ws.WeighStationStatus.open, 'Open', Icons.check_circle),
+                (live_ws.WeighStationStatus.closed, 'Closed', Icons.cancel),
+                (
+                  live_ws.WeighStationStatus.inspection,
+                  'Inspection active',
+                  Icons.policy,
+                ),
+              ])
+                ListTile(
+                  leading: Icon(item.$3),
+                  title: Text(item.$2),
+                  onTap: () => Navigator.pop(context, item.$1),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (status == null) return;
+    try {
+      await _weighStationService.reportStatus(
+        stationId: poi.id,
+        status: status,
+        reporterPosition: position,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Status report submitted for verification.'),
+        ),
+      );
+      await _refreshLiveWeighStations();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not submit report: $error')),
+      );
+    }
   }
 
   /// Loads persisted [NavSettingsModel] state from [SharedPreferences].
@@ -1267,7 +1825,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// loading so that any restored category toggle changes take effect on the
   /// already-visible map.
   Future<void> _loadNavSettings() async {
+    await _initTts();
     await _navSettings.loadFromPrefs();
+    await _applyAudioSettings();
     if (mounted) setState(() {});
   }
 
@@ -1288,19 +1848,479 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
+  Future<List<PoiItem>> _safeSearchNearby(
+    String category,
+    LatLng center,
+  ) async {
+    try {
+      return await _herePlacesService.searchNearby(
+        category: category,
+        center: center,
+        radiusMeters: 100000,
+        limit: 75,
+      );
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[HERE Places] $category search failed: $error');
+      }
+      return const [];
+    }
+  }
+
+  void _mergeProviderPois(
+    List<PoiItem> incoming, {
+    Set<String> replaceCategories = const {},
+  }) {
+    if (!mounted) return;
+    final byId = <String, PoiItem>{
+      for (final poi in _loadedPois)
+        if (!(poi.providerBacked && replaceCategories.contains(poi.category)))
+          poi.id: poi,
+    };
+    for (final poi in incoming) {
+      byId[poi.id] = poi;
+    }
+    setState(() {
+      _loadedPois = byId.values.toList(growable: false);
+      _mapPois.removeWhere(
+        (poi) =>
+            poi.id.startsWith('here:') &&
+            (poi.type == PoiType.weighStation ||
+                poi.type == PoiType.portOfEntry),
+      );
+      _mapPois.addAll(
+        incoming
+            .where((poi) => poi.category == 'weigh_station')
+            .map(
+              (poi) => MapPoi(
+                id: poi.id,
+                position: LatLng(poi.displayLat, poi.displayLng),
+                type: PoiType.weighStation,
+                name: poi.name,
+                status: 'HERE PLACE',
+              ),
+            ),
+      );
+    });
+  }
+
+  Future<void> _refreshLiveNearbyPois(
+    LatLng center, {
+    bool force = false,
+  }) async {
+    if (_isLoadingLivePois) return;
+    final lastCenter = _lastLivePoiCenter;
+    if (!force &&
+        lastCenter != null &&
+        geo.Geolocator.distanceBetween(
+              lastCenter.latitude,
+              lastCenter.longitude,
+              center.latitude,
+              center.longitude,
+            ) <
+            40000) {
+      return;
+    }
+    _isLoadingLivePois = true;
+    try {
+      final batches = await Future.wait([
+        _safeSearchNearby('weigh_station', center),
+        _safeSearchNearby('truck_stop', center),
+        _safeSearchNearby('rest_area', center),
+        _safeSearchNearby('truck_parking', center),
+        _safeSearchNearby('truck_wash', center),
+      ]);
+      final places = batches.expand((batch) => batch).toList(growable: false);
+      if (!mounted) return;
+      _mergeProviderPois(
+        places,
+        replaceCategories: const {
+          // Also clear passenger-oriented results that may have been loaded by
+          // an older app build during this process lifetime.
+          'fuel_stop',
+          'walmart_store',
+          'weigh_station',
+          'truck_stop',
+          'rest_area',
+          'truck_parking',
+          'truck_wash',
+        },
+      );
+      _lastLivePoiCenter = center;
+    } finally {
+      _isLoadingLivePois = false;
+    }
+  }
+
+  List<LatLng> _sampleRouteForPlaceSearch(
+    List<LatLng> route, {
+    int maxPoints = 500,
+  }) {
+    if (route.length <= maxPoints) return route;
+    return List.generate(maxPoints, (index) {
+      final sourceIndex = (index * (route.length - 1) / (maxPoints - 1))
+          .round();
+      return route[sourceIndex];
+    }, growable: false);
+  }
+
+  Future<void> _refreshProviderWeighStationsForRoute() async {
+    if (_routePoints.length < 2) return;
+    final routeRevision = _activeRouteRevision;
+    final route = List<LatLng>.unmodifiable(_routePoints);
+    try {
+      final stations = await _herePlacesService.searchAlongRoute(
+        category: 'weigh_station',
+        route: _sampleRouteForPlaceSearch(route),
+        radiusMeters: 25000,
+        maxResults: 200,
+      );
+      if (!mounted || routeRevision != _activeRouteRevision) {
+        debugPrint(
+          '[RouteData] Discarded stale provider weigh-station response '
+          'revision=$routeRevision current=$_activeRouteRevision',
+        );
+        return;
+      }
+      _mergeProviderPois(stations, replaceCategories: const {'weigh_station'});
+      if (!mounted || routeRevision != _activeRouteRevision) return;
+      setState(() {
+        _routeOptions = _routeOptions
+            .map(
+              (option) => option.copyWith(
+                weighStationCount: _countWeighStationsForRoute(option.points),
+              ),
+            )
+            .toList(growable: false);
+        _isLoadingRouteWeighStations = false;
+        _routeWeighStationsAvailable = true;
+      });
+      _refreshClosestWeighStationsAhead();
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[HERE Places] route weigh-station search failed: $error');
+      }
+      if (mounted && routeRevision == _activeRouteRevision) {
+        setState(() {
+          _isLoadingRouteWeighStations = false;
+          _routeWeighStationsAvailable = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showLivePlaceCategory(String category, String title) async {
+    final center = _truckPosition;
+    if (center == null) {
+      setState(() {
+        _error = 'Waiting for your live GPS position before loading $title.';
+      });
+      return;
+    }
+    final normalizedTitle = title.toLowerCase();
+    if (normalizedTitle.contains('fuel')) {
+      unawaited(_analyticsService.recordEvent('FUEL_STOP_SEARCH'));
+    } else if (category == 'truck_parking') {
+      unawaited(_analyticsService.recordEvent('PARKING_SEARCH'));
+    }
+    // Category sheets are explicit searches. Keep them independent from the
+    // automatic map feed so a destination such as Walmart can be searched
+    // without becoming an ambient driving POI. Fuel searches intentionally use
+    // the truck_stop category at the call site; generic gas stations are never
+    // treated as commercial-truck fuel.
+    final fetched = await _safeSearchNearby(category, center);
+    if (!mounted) return;
+    _mergeProviderPois(fetched, replaceCategories: {category});
+    final places =
+        _loadedPois
+            .where(
+              (poi) =>
+                  poi.category == category &&
+                  (poi.providerBacked || poi.verified),
+            )
+            .toList(growable: false)
+          ..sort((a, b) {
+            final aDistance = geo.Geolocator.distanceBetween(
+              center.latitude,
+              center.longitude,
+              a.displayLat,
+              a.displayLng,
+            );
+            final bDistance = geo.Geolocator.distanceBetween(
+              center.latitude,
+              center.longitude,
+              b.displayLat,
+              b.displayLng,
+            );
+            return aDistance.compareTo(bDistance);
+          });
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.62,
+          child: Column(
+            children: [
+              ListTile(
+                title: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                subtitle: Text(
+                  places.isEmpty
+                      ? 'No verified provider places found nearby'
+                      : '${places.length} real HERE places near your live position',
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: places.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'No live results are available in this area. Approximate bundled locations are hidden.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: math.min(places.length, 75),
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, index) {
+                          final place = places[index];
+                          final miles =
+                              geo.Geolocator.distanceBetween(
+                                center.latitude,
+                                center.longitude,
+                                place.displayLat,
+                                place.displayLng,
+                              ) /
+                              _metersPerMile;
+                          return ListTile(
+                            leading: const CircleAvatar(
+                              child: Icon(Icons.place_rounded),
+                            ),
+                            title: Text(place.name),
+                            subtitle: Text(
+                              place.address.isNotEmpty
+                                  ? place.address
+                                  : [place.city, place.stateOrProvince]
+                                        .where((part) => part.isNotEmpty)
+                                        .join(', '),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: Text('${miles.toStringAsFixed(1)} mi'),
+                            onTap: () async {
+                              if (place.category == 'truck_stop') {
+                                unawaited(
+                                  _analyticsService.recordEvent(
+                                    'TRUCK_STOP_SELECTED',
+                                    entityId: place.id,
+                                    label: place.name,
+                                  ),
+                                );
+                              }
+                              final suggestion = PlaceSuggestion(
+                                name: place.name,
+                                placeName: place.address.isNotEmpty
+                                    ? place.address
+                                    : [place.city, place.stateOrProvince]
+                                          .where((part) => part.isNotEmpty)
+                                          .join(', '),
+                                position: LatLng(
+                                  place.displayLat,
+                                  place.displayLng,
+                                ),
+                              );
+                              Navigator.of(sheetContext).pop();
+                              await Future<void>.delayed(
+                                const Duration(milliseconds: 220),
+                              );
+                              if (mounted) {
+                                await _showDestinationDetails(suggestion);
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
-    _gpsSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _invalidateCameraUpdates();
+    _mapReady = false;
+    _mapboxMap = null;
+    _routeCalculationCoordinator.dispose();
+    _roadFeatureRequestGeneration++;
+    // Never leave AppShell in its full-screen driving layout after this map
+    // screen has been removed (for example after signing out or hot restart).
+    TruckMapScreen.isNavigatingNotifier.removeListener(
+      _handleNavigationScreenAwake,
+    );
+    TruckMapScreen.isNavigatingNotifier.value = false;
+    unawaited(_setNavigationScreenAwake(false));
+    unawaited(_analyticsService.endNavigation(status: 'CANCELED'));
+    _analyticsService.dispose();
+    unawaited(_gpsSubscription?.cancel());
+    unawaited(_nativeNavigationSubscription?.cancel());
+    unawaited(
+      NativeNavigationService.instance.stopNavigation().catchError((error) {
+        if (kDebugMode) debugPrint('[Navigation] Dispose stop failed: $error');
+      }),
+    );
+    unawaited(
+      NativeNavigationService.instance.stop().catchError((error) {
+        if (kDebugMode) debugPrint('[GPS] Dispose stop failed: $error');
+      }),
+    );
     _gpsWatchdogTimer?.cancel();
+    _eldHosRefreshTimer?.cancel();
+    _roadFeatureRefreshTimer?.cancel();
     _animTimer?.cancel();
     _gestureReturnTimer?.cancel();
     _animGeneration++; // cancel any in-flight smooth animation
     _gpsInterpGeneration++; // cancel any in-flight GPS position interpolation
     _tts.stop();
+    unawaited(_voiceDestinationService.dispose());
     _searchController.dispose();
+    // A bottom-sheet TextField can remain in its reverse transition for a
+    // frame after the parent screen is removed. Delay controller teardown so
+    // Flutter never deactivates an inherited dependency around a disposed
+    // controller (framework.dart `_dependents.isEmpty`).
+    if (_destinationSearchOpen) {
+      _destinationSearchOpen = false;
+      _destinationSearchRequestGeneration++;
+      final controller = _destinationSearchController;
+      Future<void>.delayed(
+        const Duration(milliseconds: 500),
+        controller.dispose,
+      );
+    } else {
+      _destinationSearchController.dispose();
+    }
     _searchDebounce?.cancel();
     _warningManager.dispose();
+    _routeHitNotifier.dispose();
     super.dispose();
+  }
+
+  /// Applies authoritative route-progress events emitted by the native
+  /// guidance provider. GPS fixes continue to arrive on the same bridge but
+  /// are handled independently by [_onGpsPosition].
+  void _onNativeNavigationState(NativeNavigationState state) {
+    if (!mounted) return;
+
+    final current = state.currentManeuver;
+    final next = state.nextManeuver;
+    setState(() {
+      _nativeNavigationPhase = state.phase;
+      final nativeRerouting = state.phase == NativeNavigationPhase.rerouting;
+      final coordinatedRerouting = _routeCalculationCoordinator.inProgress;
+      _isRerouting = nativeRerouting || coordinatedRerouting;
+      if (nativeRerouting) {
+        _navStatus = 'Rerouting...';
+      } else if (!coordinatedRerouting) {
+        _navStatus = null;
+      }
+
+      final distance = state.remainingDistanceMeters;
+      final seconds = state.remainingDurationSeconds;
+      if (distance != null && seconds != null) {
+        final arrived = state.phase == NativeNavigationPhase.arrived;
+        _tripProgressInfo = _createTripProgress(
+          distance / _metersPerMile,
+          Duration(seconds: seconds.round()),
+          forceZero: arrived,
+        );
+      }
+
+      if (state.phase == NativeNavigationPhase.navigating ||
+          state.phase == NativeNavigationPhase.rerouting) {
+        _isNavigating = true;
+        _navigationActive = true;
+        TruckMapScreen.isNavigatingNotifier.value = true;
+      } else if (state.phase == NativeNavigationPhase.arrived) {
+        _isNavigating = false;
+        _navigationActive = false;
+        _isArrived = true;
+        TruckMapScreen.isNavigatingNotifier.value = false;
+      }
+
+      if (state.phase == NativeNavigationPhase.error) {
+        _error = state.errorMessage ?? 'Native navigation failed safely.';
+      }
+    });
+
+    if (current != null) {
+      final distanceMiles = (current.distanceMeters ?? 0) / _metersPerMile;
+      _updateTopInstructionFromNavigationStep(
+        maneuverType: current.type,
+        modifier: null,
+        instruction: current.instruction,
+        roadName: current.roadName,
+        currentRoadName: state.roadName,
+        nextRoadName: next?.roadName,
+        distanceMiles: distanceMiles,
+        exitNumber: current.exitNumber,
+      );
+      _updateUpcomingManeuver(
+        maneuverType: current.type,
+        distanceMiles: distanceMiles,
+        isHighwayManeuver: _maneuverNeedsJunctionView(current.type),
+        roadName: current.roadName,
+        lanes: current.lanes.map(_nativeLane).toList(growable: false),
+      );
+      final instruction = current.instruction.trim();
+      if ((state.phase == NativeNavigationPhase.navigating ||
+              state.phase == NativeNavigationPhase.rerouting) &&
+          instruction.isNotEmpty &&
+          instruction != _lastNativeSpokenInstruction) {
+        _lastNativeSpokenInstruction = instruction;
+        unawaited(_speak(instruction));
+      }
+    }
+  }
+
+  LaneInfo _nativeLane(NavigationLane lane) => LaneInfo(
+    directions: lane.directions
+        .map(_nativeLaneDirection)
+        .whereType<LaneDirection>()
+        .toList(growable: false),
+    isRecommended: lane.recommended,
+  );
+
+  LaneDirection? _nativeLaneDirection(String direction) {
+    switch (direction.toLowerCase().replaceAll('_', '')) {
+      case 'left':
+        return LaneDirection.left;
+      case 'slightleft':
+        return LaneDirection.slightLeft;
+      case 'straight':
+        return LaneDirection.straight;
+      case 'slightright':
+        return LaneDirection.slightRight;
+      case 'right':
+        return LaneDirection.right;
+      case 'uturn':
+        return LaneDirection.uTurn;
+      default:
+        return null;
+    }
   }
 
   // ── Icon preloader ────────────────────────────────────────────────────────
@@ -1335,14 +2355,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Discover all PNG assets registered under assets/logo_brand_markers/ via
     // the asset manifest so the loader automatically picks up any new logo
     // files added to the folder without requiring code changes.
-    final AssetManifest manifest =
-        await AssetManifest.loadFromAssetBundle(rootBundle);
+    final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
+      rootBundle,
+    );
     final List<String> allPaths = manifest.listAssets();
     final List<String> logoPaths = allPaths
         .where(
           (s) =>
-              s.startsWith('assets/logo_brand_markers/') &&
-              s.endsWith('.png'),
+              s.startsWith('assets/logo_brand_markers/') && s.endsWith('.png'),
         )
         .toList();
 
@@ -1404,7 +2424,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// if road alignment looks off on a specific device.
   Marker _buildTruckMarker() {
     return Marker(
-      point: _truckPosition ??
+      point:
+          _truckPosition ??
           (_routePoints.isNotEmpty ? _routePoints.first : const LatLng(0, 0)),
       // Bounding box matches the rendered icon size: 48 × 48 logical px.
       width: 48,
@@ -1428,9 +2449,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           errorBuilder: (_, __, ___) => Icon(
             Icons.local_shipping,
             size: 44,
-            color: _navSettings.customTruckAvatar
-                ? Colors.purple
-                : Colors.blue,
+            color: _navSettings.customTruckAvatar ? Colors.purple : Colors.blue,
           ),
         ),
       ),
@@ -1468,389 +2487,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     });
   }
 
-  // ── Truck Stop POI mock dataset ────────────────────────────────────────────
-  //
-  // Hard-coded stops covering the default Portland → Winnemucca route.
-  // Replace with a real API call or local database in a production build.
-  //
-  // ── GeoJSON / SymbolLayer equivalent ──────────────────────────────────────
-  // In the native Mapbox SDK you would represent these locations as a
-  // GeoJSON FeatureCollection and render them with a SymbolLayer:
-  //
-  //   {
-  //     "type": "FeatureCollection",
-  //     "features": [
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-122.571, 45.581] },
-  //         "properties": { "brand": "pilot" }   // key == PNG filename w/o .png
-  //       },
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-123.092, 44.057] },
-  //         "properties": { "brand": "loves" }
-  //       },
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-122.875, 42.328] },
-  //         "properties": { "brand": "ta" }
-  //       },
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-122.637, 41.740] },
-  //         "properties": { "brand": "petro" }
-  //       },
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-123.022, 44.940] },
-  //         "properties": { "brand": "weigh" }
-  //       },
-  //       { "type": "Feature",
-  //         "geometry": { "type": "Point", "coordinates": [-122.990, 43.210] },
-  //         "properties": { "brand": "rest" }
-  //       }
-  //     ]
-  //   }
-  //
-  // With the SymbolLayer configured as:
-  //   iconImage: ["get", "brand"]   // picks the image registered via addImage()
-  //
-  // In flutter_map, TruckStop.icon plays the role of the "brand" GeoJSON
-  // property, and _brandIconBytes[stop.icon] plays the role of addImage().
-  // To add a new icon type: add an entry to _brandIcons and register the asset
-  // in pubspec.yaml, then create a TruckStop with icon: '<name>'.
-  static final List<TruckStop> _mockTruckStops = [
-    TruckStop(
-      id: '1',
-      name: 'Pilot Travel Center',
-      brand: 'Pilot',
-      position: const LatLng(45.581, -122.571),
-      address: 'Portland, OR',
-      dieselPrice: 4.25,
-      icon: 'pilot',
-      assetLogo: 'assets/logo_brand_markers/pilot.png',
-      description: 'Large Pilot with 24/7 fuel, truck parking, showers, and Subway restaurant.',
-      exitNumber: '309',
-    ),
-    TruckStop(
-      id: '2',
-      name: "Love's Travel Stop",
-      brand: "Love's",
-      position: const LatLng(44.057, -123.092),
-      address: 'Eugene, OR',
-      dieselPrice: 4.19,
-      icon: 'loves',
-      assetLogo: 'assets/logo_brand_markers/loves.png',
-      description: "Love's with CAT scale, showers, Hardee's, and tire care center.",
-      exitNumber: '194B',
-    ),
-    TruckStop(
-      id: '3',
-      name: 'TA Travel Center',
-      brand: 'TA',
-      position: const LatLng(42.328, -122.875),
-      address: 'Medford, OR',
-      dieselPrice: 4.35,
-      icon: 'ta',
-      assetLogo: 'assets/logo_brand_markers/ta_truck_stop.png',
-      description: 'TA with full truck service shop, Iron Skillet, showers, and CAT scale.',
-      exitNumber: '27',
-    ),
-    TruckStop(
-      id: '4',
-      name: 'Petro Stopping Center',
-      brand: 'Petro',
-      position: const LatLng(41.740, -122.637),
-      address: 'Yreka, CA',
-      dieselPrice: 4.45,
-      icon: 'petro',
-      assetLogo: 'assets/logo_brand_markers/petro_truck_stop.png',
-      description: 'Petro with certified truck lube, CAT scale, Iron Skillet, and 24/7 fuel.',
-      exitNumber: '775',
-    ),
-    TruckStop(
-      id: '5',
-      name: 'Flying J Travel Center',
-      brand: 'Flying J',
-      position: const LatLng(40.770, -122.388),
-      address: 'Redding, CA',
-      dieselPrice: 4.29,
-      icon: 'flyingj',
-      assetLogo: 'assets/logo_brand_markers/flying_j_truck_stop.png',
-      description: 'Flying J with myPilot rewards, truck parking for 150 rigs, and Denny\'s.',
-      exitNumber: '677',
-    ),
-    TruckStop(
-      id: '6',
-      name: 'Pilot Travel Center',
-      brand: 'Pilot',
-      position: const LatLng(39.724, -121.836),
-      address: 'Chico, CA',
-      dieselPrice: 4.32,
-      icon: 'pilot',
-      assetLogo: 'assets/logo_brand_markers/pilot.png',
-      description: 'Pilot with 24/7 diesel, DEF dispensers, showers, and convenience store.',
-      exitNumber: '442',
-    ),
-    TruckStop(
-      id: '7',
-      name: 'Rest Area – I-5 North',
-      brand: 'Rest Area',
-      position: const LatLng(43.210, -122.990),
-      address: 'I-5 Northbound, OR',
-      icon: 'rest',
-      assetLogo: 'assets/logo_brand_markers/rest_area.png',
-      description: 'Oregon DOT rest area with parking, restrooms, picnic tables, and dog walk area.',
-    ),
-    TruckStop(
-      id: '8',
-      name: 'Rest Area – I-80 East',
-      brand: 'Rest Area',
-      position: const LatLng(40.210, -121.500),
-      address: 'I-80 Eastbound, CA',
-      icon: 'rest',
-      assetLogo: 'assets/logo_brand_markers/rest_area.png',
-      description: 'Caltrans rest area with truck-specific parking bays and vending machines.',
-    ),
-    TruckStop(
-      id: '9',
-      name: 'Mobil Truck Stop',
-      brand: 'Mobil',
-      position: const LatLng(41.500, -122.300),
-      address: 'Weed, CA',
-      dieselPrice: 4.38,
-      icon: 'mobil',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Mobil with high-flow diesel pumps, DEF, and 24-hour convenience store.',
-    ),
-    TruckStop(
-      id: '10',
-      name: 'Esso Travel Plaza',
-      brand: 'Esso',
-      position: const LatLng(40.400, -122.250),
-      address: 'Red Bluff, CA',
-      dieselPrice: 4.41,
-      icon: 'esso',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Esso travel plaza with high-flow diesel lanes, DEF dispensers, and 24/7 convenience store.',
-    ),
-    TruckStop(
-      id: '11',
-      name: 'Chevron Truck Stop',
-      brand: 'Chevron',
-      position: const LatLng(39.500, -121.700),
-      address: 'Orland, CA',
-      dieselPrice: 4.33,
-      icon: 'chevron',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Chevron with Techron diesel, DEF, truck parking, and 24/7 service.',
-    ),
-    TruckStop(
-      id: '12',
-      name: 'Shell Travel Center',
-      brand: 'Shell',
-      position: const LatLng(38.900, -121.600),
-      address: 'Williams, CA',
-      dieselPrice: 4.30,
-      icon: 'shell',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Shell with V-Power diesel, car wash, and large-format truck canopy.',
-    ),
-    TruckStop(
-      id: '13',
-      name: 'BP Truck Stop',
-      brand: 'BP',
-      position: const LatLng(40.580, -122.350),
-      address: 'Cottonwood, CA',
-      dieselPrice: 4.27,
-      icon: 'bp',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'BP with Amoco Ultimate diesel, DEF, and convenience store with hot food.',
-    ),
-    TruckStop(
-      id: '14',
-      name: 'Circle K Travel Stop',
-      brand: 'Circle K',
-      position: const LatLng(39.800, -121.750),
-      address: 'Corning, CA',
-      dieselPrice: 4.22,
-      icon: 'circlek',
-      assetLogo: 'assets/logo_brand_markers/circle_truck_stop.png',
-      description: 'Convenience store with diesel lanes and a quick DEF fill-up station.',
-    ),
-    // ── New stops ────────────────────────────────────────────────────────────
-    TruckStop(
-      id: '15',
-      name: "Love's Travel Stop",
-      brand: "Love's",
-      position: const LatLng(46.871, -114.017),
-      address: 'Missoula, MT',
-      dieselPrice: 4.18,
-      icon: 'loves',
-      assetLogo: 'assets/logo_brand_markers/loves.png',
-      description: 'Full-service Love\'s with showers, laundry, CAT scale, and Subway restaurant on-site.',
-    ),
-    TruckStop(
-      id: '16',
-      name: 'TA Travel Center',
-      brand: 'TA',
-      position: const LatLng(43.613, -116.202),
-      address: 'Boise, ID',
-      dieselPrice: 4.31,
-      icon: 'ta',
-      assetLogo: 'assets/logo_brand_markers/ta_truck_stop.png',
-      description: 'TravelCenters of America — diesel, DEF, parking for 200+ trucks, Iron Skillet restaurant.',
-    ),
-    TruckStop(
-      id: '17',
-      name: 'Pilot Flying J',
-      brand: 'Pilot',
-      position: const LatLng(47.658, -117.426),
-      address: 'Spokane, WA',
-      dieselPrice: 4.24,
-      icon: 'pilot',
-      assetLogo: 'assets/logo_brand_markers/pilot.png',
-      description: 'Pilot Flying J with myPilot rewards, 24/7 fuel, truck parking, and Denny\'s inside.',
-    ),
-    TruckStop(
-      id: '18',
-      name: 'Petro Stopping Center',
-      brand: 'Petro',
-      position: const LatLng(41.263, -95.855),
-      address: 'Omaha, NE',
-      dieselPrice: 4.12,
-      icon: 'petro',
-      assetLogo: 'assets/logo_brand_markers/petro_truck_stop.png',
-      description: 'Petro truck stop with Iron Skillet diner, CAT scale, and full truck service center.',
-    ),
-    TruckStop(
-      id: '19',
-      name: 'Flying J Travel Center',
-      brand: 'Flying J',
-      position: const LatLng(36.170, -115.139),
-      address: 'Las Vegas, NV',
-      dieselPrice: 4.47,
-      icon: 'flyingj',
-      assetLogo: 'assets/logo_brand_markers/flying_j_truck_stop.png',
-      description: 'Flying J with myPilot loyalty perks, diesel exhaust fluid, showers, and Wi-Fi lounge.',
-    ),
-    TruckStop(
-      id: '20',
-      name: 'Maverik Adventure\'s First Stop',
-      brand: 'Maverik',
-      position: const LatLng(40.760, -111.891),
-      address: 'Salt Lake City, UT',
-      dieselPrice: 4.09,
-      icon: 'maverik',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Maverik BonFire grill, diesel, DEF, and adventure-themed convenience store.',
-    ),
-    // ── Stops for remaining logos ────────────────────────────────────────────
-    TruckStop(
-      id: '21',
-      name: 'QuikTrip Travel Center',
-      brand: 'QuikTrip',
-      position: const LatLng(33.749, -84.388),
-      address: 'Atlanta, GA',
-      dieselPrice: 4.05,
-      icon: 'quicktrip',
-      assetLogo: 'assets/logo_brand_markers/quicktrip_truck_stop.png',
-      description: 'QuikTrip with high-flow diesel pumps, fresh food kitchen, truck parking, and 24/7 service.',
-    ),
-    TruckStop(
-      id: '22',
-      name: 'Weigh Station – I-5 Southbound',
-      brand: 'Weigh Station',
-      position: const LatLng(44.940, -123.022),
-      address: 'Salem, OR – I-5 SB',
-      icon: 'weigh',
-      assetLogo: 'assets/logo_brand_markers/weight_station.png',
-      description: 'Oregon DOT portable scale site. All vehicles over 26,001 lbs must stop when open.',
-    ),
-    TruckStop(
-      id: '23',
-      name: 'Weigh Station – I-80 Westbound',
-      brand: 'Weigh Station',
-      position: const LatLng(41.120, -112.017),
-      address: 'Ogden, UT – I-80 WB',
-      icon: 'weigh',
-      assetLogo: 'assets/logo_brand_markers/weight_station.png',
-      description: 'Utah DOT permanent weigh station. WIM sensors active 24/7; booths open Mon–Fri.',
-    ),
-    TruckStop(
-      id: '24',
-      name: 'AmBest Travel Center',
-      brand: 'AmBest',
-      position: const LatLng(35.227, -80.843),
-      address: 'Charlotte, NC',
-      dieselPrice: 4.08,
-      icon: 'ambest',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'AmBest certified truck stop with showers, CAT scale, full restaurant, and truck repair.',
-    ),
-    TruckStop(
-      id: '25',
-      name: 'Road Ranger Fuel Center',
-      brand: 'Road Ranger',
-      position: const LatLng(41.880, -87.630),
-      address: 'Chicago, IL',
-      dieselPrice: 4.55,
-      icon: 'roadranger',
-      assetLogo: 'assets/logo_brand_markers/truck_parking.png',
-      description: 'Road Ranger high-volume diesel lanes with cardlock access and reefer plug-ins.',
-    ),
-    TruckStop(
-      id: '26',
-      name: 'Petro-Canada Truck Stop',
-      brand: 'Petro-Canada',
-      position: const LatLng(49.895, -97.138),
-      address: 'Winnipeg, MB',
-      dieselPrice: 4.60,
-      icon: 'petrocanada',
-      assetLogo: 'assets/logo_brand_markers/petro_canada_truck_stop.png',
-      description: 'Petro-Canada with high-volume diesel, DEF, driver lounge, and full parking.',
-    ),
-    // NOTE: Walmart Supercenter locations are NOT listed here.
-    // All Walmart store POIs are sourced exclusively from
-    // assets/walmart-stores.json via loadWalmartPois() in poi_service.dart.
-    // Do NOT add hardcoded Walmart addresses to this list — use the JSON file.
-    TruckStop(
-      id: '28',
-      name: 'Trucker Hotel & Lodging',
-      brand: 'Hotel',
-      position: const LatLng(32.785, -96.800),
-      address: 'Dallas, TX',
-      icon: 'hotel',
-      assetLogo: 'assets/logo_brand_markers/hotel_default.png',
-      description: 'Truck-friendly hotel with extra-long parking stalls, complimentary breakfast, and Wi-Fi.',
-    ),
-    TruckStop(
-      id: '29',
-      name: 'Truck Stop Restaurant',
-      brand: 'Restaurant',
-      position: const LatLng(36.174, -86.767),
-      address: 'Nashville, TN',
-      icon: 'restaurant',
-      assetLogo: 'assets/logo_brand_markers/restaurant.png',
-      description: 'Full-service truck-stop restaurant with hot meals, salad bar, and 24/7 coffee service.',
-    ),
-    TruckStop(
-      id: '30',
-      name: 'Semi Truck Wash',
-      brand: 'Truck Wash',
-      position: const LatLng(38.871, -97.622),
-      address: 'Salina, KS',
-      icon: 'truckwash',
-      assetLogo: 'assets/logo_brand_markers/commercial_vehicle_wash.png',
-      description: 'High-pressure semi truck wash with hand-dry service and fleet discount programs.',
-    ),
-    TruckStop(
-      id: '31',
-      name: 'Truck Stop Fitness Center',
-      brand: 'Gym',
-      position: const LatLng(39.099, -94.578),
-      address: 'Kansas City, MO',
-      icon: 'gym',
-      assetLogo: 'assets/logo_brand_markers/gym.png',
-      description: 'On-site gym with showers, locker rooms, and 24/7 access for professional truck drivers.',
-    ),
-  ];
-
   // ── Truck Stop POI methods ─────────────────────────────────────────────────
 
   /// Filters [allStops] to only those within [maxDistanceMeters] of any point
@@ -1860,8 +2496,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Uses [geo.Geolocator.distanceBetween] for GPS-grade accuracy.
   ///
   /// **Performance note:** This is an O(n×m) scan (n stops × m route points).
-  /// With the current mock dataset (≤ 10 stops) this is negligible.  When
-  /// switching to a real data source with thousands of entries, replace this
+  /// When operating on thousands of entries, replace this
   /// Returns only the [TruckStop]s that lie within [maxDistanceMeters] of the
   /// active route polyline, sorted by proximity to the current truck position,
   /// and capped at [maxPOIs] entries for rendering performance.
@@ -1887,7 +2522,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // No active route — hide all POI stops so that distant (e.g. West-Coast)
     // markers are not shown before the driver picks a destination.
     if (routePoints.isEmpty) {
-      debugPrint('[POI/Alert Filter] Truck stop markers: route not set – hiding all stops.');
+      debugPrint(
+        '[POI/Alert Filter] Truck stop markers: route not set – hiding all stops.',
+      );
       return const [];
     }
 
@@ -1914,7 +2551,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Pre-compute each distance once to avoid O(n²) haversine calls inside the
     // comparator (each comparison would otherwise call distanceBetween twice).
     final LatLng userPos =
-        _truckPosition ?? (routePoints.isNotEmpty ? routePoints.first : const LatLng(0, 0));
+        _truckPosition ??
+        (routePoints.isNotEmpty ? routePoints.first : const LatLng(0, 0));
     final Map<TruckStop, double> distToUser = {
       for (final stop in nearRoute)
         stop: geo.Geolocator.distanceBetween(
@@ -1927,8 +2565,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     nearRoute.sort((a, b) => distToUser[a]!.compareTo(distToUser[b]!));
 
     // Step 3: cap at [maxPOIs] to keep the marker layer performant.
-    final result =
-        nearRoute.length > maxPOIs ? nearRoute.sublist(0, maxPOIs) : nearRoute;
+    final result = nearRoute.length > maxPOIs
+        ? nearRoute.sublist(0, maxPOIs)
+        : nearRoute;
 
     debugPrint(
       '[POI/Alert Filter] Truck stop markers: ${result.length}/${allStops.length} shown '
@@ -1938,28 +2577,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return result;
   }
 
-  /// Returns the number of fuel stops (non-rest-area truck stops) within
+  /// Returns the number of verified commercial truck stops within
   /// [maxDistanceMeters] of any point in [routePoints].
   int _countFuelStopsForRoute(
     List<LatLng> routePoints, {
     double maxDistanceMeters = 5000,
   }) {
-    return _mockTruckStops
-        .where((stop) =>
-            stop.brand != 'Rest Area' && stop.brand != 'Weigh Station')
-        .where((stop) {
-          for (final pt in routePoints) {
-            final d = geo.Geolocator.distanceBetween(
-              stop.position.latitude,
-              stop.position.longitude,
-              pt.latitude,
-              pt.longitude,
-            );
-            if (d <= maxDistanceMeters) return true;
-          }
-          return false;
-        })
-        .length;
+    return _loadedPois.where((poi) {
+      if (poi.category != 'truck_stop') return false;
+      if (!(poi.providerBacked || poi.verified)) return false;
+      for (final pt in routePoints) {
+        final d = geo.Geolocator.distanceBetween(
+          poi.displayLat,
+          poi.displayLng,
+          pt.latitude,
+          pt.longitude,
+        );
+        if (d <= maxDistanceMeters) return true;
+      }
+      return false;
+    }).length;
   }
 
   /// Returns the number of weigh-station [MapPoi]s within [maxDistanceMeters]
@@ -1968,21 +2605,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     List<LatLng> routePoints, {
     double maxDistanceMeters = 5000,
   }) {
-    return _mapPois
-        .where((p) => p.type == PoiType.weighStation)
-        .where((poi) {
-          for (final pt in routePoints) {
-            final d = geo.Geolocator.distanceBetween(
-              poi.position.latitude,
-              poi.position.longitude,
-              pt.latitude,
-              pt.longitude,
-            );
-            if (d <= maxDistanceMeters) return true;
-          }
-          return false;
-        })
-        .length;
+    final stationPositions = <String, LatLng>{
+      for (final poi in _mapPois)
+        if (poi.type == PoiType.weighStation || poi.type == PoiType.portOfEntry)
+          poi.id: poi.position,
+      for (final poi in _loadedPois)
+        if (poi.category == 'weigh_station')
+          poi.id: LatLng(poi.displayLat, poi.displayLng),
+    };
+    return stationPositions.values.where((position) {
+      for (final point in routePoints) {
+        final distance = geo.Geolocator.distanceBetween(
+          position.latitude,
+          position.longitude,
+          point.latitude,
+          point.longitude,
+        );
+        if (distance <= maxDistanceMeters) return true;
+      }
+      return false;
+    }).length;
   }
 
   /// Normalizes a raw truck-stop name or brand string into a canonical
@@ -2005,14 +2647,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (n.contains('pilot')) return 'pilot';
     if (n.contains('flying j') || n.contains('flyingj')) return 'flyingj';
     if (n.contains("love's") || n.contains('loves')) return 'loves';
-    if (n.contains('road ranger') || n.contains('roadranger')) return 'roadranger';
+    if (n.contains('road ranger') || n.contains('roadranger'))
+      return 'roadranger';
     if (n.contains('am best') || n.contains('ambest')) return 'ambest';
     if (n.contains('sapp bros') || n.contains('sappbros')) return 'sappbros';
 
     // Canadian brands (check before generic 'petro' to avoid false match)
     if (n.contains('petro-canada') ||
         n.contains('petrocanada') ||
-        n.contains('petro canada')) return 'petro-canada';
+        n.contains('petro canada'))
+      return 'petro-canada';
     if (n.contains('husky')) return 'husky';
     if (n.contains('esso')) return 'esso';
     if (n.contains('ultramar')) return 'ultramar';
@@ -2023,12 +2667,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         n.startsWith('ta ') ||
         n.contains('travelcenters') ||
         n.contains('travel center') ||
-        n.contains('ta petro')) return 'ta';
+        n.contains('ta petro'))
+      return 'ta';
     if (n.contains('petro')) return 'petro';
 
     // Regional chains
     if (n.contains('kwik trip') || n.contains('kwiktrip')) return 'kwiktrip';
-    if (n == 'qt' || n.contains('quiktrip') || n.contains('quicktrip') || n.contains('quick trip')) return 'qt';
+    if (n == 'qt' ||
+        n.contains('quiktrip') ||
+        n.contains('quicktrip') ||
+        n.contains('quick trip'))
+      return 'qt';
     if (n.contains('maverik')) return 'maverik';
     if (n.contains("casey's") || n.contains('caseys')) return 'caseys';
 
@@ -2053,7 +2702,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         n.contains('weight station') ||
         n.contains('weigh sta') ||
         n.contains('scale') ||
-        n == 'weigh') return 'weigh';
+        n == 'weigh')
+      return 'weigh';
 
     return 'default';
   }
@@ -2072,32 +2722,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// so that the legacy [_brandIcons] lookup path still works alongside the
   /// dynamic [AssetManifest] loading in [_preloadBrandIcons].
   static const Map<String, String> _brandIcons = {
-    'pilot':        'assets/logo_brand_markers/pilot.png',
-    'loves':        'assets/logo_brand_markers/loves.png',
-    'ta':           'assets/logo_brand_markers/ta_truck_stop.png',
-    'petro':        'assets/logo_brand_markers/petro_truck_stop.png',
-    'flyingj':      'assets/logo_brand_markers/flying_j_truck_stop.png',
-    'mobil':        'assets/logo_brand_markers/truck_parking.png',
-    'chevron':      'assets/logo_brand_markers/truck_parking.png',
-    'shell':        'assets/logo_brand_markers/truck_parking.png',
-    'bp':           'assets/logo_brand_markers/truck_parking.png',
-    'circlek':      'assets/logo_brand_markers/circle_truck_stop.png',
-    'weigh':        'assets/logo_brand_markers/weight_station.png',
-    'rest':         'assets/logo_brand_markers/rest_area.png',
-    'roadranger':   'assets/logo_brand_markers/truck_parking.png',
-    'ambest':       'assets/logo_brand_markers/truck_parking.png',
-    'quicktrip':    'assets/logo_brand_markers/quicktrip_truck_stop.png',
-    'esso':         'assets/logo_brand_markers/truck_parking.png',
-    'petrocanada':  'assets/logo_brand_markers/petro_canada_truck_stop.png',
+    'pilot': 'assets/logo_brand_markers/pilot.png',
+    'loves': 'assets/logo_brand_markers/loves.png',
+    'ta': 'assets/logo_brand_markers/ta_truck_stop.png',
+    'petro': 'assets/logo_brand_markers/petro_truck_stop.png',
+    'flyingj': 'assets/logo_brand_markers/flying_j_truck_stop.png',
+    'mobil': 'assets/logo_brand_markers/truck_parking.png',
+    'chevron': 'assets/logo_brand_markers/truck_parking.png',
+    'shell': 'assets/logo_brand_markers/truck_parking.png',
+    'bp': 'assets/logo_brand_markers/truck_parking.png',
+    'circlek': 'assets/logo_brand_markers/circle_truck_stop.png',
+    'weigh': 'assets/logo_brand_markers/weight_station.png',
+    'rest': 'assets/logo_brand_markers/rest_area.png',
+    'roadranger': 'assets/logo_brand_markers/truck_parking.png',
+    'ambest': 'assets/logo_brand_markers/truck_parking.png',
+    'quicktrip': 'assets/logo_brand_markers/quicktrip_truck_stop.png',
+    'esso': 'assets/logo_brand_markers/truck_parking.png',
+    'petrocanada': 'assets/logo_brand_markers/petro_canada_truck_stop.png',
     // NOTE: 'walmart' is intentionally omitted here.
     // Walmart store locations are sourced exclusively from
     // assets/walmart-stores.json and rendered via the POI cluster layer
     // (_buildAllPoiMarkers / loadWalmartPois). Do NOT add Walmart to this map.
-    'hotel':        'assets/logo_brand_markers/hotel_default.png',
-    'restaurant':   'assets/logo_brand_markers/restaurant.png',
-    'truckwash':    'assets/logo_brand_markers/commercial_vehicle_wash.png',
-    'gym':          'assets/logo_brand_markers/gym.png',
-    'maverik':      'assets/logo_brand_markers/truck_parking.png',
+    'hotel': 'assets/logo_brand_markers/hotel_default.png',
+    'restaurant': 'assets/logo_brand_markers/restaurant.png',
+    'truckwash': 'assets/logo_brand_markers/commercial_vehicle_wash.png',
+    'gym': 'assets/logo_brand_markers/gym.png',
+    'maverik': 'assets/logo_brand_markers/truck_parking.png',
   };
 
   /// Builds the list of [Marker]s for each visible truck stop in [_truckStops].
@@ -2114,10 +2764,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final markers = <Marker>[];
     for (final stop in _truckStops) {
-      final Uint8List? bytes =
-          stop.assetLogo != null ? _brandIconBytes[stop.assetLogo] : null;
+      final Uint8List? bytes = stop.assetLogo != null
+          ? _brandIconBytes[stop.assetLogo]
+          : null;
 
-      // Use orange for all mock truck-stop pins.
+      // Use orange for truck-stop pins.
       // NOTE: Walmart store markers are NOT rendered here — they come
       // exclusively from assets/walmart-stores.json via loadWalmartPois() and
       // are displayed by the POI cluster layer (_buildAllPoiMarkers).
@@ -2134,27 +2785,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         pinSize: _kPoiPinSize,
       );
 
-      markers.add(Marker(
-        point: stop.position,
-        width: _kPoiPinSize,
-        height: _kPoiPinSize,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () => _showTruckStopSheet(stop),
-          child: pinWidget,
+      markers.add(
+        Marker(
+          point: stop.position,
+          width: _kPoiPinSize,
+          height: _kPoiPinSize,
+          alignment: Alignment.topCenter,
+          child: GestureDetector(
+            onTap: () => _showTruckStopSheet(stop),
+            child: pinWidget,
+          ),
         ),
-      ));
+      );
     }
     return markers;
   }
 
   /// Builds [Marker]s for [MapPoi] entries of type [PoiType.weighStation].
   ///
-  /// **Data source:** [_mapPois] is populated from [_sampleMapPois], which is
-  /// DEMO / approximate corridor data used as a fallback before a live API feed
-  /// is available.  These markers are suppressed as soon as [_loadedPois]
-  /// (from `assets/locations.json`) contains verified weigh-station entries,
-  /// so demo markers never appear alongside real-world POIs.
+  /// **Data source:** [_mapPois] is populated only from the authenticated
+  /// safety API and the versioned official offline dataset. Unverified legacy
+  /// `locations.json` weigh-station entries are excluded by [PoiService].
   ///
   /// **Marker placement:** Every marker is rendered at the POI's true stored
   /// [MapPoi.position] coordinate — never at a snapped or shifted route point.
@@ -2169,11 +2820,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Hidden when the weigh-station layer is toggled off in nav settings.
     if (!_navSettings.viewWeighStation) return const [];
 
-    // DEMO data suppression: when the real JSON dataset has loaded weigh
-    // stations, these sample markers are hidden so drivers only see verified
-    // POIs from locations.json rendered by _buildAllPoiMarkers().
-    final bool realWeighStationsLoaded =
-        _loadedPois.any((p) => p.category == 'weigh_station');
+    // Avoid rendering a sourced station twice if it is also present in the
+    // general POI layer.
+    final bool realWeighStationsLoaded = _loadedPois.any(
+      (p) => p.category == 'weigh_station',
+    );
     if (realWeighStationsLoaded) return const [];
 
     const String weighStationAsset =
@@ -2187,14 +2838,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       );
     }
 
-    // DEMO POIs from _sampleMapPois — approximate corridor data only.
-    // These are only reached when _loadedPois has no weigh stations (checked above).
-    final List<MapPoi> weighStations =
-        _mapPois.where((p) => p.type == PoiType.weighStation).toList();
+    // Route-matched stations from the live/offline weigh repository.
+    final List<MapPoi> weighStations = _mapPois
+        .where((p) => p.type == PoiType.weighStation)
+        .toList();
 
     // Determine which weigh station is the active next one during navigation
     // so it can be rendered with a distinct highlight ring.
-    final String? nextStationId = (_isNavigating && _closestWeighStationsAhead.isNotEmpty)
+    final String? nextStationId =
+        (_isNavigating && _closestWeighStationsAhead.isNotEmpty)
         ? _closestWeighStationsAhead.first.poi.id
         : null;
 
@@ -2231,31 +2883,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // stays in the top-right corner regardless of the ring decoration.
       pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
-      if (isNext) {
-        pinWidget = Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: size + 6,
-              height: size + 6,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.orange, width: 2.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.orange.withOpacity(0.5),
-                    blurRadius: 8,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-            ),
-            pinWidget,
-          ],
-        );
-      }
-
-      final double baseSize = isNext ? size + 6 : size;
+      // The next station uses the same silhouette in an orange highlight color;
+      // keeping the outline uniform avoids the old circular halo mismatch.
+      final double baseSize = size;
 
       // Label: only shown when the coordinate fails sanity / road-proximity
       // checks.  Non-suspect POIs render without a label — they are at their
@@ -2266,7 +2896,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               children: [
                 pinWidget,
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.deepOrange.shade700,
                     borderRadius: BorderRadius.circular(4),
@@ -2284,16 +2917,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             )
           : pinWidget;
 
-      markers.add(Marker(
-        point: displayPoint,
-        width: baseSize,
-        height: isSuspect ? baseSize + _kPoiLabelHeight : baseSize,
-        alignment: Alignment.topCenter,
-        child: GestureDetector(
-          onTap: () => _showPoiAlert(poi),
-          child: markerChild,
+      markers.add(
+        Marker(
+          point: displayPoint,
+          width: baseSize,
+          height: isSuspect ? baseSize + _kPoiLabelHeight : baseSize,
+          alignment: Alignment.topCenter,
+          child: GestureDetector(
+            onTap: () => _showPoiAlert(poi),
+            child: markerChild,
+          ),
         ),
-      ));
+      );
     }
 
     return markers;
@@ -2378,7 +3013,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // Uniform bounding-box size used for every GPS-pin POI marker so all types
   // appear at the same size on the map.
-  static const double _kPoiPinSize = 72.0;
+  // 66 logical pixels is the standard on-road POI size: large enough for
+  // commercial brand marks to be recognized at a glance while driving.
+  static const double _kPoiPinSize = 66.0;
 
   // Extra height added to a weigh-station marker's bounding box to accommodate
   // the "(approx)" / "Entrance Here" / "Suspect Location" label below the pin.
@@ -2410,13 +3047,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   marker falls back to the property-centre coordinate and is rendered in
   ///   grey (the **approximateIcon** appearance) to signal that the precise
   ///   entrance location has not yet been confirmed.
-  Widget _buildGpsPinWidget(String category,
-      {Uint8List? bytes, bool isVerified = true}) {
+  Widget _buildGpsPinWidget(
+    String category, {
+    Uint8List? bytes,
+    bool isVerified = true,
+  }) {
     // Verified POIs use the category colour (verifiedIcon).
     // Approximate POIs use grey to signal an unconfirmed entrance location
     // (approximateIcon).
-    final Color pinColor =
-        isVerified ? _poiCategoryColor(category) : Colors.grey.shade500;
+    final Color pinColor = isVerified
+        ? _poiCategoryColor(category)
+        : Colors.grey.shade500;
     return buildGpsPinMarker(
       pinColor: pinColor,
       imageBytes: bytes,
@@ -2524,8 +3165,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final String? assetKey = poi.icon.isNotEmpty
           ? 'assets/logo_brand_markers/${poi.icon}.png'
           : null;
-      final Uint8List? bytes =
-          assetKey != null ? _brandIconBytes[assetKey] : null;
+      final Uint8List? bytes = assetKey != null
+          ? _brandIconBytes[assetKey]
+          : null;
 
       // A POI is "verified" when the verified flag is true AND both entrance
       // lat and lng are provided — i.e. the entrance GPS fix has been
@@ -2536,30 +3178,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final bool isVerified =
           poi.verified && poi.entranceLat != null && poi.entranceLng != null;
 
-      Widget pinWidget =
-          _buildGpsPinWidget(poi.category, bytes: bytes, isVerified: isVerified);
+      Widget pinWidget = _buildGpsPinWidget(
+        poi.category,
+        bytes: bytes,
+        isVerified: isVerified,
+      );
 
       final LatLng displayCoord = LatLng(poi.displayLat, poi.displayLng);
-      final bool isSuspect = _isPoiLocationSuspect(displayCoord,
-          poiLabel: '"${poi.name}" (id=${poi.id})');
+      final bool isSuspect = _isPoiLocationSuspect(
+        displayCoord,
+        poiLabel: '"${poi.name}" (id=${poi.id})',
+      );
       if (isSuspect) suspectCount++;
       pinWidget = _withSuspectBadge(pinWidget, suspect: isSuspect);
 
-      markers.add(Marker(
-        point: displayCoord,
-        width: _kPoiPinSize,
-        height: _kPoiPinSize,
-        alignment: Alignment.center,
-        child: GestureDetector(
-          onTap: () => _showPoiInfoDialog(poi),
-          child: pinWidget,
+      markers.add(
+        Marker(
+          point: displayCoord,
+          width: _kPoiPinSize,
+          height: _kPoiPinSize,
+          alignment: Alignment.topCenter,
+          child: GestureDetector(
+            onTap: () => _showPoiInfoDialog(poi),
+            child: pinWidget,
+          ),
         ),
-      ));
+      );
     }
 
-    debugPrint('[POI] ${filtered.length} markers shown '
-        '(zoom=${zoom.toStringAsFixed(1)}, '
-        'navigating=$_isNavigating, suspect=$suspectCount).');
+    debugPrint(
+      '[POI] ${filtered.length} markers shown '
+      '(zoom=${zoom.toStringAsFixed(1)}, '
+      'navigating=$_isNavigating, suspect=$suspectCount).',
+    );
 
     return markers;
   }
@@ -2593,7 +3244,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case 'truck_parking':
         return _navSettings.showTruckParking;
       case 'commercial_vehicle_wash':
+      case 'truck_wash':
         return _navSettings.showTruckWash;
+      case 'port_of_entry':
+        return _navSettings.showWeighStations;
       case 'weather_alert':
         return _navSettings.showWeatherAlerts;
       case 'warning_sign':
@@ -2602,15 +3256,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return _navSettings.showTollbooths;
       case 'camera_511':
         return _navSettings.show511Cameras;
-      // Restaurant and walmart_store are always enabled in the Places Filter —
-      // they have no dedicated category toggle.  They can still be hidden by
-      // the global POI FAB toggle (_showTruckStops), but when POIs are visible
-      // these categories are always included.
-      case 'restaurant':
-      case 'walmart_store':
-        return true;
       default:
-        return true; // Unknown categories are shown by default.
+        // The driving map is commercial-vehicle-only. Unknown, generic fuel,
+        // restaurant, hotel, and retail categories fail closed instead of
+        // silently appearing as truck services. They remain available through
+        // an explicit destination search.
+        return false;
     }
   }
 
@@ -2651,8 +3302,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Verified = verified flag true and both entranceLat and entranceLng present.
     final double verified =
         (poi.verified && poi.entranceLat != null && poi.entranceLng != null)
-            ? 1.0
-            : 0.0;
+        ? 1.0
+        : 0.0;
 
     double base;
     switch (category) {
@@ -2723,11 +3374,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when not navigating or position is unavailable.
   List<PoiItem> _getRouteAheadPois() {
     final LatLng? pos = _truckPosition;
-    if (!_isNavigating || pos == null || _routePoints.isEmpty) return const [];
+    if (!_isLiveRouteAssistanceActive || pos == null || _routePoints.isEmpty) {
+      return const [];
+    }
 
     // Slice route points from the truck's current index forward.
-    final List<LatLng> aheadPoints =
-        _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
+    final List<LatLng> aheadPoints = _routePoints.sublist(
+      _truckIndex.clamp(0, _routePoints.length),
+    );
 
     // Pre-filter to POIs near the route corridor.
     final List<PoiItem> corridorPois = getPOIsOnRoute(
@@ -2740,15 +3394,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final List<_ScoredPoi> scored = [];
     for (final poi in corridorPois) {
       final double miles = _distanceMiles(
-          pos.latitude, pos.longitude, poi.displayLat, poi.displayLng);
-      if (miles < _poiPassedThresholdMiles) continue; // Already passed (< 200 m).
+        pos.latitude,
+        pos.longitude,
+        poi.displayLat,
+        poi.displayLng,
+      );
+      if (miles < _poiPassedThresholdMiles)
+        continue; // Already passed (< 200 m).
 
       // Weigh stations / safety POIs look further ahead than general POIs.
       final String cat = poi.category.toLowerCase().trim();
       final double maxMiles = (cat == 'weigh_station')
           ? _poiWeighStationMaxAheadMiles
           : _poiRouteMaxAheadMiles;
-      if (miles > maxMiles) continue; // Beyond look-ahead cap for this category.
+      if (miles > maxMiles)
+        continue; // Beyond look-ahead cap for this category.
 
       scored.add(_ScoredPoi(poi, miles));
     }
@@ -2804,8 +3464,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       bool tooClose = false;
       for (final LatLng existing in included) {
         if (geo.Geolocator.distanceBetween(
-              coord.latitude, coord.longitude,
-              existing.latitude, existing.longitude,
+              coord.latitude,
+              coord.longitude,
+              existing.latitude,
+              existing.longitude,
             ) <
             minDist) {
           tooClose = true;
@@ -2851,26 +3513,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             poi.displayLng <= bounds.east + lngPad;
       }).toList();
 
-      debugPrint('[POI/Filter] viewport: ${inView.length} POIs in view '
-          '(total loaded: ${_loadedPois.length}).');
+      debugPrint(
+        '[POI/Filter] viewport: ${inView.length} POIs in view '
+        '(total loaded: ${_loadedPois.length}).',
+      );
       return inView;
     }
 
     // Fallback — map not yet initialised: return everything so cluster
     // badges are available on first render.
-    debugPrint('[POI/Filter] fallback: returning all ${_loadedPois.length} POIs.');
+    debugPrint(
+      '[POI/Filter] fallback: returning all ${_loadedPois.length} POIs.',
+    );
     return List<PoiItem>.from(_loadedPois);
   }
 
-  /// Builds cluster-badge [Marker]s for [pois] using a geographic bucket
-  /// strategy (0.1° grid ≈ 11 km), mirroring [_buildClusteredWarningMarkers].
+  /// Builds outlined teardrop cluster pins for nearby POIs.
   ///
-  /// Tapping a cluster badge zooms to [_poiClusterZoomThreshold] + 0.5 so
-  /// the user can see individual markers on the next interaction.
+  /// Tapping a cluster zooms in far enough to reveal individual category pins.
   List<Marker> _buildPoiClusterMarkers(List<PoiItem> pois) {
     if (pois.isEmpty) return const [];
 
-    const double bucketSize = 0.1; // 0.1° ≈ 11 km per bucket cell
+    const double bucketSize = 0.1;
     final Map<String, List<PoiItem>> clusters = {};
     for (final poi in pois) {
       final String key =
@@ -2882,50 +3546,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return clusters.values.map((members) {
       final double lat =
           members.map((p) => p.displayLat).reduce((a, b) => a + b) /
-              members.length;
+          members.length;
       final double lng =
           members.map((p) => p.displayLng).reduce((a, b) => a + b) /
-              members.length;
+          members.length;
       final int count = members.length;
 
       return Marker(
         point: LatLng(lat, lng),
-        width: 44,
-        height: 44,
-        alignment: Alignment.center,
+        width: _kPoiPinSize,
+        height: _kPoiPinSize,
+        alignment: Alignment.topCenter,
         child: GestureDetector(
           onTap: () {
             _mapController.move(
-                LatLng(lat, lng), _poiClusterZoomThreshold + 0.5);
+              LatLng(lat, lng),
+              _poiClusterZoomThreshold + 0.5,
+            );
           },
-          child: _buildPoiClusterBadge(count),
+          child: buildGpsPinClusterMarker(count: count, pinSize: _kPoiPinSize),
         ),
       );
     }).toList();
-  }
-
-  /// Returns a circular blue cluster badge with a white count label.
-  Widget _buildPoiClusterBadge(int count) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E90FF),
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
-        boxShadow: const [
-          BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
-        ],
-      ),
-      child: Center(
-        child: Text(
-          count > 99 ? '99+' : '$count',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-    );
   }
 
   /// Returns the subset of [_loadedPois] that are considered approximate /
@@ -2934,8 +3576,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Used by [_showApproxPoiAdminSheet] to populate the maintenance list.
   List<PoiItem> get _approxPois => _loadedPois
-      .where((p) =>
-          !p.verified || p.entranceLat == null || p.entranceLng == null)
+      .where(
+        (p) => !p.verified || p.entranceLat == null || p.entranceLng == null,
+      )
       .toList();
 
   /// Opens a bottom sheet listing all POIs that are currently shown on the
@@ -2977,8 +3620,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
               child: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded,
-                      color: Colors.amber, size: 22),
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    color: Colors.amber,
+                    size: 22,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -3029,19 +3675,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     for (final poi in byCategory[cat]!)
                       ListTile(
                         dense: true,
-                        leading: const Icon(Icons.location_off,
-                            color: Colors.orange, size: 20),
+                        leading: const Icon(
+                          Icons.location_off,
+                          color: Colors.orange,
+                          size: 20,
+                        ),
                         title: Text(
                           poi.name,
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 13),
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
                         ),
                         subtitle: Text(
                           'id: ${poi.id}  •  '
                           '${poi.lat.toStringAsFixed(6)}, '
                           '${poi.lng.toStringAsFixed(6)}',
                           style: const TextStyle(
-                              color: Colors.white54, fontSize: 11),
+                            color: Colors.white54,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                   ],
@@ -3051,8 +3704,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       child: Text(
                         'All POIs have verified entrance coordinates. '
                         'Every marker uses the verifiedIcon (category colour).',
-                        style:
-                            TextStyle(color: Colors.white70, fontSize: 13),
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -3075,19 +3727,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return cameras.map((poi) {
       return Marker(
         point: poi.position,
-        width: 32,
-        height: 32,
-        alignment: Alignment.center,
+        width: _kPoiPinSize,
+        height: _kPoiPinSize,
+        alignment: Alignment.topCenter,
         child: GestureDetector(
           onTap: () => _showPoiAlert(poi),
-          child: Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Colors.blue.shade800,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.videocam, color: Colors.white, size: 18),
+          child: buildGpsPinMarker(
+            pinColor: const Color(0xFF1489C7),
+            fallbackIcon: Icons.videocam,
+            pinSize: _kPoiPinSize,
           ),
         ),
       );
@@ -3098,6 +3746,43 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// tapped.
   void _showPoiInfoDialog(PoiItem poi) {
     if (!mounted) return;
+    if (poi.category == 'weigh_station') {
+      MapPoi? matched;
+      for (final candidate in _mapPois) {
+        if (candidate.type != PoiType.weighStation) continue;
+        if (candidate.id == poi.id ||
+            _distanceBetween(
+                  candidate.position,
+                  LatLng(poi.displayLat, poi.displayLng),
+                ) <=
+                1000) {
+          matched = candidate;
+          break;
+        }
+      }
+      _showPoiAlert(
+        matched ??
+            MapPoi(
+              id: poi.id,
+              position: LatLng(poi.displayLat, poi.displayLng),
+              type: PoiType.weighStation,
+              name: poi.name,
+              status: 'UNKNOWN',
+            ),
+      );
+      return;
+    }
+    if (poi.category == 'rest_area') {
+      _showRestAreaPoiSheet(poi);
+      return;
+    }
+    final canReportLiveData = const {
+      'truck_stop',
+      'truck_parking',
+      'rest_area',
+      'gas_station',
+      'fuel_stop',
+    }.contains(poi.category);
 
     // Check cache first — if the result is already available, show the dialog
     // immediately without a loading indicator.
@@ -3105,8 +3790,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         '${poi.displayLat.toStringAsFixed(6)},${poi.displayLng.toStringAsFixed(6)}';
     final String? cached = _reverseGeocodeCache.containsKey(cacheKey)
         ? (_reverseGeocodeCache[cacheKey]!.isEmpty
-            ? null
-            : _reverseGeocodeCache[cacheKey])
+              ? null
+              : _reverseGeocodeCache[cacheKey])
         : null;
 
     if (_reverseGeocodeCache.containsKey(cacheKey)) {
@@ -3115,22 +3800,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Text(poi.name),
           content: Row(
             children: [
               const Icon(Icons.location_on, size: 18, color: Colors.grey),
               const SizedBox(width: 6),
               Expanded(
-                child: Text(
-                  addressLabel,
-                  style: const TextStyle(fontSize: 14),
-                ),
+                child: Text(addressLabel, style: const TextStyle(fontSize: 14)),
               ),
             ],
           ),
           actions: [
+            if (canReportLiveData)
+              TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_reportLivePoiData(poi));
+                },
+                child: const Text('Report Live Data'),
+              ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('OK'),
@@ -3149,11 +3840,330 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       builder: (ctx) {
         return _PoiAddressDialog(
           poiName: poi.name,
-          geocodeFuture:
-              _reverseGeocode(poi.displayLat, poi.displayLng),
+          geocodeFuture: _reverseGeocode(poi.displayLat, poi.displayLng),
+          onReport: canReportLiveData
+              ? () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_reportLivePoiData(poi));
+                }
+              : null,
         );
       },
     );
+  }
+
+  Future<live_ws.WeighStationStatusSummary?> _loadWeighStationActivity(
+    String stationId,
+  ) async {
+    try {
+      return await _weighStationService.getStatus(stationId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _showAheadWeighStationDetails(AheadWeighStation ahead) {
+    _showPoiAlert(
+      MapPoi(
+        id: ahead.poi.id,
+        position: ahead.poi.position,
+        type: PoiType.weighStation,
+        name: ahead.poi.name,
+        status: ahead.poi.status,
+        weighStation: ahead.poi.details,
+      ),
+    );
+  }
+
+  void _showAheadRestAreaDetails(AheadRestArea ahead) {
+    _showRestAreaPoiSheet(ahead.poi.source, routeMilesAhead: ahead.milesAhead);
+  }
+
+  void _showRestAreaPoiSheet(PoiItem poi, {double? routeMilesAhead}) {
+    LiveParkingLocation? liveParking;
+    for (final candidate in _liveParkingLocations) {
+      final sameId = candidate.id == poi.id;
+      final nearby =
+          _distanceBetween(
+            candidate.position,
+            LatLng(poi.displayLat, poi.displayLng),
+          ) <=
+          1500;
+      if (sameId || nearby) {
+        liveParking = candidate;
+        break;
+      }
+    }
+    final parking = liveParking;
+    final addressFuture = poi.address.trim().isNotEmpty
+        ? Future<String?>.value(poi.address.trim())
+        : _reverseGeocode(poi.displayLat, poi.displayLng);
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE7F2FF),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.park_rounded,
+                      color: Color(0xFF0969E8),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          poi.name,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF122131),
+                          ),
+                        ),
+                        if (routeMilesAhead != null)
+                          Text(
+                            '${_formatRemainingDistance(routeMilesAhead)} ahead',
+                            style: const TextStyle(
+                              color: Color(0xFF0969E8),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              FutureBuilder<String?>(
+                future: addressFuture,
+                builder: (context, snapshot) => _truckStopDetailRow(
+                  Icons.location_on_outlined,
+                  snapshot.connectionState == ConnectionState.waiting
+                      ? 'Loading address…'
+                      : (snapshot.data ?? 'Address unavailable'),
+                ),
+              ),
+              if ((poi.exitNumber ?? '').trim().isNotEmpty)
+                _truckStopDetailRow(
+                  Icons.exit_to_app_rounded,
+                  'Exit ${poi.exitNumber}',
+                ),
+              _truckStopDetailRow(
+                Icons.local_parking_rounded,
+                parking == null || parking.availability == 'UNKNOWN'
+                    ? 'Truck parking availability not reported'
+                    : [
+                        'Truck parking: ${parking.availability.replaceAll('_', ' ').toLowerCase()}',
+                        if (parking.totalTruckSpaces != null)
+                          '${parking.totalTruckSpaces} truck spaces',
+                      ].join(' • '),
+              ),
+              _truckStopDetailRow(
+                Icons.fact_check_outlined,
+                parking == null || parking.source == 'UNKNOWN'
+                    ? 'No verified live facility activity is available'
+                    : 'Activity source: ${parking.source} • confidence ${(parking.confidence * 100).round()}%${parking.lastReportedAt == null ? '' : ' • updated ${parking.lastReportedAt!.toLocal()}'}',
+              ),
+              _truckStopDetailRow(
+                Icons.wc_rounded,
+                'Restrooms and amenity status are not reported by the current provider',
+              ),
+              _truckStopDetailRow(
+                poi.verified ? Icons.verified_rounded : Icons.info_outline,
+                poi.verified
+                    ? 'Verified rest-area location'
+                    : 'Rest-area entrance is not independently verified',
+              ),
+              _truckStopDetailRow(
+                Icons.storage_rounded,
+                'Source: ${poi.dataSource}',
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        unawaited(_reportLivePoiData(poi));
+                      },
+                      icon: const Icon(Icons.add_comment_outlined),
+                      label: const Text('Report Live Data'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _reportLivePoiData(PoiItem poi) async {
+    final position = _truckPosition;
+    if (position == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A GPS fix is required to report data.')),
+      );
+      return;
+    }
+    final supportsParking = const {
+      'truck_stop',
+      'truck_parking',
+      'rest_area',
+    }.contains(poi.category);
+    final supportsFuel = const {
+      'truck_stop',
+      'gas_station',
+      'fuel_stop',
+    }.contains(poi.category);
+    _PoiReportKind? kind;
+    if (supportsParking && supportsFuel) {
+      kind = await showModalBottomSheet<_PoiReportKind>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.local_parking),
+                title: const Text('Parking availability'),
+                onTap: () => Navigator.pop(context, _PoiReportKind.parking),
+              ),
+              ListTile(
+                leading: const Icon(Icons.local_gas_station),
+                title: const Text('Diesel price'),
+                onTap: () => Navigator.pop(context, _PoiReportKind.diesel),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (supportsParking) {
+      kind = _PoiReportKind.parking;
+    } else if (supportsFuel) {
+      kind = _PoiReportKind.diesel;
+    }
+    if (kind == null) return;
+    try {
+      if (kind == _PoiReportKind.parking) {
+        final availability = await showModalBottomSheet<String>(
+          context: context,
+          builder: (context) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    'Report only what you can currently observe. Availability reports expire automatically.',
+                  ),
+                ),
+                for (final item in const [
+                  ('PLENTY', 'Plenty of spaces'),
+                  ('SOME', 'Some spaces'),
+                  ('ALMOST_FULL', 'Almost full'),
+                  ('FULL', 'Full'),
+                ])
+                  ListTile(
+                    title: Text(item.$2),
+                    onTap: () => Navigator.pop(context, item.$1),
+                  ),
+              ],
+            ),
+          ),
+        );
+        if (availability == null) return;
+        await _liveRoadDataService.reportParking(
+          locationId: poi.id,
+          availability: availability,
+          position: position,
+        );
+      } else {
+        final controller = TextEditingController();
+        final price = await showDialog<double>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Report diesel cash price'),
+            content: TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                prefixText: '\$',
+                suffixText: 'per gallon',
+                helperText: 'Enter the posted price you can currently see.',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final value = double.tryParse(controller.text.trim());
+                  if (value != null && value >= 0.5 && value <= 25) {
+                    Navigator.pop(context, value);
+                  }
+                },
+                child: const Text('Submit'),
+              ),
+            ],
+          ),
+        );
+        controller.dispose();
+        if (price == null) return;
+        await _liveRoadDataService.reportDieselPrice(
+          stationId: poi.id,
+          price: price,
+          position: position,
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Report submitted with source and freshness data.'),
+        ),
+      );
+      unawaited(_refreshLiveRoadData());
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not submit report: $error')),
+      );
+    }
   }
 
   /// Checks whether the driver is within 500 m of any [MapPoi] and triggers
@@ -3221,6 +4231,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           poi.position.latitude,
           poi.position.longitude,
         ),
+        activityFuture: poi.type == PoiType.weighStation
+            ? _loadWeighStationActivity(poi.id)
+            : null,
+        onReportStatus: poi.type == PoiType.weighStation
+            ? () {
+                Navigator.of(ctx).pop();
+                unawaited(_reportWeighStationStatus(poi));
+              }
+            : null,
       ),
     );
   }
@@ -3234,22 +4253,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// entries (including Rest Area and Weigh Station brands) whose PNG has been
   /// loaded from `assets/logos/`.  [_buildAllPoiMarkers] renders every POI
   /// from `assets/locations.json` with a brand logo or a fallback icon —
-  /// no POI is omitted.  [_buildPoiMarkers] adds fallback DEMO [MapPoi] weigh
-  /// station markers only when [_loadedPois] has no weigh stations yet; each
-  /// marker is placed at the POI's true stored coordinate.
+  /// no POI is omitted. [_buildPoiMarkers] adds sourced [MapPoi] weigh-station
+  /// markers when a duplicate is not already present in the general POI layer.
   List<Marker> _buildMarkers() {
     return [
-      if (_truckPosition != null || _routePoints.isNotEmpty) _buildTruckMarker(),
+      if (_truckPosition != null || _routePoints.isNotEmpty)
+        _buildTruckMarker(),
       if (_selectedDestination != null || _isArrived) _buildDestinationMarker(),
       // Every POI from locations.json — no filtering, with fallback icons.
       ..._buildAllPoiMarkers(),
       ..._buildTruckStopMarkers(),
-      // DEMO MapPoi weigh-station markers — only shown when locations.json
-      // has not yet loaded real weigh stations (suppressed otherwise).
+      // Route-matched official/community-status weigh-station markers.
       ..._buildPoiMarkers(),
       // 511 camera markers (gated by view511Camera setting).
       ..._buildCameraMarkers(),
       ..._buildRestrictionMarkers(),
+      // Provider-backed physical signs and traffic signals.
+      ..._buildRoadFeatureMarkers(),
       ..._buildWarningMarkers(),
     ];
   }
@@ -3270,8 +4290,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         final Color headerColor = isRestArea
             ? Colors.teal.shade700
             : isWeighStation
-                ? Colors.orange.shade700
-                : Colors.blue.shade700;
+            ? Colors.orange.shade700
+            : Colors.blue.shade700;
         return Padding(
           padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
           child: Column(
@@ -3287,8 +4307,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       isRestArea
                           ? Icons.airline_seat_recline_normal
                           : isWeighStation
-                              ? Icons.scale
-                              : Icons.local_gas_station,
+                          ? Icons.scale
+                          : Icons.local_gas_station,
                       color: Colors.white,
                     ),
                   ),
@@ -3322,8 +4342,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               if (stop.dieselPrice != null) ...[
                 Row(
                   children: [
-                    const Icon(Icons.local_gas_station,
-                        size: 18, color: Colors.grey),
+                    const Icon(
+                      Icons.local_gas_station,
+                      size: 18,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'Diesel: \$${stop.dieselPrice!.toStringAsFixed(2)}/gal',
@@ -3337,8 +4360,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               if (stop.address != null) ...[
                 Row(
                   children: [
-                    const Icon(Icons.location_on,
-                        size: 18, color: Colors.grey),
+                    const Icon(Icons.location_on, size: 18, color: Colors.grey),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -3355,8 +4377,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.info_outline,
-                        size: 18, color: Colors.grey),
+                    const Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -3455,10 +4480,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // steady to prevent the map from spinning from heading noise.
     double bearing;
     if (speedMph >= _noRotateSpeedMph) {
-      bearing = _truckBearing;
+      bearing = nav_utils.normalizeBearing(_truckBearing);
       _lastKnownBearing = bearing;
     } else {
-      bearing = _lastKnownBearing;
+      bearing = nav_utils.normalizeBearing(_lastKnownBearing);
     }
     _mapController.moveAndRotate(cameraTarget, zoom, bearing);
   }
@@ -3500,7 +4525,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Do not shift target ahead when stopped — centre the truck on screen.
     final cameraTarget = LatLng(pos.latitude, pos.longitude);
     // Hold the last known bearing so the map does not spin from heading noise.
-    _mapController.moveAndRotate(cameraTarget, stoppedZoom, _lastKnownBearing);
+    _mapController.moveAndRotate(
+      cameraTarget,
+      stoppedZoom,
+      nav_utils.normalizeBearing(_lastKnownBearing),
+    );
   }
 
   /// Returns the appropriate navigation zoom level for [speedMph] with an
@@ -3601,7 +4630,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// - Bottom padding (320 px) keeps the truck in the lower third of the
   ///   screen, matching the framing of commercial GPS navigation.
   Future<void> _updateBestNavigationCamera(geo.Position pos) async {
-    if (_cameraMode != NavigationCameraMode.follow) return;
+    _pendingCameraPosition = pos;
+    _cameraUpdateGeneration++;
+    if (_cameraUpdateInProgress) return;
+
+    _cameraUpdateInProgress = true;
+    try {
+      while (mounted && _pendingCameraPosition != null) {
+        final nextPosition = _pendingCameraPosition!;
+        _pendingCameraPosition = null;
+        final updateGeneration = _cameraUpdateGeneration;
+        await _applyBestNavigationCamera(nextPosition, updateGeneration);
+      }
+    } finally {
+      _cameraUpdateInProgress = false;
+    }
+  }
+
+  Future<void> _applyBestNavigationCamera(
+    geo.Position pos,
+    int updateGeneration,
+  ) async {
+    if (_cameraMode != NavigationCameraMode.follow ||
+        _appLifecycleState != AppLifecycleState.resumed ||
+        !mounted ||
+        _isArrived) {
+      return;
+    }
 
     final speedMph = _speedMphFromMps(pos.speed);
     final nextStepMiles = _nextStepMilesForCamera();
@@ -3614,18 +4669,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     const pitchFactor = 0.20;
     const bearingFactor = 0.18;
 
-    _currentCameraZoom = _smoothValue(_currentCameraZoom, targetZoom, zoomFactor);
-    _currentCameraPitch =
-        _smoothValue(_currentCameraPitch, targetPitch, pitchFactor);
+    _currentCameraZoom = _smoothValue(
+      _currentCameraZoom,
+      targetZoom,
+      zoomFactor,
+    );
+    _currentCameraPitch = _smoothValue(
+      _currentCameraPitch,
+      targetPitch,
+      pitchFactor,
+    );
 
-    double bearing = _lastKnownBearing;
+    double bearing = nav_utils.normalizeBearing(_lastKnownBearing);
     // Only update bearing from GPS when the truck is moving fast enough to
     // produce a stable heading (≥ 5 mph).  Below this threshold, GPS heading
     // values are unreliable and may cause the map to spin erratically.
     // pos.heading < 0 indicates an unavailable heading fix; those are skipped.
     if (speedMph >= 5 && pos.heading >= 0) {
-      _lastKnownBearing =
-          _smoothValue(_lastKnownBearing, pos.heading, bearingFactor);
+      _lastKnownBearing = nav_utils.interpolateBearing(
+        _lastKnownBearing,
+        nav_utils.normalizeBearing(pos.heading),
+        bearingFactor,
+      );
       bearing = _lastKnownBearing;
     }
 
@@ -3634,30 +4699,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // screen so more road ahead is always visible — like a real GPS unit.
     final mbx.MapboxMap? map = _mapboxMap;
     if (map != null) {
-      await map.easeTo(
-        mbx.CameraOptions(
-          center: mbx.Point(
-            coordinates: mbx.Position(pos.longitude, pos.latitude),
+      try {
+        await map.easeTo(
+          mbx.CameraOptions(
+            center: mbx.Point(
+              coordinates: mbx.Position(pos.longitude, pos.latitude),
+            ),
+            zoom: _currentCameraZoom,
+            bearing: bearing,
+            pitch: _currentCameraPitch,
+            padding: mbx.MbxEdgeInsets(
+              top: 100,
+              left: 20,
+              bottom: 320,
+              right: 20,
+            ),
           ),
-          zoom: _currentCameraZoom,
-          bearing: bearing,
-          pitch: _currentCameraPitch,
-          padding: mbx.MbxEdgeInsets(
-            top: 100,
-            left: 20,
-            bottom: 320,
-            right: 20,
-          ),
-        ),
-        mbx.MapAnimationOptions(
-          duration: 550,
-          startDelay: 0,
-        ),
-      );
+          mbx.MapAnimationOptions(duration: 550, startDelay: 0),
+        );
+      } catch (error) {
+        if (kDebugMode) debugPrint('[Camera] Mapbox update skipped: $error');
+      }
     }
 
     // ── flutter_map camera (drives the visible navigation tile layer) ─────
-    if (!_mapReady || _isArrived) return;
+    if (!mounted ||
+        !_mapReady ||
+        _isArrived ||
+        _cameraMode != NavigationCameraMode.follow ||
+        _appLifecycleState != AppLifecycleState.resumed ||
+        updateGeneration != _cameraUpdateGeneration ||
+        !identical(map, _mapboxMap)) {
+      return;
+    }
     final cameraTarget = LatLng(
       pos.latitude - _cameraLeadLatitude,
       pos.longitude,
@@ -3684,10 +4758,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Use pos.heading when moving fast enough for a stable heading;
     // hold the last known bearing when stopped to prevent jitter.
-    final double bearing =
-        speedMph >= _noRotateSpeedMph ? pos.heading : _lastKnownBearing;
+    final double bearing = speedMph >= _noRotateSpeedMph && pos.heading >= 0
+        ? nav_utils.normalizeBearing(pos.heading)
+        : nav_utils.normalizeBearing(_lastKnownBearing);
     if (speedMph >= _noRotateSpeedMph && pos.heading >= 0) {
-      _lastKnownBearing = pos.heading;
+      _lastKnownBearing = nav_utils.normalizeBearing(pos.heading);
     }
 
     // Shift target ahead of truck so it sits in the lower third of screen.
@@ -3704,6 +4779,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// When no route is loaded the camera simply centres on the truck.
   void _setOverviewCamera() {
     if (!_mapReady) return;
+    _invalidateCameraUpdates();
     _gestureReturnTimer?.cancel();
     _gestureReturnTimer = null;
     setState(() => _cameraMode = NavigationCameraMode.overview);
@@ -3721,14 +4797,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Schedules an automatic return to follow mode after 8 s of idle when
   /// navigation is active.
   void _setFreeCamera() {
+    _invalidateCameraUpdates();
     _gestureReturnTimer?.cancel();
     setState(() {
       _cameraMode = NavigationCameraMode.free;
       _lastManualMapInteractionAt = DateTime.now();
     });
 
-    // Auto-return to follow mode after 8 s if navigating.
-    if (_hasActiveDestination) {
+    // Auto-return while the driver is actively following a truck route. The
+    // gesture still gets an eight-second inspection window before GPS follow
+    // resumes, matching professional navigation camera behaviour.
+    if (_isLiveRouteAssistanceActive) {
       _gestureReturnTimer = Timer(const Duration(seconds: 8), () {
         _maybeReturnToFollowMode();
       });
@@ -3762,7 +4841,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _lastManualMapInteractionAt = DateTime.now();
     });
 
-    if (!_hasActiveDestination) return;
+    if (!_isLiveRouteAssistanceActive) return;
     _gestureReturnTimer?.cancel();
     _gestureReturnTimer = Timer(const Duration(seconds: 8), () {
       _maybeReturnToFollowMode();
@@ -3776,7 +4855,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// via [_onGpsPosition] for redundancy.
   void _maybeReturnToFollowMode() {
     if (!mounted) return;
-    if (!_hasActiveDestination) return;
+    if (!_isLiveRouteAssistanceActive) return;
     if (_cameraMode != NavigationCameraMode.free) return;
     if (_isUserInteractingWithMap) return;
     final last = _lastManualMapInteractionAt;
@@ -3795,12 +4874,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _onRecenterPressed() {
     _gestureReturnTimer?.cancel();
     _gestureReturnTimer = null;
-    setState(() => _cameraMode = NavigationCameraMode.follow);
+    setState(() {
+      _overviewPinnedByUser = false;
+      _cameraMode = NavigationCameraMode.follow;
+    });
     _followTruckCamera();
   }
 
   /// Handles the recenter button long press: switches to route overview mode.
   void _onRecenterLongPressed() {
+    _overviewPinnedByUser = true;
     _setOverviewCamera();
   }
 
@@ -3810,7 +4893,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// so that every return to follow snaps to the real last-known position.
   Future<void> _setFollowCameraFromCurrentPosition() async {
     if (_lastAcceptedPosition == null) return;
-    setState(() => _cameraMode = NavigationCameraMode.follow);
+    setState(() {
+      _overviewPinnedByUser = false;
+      _cameraMode = NavigationCameraMode.follow;
+    });
     await _updateBestNavigationCamera(_lastAcceptedPosition!);
   }
 
@@ -3822,7 +4908,69 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _setFreeCamera();
   }
 
-  // ── Recenter button widget ─────────────────────────────────────────────────
+  // ── Recenter and zoom button widgets ───────────────────────────────────────
+
+  void _changeMapZoom(double delta) {
+    if (!_mapReady) return;
+    _enterFreeCameraMode();
+    final camera = _mapController.camera;
+    final nextZoom = (camera.zoom + delta)
+        .clamp(_minimumMapZoom, _maximumMapZoom)
+        .toDouble();
+    _mapController.moveAndRotate(camera.center, nextZoom, camera.rotation);
+    _scheduleRoadFeatureRefresh();
+  }
+
+  Widget _buildMapZoomControls() {
+    return Semantics(
+      container: true,
+      label: 'Map zoom controls',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Material(
+          color: Colors.white.withOpacity(0.94),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _mapZoomButton(
+                icon: Icons.add_rounded,
+                label: 'Zoom in',
+                onPressed: () => _changeMapZoom(1),
+              ),
+              Container(width: 48, height: 1, color: Colors.black12),
+              _mapZoomButton(
+                icon: Icons.remove_rounded,
+                label: 'Zoom out',
+                onPressed: () => _changeMapZoom(-1),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mapZoomButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          onTap: onPressed,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Icon(icon, size: 30, color: SemiTrackColors.navy),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Builds the circular recenter button shown in the bottom-right corner.
   ///
@@ -3847,11 +4995,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             ),
           ],
         ),
-        child: const Icon(
-          Icons.my_location,
-          color: Colors.white,
-          size: 32,
-        ),
+        child: const Icon(Icons.my_location, color: Colors.white, size: 32),
       ),
     );
   }
@@ -3859,10 +5003,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // ── TTS initialisation ────────────────────────────────────────────────────
 
   Future<void> _initTts() async {
-    await _tts.setLanguage('en-US');
-    await _tts.setSpeechRate(0.5);
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(1.0);
+    try {
+      await _tts.setAudioAttributesForNavigation();
+      await _tts.awaitSpeakCompletion(false);
+      await _tts.setLanguage('en-US');
+      await _tts.setSpeechRate(0.5);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
+    } catch (error, stackTrace) {
+      debugPrint('[Voice] TTS initialization failed: $error\n$stackTrace');
+    }
   }
 
   /// Applies the current [_navSettings] audio configuration to the TTS engine.
@@ -3873,13 +5023,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> _applyAudioSettings() async {
     // Map voice-package name to a BCP-47 locale tag.
     final locale = switch (_navSettings.voicePackage) {
-      'UK English'         => 'en-GB',
+      'UK English' => 'en-GB',
       'Australian English' => 'en-AU',
-      _                    => 'en-US',
+      _ => 'en-US',
     };
-    await _tts.setLanguage(locale);
-    await _tts.setPitch(_navSettings.audioPitch);
-    await _tts.setSpeechRate(_navSettings.audioSpeechRate);
+    try {
+      await _tts.setAudioAttributesForNavigation();
+      await _tts.awaitSpeakCompletion(false);
+      await _tts.setLanguage(locale);
+      await _tts.setPitch(_navSettings.audioPitch);
+      await _tts.setSpeechRate(_navSettings.audioSpeechRate);
+      await _tts.setVolume(1.0);
+    } catch (error, stackTrace) {
+      // A missing/disabled Android TTS engine must never take down navigation.
+      // The visible maneuver header remains available while the driver repairs
+      // the device's speech-service configuration.
+      debugPrint('[Voice] Unable to apply TTS settings: $error\n$stackTrace');
+    }
+    try {
+      if (_navSettings.audioMode == 0) {
+        await _tts.stop();
+        await NativeNavigationService.instance.muteVoice();
+      } else {
+        await NativeNavigationService.instance.unmuteVoice();
+      }
+    } on NativeNavigationException catch (error) {
+      if (kDebugMode) {
+        debugPrint('[Navigation] Voice bridge deferred: $error');
+      }
+    }
   }
 
   /// Speaks [text] via the TTS engine if audio is not muted.
@@ -3894,8 +5066,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// rerouting, arrival).  Use [_speakAlert] for hazard / safety announcements.
   Future<void> _speak(String text) async {
     if (_navSettings.audioMode < 2) return; // Muted or Alert-Only: skip nav TTS
-    await _tts.stop();
-    await _tts.speak(text);
+    final message = text.trim();
+    if (message.isEmpty) return;
+    try {
+      await _tts.stop();
+      await _tts.speak(message);
+    } catch (error, stackTrace) {
+      debugPrint('[Voice] Instruction playback failed: $error\n$stackTrace');
+    }
   }
 
   /// Speaks a safety-critical [text] alert regardless of audio mode, unless
@@ -3906,8 +5084,147 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///  - 2 (Unmuted)    — plays (same as [_speak]).
   Future<void> _speakAlert(String text) async {
     if (_navSettings.audioMode == 0) return; // Muted: no audio at all
+    final message = text.trim();
+    if (message.isEmpty) return;
+    try {
+      await _tts.stop();
+      await _tts.speak(message);
+    } catch (error, stackTrace) {
+      debugPrint('[Voice] Alert playback failed: $error\n$stackTrace');
+    }
+  }
+
+  /// Quick mute control used by the map and navigation overlays.
+  /// Alert-only remains available in the full navigation settings screen.
+  Future<void> _toggleVoiceMute() async {
+    final nextMode = _navSettings.audioMode == 0 ? 2 : 0;
+    setState(() => _navSettings.audioMode = nextMode);
+    await _navSettings.saveToPrefs();
+    await _applyAudioSettings();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(nextMode == 0 ? 'GPS voice muted' : 'GPS voice on'),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    if (nextMode != 0) {
+      unawaited(_speakAlert('GPS voice on'));
+    }
+  }
+
+  Future<String?> _captureVoiceDestination() async {
     await _tts.stop();
-    await _tts.speak(text);
+    final transcript = ValueNotifier<String>('');
+    BuildContext? listeningDialogContext;
+    var dialogOpen = true;
+
+    final dialogFuture = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        listeningDialogContext = dialogContext;
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            icon: const Icon(
+              Icons.mic_rounded,
+              color: SemiTrackColors.orange,
+              size: 42,
+            ),
+            title: const Text('Listening for destination'),
+            content: ValueListenableBuilder<String>(
+              valueListenable: transcript,
+              builder: (_, heard, __) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 18),
+                  Text(
+                    heard.isEmpty
+                        ? 'Say an address, city, business, or truck stop.'
+                        : heard,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: heard.isEmpty
+                          ? Theme.of(dialogContext).colorScheme.onSurfaceVariant
+                          : Theme.of(dialogContext).colorScheme.onSurface,
+                      fontSize: 16,
+                      fontWeight: heard.isEmpty
+                          ? FontWeight.w500
+                          : FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton.icon(
+                onPressed: () {
+                  unawaited(_voiceDestinationService.cancel());
+                  if (dialogOpen && Navigator.of(dialogContext).canPop()) {
+                    dialogOpen = false;
+                    Navigator.of(dialogContext).pop();
+                  }
+                },
+                icon: const Icon(Icons.close_rounded),
+                label: const Text('Cancel'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      return await _voiceDestinationService.listen(
+        onTranscript: (heard) => transcript.value = heard,
+      );
+    } finally {
+      final dialogContext = listeningDialogContext;
+      if (dialogOpen &&
+          dialogContext != null &&
+          dialogContext.mounted &&
+          Navigator.of(dialogContext).canPop()) {
+        dialogOpen = false;
+        Navigator.of(dialogContext).pop();
+      }
+      await dialogFuture;
+      transcript.dispose();
+    }
+  }
+
+  Future<void> _startVoiceDestinationSearch() async {
+    if (_mapboxToken.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Destination search is not configured. Rebuild with the Mapbox public access token.',
+          ),
+        ),
+      );
+      return;
+    }
+    try {
+      final query = await _captureVoiceDestination();
+      if (!mounted || query == null || query.trim().isEmpty) return;
+      await _showDestinationSearch(
+        initialQuery: query.trim(),
+        searchImmediately: true,
+      );
+    } on VoiceDestinationException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   // ── GPS tracking ──────────────────────────────────────────────────────────
@@ -3990,11 +5307,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Decides whether [newPos] should be accepted as a new truck location.
   ///
   /// Rules applied in order:
-  ///   1. Reject any fix whose accuracy exceeds [_poorAccuracyMeters] (25 m).
+  ///   1. Reject fixes that cannot locate the truck to a useful road corridor.
   ///   2. First qualifying fix is always accepted.
   ///   3. Ignore drift < [_minStoppedDriftMeters] when speed is below
   ///      [_stoppedSpeedMph] (vehicle is stopped).
-  ///   4. Reject jumps > [_maxPositionJumpMeters] (80 m) as unrealistic.
+  ///   4. Reject jumps that are impossible for the elapsed time, speed and
+  ///      reported accuracy. This permits delayed high-speed fixes.
   ///   5. Accept immediately when speed ≥ [_stoppedSpeedMph] or distance
   ///      ≥ [_immediateAcceptDistanceMeters].
   ///   6. Require [_requiredCandidateFixCount] consistent candidate fixes
@@ -4003,8 +5321,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// When a fix is rejected the caller holds [_truckPosition] at its current
   /// value, effectively keeping the last valid stable position on screen.
   bool _shouldAcceptPosition(geo.Position newPos) {
-    // 1. Always reject fixes with poor accuracy (> 25 m).
-    if (newPos.accuracy > _poorAccuracyMeters) return false;
+    // Accuracy may be -1 when Android cannot supply a value. Such a fix is not
+    // safe for road matching; fixes up to 65 m are retained during acquisition
+    // and replaced as the fused provider converges on GNSS accuracy.
+    if (newPos.accuracy < 0 || newPos.accuracy > _poorAccuracyMeters) {
+      return false;
+    }
 
     final speedMph = _speedMphFromMps(newPos.speed);
 
@@ -4014,15 +5336,39 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return true;
     }
 
-    final distanceMeters =
-        _distanceMetersBetween(_lastAcceptedPosition!, newPos);
+    final distanceMeters = _distanceMetersBetween(
+      _lastAcceptedPosition!,
+      newPos,
+    );
     final stopped = speedMph < _stoppedSpeedMph;
 
     // Ignore tiny drift when the vehicle is stopped.
     if (stopped && distanceMeters < _minStoppedDriftMeters) return false;
 
-    // 2. Reject unrealistic jumps (> 80 m) as multipath / signal errors.
-    if (distanceMeters > _maxPositionJumpMeters) return false;
+    // Reject only physically implausible jumps. The former fixed 80 m cap
+    // discarded ordinary highway movement whenever Android delayed a callback.
+    final elapsedSeconds = math.max(
+      1.0,
+      math.min(
+        30.0,
+        newPos.timestamp
+                .difference(_lastAcceptedPosition!.timestamp)
+                .inMilliseconds
+                .abs() /
+            1000.0,
+      ),
+    );
+    final reportedSpeedMps = math.max(
+      0.0,
+      math.max(newPos.speed, _lastAcceptedPosition!.speed),
+    );
+    final accuracyAllowance =
+        math.max(newPos.accuracy, _lastAcceptedPosition!.accuracy) * 2.0;
+    final plausibleJumpMeters = math.max(
+      _maxPositionJumpMeters,
+      reportedSpeedMps * elapsedSeconds * 2.5 + accuracyAllowance + 35.0,
+    );
+    if (distanceMeters > plausibleJumpMeters) return false;
 
     // Accept immediately when clearly moving or significantly displaced.
     if (speedMph >= _stoppedSpeedMph ||
@@ -4040,8 +5386,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return false;
     }
 
-    final candidateDistance =
-        _distanceMetersBetween(_candidatePosition!, newPos);
+    final candidateDistance = _distanceMetersBetween(
+      _candidatePosition!,
+      newPos,
+    );
     if (candidateDistance < _candidateStabilityRadiusMeters) {
       _stableCandidateCount++;
     } else {
@@ -4058,6 +5406,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return false;
   }
 
+  /// Returns an adaptive display weight for the new fix. Slow movement keeps
+  /// more filtering to suppress parking-lot wander; highway movement follows
+  /// the device quickly enough that the marker does not visibly lag behind.
+  double _gpsSmoothingWeightFor(geo.Position position) {
+    final speedMph = _speedMphFromMps(position.speed);
+    double weight;
+    if (speedMph >= 45) {
+      weight = 0.88;
+    } else if (speedMph >= 15) {
+      weight = 0.76;
+    } else if (speedMph >= 3) {
+      weight = 0.62;
+    } else {
+      weight = 0.35;
+    }
+    if (position.accuracy > 30) weight *= 0.8;
+    return weight.clamp(0.28, 0.9);
+  }
+
   /// Returns `true` when route progress (nearest-point snapping) should
   /// advance for [pos].  Always returns `true` in [_isSimulationMode].
   ///
@@ -4069,25 +5436,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Head Out Card and trip strip still update as the driver moves.
   bool _shouldAdvanceRouteProgress(geo.Position pos) {
     if (_isSimulationMode) return true;
+    if (_lastAcceptedPosition == null) return false;
+    final displacement = _distanceMetersBetween(_lastAcceptedPosition!, pos);
     // Only block when speed data is valid AND confirms the vehicle is stopped.
-    // If speed is unavailable (negative), fall through to the distance check.
-    if (pos.speed >= 0 && _speedMphFromMps(pos.speed) < _stoppedSpeedMph) {
+    // A substantial displacement overrides a stale zero-speed sample.
+    if (pos.speed >= 0 &&
+        _speedMphFromMps(pos.speed) < _stoppedSpeedMph &&
+        displacement < _immediateAcceptDistanceMeters) {
       return false;
     }
-    if (_lastAcceptedPosition == null) return false;
-    return _distanceMetersBetween(_lastAcceptedPosition!, pos) >=
-        _minRouteProgressDistanceMeters;
+    return displacement >= _minRouteProgressDistanceMeters;
   }
 
-  /// Advances [_truckIndex] to [nearestRouteIndex] only when movement is
-  /// real and the jump is not spuriously large (GPS noise guard).
+  /// Advances [_truckIndex] to [nearestRouteIndex] only when movement is real.
+  /// Position plausibility is already checked by [_shouldAcceptPosition]; a
+  /// point-count cap is unsafe because long routes are intentionally simplified
+  /// and legitimate fixes can span many route points.
   void _tryAdvanceRouteIndex(int nearestRouteIndex, geo.Position pos) {
     if (!_shouldAdvanceRouteProgress(pos)) return;
     if (nearestRouteIndex <= _truckIndex) return;
-    final jump = nearestRouteIndex - _truckIndex;
-    // Cap index jumps to _maxRouteIndexJump points per fix to suppress
-    // GPS noise teleports in real-device mode.
-    if (jump > _maxRouteIndexJump && !_isSimulationMode) return;
     _truckIndex = nearestRouteIndex;
   }
 
@@ -4102,63 +5469,252 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       return;
     }
 
-    bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-    debugPrint('[GPS] Location services enabled: $serviceEnabled');
-    if (!serviceEnabled) {
-      debugPrint('[GPS] Location service disabled — GPS stream not started.');
-      return;
-    }
-
-    geo.LocationPermission permission = await geo.Geolocator.checkPermission();
-    debugPrint('[GPS] Permission status before request: $permission');
-    if (permission == geo.LocationPermission.denied) {
-      permission = await geo.Geolocator.requestPermission();
-      debugPrint('[GPS] Permission status after request: $permission');
-      if (permission == geo.LocationPermission.denied) {
-        debugPrint('[GPS] Location permission denied — GPS stream not started.');
+    try {
+      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      debugPrint('[GPS] Location services enabled: $serviceEnabled');
+      if (!serviceEnabled) {
+        debugPrint('[GPS] Location service disabled — GPS stream not started.');
         return;
       }
+
+      geo.LocationPermission permission =
+          await geo.Geolocator.checkPermission();
+      debugPrint('[GPS] Permission status before request: $permission');
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+        debugPrint('[GPS] Permission status after request: $permission');
+        if (permission == geo.LocationPermission.denied) {
+          debugPrint(
+            '[GPS] Location permission denied — GPS stream not started.',
+          );
+          return;
+        }
+      }
+      if (permission == geo.LocationPermission.deniedForever) {
+        debugPrint('[GPS] Location permission permanently denied.');
+        return;
+      }
+
+      debugPrint('[GPS] Starting native navigation location stream.');
+      _gpsSubscription = NativeNavigationService.instance.fixes
+          .map((fix) => fix.toPosition())
+          .listen(
+            _onGpsPosition,
+            onError: (Object error, StackTrace stackTrace) {
+              // Keep the stream/watchdog active; a subsequent fix callback resumes
+              // normal updates automatically without resetting map/route state.
+              debugPrint('[GPS] Position stream error: $error\n$stackTrace');
+            },
+            cancelOnError: false,
+          );
+
+      try {
+        await NativeNavigationService.instance.start(
+          intervalMs: 500,
+          // Zero keeps the native fused stream alive while stopped. The Dart
+          // drift filter still holds the marker steady without falsely declaring
+          // that GPS was lost simply because the truck did not move one metre.
+          distanceFilterMeters: 0,
+        );
+        _gpsTrackingStartedAt = DateTime.now();
+      } on NativeNavigationException catch (error) {
+        await _gpsSubscription?.cancel();
+        _gpsSubscription = null;
+        if (mounted) {
+          setState(() {
+            _gpsStale = true;
+            _error = error.message;
+          });
+        }
+        debugPrint('[GPS] Native navigation failed: $error');
+        return;
+      }
+
+      _startGpsWatchdog();
+    } catch (error, stack) {
+      await _gpsSubscription?.cancel();
+      _gpsSubscription = null;
+      if (!mounted) return;
+      setState(() {
+        _gpsStale = true;
+        _error = 'GPS could not start. Check location settings and try again.';
+      });
+      if (kDebugMode) {
+        debugPrint('[GPS] Startup error: $error\n$stack');
+      }
     }
-    if (permission == geo.LocationPermission.deniedForever) {
-      debugPrint('[GPS] Location permission permanently denied.');
-      return;
+  }
+
+  /// Waits for an immediate navigation-grade location before route building.
+  ///
+  /// The continuous native stream remains the primary source. This one-shot
+  /// request closes the cold-start gap where a driver can select a destination
+  /// before Android has delivered the stream's first callback. A recent,
+  /// accurate cached fix is accepted only when the live request times out.
+  Future<LatLng?> _acquireRouteOrigin() async {
+    if (_truckPosition != null) return _truckPosition;
+
+    if (_isAcquiringGpsFix) {
+      for (var attempt = 0; attempt < 40; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (_truckPosition != null) return _truckPosition;
+        if (!_isAcquiringGpsFix) break;
+      }
+      return _truckPosition;
     }
 
-    // distanceFilter:1 triggers a GPS callback every ~1 metre, providing the
-    // high-frequency position stream needed for smooth map matching, bearing
-    // calculation, and camera follow.  The increased battery usage is acceptable
-    // for professional truck navigation where the vehicle is always running.
-    const locationSettings = geo.LocationSettings(
-      accuracy: geo.LocationAccuracy.bestForNavigation,
-      distanceFilter: 1,
-    );
-
-    debugPrint('[GPS] Starting position stream (best-for-navigation accuracy, 1 m filter).');
-    _gpsSubscription = geo.Geolocator.getPositionStream(
-      locationSettings: locationSettings,
-    ).listen(
-      _onGpsPosition,
-      onError: (Object error, StackTrace stackTrace) {
-        // Keep the stream/watchdog active; a subsequent fix callback resumes
-        // normal updates automatically without resetting map/route state.
-        debugPrint('[GPS] Position stream error: $error\n$stackTrace');
-      },
-      cancelOnError: false,
-    );
+    _isAcquiringGpsFix = true;
+    if (mounted) {
+      setState(() {
+        _error = 'Getting a precise GPS location…';
+        _locationRecoveryAction = null;
+      });
+    }
 
     try {
-      final current = await geo.Geolocator.getCurrentPosition(
-        locationSettings: locationSettings,
-      );
-      if (_lastGpsFixTime == null) {
-        _onGpsPosition(current);
+      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'Location is turned off. Turn it on to build a route from your truck.';
+            _locationRecoveryAction = _LocationRecoveryAction.enableServices;
+          });
+        }
+        return null;
       }
-    } catch (e) {
-      debugPrint('[GPS] Failed to fetch initial position: ${e.toString()}');
-    }
 
-    _startGpsWatchdog();
+      var permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+      }
+      if (permission == geo.LocationPermission.deniedForever) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'Precise location is blocked. Allow it in SemiTrax app settings.';
+            _locationRecoveryAction = _LocationRecoveryAction.appSettings;
+          });
+        }
+        return null;
+      }
+      if (permission == geo.LocationPermission.denied) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'Precise location permission is required to use your truck as the route origin.';
+            _locationRecoveryAction = _LocationRecoveryAction.retry;
+          });
+        }
+        return null;
+      }
+
+      // Ensure the foreground fused-location request is alive even when the
+      // screen's initial start raced with the Android permission dialog.
+      await NativeNavigationService.instance.start(
+        intervalMs: 500,
+        distanceFilterMeters: 0,
+      );
+      _gpsTrackingStartedAt ??= DateTime.now();
+      _startGpsWatchdog();
+
+      geo.Position? position;
+      try {
+        position = await geo.Geolocator.getCurrentPosition(
+          locationSettings: const geo.LocationSettings(
+            accuracy: geo.LocationAccuracy.bestForNavigation,
+            timeLimit: Duration(seconds: 15),
+          ),
+        );
+      } on TimeoutException {
+        final cached = await geo.Geolocator.getLastKnownPosition();
+        if (cached != null) {
+          final age = DateTime.now().difference(cached.timestamp).abs();
+          if (age <= const Duration(minutes: 2) &&
+              cached.accuracy >= 0 &&
+              cached.accuracy <= _poorAccuracyMeters) {
+            position = cached;
+          }
+        }
+      }
+
+      if (position == null) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'GPS is on but has no precise fix yet. Move near a window or outdoors, then retry.';
+            _locationRecoveryAction = _LocationRecoveryAction.retry;
+          });
+        }
+        return null;
+      }
+
+      _onGpsPosition(position);
+      final accepted = _truckPosition;
+      if (accepted == null) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'GPS accuracy is ${position!.accuracy.toStringAsFixed(0)} m. Wait for a stronger signal, then retry.';
+            _locationRecoveryAction = _LocationRecoveryAction.retry;
+          });
+        }
+        return null;
+      }
+
+      if (mounted) {
+        setState(() {
+          _error = null;
+          _locationRecoveryAction = null;
+        });
+      }
+      return accepted;
+    } on NativeNavigationException catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = error.message;
+          _locationRecoveryAction = _LocationRecoveryAction.retry;
+        });
+      }
+      return null;
+    } on Object catch (error) {
+      if (kDebugMode) debugPrint('[GPS] Immediate fix failed: $error');
+      if (mounted) {
+        setState(() {
+          _error =
+              'Unable to acquire GPS. Check precise location and try again.';
+          _locationRecoveryAction = _LocationRecoveryAction.retry;
+        });
+      }
+      return null;
+    } finally {
+      _isAcquiringGpsFix = false;
+    }
   }
+
+  Future<void> _handleLocationRecovery() async {
+    final action = _locationRecoveryAction ?? _LocationRecoveryAction.retry;
+    switch (action) {
+      case _LocationRecoveryAction.enableServices:
+        await geo.Geolocator.openLocationSettings();
+        return;
+      case _LocationRecoveryAction.appSettings:
+        await geo.Geolocator.openAppSettings();
+        return;
+      case _LocationRecoveryAction.retry:
+        if (_selectedDestination != null && !_isLoadingRoute) {
+          await fetchRoute();
+        } else {
+          await _acquireRouteOrigin();
+        }
+    }
+  }
+
+  String get _locationRecoveryLabel => switch (_locationRecoveryAction) {
+    _LocationRecoveryAction.enableServices => 'Turn on location',
+    _LocationRecoveryAction.appSettings => 'Open settings',
+    _ => 'Retry GPS',
+  };
 
   /// Starts a periodic watchdog timer that detects GPS signal loss.
   ///
@@ -4181,28 +5737,65 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         if (!mounted) return;
         final now = DateTime.now();
         final lastFix = _lastGpsFixTime;
-        if (lastFix == null) return; // no fix yet — nothing to check
-        final silentSeconds = now.difference(lastFix).inSeconds;
+        final silenceReference = lastFix ?? _gpsTrackingStartedAt;
+        if (silenceReference == null) return;
+        final silentSeconds = now.difference(silenceReference).inSeconds;
         if (silentSeconds >= _gpsStalenessThresholdSeconds) {
           if (!_gpsStale) {
             debugPrint(
-              '[GPS] ⚠ Signal lost — no fix for ${silentSeconds}s '
+              '[GPS] ⚠ Signal unavailable — no fix for ${silentSeconds}s '
               '(threshold: ${_gpsStalenessThresholdSeconds}s). '
-              'Last fix: $lastFix. Resetting speed to unavailable.',
+              'Last fix: ${lastFix ?? "none received"}. Resetting speed to unavailable.',
             );
             setState(() {
               _gpsStale = true;
-              _currentSpeedMps = -1.0; // reset: speed unknown during signal loss
+              _currentSpeedMps =
+                  -1.0; // reset: speed unknown during signal loss
             });
+            unawaited(
+              _speakAlert(
+                'GPS signal lost. Position and speed may be out of date.',
+              ),
+            );
           } else {
             // Already stale — emit a periodic reminder for diagnostics.
-            debugPrint(
-              '[GPS] ⚠ Still no fix — silent for ${silentSeconds}s.',
-            );
+            debugPrint('[GPS] ⚠ Still no fix — silent for ${silentSeconds}s.');
+          }
+
+          final lastRecovery = _lastGpsRecoveryAttempt;
+          if (lastRecovery == null ||
+              now.difference(lastRecovery).inSeconds >=
+                  _gpsRecoveryRetrySeconds) {
+            _lastGpsRecoveryAttempt = now;
+            unawaited(_restartNativeGpsUpdates());
           }
         }
       },
     );
+  }
+
+  /// Reissues the native high-accuracy request after a genuinely silent
+  /// stream. It does not recreate the EventChannel subscription or route state.
+  Future<void> _restartNativeGpsUpdates() async {
+    try {
+      await NativeNavigationService.instance.start(
+        intervalMs: 500,
+        distanceFilterMeters: 0,
+      );
+      // Request one immediate navigation-grade fix as a recovery path. Android
+      // can keep an EventChannel alive while the fused callback itself has gone
+      // quiet after doze, process resume, or provider switching.
+      final freshPosition = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.bestForNavigation,
+          timeLimit: Duration(seconds: 12),
+        ),
+      );
+      if (mounted) _onGpsPosition(freshPosition);
+      debugPrint('[GPS] Fused stream restarted and current fix refreshed.');
+    } on Object catch (error) {
+      debugPrint('[GPS] Fused-location recovery failed: $error');
+    }
   }
 
   /// Handles a new GPS position: updates the truck marker to the real device
@@ -4227,6 +5820,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the map never appears frozen; only arrival-specific navigation logic is
   /// skipped by the `_hasActiveDestination && !_isArrived` guard below.
   void _onGpsPosition(geo.Position position) {
+    if (!mounted) return;
     if (kDebugMode) {
       debugPrint(
         '[GPS] New update — '
@@ -4266,6 +5860,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         'speed=${position.speed.toStringAsFixed(1)}m/s',
       );
       if (mounted) setState(() => _gpsStale = false);
+      unawaited(_speakAlert('GPS signal restored'));
     }
     _lastGpsFixTime = fixArrivalTime;
 
@@ -4298,13 +5893,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     _isStopped = _speedMphFromMps(position.speed) < _stoppedSpeedMph;
     _gpsActive = true;
     final gpsPoint = LatLng(position.latitude, position.longitude);
+    unawaited(_refreshLiveNearbyPois(gpsPoint));
+    if (_routePoints.isNotEmpty) {
+      _scheduleRoadFeatureRefresh(center: gpsPoint, routeAware: true);
+    }
 
     // ── Stable-fix detection for startup reroute suppression ─────────────
     // Mark a stable GPS fix once accuracy is within 30 m and speed data is
     // valid.  This allows the startup suppression to lift as soon as the
     // device has a solid lock.
     if (!_hasStableFixForNavigation &&
-        _isNavigating &&
+        _isLiveRouteAssistanceActive &&
         position.accuracy < 30.0 &&
         position.speed >= 0) {
       _hasStableFixForNavigation = true;
@@ -4315,17 +5914,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // a live navigation session.  In plain GPS-tracking mode (no destination
     // selected) the truck marker and speed panel still update, but no
     // turn-by-turn, rerouting, TTS, or POI-alert behaviour fires.
-    if (_hasActiveDestination && !_isArrived) {
+    if (_isLiveRouteAssistanceActive && !_isArrived) {
       // Arrival detection: check proximity to destination first.
       // Always evaluated before step/off-route logic so arrival wins immediately.
       _checkArrival(gpsPoint);
-      if (_isArrived) return; // arrival was just triggered — stop all processing
+      if (_isArrived)
+        return; // arrival was just triggered — stop all processing
 
       // Leg arrival detection: advance active leg when driver reaches each stop.
       _checkLegArrival(gpsPoint);
 
-      // Step advancement: speak instruction when nearing next maneuver.
+      // Step advancement: keep the live street header aligned with the route.
       _checkStepAdvancement(gpsPoint);
+      _maybeAnnounceUpcomingStreet(gpsPoint);
 
       // Off-route detection: reroute when >30 m from the route line.
       // Guard: do not reroute while stopped — GPS noise while parked can push
@@ -4349,13 +5950,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Warning sign proximity alerts: single-banner alert for safety hazards.
       _checkWarningAheadAlert(gpsPoint);
 
+      // Physical traffic controls and mapped warning signs use route-progress
+      // distance so parallel-road features do not notify the driver.
+      _checkRoadFeatureApproachAlerts(gpsPoint);
+
       // Ahead-on-route weigh stations: refresh the closest 1–2 stations
       // ahead on the active route so the ClosestWeighStationsRow stays current.
-      if (_isNavigating) _refreshClosestWeighStationsAhead();
+      _refreshClosestWeighStationsAhead();
 
       // Ahead-on-route rest areas: refresh the closest rest area ahead on the
       // active route so the ClosestRestAreasRow stays current.
-      if (_isNavigating) _refreshClosestRestAreasAhead();
+      _refreshClosestRestAreasAhead();
 
       // Trip statistics: update mileage and stopped time from live GPS.
       _updateTripStats(position);
@@ -4366,12 +5971,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // only when a route exists; otherwise keep the raw GPS fix for display.
     // Use _tryAdvanceRouteIndex instead of direct assignment to prevent GPS
     // noise teleports and fake progress while stopped.
+    final previousRouteIndex = _truckIndex;
     int nearest = _truckIndex;
     if (_routePoints.isNotEmpty) {
       final candidate = _nearestRouteIndex(gpsPoint);
       _tryAdvanceRouteIndex(candidate, position);
       nearest = _truckIndex;
     }
+    final liveRoadContext = _roadContextForRouteIndex(nearest);
 
     // Prefer the true device heading from GPS (heading ≥ 0 = valid fix).
     // Fall back to route-computed bearing when heading is unavailable (−1).
@@ -4381,13 +5988,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final double speedMph = _speedMphFromMps(position.speed);
     if (position.heading >= 0 && speedMph >= _noRotateSpeedMph) {
       // Real device compass heading — use directly for marker rotation.
-      trueBearing = position.heading;
-    } else if (_routePoints.isNotEmpty && nearest != _truckIndex) {
+      trueBearing = nav_utils.normalizeBearing(position.heading);
+    } else if (_routePoints.isNotEmpty && nearest != previousRouteIndex) {
       // No GPS heading but route index changed: compute from route geometry.
       trueBearing = _bearingBetween(
-        _routePoints[_truckIndex.clamp(0, _routePoints.length - 1)],
+        _routePoints[previousRouteIndex.clamp(0, _routePoints.length - 1)],
         _routePoints[nearest.clamp(0, _routePoints.length - 1)],
       );
+    } else if (_routePoints.length > 1) {
+      // When the nearest point has not changed, use the direction of the
+      // current route segment instead of freezing an arbitrary old heading.
+      final current = nearest.clamp(0, _routePoints.length - 1);
+      final next = math.min(current + 1, _routePoints.length - 1);
+      trueBearing = current == next
+          ? _truckBearing
+          : _bearingBetween(_routePoints[current], _routePoints[next]);
     } else {
       // Low speed, no GPS heading, or no index change: keep current bearing.
       trueBearing = _truckBearing;
@@ -4395,45 +6010,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Speed update: read GPS speed and compute new speed limit estimate ────
     // pos.speed is in m/s; negative values mean the speed is unavailable.
-    final double newSpeedMps =
-        position.speed >= 0 ? position.speed : _currentSpeedMps;
+    final double newSpeedMps = position.speed >= 0
+        ? position.speed
+        : _currentSpeedMps;
     final double carSpeedLimit = _estimateSpeedLimit();
-    final double newSpeedLimit =
-        _getTruckSpeedLimit(carSpeedLimit, position.latitude, position.longitude);
-
-    // ── HOS: accumulate driving / break time from this GPS fix ────────────
-    // Runs on every accepted fix so HOS remaining updates in real-time,
-    // both during active navigation and in plain GPS-tracking mode.
-    final hosNow = DateTime.now();
-    if (_hosLastFixTime != null && position.speed >= 0) {
-      final delta = hosNow.difference(_hosLastFixTime!);
-      // Guard: ignore deltas > 5 min (app backgrounded / GPS gap) to avoid
-      // crediting a long pause as continuous driving or a long stop as a break.
-      if (delta > Duration.zero && delta < const Duration(minutes: 5)) {
-        if (position.speed >= 1.0) {
-          // Vehicle is moving — accumulate driving time and reset break clock.
-          _hosDrivingDuration += delta;
-          _hosCurrentBreakDuration = Duration.zero;
-          _hosBreakDue = _hosDrivingDuration.inMinutes >= _hosBreakDueMinutes; // 8-hour mark
-        } else {
-          // Vehicle is stopped — accumulate break time.
-          _hosCurrentBreakDuration += delta;
-          // FMCSA 10-hour off-duty reset: full drive clock resets after a
-          // 10-consecutive-hour break.
-          if (_hosCurrentBreakDuration.inMinutes >= _hosResetBreakMinutes) {
-            _hosDrivingDuration = Duration.zero;
-            _hosCurrentBreakDuration = Duration.zero;
-            _hosBreakDue = false;
-          }
-        }
-      }
-    }
-    _hosLastFixTime = hosNow;
-
-    // Compute updated HOS remaining before entering setState so it is
-    // applied atomically with the speed/position update.
-    final hosRemaining =
-        (_hosMaxDriveMinutes - _hosDrivingDuration.inMinutes).clamp(0, _hosMaxDriveMinutes);
+    final double newSpeedLimit = _getTruckSpeedLimit(carSpeedLimit);
 
     // Capture the current truck position as the lerp start point before
     // updating any state.  Fall back to gpsPoint on the very first fix so
@@ -4448,12 +6029,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Navigation checks above use the raw gpsPoint for accuracy; only the
     // displayed marker position is smoothed.
     final LatLng smoothedPoint;
-    if (_lastAcceptedPosition != null) {
+    if (_lastAcceptedPosition != null && speedMph < _stoppedSpeedMph) {
+      final smoothingWeight = _gpsSmoothingWeightFor(position);
       smoothedPoint = LatLng(
-        _lastAcceptedPosition!.latitude * (1.0 - _gpsSmoothingWeight) +
-            gpsPoint.latitude * _gpsSmoothingWeight,
-        _lastAcceptedPosition!.longitude * (1.0 - _gpsSmoothingWeight) +
-            gpsPoint.longitude * _gpsSmoothingWeight,
+        _lastAcceptedPosition!.latitude * (1.0 - smoothingWeight) +
+            gpsPoint.latitude * smoothingWeight,
+        _lastAcceptedPosition!.longitude * (1.0 - smoothingWeight) +
+            gpsPoint.longitude * smoothingWeight,
       );
     } else {
       smoothedPoint = gpsPoint;
@@ -4488,14 +6070,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // _truckPosition is NOT updated here — it is lerped smoothly to
       // renderPosition by _interpolateToGpsPosition below.
       // Use real device heading for accurate marker rotation.
-      _truckBearing = trueBearing;
+      _truckBearing = nav_utils.normalizeBearing(trueBearing);
       // Persist updated speed and speed-limit for the PositionPanel overlay.
       _currentSpeedMps = newSpeedMps;
       _speedLimitMph = newSpeedLimit;
-      // Update HOS remaining so the floating dashboard and Drive Intelligence
-      // card always reflect the actual remaining drive time.
-      _intelligence = {..._intelligence, 'driveMinutesLeft': hosRemaining};
+      if (liveRoadContext != null) {
+        _liveRoadStepIndex = liveRoadContext.key;
+        _liveRoadName = liveRoadContext.value;
+      }
     });
+
+    // GPS updates can jump past a maneuver without entering the 20 m proximity
+    // circle. Route-index matching keeps the street header truthful in that case.
+    final nativeGuidanceActive =
+        _nativeNavigationPhase == NativeNavigationPhase.navigating ||
+        _nativeNavigationPhase == NativeNavigationPhase.rerouting;
+    if (_isLiveRouteAssistanceActive &&
+        !nativeGuidanceActive &&
+        liveRoadContext != null &&
+        liveRoadContext.key > _currentStepIndex) {
+      _activateNavigationStep(liveRoadContext.key, speak: false);
+    }
 
     // Smoothly lerp the truck marker from its current rendered position to
     // the new GPS fix, preventing sudden jumps on each location update.
@@ -4506,20 +6101,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // ── Over-speed announcement (navigation only, throttled) ──────────────
     // Only announce during active navigation and when speed data is available.
-    if (_hasActiveDestination && _navigationMode && newSpeedMps >= 0) {
+    if (_isLiveRouteAssistanceActive && newSpeedMps >= 0) {
       final double currentSpeedMph = newSpeedMps * _mpsToMph;
-      if (currentSpeedMph > newSpeedLimit) {
+      if (newSpeedLimit > 0 && currentSpeedMph > newSpeedLimit) {
         final now = DateTime.now();
         // Throttle: announce at most once every [_slowDownThrottleSeconds] s.
         if (_lastSlowDownAnnouncementTime == null ||
-            now
-                    .difference(_lastSlowDownAnnouncementTime!)
-                    .inSeconds >=
+            now.difference(_lastSlowDownAnnouncementTime!).inSeconds >=
                 _slowDownThrottleSeconds) {
           _lastSlowDownAnnouncementTime = now;
           _speakAlert('Slow down');
         }
       }
+    }
+
+    // A continent-scale preview makes real movement look stationary. Once the
+    // truck is genuinely moving, enter close follow unless the driver explicitly
+    // pinned the overview with a long press on the recenter control.
+    if (_routePoints.isNotEmpty &&
+        speedMph >= _noRotateSpeedMph &&
+        _cameraMode == NavigationCameraMode.overview &&
+        !_overviewPinnedByUser) {
+      _cameraMode = NavigationCameraMode.follow;
     }
 
     // Check whether to auto-return from free mode to follow mode (8 s idle).
@@ -4534,7 +6137,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Refresh the 2-closest-ahead truck stops row on every GPS fix during
     // active navigation so the UI stays in sync with the driver's position.
-    if (_isNavigating) {
+    if (_isLiveRouteAssistanceActive) {
       _refreshClosestTruckStopsAhead();
       // Refresh upcoming route alert chips (top-right overlay).
       // Remove the call below to disable the upcoming-alerts feature.
@@ -4552,43 +6155,93 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Advances to the next step when the driver comes within 20 m of the
-  /// upcoming maneuver point, then speaks the new instruction aloud.
+  /// Advances to the next step when the driver reaches its maneuver point.
   void _checkStepAdvancement(LatLng current) {
     if (_navSteps.isEmpty) return;
-    // Do not advance steps unless the vehicle is actually moving.  GPS noise
-    // while the truck is stationary can put the position within the threshold
-    // of the next step even though the driver has not moved.
-    // Use _shouldAdvanceRouteProgress for consistent movement gate logic.
+    // Do not advance steps unless the vehicle is actually moving. GPS noise
+    // while stationary can otherwise advance a maneuver prematurely.
     if (_lastAcceptedPosition == null ||
-        !_shouldAdvanceRouteProgress(_lastAcceptedPosition!)) return;
+        !_shouldAdvanceRouteProgress(_lastAcceptedPosition!)) {
+      return;
+    }
     final nextIdx = _currentStepIndex + 1;
     if (nextIdx >= _navSteps.length) return;
-    final nextStep = _navSteps[nextIdx];
-    final dist = _distanceBetween(current, nextStep.location);
-    // Advance when within 20 m of the next maneuver waypoint.
-    if (dist <= 20.0) {
-      setState(() => _currentStepIndex = nextIdx);
-      _speak(nextStep.instruction);
-      // Sync the top instruction card with the newly active step.
-      _updateTopInstructionFromNavigationStep(
-        maneuverType:  nextStep.type,
-        modifier:      nextStep.maneuver,
-        roadName:      nextStep.name,
-        distanceMiles: nextStep.distanceMeters * 0.000621371,
-        exitNumber:    nextStep.exitNumber,
-      );
-      // Refresh exit preview for the newly active step.
-      _refreshExitPreview();
+    final distanceMeters = _distanceBetween(
+      current,
+      _navSteps[nextIdx].location,
+    );
+    if (distanceMeters <= 20.0) _activateNavigationStep(nextIdx);
+  }
+
+  void _activateNavigationStep(int index, {bool speak = true}) {
+    if (!mounted || index < 0 || index >= _navSteps.length) return;
+    final step = _navSteps[index];
+    setState(() {
+      _currentStepIndex = index;
+      _halfMileAnnouncedStepIndex = null;
+      _nearTurnAnnouncedStepIndex = null;
+    });
+    _updateTopInstructionFromNavigationStep(
+      maneuverType: step.type,
+      modifier: step.maneuver,
+      instruction: step.instruction,
+      roadName: step.nextRoadName ?? step.name,
+      currentRoadName: step.currentRoadName,
+      nextRoadName: _nextNamedRoadAfter(index),
+      distanceMiles: step.distanceMeters / _metersPerMile,
+      exitNumber: step.exitNumber,
+    );
+    if (speak && step.instruction.trim().isNotEmpty) {
+      unawaited(_speak(step.instruction));
+    }
+    _refreshExitPreview();
+  }
+
+  /// Announces the upcoming maneuver early enough for a commercial driver to
+  /// prepare. Licensed native guidance remains authoritative when active.
+  void _maybeAnnounceUpcomingStreet(LatLng current) {
+    if (!_isLiveRouteAssistanceActive || _isStopped || _navSteps.isEmpty) {
+      return;
+    }
+    final nativeGuidanceActive =
+        _nativeNavigationPhase == NativeNavigationPhase.navigating ||
+        _nativeNavigationPhase == NativeNavigationPhase.rerouting;
+    if (nativeGuidanceActive) return;
+
+    final targetIndex = _currentStepIndex + 1;
+    if (targetIndex >= _navSteps.length) return;
+    final target = _navSteps[targetIndex];
+    final distanceMeters = _distanceBetween(current, target.location);
+    final guidance = buildStreetGuidanceText(
+      maneuverType: target.type,
+      modifier: target.maneuver,
+      instruction: target.instruction,
+      roadName: target.nextRoadName ?? target.name,
+      currentRoadName: target.currentRoadName,
+      nextRoadName: _nextNamedRoadAfter(targetIndex),
+    );
+    final instruction = guidance.headline.trim().isEmpty
+        ? target.instruction.trim()
+        : guidance.headline.trim();
+    if (instruction.isEmpty) return;
+
+    if (distanceMeters <= 244 && _nearTurnAnnouncedStepIndex != targetIndex) {
+      _nearTurnAnnouncedStepIndex = targetIndex;
+      _halfMileAnnouncedStepIndex = targetIndex;
+      unawaited(_speak('In 800 feet, $instruction'));
+    } else if (distanceMeters <= 805 &&
+        _halfMileAnnouncedStepIndex != targetIndex) {
+      _halfMileAnnouncedStepIndex = targetIndex;
+      unawaited(_speak('In half a mile, $instruction'));
     }
   }
 
-  /// Detects whether [current] has strayed more than [_offRouteThresholdMeters]
-  /// from the nearest point on the route polyline.  When off-route, triggers a
-  /// full reroute from the current live GPS position to the original destination.
+  /// Detects whether [current] has strayed outside the accuracy-aware route
+  /// corridor. When off-route, triggers a full truck-route recalculation from
+  /// the current live GPS position to the original destination.
   ///
   /// Rerouting is not immediate: the driver must be more than
-  /// [_offRouteThresholdMeters] from the route **continuously for at least
+  /// the effective corridor from the route **continuously for at least
   /// 5 seconds** before a reroute is triggered.  Once on-route again the
   /// off-route timer is reset, so a brief GPS excursion never causes a reroute.
   ///
@@ -4597,7 +6250,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// to prevent rapid repeated API calls in areas with poor GPS accuracy.
   /// Only reroutes when the vehicle is moving (_isStopped == false).
   void _checkOffRoute(LatLng current) {
-    if (_routePoints.length < 2 || _isRerouting) return;
+    if (_routePoints.length < 2 || _routeCalculationCoordinator.inProgress) {
+      return;
+    }
 
     // Never reroute while stopped — GPS noise while parked can shift the
     // position outside the route corridor and trigger spurious reroutes.
@@ -4609,29 +6264,34 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // Require the driver to be moving at more than 3 mph (≈1.34 m/s) before
     // considering a reroute to ignore GPS jitter while slow or stopped.
-    if (_lastAcceptedPosition == null ||
-        _lastAcceptedPosition!.speed < 1.34) {
+    if (_lastAcceptedPosition == null || _lastAcceptedPosition!.speed < 1.34) {
       _resetOffRouteState();
       return;
     }
 
-    // Compute minimum distance from current position to nearest route point.
+    // Compute minimum distance from current position to the route polyline.
+    // A precise fix uses a 50 m urban corridor so a parallel side road is
+    // detected promptly. Poorer fixes widen the corridor, capped at the former
+    // 80 m safety value, to avoid false reroutes caused by GPS uncertainty.
     final double minDist = _distanceToNearestRouteMeters(current);
+    final double offRouteThreshold = _effectiveOffRouteThresholdMeters();
 
-    if (minDist <= _offRouteThresholdMeters) {
+    if (minDist <= offRouteThreshold) {
       // Driver is back on or near the route — reset the off-route timer.
       _resetOffRouteState();
       return;
     }
 
-    // Driver is >80 m off route. Record the time of the first detection in
-    // the current episode; subsequent calls accumulate elapsed time.
+    // The driver is outside the current route corridor. Record the time of the
+    // first detection; subsequent fixes accumulate continuous off-route time.
     final now = DateTime.now();
     _offRouteDetectedAt ??= now;
 
     // Require at least 5 seconds of continuous off-route before rerouting to
     // avoid reacting to momentary GPS noise or brief deviations.
-    if (now.difference(_offRouteDetectedAt!).inSeconds < _offRouteConfirmationSeconds) return;
+    if (now.difference(_offRouteDetectedAt!).inSeconds <
+        _offRouteConfirmationSeconds)
+      return;
 
     // Enforce 10-second cooldown (debounce) between consecutive reroutes.
     if (_lastRerouteAt != null &&
@@ -4644,25 +6304,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!_canCallApi()) return;
     if (!_shouldUpdateRoute(current.latitude, current.longitude)) return;
 
-    _isRerouting = true;
     _lastRerouteTime = now;
     _lastRerouteAt = now;
     _offRouteDetectedAt = null;
     // Show rerouting status indicator and announce the change via TTS.
-    setState(() => _navStatus = 'Rerouting...');
-    _speak('Rerouting');
+    setState(() => _navStatus = 'Recalculating truck route…');
+    unawaited(_speakAlert('Off route. Recalculating the truck safe route.'));
     // Re-fetch the route from the current live position to the original
     // destination, then clear the rerouting lock and status indicator.
-    fetchRoute(fromPosition: current).then((_) {
-      _isRerouting = false;
-      if (mounted) {
-        setState(() => _navStatus = null);
+    _requestReroute(current, reason: 'off-route').then((completion) {
+      if (mounted && completion == LatestRequestCompletion.completed) {
         // Force-refresh the route-POI source immediately after the reroute
         // completes so markers reflect the new route geometry without waiting
         // for the next GPS-update throttle window.
         _refreshRoutePoiSourceIfNeeded(force: true);
+        if (_routePoints.isNotEmpty) {
+          unawaited(_speakAlert('Truck route updated'));
+        }
       }
     });
+  }
+
+  Future<LatestRequestCompletion> _requestReroute(
+    LatLng origin, {
+    required String reason,
+  }) {
+    final nativeGuidanceActive =
+        _nativeNavigationStatus?.truckSafeGuidanceAvailable == true &&
+        (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
+            _nativeNavigationPhase == NativeNavigationPhase.rerouting);
+    return _submitRouteCalculation(
+      _RouteCalculationRequest(
+        kind: nativeGuidanceActive
+            ? _RouteCalculationKind.native
+            : _RouteCalculationKind.backend,
+        reason: reason,
+        destination: _selectedDestination ?? _destination,
+        origin: origin,
+      ),
+    );
   }
 
   /// Returns true when rerouting should be suppressed because navigation just
@@ -4675,80 +6355,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }
 
   /// Computes the minimum distance in metres from [pos] to the nearest point
-  /// on the active route polyline using GPS-grade Geolocator measurement.
+  /// on the locally relevant route window. Using the same bounded match for
+  /// snapping, progress, and off-route detection prevents contradictory state
+  /// near crossings and parallel roads.
   double _distanceToNearestRouteMeters(LatLng pos) {
-    double minDist = double.infinity;
-    for (final pt in _routePoints) {
-      final d = geo.Geolocator.distanceBetween(
-        pos.latitude,
-        pos.longitude,
-        pt.latitude,
-        pt.longitude,
-      );
-      if (d < minDist) minDist = d;
-    }
-    return minDist;
+    return _matchActiveRoute(pos)?.crossTrackMeters ?? double.infinity;
   }
 
-  /// Finds the nearest point on the active route polyline to [pos] by
-  /// projecting [pos] onto each route segment and returning the closest
-  /// on-segment projection.
-  ///
-  /// Uses a flat-earth approximation with a cos(lat) longitude scale factor
-  /// that is accurate to within centimetres for the short segment lengths
-  /// (< 1 km) typical in turn-by-turn route polylines.
-  ///
-  /// Returns `null` when [_routePoints] contains fewer than 2 points.
+  /// Returns an off-route corridor that reflects the current GPS uncertainty.
+  /// With a navigation-grade fix this is 50 m; lower-quality fixes gradually
+  /// widen the corridor up to [_offRouteThresholdMeters].
+  double _effectiveOffRouteThresholdMeters() {
+    final accuracy = _lastAcceptedPosition?.accuracy ?? 0.0;
+    if (!accuracy.isFinite || accuracy <= 0) {
+      return _offRouteThresholdMeters;
+    }
+    return (accuracy * 1.5).clamp(50.0, _offRouteThresholdMeters);
+  }
+
+  RouteMatch? _matchActiveRoute(LatLng pos) {
+    return matchRoutePosition(
+      route: _routePoints,
+      current: pos,
+      currentRouteIndex: _truckIndex,
+      backwardSegmentWindow: 3,
+      forwardSegmentWindow: 36,
+    );
+  }
+
+  /// Returns the projected point from the current bounded route match.
   LatLng? _nearestPointOnPolyline(LatLng pos) {
-    if (_routePoints.length < 2) {
-      return _routePoints.isNotEmpty ? _routePoints.first : null;
-    }
-
-    // Pre-compute the longitude scale factor once for the current latitude.
-    // 1° latitude  ≈ 110 540 m; 1° longitude ≈ 111 320 * cos(lat) m.
-    final double cosLat = math.cos(pos.latitude * math.pi / 180.0);
-
-    double minDist = double.infinity;
-    LatLng? nearest;
-
-    for (int i = 0; i < _routePoints.length - 1; i++) {
-      final LatLng a = _routePoints[i];
-      final LatLng b = _routePoints[i + 1];
-
-      // Segment vector AB and vector from A to the GPS point, in metres.
-      final double abLat = (b.latitude - a.latitude) * 110540.0;
-      final double abLng = (b.longitude - a.longitude) * 111320.0 * cosLat;
-      final double apLat = (pos.latitude - a.latitude) * 110540.0;
-      final double apLng = (pos.longitude - a.longitude) * 111320.0 * cosLat;
-
-      final double ab2 = abLat * abLat + abLng * abLng;
-      final LatLng candidate;
-      if (ab2 < 1e-10) {
-        // Degenerate segment: A and B are effectively the same point.
-        candidate = a;
-      } else {
-        // Scalar projection parameter t ∈ [0, 1].
-        final double t = ((apLat * abLat) + (apLng * abLng)) / ab2;
-        final double tc = t.clamp(0.0, 1.0);
-        candidate = LatLng(
-          a.latitude + tc * (b.latitude - a.latitude),
-          a.longitude + tc * (b.longitude - a.longitude),
-        );
-      }
-
-      final double d = geo.Geolocator.distanceBetween(
-        pos.latitude,
-        pos.longitude,
-        candidate.latitude,
-        candidate.longitude,
-      );
-      if (d < minDist) {
-        minDist = d;
-        nearest = candidate;
-      }
-    }
-
-    return nearest;
+    return _matchActiveRoute(pos)?.projectedPoint;
   }
 
   /// Returns true when all conditions for triggering a reroute are met:
@@ -4758,7 +6395,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (_lastAcceptedPosition == null || _lastAcceptedPosition!.speed < 1.34) {
       return false;
     }
-    return _distanceToNearestRouteMeters(pos) > _offRouteThresholdMeters;
+    return _distanceToNearestRouteMeters(pos) >
+        _effectiveOffRouteThresholdMeters();
   }
 
   /// Resets the off-route detection timer so that a single on-route GPS fix
@@ -4801,21 +6439,42 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   • The trip completes and the driver taps "Done" on the arrival sheet.
   ///   • A new destination is chosen (via [_startRouteToSelectedDestination]).
   void _clearActiveRoute() {
+    _routeCalculationCoordinator.invalidate();
+    _isLoadingRoute = false;
+    _roadFeatureRequestGeneration++;
+    _routePoiRequestGeneration++;
+    unawaited(_analyticsService.endNavigation(status: 'CANCELED'));
     _animTimer?.cancel();
     _animGeneration++; // invalidate any in-flight smooth animation loop
     _tts.stop();
     setState(() {
+      _activeRouteRevision++;
       _navigationActive = false;
       _navigationMode = false;
       _isNavigating = false;
       _isArrived = false;
-      _cameraMode = NavigationCameraMode.free; // no active destination to follow
+      _cameraMode =
+          NavigationCameraMode.free; // no active destination to follow
+      _overviewPinnedByUser = false;
       _routePoints = const [];
       _navSteps = const [];
       _currentStepIndex = 0;
+      _halfMileAnnouncedStepIndex = null;
+      _nearTurnAnnouncedStepIndex = null;
+      _lastNativeSpokenInstruction = null;
+      _liveRoadName = null;
+      _liveRoadStepIndex = 0;
       _routeData = null;
       _routeTotalDistanceMiles = 0.0;
       _routeTotalDurationSeconds = 0;
+      _destinationTimeZone = null;
+      _destinationTimeZoneCoordinate = null;
+      _destinationTimeZoneRequestGeneration++;
+      _tripProgressInfo = _createTripProgress(
+        0,
+        Duration.zero,
+        forceZero: true,
+      );
       _routeViolations = const [];
       _weatherRisk = null;
       _restrictionAhead = null;
@@ -4824,8 +6483,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _isRestrictionRerouting = false;
       _restrictionRerouteAttempts = 0;
       _warningAhead = null;
+      _roadFeatureAhead = null;
+      _roadFeatureAheadMeters = null;
+      _roadFeatures = const [];
       _routeOptions = const [];
       _selectedRouteOptionIndex = 0;
+      _previewPanelExpanded = false;
+      _routePreviewActive = false;
       _tripStartTime = null;
       _lastMoveTime = null;
       _milesDriven = 0.0;
@@ -4838,8 +6502,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _activeLegIndex = 0;
       _closestTruckStopsAhead = const [];
       _closestWeighStationsAhead = const [];
+      _closestRestAreasAhead = const [];
       _upcomingAlerts = const [];
       _topInstructionData = null;
+      _secondaryInstructionData = null;
+      _nativeNavigationPhase = NativeNavigationPhase.idle;
+      _navigationPaused = false;
       // Reset GPS watchdog staleness so the stale indicator is cleared
       // between navigation sessions when the route is cancelled.
       _gpsStale = false;
@@ -4849,6 +6517,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Reset warning manager so the next navigation session starts clean.
     _warningManager.reset();
     _warningAlertShown.clear();
+    _roadFeatureAlerted.clear();
+    _roadFeatureRouteIndices.clear();
+    _roadFeatureCrossTrackMeters.clear();
+    _roadFeatureRouteOffsetsMeters.clear();
+    _routeCumulativeMeters = const [];
+    _roadFeatureRouteSignature = 0;
+    _lastRoadFeatureCenter = null;
+    _lastRoadFeatureLoadedAt = null;
+    _roadFeatureRefreshTimer?.cancel();
     // Reset route-POI tracking state so the next navigation session starts
     // with a clean slate and the first GPS fix triggers a fresh source push.
     _lastRoutePoiRefreshAt = null;
@@ -4920,72 +6597,158 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Record when this GPS fix arrived for the next delta calculation.
     _lastGpsTimestamp = now;
 
+    _analyticsService.updateNavigationSnapshot(
+      actualDistanceMiles: _milesDriven,
+      actualDurationSeconds: _tripStartTime == null
+          ? null
+          : now.difference(_tripStartTime!).inSeconds,
+    );
+
     // Trigger a UI rebuild so the trip-stats panel reflects the latest values.
     if (mounted) setState(() {});
   }
 
   // ── Trip progress helpers ──────────────────────────────────────────────────
 
-  /// Returns the remaining route distance in **miles** by summing polyline
-  /// segments from [_truckIndex] to the end of [_routePoints].
+  /// Returns smooth route distance from the driver's projected polyline
+  /// position to the terminal point. This updates between route vertices rather
+  /// than dropping only when [_truckIndex] changes.
   double _computeRemainingMilesOnRoute() {
-    if (_routePoints.isEmpty) return 0.0;
-    final end = _routePoints.length - 1;
-    final start = _truckIndex.clamp(0, end);
-    double total = 0.0;
-    for (int i = start; i < end; i++) {
-      total += _distanceMiles(
-        _routePoints[i].latitude,
-        _routePoints[i].longitude,
-        _routePoints[i + 1].latitude,
-        _routePoints[i + 1].longitude,
+    if (_routePoints.isEmpty) return 0;
+    final current = _lastAcceptedPosition == null
+        ? (_truckPosition ??
+              _routePoints[_truckIndex.clamp(0, _routePoints.length - 1)])
+        : LatLng(
+            _lastAcceptedPosition!.latitude,
+            _lastAcceptedPosition!.longitude,
+          );
+    return (_matchActiveRoute(current)?.remainingRouteMeters ?? 0) /
+        _metersPerMile;
+  }
+
+  TripProgressInfo _createTripProgress(
+    double milesRemaining,
+    Duration durationRemaining, {
+    bool forceZero = false,
+  }) {
+    final safeMiles = forceZero || !milesRemaining.isFinite
+        ? 0.0
+        : math.max(0.0, milesRemaining);
+    final safeSeconds = forceZero
+        ? 0
+        : math.max(0, durationRemaining.inSeconds);
+    final safeDuration = Duration(seconds: safeSeconds);
+    final nowUtc = DateTime.now().toUtc();
+    final arrivalInstant = nowUtc.add(safeDuration);
+    final destinationZone = _destinationTimeZone;
+    final arrivalTime = destinationZone == null
+        ? arrivalInstant.toLocal()
+        : destinationZone.localTimeAt(arrivalInstant);
+    final label = destinationZone == null
+        ? arrivalTime.timeZoneName
+        : destinationZone.abbreviationAt(arrivalInstant);
+    final dayOffset = destinationZone == null
+        ? _calendarDayDifference(DateTime.now(), arrivalTime)
+        : destinationZone.dayOffsetAt(arrivalInstant, now: nowUtc);
+    return TripProgressInfo(
+      milesRemaining: safeMiles,
+      durationRemaining: safeDuration,
+      etaLocal: arrivalTime,
+      timezoneLabel: label,
+      arrivalDayOffset: dayOffset,
+    );
+  }
+
+  int _calendarDayDifference(DateTime start, DateTime end) {
+    final startDay = DateTime.utc(start.year, start.month, start.day);
+    final endDay = DateTime.utc(end.year, end.month, end.day);
+    return endDay.difference(startDay).inDays;
+  }
+
+  Future<void> _resolveDestinationTimeZone(LatLng destination) async {
+    final cached = _destinationTimeZoneCoordinate;
+    if (_destinationTimeZone != null &&
+        cached != null &&
+        _distanceBetween(cached, destination) < 100) {
+      return;
+    }
+    final generation = ++_destinationTimeZoneRequestGeneration;
+    try {
+      final zone = await _destinationTimeZoneService.resolve(
+        latitude: destination.latitude,
+        longitude: destination.longitude,
       );
+      if (!mounted || generation != _destinationTimeZoneRequestGeneration) {
+        return;
+      }
+      setState(() {
+        _destinationTimeZone = zone;
+        _destinationTimeZoneCoordinate = destination;
+        _tripProgressInfo = _createTripProgress(
+          _tripProgressInfo.milesRemaining,
+          _tripProgressInfo.durationRemaining,
+        );
+      });
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('Destination time-zone lookup failed: $error');
+      }
     }
-    return total;
   }
 
-  /// Refreshes [_tripProgressInfo] from a freshly fetched full-route
-  /// [distanceMiles] and [durationSeconds] (as returned by the Mapbox
-  /// Directions API).  Also caches the totals so [_refreshTripProgress] can
-  /// recalculate remaining values proportionally as the driver advances.
+  /// Seeds live progress from the selected HERE route totals.
   void _updateTripProgressFromRoute(double distanceMiles, int durationSeconds) {
-    _routeTotalDistanceMiles = distanceMiles;
-    _routeTotalDurationSeconds = durationSeconds;
-    final remaining = Duration(seconds: durationSeconds);
-    if (mounted) {
-      setState(() {
-        _tripProgressInfo = TripProgressInfo(
-          milesRemaining: distanceMiles,
-          durationRemaining: remaining,
-          etaLocal: DateTime.now().add(remaining),
-          timezoneLabel: _tripProgressInfo.timezoneLabel,
-        );
-      });
-    }
+    _routeTotalDistanceMiles = math.max(0, distanceMiles);
+    _routeTotalDurationSeconds = math.max(0, durationSeconds);
+    if (!mounted) return;
+    setState(() {
+      _tripProgressInfo = _createTripProgress(
+        _routeTotalDistanceMiles,
+        Duration(seconds: _routeTotalDurationSeconds),
+      );
+    });
   }
 
-  /// Recalculates [_tripProgressInfo] based on the driver's current position
-  /// on the route ([_truckIndex]).  Called on every GPS tick while navigating
-  /// so the miles-remaining, drive-time, and ETA values stay in real-time sync
-  /// with the map whenever the driver advances, reroutes, or changes destination.
+  /// Recalculates fallback progress from real GPS movement. Licensed native
+  /// guidance values remain authoritative whenever that engine is active.
   void _refreshTripProgress() {
-    if (_routePoints.isEmpty || _routeTotalDistanceMiles <= 0) return;
-    final remainingMiles = _computeRemainingMilesOnRoute();
-    // Estimate remaining duration proportionally: remaining miles / total miles
-    // × original total duration, clamped to [0, total].
-    final ratio = (remainingMiles / _routeTotalDistanceMiles).clamp(0.0, 1.0);
-    final remainingSecs = (_routeTotalDurationSeconds * ratio).round();
-    final remaining = Duration(seconds: remainingSecs);
-    if (mounted) {
-      setState(() {
-        _tripProgressInfo = TripProgressInfo(
-          milesRemaining: remainingMiles,
-          durationRemaining: remaining,
-          etaLocal: DateTime.now().add(remaining),
-          timezoneLabel: _tripProgressInfo.timezoneLabel,
-        );
-      });
+    if (_isArrived) {
+      if (mounted) {
+        setState(() {
+          _tripProgressInfo = _createTripProgress(
+            0,
+            Duration.zero,
+            forceZero: true,
+          );
+        });
+      }
+      return;
     }
+    final nativeGuidanceActive =
+        _nativeNavigationPhase == NativeNavigationPhase.navigating ||
+        _nativeNavigationPhase == NativeNavigationPhase.rerouting;
+    if (nativeGuidanceActive ||
+        _routePoints.isEmpty ||
+        _routeTotalDistanceMiles <= 0) {
+      return;
+    }
+
+    var remainingMiles = _computeRemainingMilesOnRoute()
+        .clamp(0.0, _routeTotalDistanceMiles)
+        .toDouble();
+    final previousMiles = _tripProgressInfo.milesRemaining;
+    if (previousMiles > 0) {
+      remainingMiles = math.min(remainingMiles, previousMiles);
+    }
+    final ratio = (remainingMiles / _routeTotalDistanceMiles).clamp(0.0, 1.0);
+    final remainingSeconds = (_routeTotalDurationSeconds * ratio).round();
+    if (!mounted) return;
+    setState(() {
+      _tripProgressInfo = _createTripProgress(
+        remainingMiles,
+        Duration(seconds: remainingSeconds),
+      );
+    });
   }
 
   // ── Trip statistics computed display strings ───────────────────────────────
@@ -5011,8 +6774,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// has not started or has not elapsed enough time for a meaningful value.
   String get _avgSpeedText {
     if (_tripStartTime == null) return '--';
-    final elapsedSeconds =
-        DateTime.now().difference(_tripStartTime!).inSeconds;
+    final elapsedSeconds = DateTime.now().difference(_tripStartTime!).inSeconds;
     // Avoid division-by-zero and nonsensical values on very short elapsed times.
     if (elapsedSeconds <= 0) return '--';
     final elapsedHours = elapsedSeconds / 3600.0;
@@ -5047,12 +6809,27 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///      is stable before the bottom sheet is pushed.
   void _triggerArrival() {
     if (!mounted) return;
+    _analyticsService.updateNavigationSnapshot(
+      actualDistanceMiles: _milesDriven,
+      actualDurationSeconds: _tripStartTime == null
+          ? null
+          : DateTime.now().difference(_tripStartTime!).inSeconds,
+    );
+    unawaited(_analyticsService.endNavigation(status: 'COMPLETED'));
     setState(() {
       _isArrived = true;
+      _isNavigating = false;
+      _routePreviewActive = false;
       _navigationActive = false;
+      _tripProgressInfo = _createTripProgress(
+        0,
+        Duration.zero,
+        forceZero: true,
+      );
       // Invalidate any in-flight smooth animation loop.
       _animGeneration++;
     });
+    TruckMapScreen.isNavigatingNotifier.value = false;
     // Keep the GPS stream and watchdog alive after arrival so the live
     // location panel and map marker continue to reflect the latest device
     // position and still report stale-signal conditions.
@@ -5063,49 +6840,114 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (mounted) _showArrivalSheet(context);
     });
   }
+
   /// Returns the index of the route point closest to [point], searching only
-  /// from the current truck index onward to prevent backward snapping.
+  /// inside the bounded route-match window to prevent crossing-road jumps.
   int _nearestRouteIndex(LatLng point) {
+    return _matchActiveRoute(point)?.nearestRoutePointIndex ?? _truckIndex;
+  }
+
+  /// Finds the closest point without the forward-only progress constraint.
+  /// Used to map HERE maneuver offsets onto the simplified preview polyline.
+  int _nearestRouteIndexFromStart(LatLng point) {
+    if (_routePoints.isEmpty) return 0;
     double minDist = double.infinity;
-    int nearest = _truckIndex;
-    for (int i = _truckIndex; i < _routePoints.length; i++) {
-      final d = _distanceBetween(point, _routePoints[i]);
-      if (d < minDist) {
-        minDist = d;
+    int nearest = 0;
+    for (int i = 0; i < _routePoints.length; i++) {
+      final distance = _distanceBetween(point, _routePoints[i]);
+      if (distance < minDist) {
+        minDist = distance;
         nearest = i;
       }
     }
     return nearest;
   }
 
-  /// Estimates the speed limit in mph for the current road segment.
-  ///
-  /// Uses simple heuristics based on the truck's progress along the route to
-  /// approximate city vs. highway segments.  In a production implementation
-  /// this would query a road-network speed-limit dataset.
-  ///
-  ///   progress < 5 % or > 95 %  → 35 mph  (city/suburban near start or end)
-  ///   everything else            → 65 mph  (highway mid-route)
+  /// Resolves the road segment containing [routeIndex] from HERE's ordered
+  /// maneuver list. This exposes truthful route-road context during preview;
+  /// it is not presented as native turn-by-turn guidance.
+  MapEntry<int, String>? _roadContextForRouteIndex(int routeIndex) {
+    if (_routePoints.isEmpty || _navSteps.isEmpty) return null;
+
+    int activeStep = 0;
+    int activeOffset = -1;
+    for (int i = 0; i < _navSteps.length; i++) {
+      final stepOffset = _nearestRouteIndexFromStart(_navSteps[i].location);
+      if (stepOffset <= routeIndex + 2 && stepOffset >= activeOffset) {
+        activeOffset = stepOffset;
+        activeStep = i;
+      }
+    }
+
+    String roadName = _roadNameForStep(_navSteps[activeStep]);
+    if (roadName.isEmpty) {
+      // HERE arrival/departure actions occasionally omit a road name. Prefer
+      // the closest earlier named segment, then a near upcoming segment.
+      for (int i = activeStep - 1; i >= 0 && roadName.isEmpty; i--) {
+        roadName = _roadNameForStep(_navSteps[i]);
+      }
+      for (
+        int i = activeStep + 1;
+        i < _navSteps.length && roadName.isEmpty;
+        i++
+      ) {
+        roadName = _roadNameForStep(_navSteps[i]);
+      }
+    }
+    if (roadName.isEmpty) return null;
+    return MapEntry(activeStep, roadName);
+  }
+
+  void _refreshLiveRoadContextFromCurrentPosition() {
+    if (!mounted || _routePoints.isEmpty || _navSteps.isEmpty) return;
+    final routeIndex = _truckPosition == null
+        ? _truckIndex
+        : _nearestRouteIndexFromStart(_truckPosition!);
+    final context = _roadContextForRouteIndex(routeIndex);
+    if (context == null) return;
+    setState(() {
+      _liveRoadStepIndex = context.key;
+      _liveRoadName = context.value;
+    });
+  }
+
+  String _roadNameForStep(_NavStep step) {
+    for (final providerName in [
+      step.nextRoadName,
+      step.name,
+      step.currentRoadName,
+    ]) {
+      final cleaned = providerName?.trim() ?? '';
+      if (cleaned.isNotEmpty && cleaned.toLowerCase() != 'unnamed road') {
+        return cleaned;
+      }
+    }
+    final match = RegExp(
+      r'\b(?:onto|on|toward)\s+(.+?)(?:\s+(?:toward|for)\b|$)',
+      caseSensitive: false,
+    ).firstMatch(step.instruction);
+    return match?.group(1)?.replaceAll(RegExp(r'[.,;]+$'), '').trim() ?? '';
+  }
+
+  String? _nextNamedRoadAfter(int stepIndex) {
+    for (int index = stepIndex + 1; index < _navSteps.length; index++) {
+      final roadName = _roadNameForStep(_navSteps[index]);
+      if (roadName.isNotEmpty) return roadName;
+    }
+    return null;
+  }
+
+  /// Returns the provider speed limit, or unknown until native guidance
+  /// supplies one. Route-progress heuristics are unsafe for a truck driver.
   double _estimateSpeedLimit() {
-    if (_routePoints.isEmpty) return 65.0;
-    final double progress = _truckIndex / _routePoints.length;
-    // Near the route's start/end we assume a city segment with a lower limit.
-    if (progress < 0.05 || progress > 0.95) return 35.0;
-    return 65.0;
+    return _speedLimitMph;
   }
 
   /// Returns the truck-specific speed limit for the given position.
   ///
-  /// California state law caps trucks at 55 mph on most roads.  When the
-  /// position falls inside the California bounding box (lat 32.0–42.5,
-  /// lng -125.0–-114.0) this method returns 55.0.  For all other locations
-  /// the car speed limit from [_estimateSpeedLimit] is used as a fallback.
-  double _getTruckSpeedLimit(double carSpeedLimit, double lat, double lng) {
-    final bool inCalifornia = lat >= _californiaMinLat &&
-        lat <= _californiaMaxLat &&
-        lng >= _californiaMinLng &&
-        lng <= _californiaMaxLng;
-    if (inCalifornia) return _californiaTruckSpeedLimitMph;
+  /// Applies a truck-specific provider value. A state bounding box is not
+  /// accurate enough to manufacture a posted limit for the current road.
+  double _getTruckSpeedLimit(double carSpeedLimit) {
     return carSpeedLimit;
   }
 
@@ -5126,8 +6968,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Invalidate any in-flight smooth animation loop.
     _animGeneration++;
     _truckIndex = 0;
-    _truckPosition =
-        _routePoints.isNotEmpty ? _routePoints.first : null;
+    _truckPosition = _routePoints.isNotEmpty ? _routePoints.first : null;
 
     // Enter navigation mode: camera zooms to truck position (12.5–15 range).
     // _navigationActive is set true here so _followTruckCamera and step checks
@@ -5158,8 +6999,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// session and route animation.
   ///
   /// Does nothing if no route has been loaded yet.
-  void _startNavigation() {
+  Future<void> _startNavigation() async {
     if (_routePoints.isEmpty) return;
+    try {
+      final status = await NativeNavigationService.instance.status();
+      if (mounted) {
+        setState(() {
+          _nativeNavigationStatus = status;
+          _nativeNavigationStatusLoading = false;
+        });
+      }
+      if (!status.truckSafeGuidanceAvailable) {
+        throw const NativeNavigationException(
+          'TRUCK_SAFE_NATIVE_ROUTING_UNAVAILABLE',
+          'Turn-by-turn navigation requires HERE SDK Navigate access. The truck-safe route preview is still available.',
+        );
+      }
+      final destination = _selectedDestination ?? _destination;
+      await NativeNavigationService.instance.updateDestination(
+        destination.latitude,
+        destination.longitude,
+      );
+      await NativeNavigationService.instance.previewRoute();
+      await NativeNavigationService.instance.startNavigation();
+    } on NativeNavigationException catch (error) {
+      if (mounted) {
+        setState(() {
+          _isNavigating = false;
+          _navigationActive = false;
+        });
+        TruckMapScreen.isNavigatingNotifier.value = false;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(error.message),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+      }
+      return;
+    }
     setState(() {
       _isNavigating = true;
       _navigationStartedAt = DateTime.now();
@@ -5167,6 +7048,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _offRouteDetectedAt = null;
       _hasStableFixForNavigation = false;
     });
+    unawaited(
+      _analyticsService.startNavigation(
+        estimatedDriveMinutes: (_routeTotalDurationSeconds / 60).ceil(),
+      ),
+    );
     // Re-check permission/service state when navigation starts and ensure
     // the GPS stream is active (important after previous trips).
     unawaited(_startGps());
@@ -5188,25 +7074,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // waiting for the first GPS fix.
     _refreshRoutePoiSourceIfNeeded(force: true);
 
-    // Seed the top instruction card with the first navigation step so the
-    // card is visible immediately when the driver starts.  Falls back to
-    // sample data when no steps have been loaded yet (dev/testing mode).
+    // Seed the card only from a verified route step. Native guidance replaces
+    // it through [_onNativeNavigationState] when that provider is active.
     if (_navSteps.isNotEmpty) {
       final first = _navSteps[0];
       _updateTopInstructionFromNavigationStep(
-        maneuverType:   first.type,
-        modifier:       first.maneuver,
-        roadName:       first.name,
-        distanceMiles:  first.distanceMeters * 0.000621371,
-        exitNumber:     first.exitNumber,
-      );
-    } else {
-      // Sample data — replace with real SDK values in production.
-      _updateTopInstructionFromNavigationStep(
-        maneuverType:   'continue',
-        modifier:       null,
-        roadName:       'Allegrini Drive',
-        distanceMiles:  16.9,
+        maneuverType: first.type,
+        modifier: first.maneuver,
+        instruction: first.instruction,
+        roadName: first.nextRoadName ?? first.name,
+        currentRoadName: first.currentRoadName,
+        nextRoadName: _nextNamedRoadAfter(0),
+        distanceMiles: first.distanceMeters * 0.000621371,
+        exitNumber: first.exitNumber,
       );
     }
   }
@@ -5215,8 +7095,48 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Delegates to [_clearActiveRoute] which resets all trip state, stops TTS,
   /// cancels the route animation, and resets [_isNavigating] to false.
-  void _stopNavigation() {
+  Future<void> _stopNavigation() async {
+    _analyticsService.updateNavigationSnapshot(
+      actualDistanceMiles: _milesDriven,
+      actualDurationSeconds: _tripStartTime == null
+          ? null
+          : DateTime.now().difference(_tripStartTime!).inSeconds,
+    );
     _clearActiveRoute();
+
+    // Quitting navigation is a hard session boundary. Stop every producer of
+    // navigation state instead of relying on the last native phase, because an
+    // assisted preview also owns the foreground location service.
+    _gpsWatchdogTimer?.cancel();
+    _gpsWatchdogTimer = null;
+    _gpsInterpGeneration++;
+    final gpsSubscription = _gpsSubscription;
+    _gpsSubscription = null;
+    _gpsActive = false;
+    if (gpsSubscription != null) {
+      await gpsSubscription.cancel();
+    }
+    await _tts.stop();
+
+    final nativeNavigation = NativeNavigationService.instance;
+    Future<void> attemptShutdown(
+      String operation,
+      Future<void> Function() action,
+    ) async {
+      try {
+        await action().timeout(const Duration(seconds: 4));
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('Native navigation $operation failed: $error');
+        }
+      }
+    }
+
+    // Keep these calls independent: route state must still be cleared if the
+    // foreground-service stop reports a platform error (and vice versa).
+    await attemptShutdown('stop', nativeNavigation.stopNavigation);
+    await attemptShutdown('route cancellation', nativeNavigation.cancelRoute);
+    await _setNavigationScreenAwake(false);
   }
 
   // ── Multi-stop leg breakdown ───────────────────────────────────────────────
@@ -5249,18 +7169,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
       final restrictions = _evaluateRouteRestrictions(result.points);
 
-      builtLegs.add(TripLeg(
-        id: 'leg_$i',
-        fromName: fromName,
-        toName: stop.name,
-        fromPosition: from,
-        toPosition: stop.position,
-        points: result.points,
-        steps: result.steps,
-        distanceMiles: result.distanceMiles,
-        durationSeconds: result.durationSeconds,
-        restrictionCount: restrictions.length,
-      ));
+      builtLegs.add(
+        TripLeg(
+          id: 'leg_$i',
+          fromName: fromName,
+          toName: stop.name,
+          fromPosition: from,
+          toPosition: stop.position,
+          points: result.points,
+          steps: result.steps,
+          distanceMiles: result.distanceMiles,
+          durationSeconds: result.durationSeconds,
+          restrictionCount: restrictions.length,
+        ),
+      );
 
       combinedPoints.addAll(result.points);
       combinedSteps.addAll(result.steps);
@@ -5276,6 +7198,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _routePoints = combinedPoints.toSet().toList();
       _navSteps = combinedSteps;
       _currentStepIndex = 0;
+      _halfMileAnnouncedStepIndex = null;
+      _nearTurnAnnouncedStepIndex = null;
       _selectedDestination = stops.last.position;
       _selectedDestinationName = stops.last.name;
       _navigationActive = true;
@@ -5320,7 +7244,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     for (int i = 0; i < _routePoints.length - 1; i++) {
       if (!mounted || _animGeneration != generation) return;
       _truckIndex = i;
-      await _moveTruckSmoothly(_routePoints[i], _routePoints[i + 1], generation);
+      await _moveTruckSmoothly(
+        _routePoints[i],
+        _routePoints[i + 1],
+        generation,
+      );
     }
     // Snap to the final point once all segments are complete.
     if (mounted && _animGeneration == generation) {
@@ -5344,7 +7272,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// implementation guide.  The [generation] parameter allows early exit when
   /// a new route animation has been started.
   Future<void> _moveTruckSmoothly(
-      LatLng from, LatLng to, int generation) async {
+    LatLng from,
+    LatLng to,
+    int generation,
+  ) async {
     final bearing = _bearingBetween(from, to);
     for (double t = 0.0; t <= 1.0 + 1e-9; t += 0.1) {
       if (!mounted || _animGeneration != generation) return;
@@ -5365,27 +7296,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Smoothly interpolates the truck marker from [from] to [to] in response
   /// to a new GPS fix, preventing sudden jumps on each location update.
   ///
-  /// Uses linear interpolation (lerp) over ~500 ms with 10 steps of 50 ms
-  /// each — the same cadence as [_moveTruckSmoothly] — so the marker glides
-  /// continuously between GPS updates, matching the feel of professional GPS
-  /// navigation apps.
+  /// Uses linear interpolation over ~420 ms with 14 frame-sized steps. The
+  /// native stream requests a 500 ms interval, so the marker reaches each real
+  /// fix before the next fix arrives instead of remaining almost one sample
+  /// behind the truck.
   ///
   /// The [generation] parameter allows early exit when a new GPS fix arrives
   /// before the current interpolation finishes; the stale animation stops and
   /// the newer one takes over seamlessly.
   Future<void> _interpolateToGpsPosition(
-      LatLng from, LatLng to, int generation) async {
-    for (int step = 1; step <= 10; step++) {
+    LatLng from,
+    LatLng to,
+    int generation,
+  ) async {
+    const steps = 14;
+    for (int step = 1; step <= steps; step++) {
       if (!mounted || _gpsInterpGeneration != generation) return;
-      await Future.delayed(const Duration(milliseconds: 50));
+      await Future.delayed(const Duration(milliseconds: 30));
       if (!mounted || _gpsInterpGeneration != generation) return;
-      final pos = _interpolate(from, to, step / 10.0);
+      final pos = _interpolate(from, to, step / steps);
       setState(() {
         _truckPosition = pos;
       });
-      if (_navigationMode) {
-        _followTruckCamera();
-      }
     }
   }
 
@@ -5443,7 +7375,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final lat2 = to.latitude * math.pi / 180.0;
     final dLng = (to.longitude - from.longitude) * math.pi / 180.0;
     final y = math.sin(dLng) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
     return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
   }
@@ -5466,12 +7399,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   /// Returns the great-circle distance in **miles** between two coordinates
   /// using the Haversine formula.
-  double _distanceMiles(
-      double lat1, double lng1, double lat2, double lng2) {
+  double _distanceMiles(double lat1, double lng1, double lat2, double lng2) {
     const r = 3958.8; // Earth's radius in miles
     final dLat = (lat2 - lat1) * math.pi / 180.0;
     final dLng = (lng2 - lng1) * math.pi / 180.0;
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(lat1 * math.pi / 180.0) *
             math.cos(lat2 * math.pi / 180.0) *
             math.sin(dLng / 2) *
@@ -5483,12 +7416,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// given coordinate.  Searches the **entire** list (unlike [_nearestRouteIndex]
   /// which starts from [_truckIndex]) so it works correctly for arbitrary POIs.
   int _findNearestRouteIndexForPoi(
-      double lat, double lng, List<RoutePoint> routePoints) {
+    double lat,
+    double lng,
+    List<RoutePoint> routePoints,
+  ) {
     double minDist = double.infinity;
     int minIdx = 0;
     for (int i = 0; i < routePoints.length; i++) {
-      final d =
-          _distanceMiles(lat, lng, routePoints[i].lat, routePoints[i].lng);
+      final d = _distanceMiles(
+        lat,
+        lng,
+        routePoints[i].lat,
+        routePoints[i].lng,
+      );
       if (d < minDist) {
         minDist = d;
         minIdx = i;
@@ -5500,13 +7440,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Sums the segment-by-segment route distance in **miles** between two
   /// indices in [points].  Returns 0 when [endIndex] ≤ [startIndex].
   double _routeDistanceMilesBetweenIndices(
-      List<RoutePoint> points, int startIndex, int endIndex) {
+    List<RoutePoint> points,
+    int startIndex,
+    int endIndex,
+  ) {
     if (endIndex <= startIndex) return 0.0;
     double total = 0.0;
     for (int i = startIndex; i < endIndex; i++) {
       total += _distanceMiles(
-        points[i].lat, points[i].lng,
-        points[i + 1].lat, points[i + 1].lng,
+        points[i].lat,
+        points[i].lng,
+        points[i + 1].lat,
+        points[i + 1].lng,
       );
     }
     return total;
@@ -5546,47 +7491,89 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }) {
     if (routePoints.isEmpty) return const [];
 
-    final driverIdx =
-        _findNearestRouteIndexForPoi(driverLat, driverLng, routePoints);
+    final driverIdx = _findNearestRouteIndexForPoi(
+      driverLat,
+      driverLng,
+      routePoints,
+    );
 
     final List<AheadTruckStop> ahead = [];
     for (final poi in truckStops) {
-      if (!_isPoiNearRoute(poi, routePoints,
-          maxDistanceMiles: maxOffRouteMiles)) {
+      if (!_isPoiNearRoute(
+        poi,
+        routePoints,
+        maxDistanceMiles: maxOffRouteMiles,
+      )) {
         continue;
       }
-      final poiIdx =
-          _findNearestRouteIndexForPoi(poi.latitude, poi.longitude, routePoints);
+      final poiIdx = _findNearestRouteIndexForPoi(
+        poi.latitude,
+        poi.longitude,
+        routePoints,
+      );
       if (poiIdx < driverIdx) continue; // behind the driver on the route
 
-      final routeMilesAhead =
-          _routeDistanceMilesBetweenIndices(routePoints, driverIdx, poiIdx);
-      if (routeMilesAhead < _poiPassedThresholdMiles) continue; // virtually passed (< 200 m)
-      if (routeMilesAhead > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
+      final routeMilesAhead = _routeDistanceMilesBetweenIndices(
+        routePoints,
+        driverIdx,
+        poiIdx,
+      );
+      if (routeMilesAhead < _poiPassedThresholdMiles)
+        continue; // virtually passed (< 200 m)
+      if (routeMilesAhead > _poiMaxAheadMiles)
+        continue; // beyond 50 km ahead — skip
 
-      ahead.add(AheadTruckStop(
-        poi: poi,
-        routeMilesAhead: routeMilesAhead,
-        nearestRouteIndex: poiIdx,
-      ));
+      ahead.add(
+        AheadTruckStop(
+          poi: poi,
+          routeMilesAhead: routeMilesAhead,
+          nearestRouteIndex: poiIdx,
+        ),
+      );
     }
 
     ahead.sort((a, b) => a.routeMilesAhead.compareTo(b.routeMilesAhead));
-    return ahead.take(2).toList();
+
+    // HERE/provider place feeds can return separate entrance records for the
+    // same travel center. Keep the closest route match so drivers do not see
+    // duplicate chips for one physical commercial truck stop.
+    final List<AheadTruckStop> uniqueFacilities = [];
+    for (final candidate in ahead) {
+      final candidateLogo = candidate.poi.logoName.trim().toLowerCase();
+      final candidateName = candidate.poi.name.trim().toLowerCase();
+      final isDuplicate = uniqueFacilities.any((existing) {
+        final existingLogo = existing.poi.logoName.trim().toLowerCase();
+        final existingName = existing.poi.name.trim().toLowerCase();
+        final sameFacilityIdentity =
+            (candidateLogo != 'truck_parking' &&
+                candidateLogo.isNotEmpty &&
+                candidateLogo == existingLogo) ||
+            candidateName == existingName;
+        if (!sameFacilityIdentity) return false;
+        return _distanceMiles(
+              candidate.poi.latitude,
+              candidate.poi.longitude,
+              existing.poi.latitude,
+              existing.poi.longitude,
+            ) <=
+            0.5;
+      });
+      if (!isDuplicate) uniqueFacilities.add(candidate);
+      if (uniqueFacilities.length == 2) break;
+    }
+    return uniqueFacilities;
   }
 
   /// Refreshes [_closestTruckStopsAhead] using the current driver position,
   /// active route polyline, and truck stop list.
   ///
-  /// Uses [_loadedPois] (loaded from `assets/locations.json`) as the primary
-  /// data source so the panel works for any route.  Falls back to [_truckStops]
-  /// (mock data) when [_loadedPois] has not yet been populated.
+  /// Uses [_loadedPois] loaded from the app's maintained POI assets.
   ///
   /// No-ops (and clears the list) when not navigating, when there is no
   /// driver position, or when route / stop data is unavailable.
   void _refreshClosestTruckStopsAhead() {
-    final bool hasStopData = _loadedPois.isNotEmpty || _truckStops.isNotEmpty;
-    if (!_isNavigating ||
+    final bool hasStopData = _loadedPois.isNotEmpty;
+    if (!_isLiveRouteAssistanceActive ||
         _truckPosition == null ||
         _routePoints.isEmpty ||
         !hasStopData) {
@@ -5601,57 +7588,36 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
         .toList(growable: false);
 
-    // Build the TruckStopPoi list via the unified Poi model.
-    // Convert PoiItem → Poi (unified model) → TruckStopPoi.
-    // Only entries with type == "truck_stop" are surfaced as chips.
-    final List<TruckStopPoi> pois;
-    if (_loadedPois.isNotEmpty) {
-      pois = _loadedPois
-          .map(Poi.fromPoiItem)
-          .where((p) => p.type == 'truck_stop')
-          .map((p) => TruckStopPoi(
-                id: p.id,
-                name: p.name,
-                brand: p.icon,
-                logoName: p.icon,
-                // Use the most precise coordinate available so the chip
-                // distance/ahead calculation uses the actual truck entrance
-                // rather than the property centre.
-                latitude: p.displayLat,
-                longitude: p.displayLng,
-                locationName: p.city.isNotEmpty
-                    ? '${p.city}, ${p.stateOrProvince}'
-                    : p.stateOrProvince,
-                exitNumber: p.exitNumber,
-              ))
-          .toList(growable: false);
-    } else {
-      // Convert TruckStop list to TruckStopPoi list, deriving logoName from
-      // the assetLogo path (e.g. 'assets/logo_brand_markers/pilot.png' → 'pilot').
-      pois = _truckStops.map((s) {
-        String logoName;
-        if (s.assetLogo != null) {
-          final path = s.assetLogo!;
-          final slashIdx = path.lastIndexOf('/');
-          final dotIdx = path.lastIndexOf('.');
-          final start = slashIdx >= 0 ? slashIdx + 1 : 0;
-          final end = dotIdx > start ? dotIdx : path.length;
-          logoName = start < end ? path.substring(start, end) : s.brand;
-        } else {
-          logoName = s.icon ?? s.brand.toLowerCase();
-        }
-        return TruckStopPoi(
-          id: s.id,
-          name: s.name,
-          brand: s.brand,
-          logoName: logoName,
-          latitude: s.position.latitude,
-          longitude: s.position.longitude,
-          locationName: s.address,
-          exitNumber: s.exitNumber,
-        );
-      }).toList(growable: false);
-    }
+    // Build directly from PoiItem so provider provenance and verified entrance
+    // metadata are preserved in the driver-facing detail sheet.
+    final List<TruckStopPoi> pois = _loadedPois
+        .where((p) => p.category == 'truck_stop')
+        .map((p) {
+          final liveParking = _nearestLiveParking(p.displayLat, p.displayLng);
+          final liveDiesel = _nearestLiveDiesel(p.displayLat, p.displayLng);
+          return TruckStopPoi(
+            id: p.id,
+            name: p.name,
+            brand: p.icon,
+            logoName: p.icon,
+            latitude: p.displayLat,
+            longitude: p.displayLng,
+            locationName: p.city.isNotEmpty
+                ? '${p.city}, ${p.stateOrProvince}'
+                : p.stateOrProvince,
+            address: p.address,
+            dataSource: p.dataSource,
+            verified: p.verified,
+            dieselPrice: liveDiesel?.cashPrice,
+            parkingStatus:
+                liveParking == null || liveParking.availability == 'UNKNOWN'
+                ? null
+                : liveParking.availability.replaceAll('_', ' ').toLowerCase(),
+            truckParkingSpaces: liveParking?.totalTruckSpaces,
+            exitNumber: p.exitNumber,
+          );
+        })
+        .toList(growable: false);
 
     final raw = _getClosestTruckStopsAheadOnRoute(
       driverLat: _truckPosition!.latitude,
@@ -5664,8 +7630,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // _NavStep with an exit number within 2 miles of the stop's location.
     final updated = raw.map((stop) {
       if (stop.poi.exitNumber != null) return stop;
-      final exit =
-          _findExitNumberNearLocation(stop.poi.latitude, stop.poi.longitude);
+      final exit = _findExitNumberNearLocation(
+        stop.poi.latitude,
+        stop.poi.longitude,
+      );
       if (exit == null) return stop;
       final enriched = TruckStopPoi(
         id: stop.poi.id,
@@ -5675,6 +7643,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         latitude: stop.poi.latitude,
         longitude: stop.poi.longitude,
         locationName: stop.poi.locationName,
+        address: stop.poi.address,
+        dataSource: stop.poi.dataSource,
+        verified: stop.poi.verified,
+        openNow: stop.poi.openNow,
+        openingHours: stop.poi.openingHours,
+        dieselPrice: stop.poi.dieselPrice,
+        defPrice: stop.poi.defPrice,
+        parkingStatus: stop.poi.parkingStatus,
+        truckParkingSpaces: stop.poi.truckParkingSpaces,
+        amenities: stop.poi.amenities,
         exitNumber: exit,
       );
       return AheadTruckStop(
@@ -5687,16 +7665,59 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     setState(() => _closestTruckStopsAhead = updated);
   }
 
+  LiveParkingLocation? _nearestLiveParking(double latitude, double longitude) {
+    LiveParkingLocation? closest;
+    var closestMiles = 0.5;
+    for (final parking in _liveParkingLocations) {
+      final miles = _distanceMiles(
+        latitude,
+        longitude,
+        parking.position.latitude,
+        parking.position.longitude,
+      );
+      if (miles < closestMiles) {
+        closest = parking;
+        closestMiles = miles;
+      }
+    }
+    return closest;
+  }
+
+  LiveDieselStation? _nearestLiveDiesel(double latitude, double longitude) {
+    LiveDieselStation? closest;
+    var closestMiles = 0.5;
+    for (final station in _liveDieselStations) {
+      final miles = _distanceMiles(
+        latitude,
+        longitude,
+        station.position.latitude,
+        station.position.longitude,
+      );
+      if (miles < closestMiles) {
+        closest = station;
+        closestMiles = miles;
+      }
+    }
+    return closest;
+  }
+
   /// Returns the exit number from the nearest [_NavStep] that has one and is
   /// within [maxMiles] of the given coordinate, or null when none qualifies.
-  String? _findExitNumberNearLocation(double lat, double lng,
-      {double maxMiles = 2.0}) {
+  String? _findExitNumberNearLocation(
+    double lat,
+    double lng, {
+    double maxMiles = 2.0,
+  }) {
     String? best;
     double bestDist = double.infinity;
     for (final step in _navSteps) {
       if (step.exitNumber == null) continue;
       final d = _distanceMiles(
-          lat, lng, step.location.latitude, step.location.longitude);
+        lat,
+        lng,
+        step.location.latitude,
+        step.location.longitude,
+      );
       if (d < maxMiles && d < bestDist) {
         bestDist = d;
         best = step.exitNumber;
@@ -5715,7 +7736,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   static const _restrictedZones = [
     {'lat': 40.123, 'lng': -120.456, 'type': 'low_bridge', 'limit_value': 12.6},
     {'lat': 41.234, 'lng': -121.567, 'type': 'low_bridge', 'limit_value': 13.5},
-    {'lat': 39.876, 'lng': -119.234, 'type': 'weight_limit', 'limit_value': 40.0},
+    {
+      'lat': 39.876,
+      'lng': -119.234,
+      'type': 'weight_limit',
+      'limit_value': 40.0,
+    },
   ];
 
   // ── Mapbox Directions API integration ─────────────────────────────────────
@@ -5813,10 +7839,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_restrictedZones].
   bool _isTruckSafe(List<LatLng> routePoints) {
     for (final zone in _restrictedZones) {
-      final zonePt =
-          LatLng(zone['lat']! as double, zone['lng']! as double);
+      final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
       for (final pt in routePoints) {
-        if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters) return false;
+        if (_distanceBetween(pt, zonePt) <=
+            _restrictionProximityThresholdMeters)
+          return false;
       }
     }
     return true;
@@ -5909,58 +7936,171 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Fetches a route from [origin] to [destination] via the Mapbox Directions
-  /// API.  When [viaPoint] is provided the coordinates are injected as a
-  /// shaping point between origin and destination, guiding the route away from
-  /// a restriction.
+  String _truckRouteFailureMessage(Object error) {
+    if (error is TimeoutException) {
+      return 'Truck routing timed out. Check the connection and try again.';
+    }
+    if (error is ApiException) {
+      if (error.code == 'UNSAFE_ROUTE') return error.message;
+      if (error.statusCode == 400 || error.statusCode == 422) {
+        return 'HERE could not calculate this truck route. Check the truck profile and destination.';
+      }
+      if (error.statusCode >= 500) {
+        return 'The truck-routing service is temporarily unavailable. Please try again.';
+      }
+      if (!error.message.contains('{') && !error.message.contains('\n')) {
+        return error.message;
+      }
+    }
+    return 'Unable to calculate a truck-safe route. Please try again.';
+  }
+
+  /// Parses the normalized truck-route response returned by the selected
+  /// backend provider. Provider-specific fields remain behind the backend
+  /// adapter so this screen never has to merge HERE and Trimble payloads.
   ///
   /// Returns a [RouteResult] containing the decoded polyline points, parsed
   /// turn-by-turn steps, distance in miles, and duration in seconds.
   /// Returns `null` on error or when no routes are returned.
+  RouteResult? _parseProviderRouteResult(
+    Map<String, dynamic> route, {
+    String? inheritedProvider,
+    List<RouteResult> alternatives = const [],
+  }) {
+    final provider = route['provider']?.toString().trim();
+    final resolvedProvider = provider == null || provider.isEmpty
+        ? (inheritedProvider?.trim().isNotEmpty == true
+              ? inheritedProvider!.trim()
+              : 'Unknown')
+        : provider;
+    final geometry = route['routeGeometry'] as List? ?? const [];
+    final decoded = geometry
+        .whereType<List>()
+        .where((point) => point.length >= 2)
+        .map(
+          (point) => LatLng(
+            (point[1] as num).toDouble(),
+            (point[0] as num).toDouble(),
+          ),
+        )
+        .toList(growable: false);
+    if (decoded.length < 2) return null;
+
+    final maneuverJson = route['turnByTurn'] as List? ?? const [];
+    final steps = maneuverJson.indexed
+        .where((entry) => entry.$2 is Map<String, dynamic>)
+        .map((entry) {
+          final index = entry.$1;
+          final item = entry.$2 as Map<String, dynamic>;
+          final offset = ((item['offset'] as num?)?.toInt() ?? index).clamp(
+            0,
+            decoded.length - 1,
+          );
+          return _NavStep(
+            item['instruction']?.toString() ?? 'Continue',
+            decoded[offset],
+            maneuver: item['direction']?.toString() ?? 'straight',
+            type: item['action']?.toString() ?? '',
+            distanceMeters:
+                ((item['distanceMiles'] as num?)?.toDouble() ?? 0) *
+                _metersPerMile,
+            name: item['roadName']?.toString() ?? '',
+            exitNumber: item['exitNumber']?.toString(),
+            currentRoadName: item['currentRoadName']?.toString(),
+            nextRoadName: item['nextRoadName']?.toString(),
+          );
+        })
+        .toList(growable: false);
+
+    final rawNotices =
+        (route['alerts'] as List?) ?? (route['notices'] as List?) ?? const [];
+    final notices = rawNotices
+        .map((item) {
+          if (item is Map<String, dynamic>) {
+            final code = item['code']?.toString();
+            final title = item['title']?.toString();
+            if (title != null && title.trim().isNotEmpty) {
+              return code == null ? title : '$code: $title';
+            }
+            return code ?? '';
+          }
+          return item.toString();
+        })
+        .where((item) => item.trim().isNotEmpty)
+        .toList(growable: false);
+
+    return RouteResult(
+      provider: resolvedProvider,
+      points: _simplifyRoute(decoded),
+      steps: steps,
+      distanceMiles: (route['distanceMiles'] as num).toDouble(),
+      durationSeconds: (route['durationSeconds'] as num).toInt(),
+      providerNotices: notices,
+      alternatives: alternatives,
+    );
+  }
+
   Future<RouteResult?> _fetchRouteFromApi(
     LatLng origin,
     LatLng destination, {
     LatLng? viaPoint,
   }) async {
+    final profile = _activeTruckProfile;
+    if (profile == null) {
+      throw StateError('Select a truck profile before calculating a route.');
+    }
     try {
-      final StringBuffer coords = StringBuffer()
-        ..write('${origin.longitude},${origin.latitude}');
-      if (viaPoint != null) {
-        coords.write(';${viaPoint.longitude},${viaPoint.latitude}');
+      final truck = profile.toJson()
+        ..remove('name')
+        ..remove('isDefault');
+      final route = await widget.api
+          .postJson('/routing/truck-route', {
+            'origin': {'lat': origin.latitude, 'lng': origin.longitude},
+            'destination': {
+              'lat': destination.latitude,
+              'lng': destination.longitude,
+            },
+            if (viaPoint != null)
+              'viaStops': [
+                {'lat': viaPoint.latitude, 'lng': viaPoint.longitude},
+              ],
+            'truck': truck,
+            'routeMode': 'fastest',
+            'alternatives': 2,
+          })
+          .timeout(const Duration(seconds: 30));
+      if (route['truckSafe'] != true || route['navigationAllowed'] != true) {
+        throw const ApiException(
+          409,
+          'UNSAFE_ROUTE',
+          'The provider did not return a truck-safe route.',
+        );
       }
-      coords.write(';${destination.longitude},${destination.latitude}');
 
-      final url = 'https://api.mapbox.com/directions/v5/mapbox/driving-traffic/'
-          '${coords.toString()}'
-          '?overview=full'
-          '&geometries=polyline6'
-          '&steps=true'
-          '&alternatives=false'
-          '&exclude=ferry'
-          '&access_token=$_mapboxToken';
-
-      final res = await http.get(Uri.parse(url)).timeout(
-        const Duration(seconds: 10),
+      final provider = route['provider']?.toString().trim();
+      final alternatives = (route['alternatives'] as List? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(
+            (candidate) => _parseProviderRouteResult(
+              candidate,
+              inheritedProvider: provider,
+            ),
+          )
+          .whereType<RouteResult>()
+          .toList(growable: false);
+      final parsed = _parseProviderRouteResult(
+        route,
+        alternatives: alternatives,
       );
-      final data = jsonDecode(res.body);
-      final routes = data['routes'] as List?;
-      if (routes == null || routes.isEmpty) return null;
-      final route = routes[0] as Map<String, dynamic>;
-      final decoded = _decodePolyline6(route['geometry'] as String);
-      final points = _simplifyRoute(decoded);
-      final steps = _extractAllSteps(route);
-      final distanceMiles = (route['distance'] as num).toDouble() / 1609.34;
-      final durationSeconds = (route['duration'] as num).toInt();
-      return RouteResult(
-        points: points,
-        steps: steps,
-        distanceMiles: distanceMiles,
-        durationSeconds: durationSeconds,
-      );
+      if (parsed == null) {
+        throw StateError(
+          'The truck-routing provider returned incomplete route geometry.',
+        );
+      }
+      return parsed;
     } catch (e) {
-      // Only log internal route-fetch errors in debug builds.
       if (kDebugMode) debugPrint('_fetchRouteFromApi error: $e');
-      return null;
+      rethrow;
     }
   }
 
@@ -5972,63 +8112,94 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// found it becomes the current route and the UI is updated.  If no safe
   /// route is found after all attempts [_showNoSafeRouteDialog] is called.
   Future<void> _smartRerouteAroundRestrictions() async {
-    if (_isRestrictionRerouting) return; // guard against re-entrant calls
+    final origin = _truckPosition;
+    if (origin == null || _isRestrictionRerouting) return;
+    await _submitRouteCalculation(
+      _RouteCalculationRequest(
+        kind: _RouteCalculationKind.restriction,
+        reason: 'restriction-avoidance',
+        destination: _selectedDestination ?? _destination,
+        origin: origin,
+      ),
+    );
+  }
+
+  Future<void> _executeRestrictionRouteCalculation(
+    _RouteCalculationRequest request,
+    int requestId,
+    bool Function() isCurrent,
+  ) async {
+    final origin = request.origin;
+    if (origin == null || !mounted || !isCurrent()) return;
+
     setState(() {
       _isRestrictionRerouting = true;
       _restrictionRerouteAttempts = 0;
+      _navStatus = 'Checking truck restrictions…';
     });
 
-    if (_truckPosition == null) {
-      setState(() => _isRestrictionRerouting = false);
-      return;
-    }
-    final origin = _truckPosition!;
-    final dest = _selectedDestination ?? _destination;
+    RouteResult? bestResult;
+    var candidatePoints = List<LatLng>.of(_routePoints);
+    try {
+      while (_restrictionRerouteAttempts < _maxRestrictionReroutes &&
+          isCurrent()) {
+        final violation = _firstRouteViolation(candidatePoints);
+        if (violation == null) break;
 
-    List<LatLng> candidatePoints = _routePoints;
-
-    while (_restrictionRerouteAttempts < _maxRestrictionReroutes) {
-      final violation = _firstRouteViolation(candidatePoints);
-      if (violation == null) {
-        // Route is safe — apply it if it differs from what is already shown.
-        if (candidatePoints != _routePoints) {
-          setState(() {
-            _routePoints = candidatePoints.toSet().toList();
-          });
+        final attempt = _restrictionRerouteAttempts + 1;
+        if (mounted && isCurrent()) {
+          setState(() => _restrictionRerouteAttempts = attempt);
         }
-        break;
+        final avoidPoint = _buildAvoidPoint(
+          violation,
+          attemptNumber: attempt - 1,
+        );
+        final result = await _fetchRouteFromApi(
+          origin,
+          request.destination,
+          viaPoint: avoidPoint,
+        );
+        if (!mounted || !isCurrent()) return;
+        if (result == null || result.points.isEmpty) break;
+        bestResult = result;
+        candidatePoints = result.points;
       }
 
-      setState(() => _restrictionRerouteAttempts++);
-      final avoidPt = _buildAvoidPoint(
-        violation,
-        attemptNumber: _restrictionRerouteAttempts - 1,
-      );
-
-      final result = await _fetchRouteFromApi(origin, dest, viaPoint: avoidPt);
-      if (result == null || result.points.isEmpty) {
-        // API call failed — stop retrying.
-        break;
+      if (!mounted || !isCurrent()) return;
+      if (bestResult != null) {
+        final results = <RouteResult>[bestResult, ...bestResult.alternatives];
+        final options = _buildProviderRouteOptions(results);
+        _applyAuthoritativeRouteResult(
+          bestResult,
+          options: options,
+          selectedIndex: 0,
+          preserveLiveSession: _isLiveRouteAssistanceActive,
+        );
+        _updateRouteViolationWarnings();
+        _updateTripProgressFromRoute(
+          bestResult.distanceMiles,
+          bestResult.durationSeconds,
+        );
+        _refreshRoutePoiSourceIfNeeded(force: true);
+        debugPrint(
+          '[Reroute][$requestId] APPLIED restriction route '
+          'provider=${bestResult.provider}',
+        );
       }
-      candidatePoints = result.points;
-    }
 
-    // Final check after all attempts.
-    final stillViolated = _firstRouteViolation(candidatePoints) != null;
-    if (stillViolated) {
-      // Apply the best candidate we found (even if imperfect) so the driver
-      // has a route, then warn them.
-      if (candidatePoints.isNotEmpty && candidatePoints != _routePoints) {
-        setState(() {
-          _routePoints = candidatePoints.toSet().toList();
+      if (_firstRouteViolation(candidatePoints) != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && isCurrent()) _showNoSafeRouteDialog();
         });
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showNoSafeRouteDialog();
-      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRestrictionRerouting = false;
+          if (isCurrent()) _navStatus = null;
+        });
+      }
     }
-
-    if (mounted) setState(() => _isRestrictionRerouting = false);
   }
 
   /// Shows an [AlertDialog] warning the driver that no restriction-free route
@@ -6151,8 +8322,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   // ── Header ───────────────────────────────────────────────
                   Row(
                     children: [
-                      const Icon(Icons.warning_amber,
-                          color: Colors.red, size: 28),
+                      const Icon(
+                        Icons.warning_amber,
+                        color: Colors.red,
+                        size: 28,
+                      ),
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
@@ -6169,8 +8343,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   const SizedBox(height: 6),
                   Text(
                     '${violations.length} violation${violations.length == 1 ? '' : 's'} detected on this route.',
-                    style: const TextStyle(
-                        fontSize: 13, color: Colors.black54),
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                   const SizedBox(height: 14),
                   // ── Violations list ──────────────────────────────────────
@@ -6179,8 +8352,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       controller: scrollController,
                       shrinkWrap: true,
                       itemCount: violations.length,
-                      separatorBuilder: (_, __) =>
-                          const Divider(height: 1),
+                      separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
                         final v = violations[i];
                         return _buildViolationTile(v);
@@ -6197,8 +8369,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           icon: const Icon(Icons.alt_route),
                           label: const Text('Get Safe Route'),
                           style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                             side: const BorderSide(color: Colors.blue),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
@@ -6219,8 +8390,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
                             foregroundColor: Colors.white,
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
                             ),
@@ -6243,8 +8413,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// inside the restriction violations bottom sheet.
   Widget _buildViolationTile(TruckRestriction v) {
     final style = _restrictionStyle(v.type);
-    final String limitText = _formatLimitText(v.limitValue, v.limitUnit,
-        prefix: ' — limit: ');
+    final String limitText = _formatLimitText(
+      v.limitValue,
+      v.limitUnit,
+      prefix: ' — limit: ',
+    );
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 4),
@@ -6270,7 +8443,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_buildRestrictionMarkers], and [_buildRestrictionAlertCard] all use
   /// identical styling without duplication.
   ({IconData icon, Color color, String label}) _restrictionStyle(
-      RestrictionType type) {
+    RestrictionType type,
+  ) {
     switch (type) {
       case RestrictionType.lowBridge:
         return (
@@ -6373,23 +8547,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(r.description,
-                style: const TextStyle(fontSize: 14)),
+            Text(r.description, style: const TextStyle(fontSize: 14)),
             if (r.limitValue != null && r.limitUnit != null) ...[
               const SizedBox(height: 8),
               Text(
                 'Limit:${_formatLimitText(r.limitValue, r.limitUnit, prefix: ' ')}',
                 style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
             const SizedBox(height: 12),
             Row(
               children: [
                 Icon(
-                  violates
-                      ? Icons.warning_amber
-                      : Icons.check_circle_outline,
+                  violates ? Icons.warning_amber : Icons.check_circle_outline,
                   color: violates ? Colors.red : Colors.green,
                   size: 20,
                 ),
@@ -6480,14 +8653,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget _buildRestrictionAlertCard() {
     final r = _restrictionAhead!;
     final style = _restrictionStyle(r.type);
-    final String limitText =
-        _formatLimitText(r.limitValue, r.limitUnit, prefix: ' — ');
+    final String limitText = _formatLimitText(
+      r.limitValue,
+      r.limitUnit,
+      prefix: ' — ',
+    );
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: style.color,
           borderRadius: BorderRadius.circular(12),
@@ -6517,7 +8692,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       height: 1.2,
                     ),
                     maxLines: 1,
-                          ),
+                  ),
                   Text(
                     '${style.label}$limitText · Approaching',
                     style: const TextStyle(
@@ -6541,27 +8716,555 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  // ── Warning sign methods ──────────────────────────────────────────────────
+  // ── Provider-backed road controls ─────────────────────────────────────────
 
-  /// Returns `true` when [sign] is within [_warningProximityMeters] of any
-  /// segment of [routePoints].
-  ///
-  /// Uses the spherical cross-track distance formula (via [_crossTrackDistance])
-  /// so that the check is accurate anywhere on the globe.  Falls back to a
-  /// simple point-to-point check for route polylines shorter than 2 points.
-  bool _isWarningNearRoute(WarningSign sign, List<LatLng> routePoints) {
-    if (routePoints.isEmpty) return false;
-    final signPoint = LatLng(sign.lat, sign.lng);
-    if (routePoints.length == 1) {
-      return _distanceBetween(signPoint, routePoints.first) <=
-          _warningProximityMeters;
-    }
-    for (int i = 0; i < routePoints.length - 1; i++) {
-      final d = _crossTrackDistance(signPoint, routePoints[i], routePoints[i + 1]);
-      if (d <= _warningProximityMeters) return true;
-    }
-    return false;
+  void _scheduleRoadFeatureRefresh({LatLng? center, bool routeAware = false}) {
+    _roadFeatureRefreshTimer?.cancel();
+    _roadFeatureRefreshTimer = Timer(const Duration(milliseconds: 450), () {
+      unawaited(_refreshRoadFeatures(center: center, routeAware: routeAware));
+    });
   }
+
+  Future<void> _refreshRoadFeatures({
+    LatLng? center,
+    bool routeAware = false,
+  }) async {
+    if (!mounted) return;
+    final double zoom = _mapReady ? _mapController.camera.zoom : 15.0;
+    if (!routeAware && zoom < _roadFeatureMinZoom) return;
+
+    final LatLng? requestCenter =
+        center ?? (_mapReady ? _mapController.camera.center : _truckPosition);
+    if (requestCenter == null) return;
+
+    final double radiusMeters = routeAware
+        ? 3500
+        : zoom >= 17
+        ? 900
+        : zoom >= 16
+        ? 1500
+        : zoom >= 15
+        ? 2600
+        : 3200;
+    final lastCenter = _lastRoadFeatureCenter;
+    final lastLoaded = _lastRoadFeatureLoadedAt;
+    if (lastCenter != null &&
+        lastLoaded != null &&
+        DateTime.now().difference(lastLoaded) < const Duration(minutes: 5) &&
+        _distanceBetween(lastCenter, requestCenter) < radiusMeters * 0.28) {
+      return;
+    }
+
+    final int generation = ++_roadFeatureRequestGeneration;
+    try {
+      final features = await _liveRoadDataService.loadRoadFeaturesNearby(
+        center: requestCenter,
+        radiusMeters: radiusMeters,
+        limit: 300,
+      );
+      if (!mounted || generation != _roadFeatureRequestGeneration) return;
+      final deduplicatedFeatures = _deduplicateRoadFeatures(features);
+      setState(() {
+        _roadFeatures = deduplicatedFeatures;
+        _lastRoadFeatureCenter = requestCenter;
+        _lastRoadFeatureLoadedAt = DateTime.now();
+        _roadFeatureRouteSignature = 0;
+        if (_roadFeatureAhead != null &&
+            !deduplicatedFeatures.any(
+              (feature) => feature.id == _roadFeatureAhead!.id,
+            )) {
+          _roadFeatureAhead = null;
+          _roadFeatureAheadMeters = null;
+        }
+      });
+      _ensureRoadFeatureRouteMatches();
+    } catch (error) {
+      // Do not create fallback coordinates. Existing markers remain until a
+      // later provider refresh succeeds.
+      debugPrint('[RoadFeatures] Provider refresh unavailable: $error');
+    }
+  }
+
+  List<RoadFeature> _deduplicateRoadFeatures(List<RoadFeature> features) {
+    final byId = <String, RoadFeature>{};
+    final accepted = <RoadFeature>[];
+    for (final feature in features) {
+      if (byId.containsKey(feature.id)) continue;
+      final spatialDuplicate = accepted.any(
+        (other) =>
+            other.kind == feature.kind &&
+            _distanceBetween(other.position, feature.position) < 28,
+      );
+      if (spatialDuplicate) continue;
+      byId[feature.id] = feature;
+      accepted.add(feature);
+    }
+    return accepted;
+  }
+
+  void _ensureRoadFeatureRouteMatches() {
+    if (_routePoints.isEmpty || _roadFeatures.isEmpty) {
+      _roadFeatureRouteIndices.clear();
+      _roadFeatureCrossTrackMeters.clear();
+      _roadFeatureRouteOffsetsMeters.clear();
+      _routeCumulativeMeters = const [];
+      _roadFeatureRouteSignature = 0;
+      return;
+    }
+    final first = _routePoints.first;
+    final last = _routePoints.last;
+    final signature = Object.hash(
+      _routePoints.length,
+      first.latitude,
+      first.longitude,
+      last.latitude,
+      last.longitude,
+      _selectedRouteOptionIndex,
+      Object.hashAll(_roadFeatures.map((feature) => feature.id)),
+    );
+    if (signature == _roadFeatureRouteSignature &&
+        _roadFeatureRouteIndices.length == _roadFeatures.length &&
+        _roadFeatureRouteOffsetsMeters.length == _roadFeatures.length) {
+      return;
+    }
+
+    final cumulative = List<double>.filled(_routePoints.length, 0);
+    for (int i = 1; i < _routePoints.length; i++) {
+      cumulative[i] =
+          cumulative[i - 1] +
+          _distanceBetween(_routePoints[i - 1], _routePoints[i]);
+    }
+
+    _roadFeatureRouteIndices.clear();
+    _roadFeatureCrossTrackMeters.clear();
+    _roadFeatureRouteOffsetsMeters.clear();
+    for (final feature in _roadFeatures) {
+      final projection = projectPointToRoute(feature.position, _routePoints);
+      if (projection == null) continue;
+      final nearestIndex =
+          projection.segmentIndex + (projection.segmentFraction >= 0.5 ? 1 : 0);
+      _roadFeatureRouteIndices[feature.id] = math.max(
+        0,
+        math.min(nearestIndex, _routePoints.length - 1),
+      );
+      _roadFeatureCrossTrackMeters[feature.id] = projection.distanceMeters;
+      _roadFeatureRouteOffsetsMeters[feature.id] = projection.routeOffsetMeters;
+    }
+    _routeCumulativeMeters = cumulative;
+    _roadFeatureRouteSignature = signature;
+  }
+
+  /// Road controls must sit very close to the selected route. Stop/yield signs
+  /// use the tightest corridor so controls belonging to intersecting side roads
+  /// are not presented as instructions for the driver's road.
+  double _roadFeatureRouteCorridorFor(RoadFeature feature) {
+    return switch (feature.kind) {
+      'STOP_SIGN' || 'YIELD_SIGN' => 12.0,
+      'TRAFFIC_SIGNAL' => 20.0,
+      'SPEED_LIMIT' || 'ROAD_SIGN' || 'WARNING_SIGN' => 30.0,
+      'RAILROAD_CROSSING' => 35.0,
+      _ => _roadFeatureRouteCorridorMeters,
+    };
+  }
+
+  double _roadFeatureTriggerMeters(RoadFeature feature) {
+    switch (feature.kind) {
+      case 'WARNING_SIGN':
+      case 'RAILROAD_CROSSING':
+        return 1609.344;
+      case 'SPEED_LIMIT':
+      case 'ROAD_SIGN':
+        return 804.672;
+      case 'TRAFFIC_SIGNAL':
+        return 500;
+      case 'STOP_SIGN':
+      case 'YIELD_SIGN':
+        return 402.336;
+      default:
+        return 500;
+    }
+  }
+
+  void _checkRoadFeatureApproachAlerts(LatLng currentPosition) {
+    if (!(_isNavigating || _routePreviewActive) ||
+        _routePoints.length < 2 ||
+        _roadFeatures.isEmpty) {
+      if (_roadFeatureAhead != null && mounted) {
+        setState(() {
+          _roadFeatureAhead = null;
+          _roadFeatureAheadMeters = null;
+        });
+      }
+      return;
+    }
+
+    _ensureRoadFeatureRouteMatches();
+    if (_routeCumulativeMeters.length != _routePoints.length) return;
+    final currentProjection = projectPointToRoute(
+      currentPosition,
+      _routePoints,
+    );
+    if (currentProjection == null) return;
+    final double currentOffset = currentProjection.routeOffsetMeters;
+    RoadFeature? closest;
+    double closestAhead = double.infinity;
+
+    for (final feature in _roadFeatures) {
+      final double? featureOffset = _roadFeatureRouteOffsetsMeters[feature.id];
+      final double crossTrack =
+          _roadFeatureCrossTrackMeters[feature.id] ?? double.infinity;
+      if (featureOffset == null ||
+          crossTrack > _roadFeatureRouteCorridorFor(feature)) {
+        continue;
+      }
+      final double ahead = featureOffset - currentOffset;
+      if (ahead < -45 || ahead > _roadFeatureTriggerMeters(feature)) continue;
+      if (ahead < closestAhead) {
+        closest = feature;
+        closestAhead = ahead;
+      }
+    }
+
+    if (closest == null) {
+      if (_roadFeatureAhead != null && mounted) {
+        setState(() {
+          _roadFeatureAhead = null;
+          _roadFeatureAheadMeters = null;
+        });
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _roadFeatureAhead = closest;
+        _roadFeatureAheadMeters = closestAhead.clamp(0, double.infinity);
+      });
+    }
+
+    // Speak once while genuinely moving. If the truck is parked when the
+    // feature first becomes visible, it remains eligible until movement starts.
+    if (_currentSpeedMps >= 1.0 && _roadFeatureAlerted.add(closest.id)) {
+      final distance = closestAhead < 305
+          ? '${(closestAhead * 3.28084).round()} feet'
+          : '${(closestAhead / 1609.344).toStringAsFixed(1)} miles';
+      _speakAlert('${closest.title} ahead in $distance');
+    }
+  }
+
+  List<Marker> _buildRoadFeatureMarkers() {
+    if (!_navSettings.viewRoadSign ||
+        !_mapReady ||
+        !_isLiveRouteAssistanceActive ||
+        _routePoints.length < 2) {
+      return const [];
+    }
+    final zoom = _mapController.camera.zoom;
+    if (zoom < _roadFeatureMinZoom) return const [];
+    _ensureRoadFeatureRouteMatches();
+    final currentProjection = projectPointToRoute(
+      _truckPosition ?? _routePoints.first,
+      _routePoints,
+    );
+    final currentOffset = currentProjection?.routeOffsetMeters ?? 0;
+
+    final candidates = <RoadFeature>[];
+    final candidateIds = <String>{};
+    for (final feature in _roadFeatures) {
+      if (!candidateIds.add(feature.id)) continue;
+      final crossTrack =
+          _roadFeatureCrossTrackMeters[feature.id] ?? double.infinity;
+      final featureOffset = _roadFeatureRouteOffsetsMeters[feature.id];
+      if (featureOffset == null ||
+          crossTrack > _roadFeatureRouteCorridorFor(feature) ||
+          featureOffset < currentOffset - 35) {
+        continue;
+      }
+      candidates.add(feature);
+    }
+
+    // While driving, order controls by route progress and keep the display
+    // focused on what the driver will encounter next. OpenStreetMap can expose
+    // every stop sign around a four-way intersection; drawing all of them looks
+    // like four simultaneous stops even though only one belongs to this route.
+    candidates.sort((a, b) {
+      final aOffset = _roadFeatureRouteOffsetsMeters[a.id] ?? double.infinity;
+      final bOffset = _roadFeatureRouteOffsetsMeters[b.id] ?? double.infinity;
+      return aOffset.compareTo(bOffset);
+    });
+
+    final markers = <Marker>[];
+    final visibleByKind = <String, int>{};
+    for (final feature in candidates) {
+      final limit = switch (feature.kind) {
+        'WARNING_SIGN' || 'ROAD_SIGN' => 2,
+        _ => 1,
+      };
+      final visibleCount = visibleByKind[feature.kind] ?? 0;
+      if (visibleCount >= limit) continue;
+      if (markers.length >= 7) break;
+      visibleByKind[feature.kind] = visibleCount + 1;
+      markers.add(
+        Marker(
+          point: feature.position,
+          width: 46,
+          height: 46,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            key: ValueKey<String>('road-feature-${feature.id}'),
+            onTap: () => _showRoadFeatureInfo(feature),
+            child: _buildRoadFeatureMarker(feature),
+          ),
+        ),
+      );
+    }
+    return markers;
+  }
+
+  Color _roadFeatureColor(RoadFeature feature) {
+    switch (feature.kind) {
+      case 'STOP_SIGN':
+        return const Color(0xFFD32F2F);
+      case 'YIELD_SIGN':
+      case 'WARNING_SIGN':
+      case 'RAILROAD_CROSSING':
+        return const Color(0xFFFFB300);
+      case 'TRAFFIC_SIGNAL':
+        return const Color(0xFF111827);
+      default:
+        return const Color(0xFF1565C0);
+    }
+  }
+
+  IconData _roadFeatureIcon(RoadFeature feature) {
+    switch (feature.kind) {
+      case 'TRAFFIC_SIGNAL':
+        return Icons.traffic_rounded;
+      case 'STOP_SIGN':
+        return Icons.front_hand_rounded;
+      case 'YIELD_SIGN':
+        return Icons.change_history_rounded;
+      case 'WARNING_SIGN':
+        return Icons.warning_amber_rounded;
+      case 'RAILROAD_CROSSING':
+        return Icons.train_rounded;
+      case 'SPEED_LIMIT':
+        return Icons.speed_rounded;
+      default:
+        return Icons.signpost_rounded;
+    }
+  }
+
+  Widget _buildRoadFeatureMarker(RoadFeature feature) {
+    if (feature.kind == 'TRAFFIC_SIGNAL') {
+      return Container(
+        width: 38,
+        height: 22,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827),
+          border: Border.all(color: Colors.white, width: 2),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 5)],
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _SignalLamp(Color(0xFFE53935)),
+            _SignalLamp(Color(0xFFFFC107)),
+            _SignalLamp(Color(0xFF43A047)),
+          ],
+        ),
+      );
+    }
+    if (feature.kind == 'STOP_SIGN') {
+      return ClipPath(
+        clipper: const _OctagonClipper(),
+        child: Container(
+          width: 42,
+          height: 42,
+          color: const Color(0xFFD32F2F),
+          alignment: Alignment.center,
+          child: const Text(
+            'STOP',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 9,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      );
+    }
+    if (feature.kind == 'WARNING_SIGN') {
+      return Transform.rotate(
+        angle: math.pi / 4,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFC400),
+            border: Border.all(color: Colors.black, width: 2),
+            borderRadius: BorderRadius.circular(3),
+            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 5)],
+          ),
+          child: Transform.rotate(
+            angle: -math.pi / 4,
+            child: const Icon(Icons.warning_amber_rounded, size: 19),
+          ),
+        ),
+      );
+    }
+    if (feature.kind == 'YIELD_SIGN') {
+      return Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFFD32F2F), width: 3),
+        ),
+        child: const Icon(
+          Icons.change_history_rounded,
+          color: Color(0xFFD32F2F),
+        ),
+      );
+    }
+    if (feature.kind == 'SPEED_LIMIT') {
+      return Container(
+        width: 34,
+        height: 42,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: Colors.black87, width: 2),
+          borderRadius: BorderRadius.circular(4),
+          boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+        ),
+        child: Text(
+          feature.value ?? 'SPEED',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900),
+        ),
+      );
+    }
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: _roadFeatureColor(feature),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 5)],
+      ),
+      child: Icon(_roadFeatureIcon(feature), color: Colors.white, size: 23),
+    );
+  }
+
+  void _showRoadFeatureInfo(RoadFeature feature) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(_roadFeatureIcon(feature), color: _roadFeatureColor(feature)),
+            const SizedBox(width: 10),
+            Expanded(child: Text(feature.title)),
+          ],
+        ),
+        content: Text(
+          '${feature.provider} mapped location'
+          '${feature.value == null ? '' : '\nCode/value: ${feature.value}'}'
+          '\n\nRoad-control locations are advisory map context. '
+          'Truck restrictions continue to use authoritative HERE and DOT data.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoadFeatureAlertBanner() {
+    final feature = _roadFeatureAhead!;
+    final distanceMeters = _roadFeatureAheadMeters ?? 0;
+    final distance = distanceMeters < 305
+        ? '${(distanceMeters * 3.28084).round()} ft ahead'
+        : '${(distanceMeters / 1609.344).toStringAsFixed(1)} mi ahead';
+    final color = _roadFeatureColor(feature);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Semantics(
+        button: true,
+        label: '${feature.title}, $distance. Tap for details.',
+        child: Material(
+          color: const Color(0xFF142235),
+          elevation: 5,
+          shadowColor: Colors.black45,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _showRoadFeatureInfo(feature),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: color, width: 2),
+              ),
+              child: Row(
+                children: [
+                  Icon(_roadFeatureIcon(feature), color: color, size: 28),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          feature.title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        Text(
+                          '$distance • ${feature.provider} • Tap for details',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Dismiss warning',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() {
+                      _roadFeatureAlerted.add(feature.id);
+                      _roadFeatureAhead = null;
+                      _roadFeatureAheadMeters = null;
+                    }),
+                    icon: const Icon(
+                      Icons.close,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  // ── Warning sign methods ──────────────────────────────────────────────────
 
   /// Checks whether the truck is within [_warningAlertRadiusMeters] of any
   /// [WarningSign] on the active route and updates [_warningAhead].
@@ -6574,21 +9277,37 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_warningAlertShown] after the first banner to prevent repeated alerts.
   /// Only one banner is shown at a time.
   void _checkWarningAheadAlert(LatLng currentPosition) {
+    if (!_isLiveRouteAssistanceActive || _routePoints.length < 2) {
+      if (mounted && _warningAhead != null) {
+        setState(() => _warningAhead = null);
+      }
+      return;
+    }
+
+    final currentProjection = projectPointToRoute(
+      currentPosition,
+      _routePoints,
+    );
+    if (currentProjection == null) return;
     WarningSign? best;
     double bestDist = double.infinity;
 
     for (final sign in _warningSigns) {
-      // Only show warnings that are actually close to the current route.
-      if (_routePoints.isNotEmpty &&
-          !_isWarningNearRoute(sign, _routePoints)) {
+      final projection = projectPointToRoute(
+        LatLng(sign.lat, sign.lng),
+        _routePoints,
+      );
+      if (projection == null ||
+          projection.distanceMeters > _warningProximityMeters) {
         continue;
       }
       final double dist =
-          _distanceBetween(currentPosition, LatLng(sign.lat, sign.lng));
-      if (dist > _warningAlertRadiusMeters) continue;
+          projection.routeOffsetMeters - currentProjection.routeOffsetMeters;
+      if (dist < -35 || dist > _warningAlertRadiusMeters) continue;
 
       // Prefer high severity, then nearest.
-      final bool isBetter = best == null ||
+      final bool isBetter =
+          best == null ||
           (_severityRank(sign.severity) > _severityRank(best.severity)) ||
           (_severityRank(sign.severity) == _severityRank(best.severity) &&
               dist < bestDist);
@@ -6643,14 +9362,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// into cluster badges to avoid marker clutter.  Above that zoom, every
   /// eligible sign is shown individually.
   ///
-  /// Only signs within [_warningDisplayBufferMeters] (~10 miles) of the active
-  /// route polyline are shown, so that unrelated far-off warnings do not clutter
-  /// the map.  During navigation, signs behind [_truckIndex] on the route are
-  /// additionally suppressed so only ahead-of-position hazards remain visible.
+  /// Only signs inside the tight route corridor and no more than
+  /// [_warningDisplayLookaheadMeters] ahead are shown. Nearby signs on other
+  /// roads and signs already passed by the truck are suppressed.
   List<Marker> _buildWarningMarkers() {
-    // No active route — hide all warning markers.
-    if (_routePoints.isEmpty) {
-      debugPrint('[POI/Alert Filter] Warning markers: route not set – hiding all warning markers.');
+    // No active selected route — hide all warning markers.
+    if (!_isLiveRouteAssistanceActive || _routePoints.length < 2) {
+      debugPrint(
+        '[POI/Alert Filter] Warning markers: no active route – hiding all warning markers.',
+      );
       return const [];
     }
 
@@ -6663,7 +9383,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       hiddenTypes.addAll([WarningTypes.accidentAhead, WarningTypes.roadClosed]);
     }
     if (!_navSettings.viewWeatherAlert) {
-      hiddenTypes.addAll([WarningTypes.highWindArea, WarningTypes.chainRequirement]);
+      hiddenTypes.addAll([
+        WarningTypes.highWindArea,
+        WarningTypes.chainRequirement,
+      ]);
     }
     if (!_navSettings.viewWeighStation) {
       hiddenTypes.add(WarningTypes.weighStation);
@@ -6692,32 +9415,28 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       hiddenTypes.add(WarningTypes.runawayTruckRamp);
     }
 
-    // Single-pass filter: for each sign find the nearest route point index and
-    // its distance in one loop.  This lets us simultaneously check proximity
-    // (is the sign within the 10-mile display buffer?) and, during navigation,
-    // whether the sign is ahead of or behind the truck — without a second
-    // O(signs × route_points) scan.
+    final currentProjection = projectPointToRoute(
+      _truckPosition ?? _routePoints.first,
+      _routePoints,
+    );
+    final currentOffset = currentProjection?.routeOffsetMeters ?? 0;
+
+    // Match every warning to the actual bounded route segments. The 10-mile
+    // allowance is forward look-ahead along the route, never sideways distance.
     final List<WarningSign> signsToDisplay = [];
     for (final sign in _warningSigns) {
       // Skip types hidden by nav settings.
       if (hiddenTypes.contains(sign.type)) continue;
-      final signPt = LatLng(sign.lat, sign.lng);
-      double bestDist = double.infinity;
-      int bestIdx = 0;
-      for (int i = 0; i < _routePoints.length; i++) {
-        final d = _distanceBetween(signPt, _routePoints[i]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
+      final projection = projectPointToRoute(
+        LatLng(sign.lat, sign.lng),
+        _routePoints,
+      );
+      if (projection == null ||
+          projection.distanceMeters > _warningProximityMeters) {
+        continue;
       }
-
-      // Skip signs farther than the display buffer from the route.
-      if (bestDist > _warningDisplayBufferMeters) continue;
-
-      // During active navigation suppress signs behind the truck's current
-      // route index so only ahead-of-position hazards remain visible.
-      if (_isNavigating && _truckIndex > 0 && bestIdx < _truckIndex) continue;
+      final ahead = projection.routeOffsetMeters - currentOffset;
+      if (ahead < -35 || ahead > _warningDisplayLookaheadMeters) continue;
 
       signsToDisplay.add(sign);
     }
@@ -6725,8 +9444,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     debugPrint(
       '[POI/Alert Filter] Warning markers: ${signsToDisplay.length}/'
       '${_warningSigns.length} shown '
-      '(within ${(_warningDisplayBufferMeters / 1609.34).toStringAsFixed(0)} miles of route'
-      '${_isNavigating ? ", ahead of position" : ""}).',
+      '(within ${_warningProximityMeters.toStringAsFixed(0)} m of the selected route, '
+      'up to ${(_warningDisplayLookaheadMeters / 1609.34).toStringAsFixed(0)} miles ahead).',
     );
 
     // ── Cluster when zoomed out ──────────────────────────────────────────────
@@ -6770,13 +9489,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     return clusters.values.map((clusterSigns) {
-      final double lat = clusterSigns
-              .map((s) => s.lat)
-              .reduce((a, b) => a + b) /
+      final double lat =
+          clusterSigns.map((s) => s.lat).reduce((a, b) => a + b) /
           clusterSigns.length;
-      final double lng = clusterSigns
-              .map((s) => s.lng)
-              .reduce((a, b) => a + b) /
+      final double lng =
+          clusterSigns.map((s) => s.lng).reduce((a, b) => a + b) /
           clusterSigns.length;
       final int count = clusterSigns.length;
 
@@ -6788,17 +9505,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         child: GestureDetector(
           onTap: () {
             // Tapping a cluster zooms into the cluster area so signs expand.
-            _mapController.move(LatLng(lat, lng), _warningClusterZoomThreshold + 0.5);
+            _mapController.move(
+              LatLng(lat, lng),
+              _warningClusterZoomThreshold + 0.5,
+            );
           },
           child: Stack(
             alignment: Alignment.center,
             children: [
               CustomPaint(
                 size: const Size(44, 44),
-                painter: _WarningTrianglePainter(
-                  opacity: 1.0,
-                  shadowBlur: 6,
-                ),
+                painter: _WarningTrianglePainter(opacity: 1.0, shadowBlur: 6),
               ),
               Positioned(
                 bottom: 8,
@@ -6830,7 +9547,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     final double distMiles =
         _distanceBetween(_truckPosition!, LatLng(sign.lat, sign.lng)) /
-            1609.344;
+        1609.344;
 
     final triggers = sign.roadType == 'city'
         ? kCityWarningTriggers
@@ -6877,25 +9594,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               shadowBlur: shadowBlur,
             ),
           ),
-          // Type icon positioned in the lower-centre of the triangle.
-          Positioned(
-            bottom: size * 0.08,
-            child: Opacity(
-              opacity: opacity,
-              child: Icon(
-                icon,
-                color: Colors.black87,
-                size: size * 0.42,
-              ),
-            ),
+          // Type icon centred inside the North-American warning diamond.
+          Opacity(
+            opacity: opacity,
+            child: Icon(icon, color: Colors.black87, size: size * 0.38),
           ),
           // Urgent: show a red glow ring for maximum emphasis.
           if (emphasis == _WarningEmphasis.urgent)
             Positioned.fill(
               child: IgnorePointer(
-                child: CustomPaint(
-                  painter: _UrgentGlowPainter(size: size),
-                ),
+                child: CustomPaint(painter: _UrgentGlowPainter(size: size)),
               ),
             ),
         ],
@@ -6919,8 +9627,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             Expanded(
               child: Text(
                 sign.title,
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -6930,14 +9640,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (sign.message != null)
-              Text(sign.message!,
-                  style: const TextStyle(fontSize: 14)),
+              Text(sign.message!, style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
             Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: badgeColor,
                     borderRadius: BorderRadius.circular(8),
@@ -6945,15 +9656,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   child: Text(
                     sign.severity.toUpperCase(),
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold),
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(style.label,
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.grey)),
+                Text(
+                  style.label,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
               ],
             ),
           ],
@@ -7100,8 +9813,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         position.latitude > 90.0 ||
         position.longitude < -180.0 ||
         position.longitude > 180.0) {
-      debugPrint('[POI-SUSPECT] $label — invalid WGS-84 coordinate '
-          '(lat=${position.latitude}, lng=${position.longitude})');
+      debugPrint(
+        '[POI-SUSPECT] $label — invalid WGS-84 coordinate '
+        '(lat=${position.latitude}, lng=${position.longitude})',
+      );
       return true;
     }
 
@@ -7116,8 +9831,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         position.latitude > kMaxLat ||
         position.longitude < kMinLng ||
         position.longitude > kMaxLng) {
-      debugPrint('[POI-SUSPECT] $label — outside North America corridor '
-          '(lat=${position.latitude}, lng=${position.longitude})');
+      debugPrint(
+        '[POI-SUSPECT] $label — outside North America corridor '
+        '(lat=${position.latitude}, lng=${position.longitude})',
+      );
       return true;
     }
 
@@ -7130,8 +9847,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // in any commercial POI dataset.
     if (position.latitude == position.latitude.truncateToDouble() &&
         position.longitude == position.longitude.truncateToDouble()) {
-      debugPrint('[POI-SUSPECT] $label — round integer placeholder coordinates '
-          '(lat=${position.latitude}, lng=${position.longitude})');
+      debugPrint(
+        '[POI-SUSPECT] $label — round integer placeholder coordinates '
+        '(lat=${position.latitude}, lng=${position.longitude})',
+      );
       return true;
     }
 
@@ -7147,16 +9866,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ? _distanceBetween(position, _routePoints.first)
           : double.infinity;
       for (int i = 0; i < _routePoints.length - 1; i++) {
-        final d =
-            _crossTrackDistance(position, _routePoints[i], _routePoints[i + 1]);
+        final d = _crossTrackDistance(
+          position,
+          _routePoints[i],
+          _routePoints[i + 1],
+        );
         if (d < minDist) minDist = d;
         // Early exit once well within threshold.
         if (minDist <= _kPoiRoadProximityMeters) break;
       }
       if (minDist > _kPoiRoadProximityMeters) {
-        debugPrint('[POI-SUSPECT] $label — ${minDist.toStringAsFixed(1)} m '
-            'from active route (threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m). '
-            'Check lat=${position.latitude}, lng=${position.longitude} in source data.');
+        debugPrint(
+          '[POI-SUSPECT] $label — ${minDist.toStringAsFixed(1)} m '
+          'from active route (threshold: ${_kPoiRoadProximityMeters.toStringAsFixed(0)} m). '
+          'Check lat=${position.latitude}, lng=${position.longitude} in source data.',
+        );
         return true;
       }
       return false;
@@ -7179,8 +9903,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _weighStationProximityMeters;
     }
     for (int i = 0; i < routePoints.length - 1; i++) {
-      final d =
-          _crossTrackDistance(poi.position, routePoints[i], routePoints[i + 1]);
+      final d = _crossTrackDistance(
+        poi.position,
+        routePoints[i],
+        routePoints[i + 1],
+      );
       if (d <= _weighStationProximityMeters) return true;
     }
     return false;
@@ -7207,10 +9934,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns the next 1–2 weigh stations that are ahead of the truck on the
   /// active route, sorted by ascending route distance.
   ///
-  /// **Data sources (merged):**
-  ///   1. `_loadedPois` (from `assets/locations.json`) where `category ==
-  ///      "weigh_station"` — covers both USA and Canada JSON data.
-  ///   2. `_mapPois` of type [PoiType.weighStation] — the in-memory sample set.
+  /// **Data sources (merged):** official versioned offline assets and
+  /// authenticated backend records that have already been route matched and
+  /// copied into [_mapPois]. Legacy `locations.json` weigh entries are filtered
+  /// by [PoiService] because they lack official source metadata.
   ///
   /// A station is considered "ahead" when its nearest route-point index is
   /// strictly greater than [_truckIndex] AND the station is within
@@ -7227,26 +9954,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final Set<String> seenIds = {};
     final List<WeighStationPoi> weighPois = [];
 
-    // 1. JSON-loaded weigh stations (both USA and Canada).
-    for (final p in _loadedPois) {
-      if (p.category != 'weigh_station') continue;
-      if (seenIds.contains(p.id)) continue;
-      seenIds.add(p.id);
-      weighPois.add(WeighStationPoi(
-        id: p.id,
-        position: LatLng(p.displayLat, p.displayLng),
-        name: p.name,
-        status: 'Open',
-        logoName: p.icon.isNotEmpty ? p.icon : 'weight_station',
-      ));
-    }
-
-    // 2. In-memory MapPoi weigh stations (legacy / fallback).
+    // Prefer authenticated/service-backed records because they preserve
+    // official source metadata and live/community activity.
     for (final p in _mapPois) {
       if (p.type != PoiType.weighStation) continue;
       if (seenIds.contains(p.id)) continue;
       seenIds.add(p.id);
       weighPois.add(WeighStationPoi.fromMapPoi(p));
+    }
+
+    // Retain source-compatible bundled records that are not already present.
+    // Never claim a station is open when no status source supplied that fact.
+    for (final p in _loadedPois) {
+      if (p.category != 'weigh_station') continue;
+      if (seenIds.contains(p.id)) continue;
+      seenIds.add(p.id);
+      weighPois.add(
+        WeighStationPoi(
+          id: p.id,
+          position: LatLng(p.displayLat, p.displayLng),
+          name: p.name,
+          status: 'UNKNOWN',
+          logoName: p.icon.isNotEmpty ? p.icon : 'weight_station',
+        ),
+      );
     }
 
     final List<AheadWeighStation> candidates = [];
@@ -7269,11 +10000,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (miles < _poiPassedThresholdMiles) continue; // within 200 m — passed
       if (miles > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
-      candidates.add(AheadWeighStation(
-        poi: poi,
-        milesAhead: miles,
-        routeIndex: idx,
-      ));
+      candidates.add(
+        AheadWeighStation(poi: poi, milesAhead: miles, routeIndex: idx),
+      );
     }
 
     // Sort ascending by route miles and return the single closest station.
@@ -7294,9 +10023,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final next = _getClosestWeighStationsAheadOnRoute();
     // Avoid a redundant rebuild if the list content hasn't changed.
     if (next.length == _closestWeighStationsAhead.length &&
-        next.every((s) => _closestWeighStationsAhead
-            .any((existing) => existing.poi.id == s.poi.id &&
-                (existing.milesAhead - s.milesAhead).abs() < 0.05))) {
+        next.every(
+          (s) => _closestWeighStationsAhead.any(
+            (existing) =>
+                existing.poi.id == s.poi.id &&
+                (existing.milesAhead - s.milesAhead).abs() < 0.05,
+          ),
+        )) {
       return;
     }
     setState(() => _closestWeighStationsAhead = next);
@@ -7313,8 +10046,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _weighStationProximityMeters;
     }
     for (int i = 0; i < routePoints.length - 1; i++) {
-      final d =
-          _crossTrackDistance(poi.position, routePoints[i], routePoints[i + 1]);
+      final d = _crossTrackDistance(
+        poi.position,
+        routePoints[i],
+        routePoints[i + 1],
+      );
       if (d <= _weighStationProximityMeters) return true;
     }
     return false;
@@ -7356,11 +10092,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final List<RestAreaPoi> restPois = [];
     for (final p in _loadedPois) {
       if (p.category != 'rest_area') continue;
-      restPois.add(RestAreaPoi(
-        id: p.id,
-        position: LatLng(p.displayLat, p.displayLng),
-        name: p.name,
-      ));
+      restPois.add(
+        RestAreaPoi(
+          id: p.id,
+          position: LatLng(p.displayLat, p.displayLng),
+          name: p.name,
+          source: p,
+        ),
+      );
     }
 
     final List<AheadRestArea> candidates = [];
@@ -7383,16 +10122,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       if (miles < _poiPassedThresholdMiles) continue; // within 200 m — passed
       if (miles > _poiMaxAheadMiles) continue; // beyond 50 km ahead — skip
 
-      candidates.add(AheadRestArea(
-        poi: poi,
-        milesAhead: miles,
-        routeIndex: idx,
-      ));
+      candidates.add(
+        AheadRestArea(poi: poi, milesAhead: miles, routeIndex: idx),
+      );
     }
 
-    // Sort ascending by route miles and return the single closest rest area.
+    // Keep the two closest route-matched rest areas so drivers can compare
+    // the immediate option with the next safe stopping opportunity.
     candidates.sort((a, b) => a.milesAhead.compareTo(b.milesAhead));
-    return candidates.take(1).toList();
+    return candidates.take(2).toList();
   }
 
   /// Recomputes [_closestRestAreasAhead] from the current truck position and
@@ -7404,9 +10142,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final next = _getClosestRestAreasAheadOnRoute();
     // Avoid a redundant rebuild if the list content hasn't changed.
     if (next.length == _closestRestAreasAhead.length &&
-        next.every((r) => _closestRestAreasAhead
-            .any((existing) => existing.poi.id == r.poi.id &&
-                (existing.milesAhead - r.milesAhead).abs() < 0.05))) {
+        next.every(
+          (r) => _closestRestAreasAhead.any(
+            (existing) =>
+                existing.poi.id == r.poi.id &&
+                (existing.milesAhead - r.milesAhead).abs() < 0.05,
+          ),
+        )) {
       return;
     }
     setState(() => _closestRestAreasAhead = next);
@@ -7416,10 +10158,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// top-right overlay chips during active navigation.
   ///
   /// Sources alerts from:
-  ///   - [_closestTruckStopsAhead] → [UpcomingAlertType.truckStop]
-  ///   - [_closestWeighStationsAhead] → [UpcomingAlertType.weighStation]
   ///   - [_navAlerts] wind/advisory entries → [UpcomingAlertType.wind]
   ///   - [_navAlerts] restriction entries → [UpcomingAlertType.restriction]
+  ///
+  /// Weigh stations and rest areas use dedicated, tappable rails so their
+  /// details remain accessible and are not duplicated in this hazard stack.
   ///
   /// Filters to only include alerts with a known positive distance ahead,
   /// sorts by ascending distance, and caps the list at 3 entries so the
@@ -7430,7 +10173,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// To disable this feature entirely, remove the call site in
   /// [_onGpsPosition] and the widget reference in the Stack overlay.
   void _refreshUpcomingAlerts() {
-    if (!_isNavigating) {
+    if (!_isLiveRouteAssistanceActive) {
       if (_upcomingAlerts.isNotEmpty) {
         setState(() => _upcomingAlerts = const []);
       }
@@ -7438,39 +10181,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     final List<UpcomingAlertItem> fresh = [];
-
-    // ── Truck stops ahead ────────────────────────────────────────────────────
-    for (final s in _closestTruckStopsAhead) {
-      if (s.routeMilesAhead > 0) {
-        fresh.add(UpcomingAlertItem(
-          type: UpcomingAlertType.truckStop,
-          label: s.poi.name,
-          distanceMiles: s.routeMilesAhead,
-        ));
-      }
-    }
-
-    // ── Weigh stations ahead ─────────────────────────────────────────────────
-    for (final w in _closestWeighStationsAhead) {
-      if (w.milesAhead > 0) {
-        fresh.add(UpcomingAlertItem(
-          type: UpcomingAlertType.weighStation,
-          label: w.poi.name,
-          distanceMiles: w.milesAhead,
-        ));
-      }
-    }
-
-    // ── Rest areas ahead ─────────────────────────────────────────────────────
-    for (final r in _closestRestAreasAhead) {
-      if (r.milesAhead > 0) {
-        fresh.add(UpcomingAlertItem(
-          type: UpcomingAlertType.restArea,
-          label: r.poi.name,
-          distanceMiles: r.milesAhead,
-        ));
-      }
-    }
 
     // ── Wind / weather advisories from _navAlerts ────────────────────────────
     for (final a in _navAlerts) {
@@ -7480,11 +10190,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           a.type == AlertType.weather) {
         final dist = a.distanceMiles ?? 0.0;
         if (dist > 0) {
-          fresh.add(UpcomingAlertItem(
-            type: UpcomingAlertType.wind,
-            label: a.title,
-            distanceMiles: dist,
-          ));
+          fresh.add(
+            UpcomingAlertItem(
+              type: UpcomingAlertType.wind,
+              label: a.title,
+              distanceMiles: dist,
+              sourceAlertId: a.id,
+            ),
+          );
         }
       }
     }
@@ -7497,11 +10210,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           a.type == AlertType.hazmat) {
         final dist = a.distanceMiles ?? 0.0;
         if (dist > 0) {
-          fresh.add(UpcomingAlertItem(
-            type: UpcomingAlertType.restriction,
-            label: a.title,
-            distanceMiles: dist,
-          ));
+          fresh.add(
+            UpcomingAlertItem(
+              type: UpcomingAlertType.restriction,
+              label: a.title,
+              distanceMiles: dist,
+              sourceAlertId: a.id,
+            ),
+          );
         }
       }
     }
@@ -7524,10 +10240,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns true when [a] and [b] contain identical [UpcomingAlertItem]s in
   /// the same order.  Used by [_refreshUpcomingAlerts] to skip needless rebuilds.
   bool _listsEqualUpcomingAlerts(
-      List<UpcomingAlertItem> a, List<UpcomingAlertItem> b) {
+    List<UpcomingAlertItem> a,
+    List<UpcomingAlertItem> b,
+  ) {
     if (a.length != b.length) return false;
     for (int i = 0; i < a.length; i++) {
       if (a[i].type != b[i].type ||
+          a[i].sourceAlertId != b[i].sourceAlertId ||
           a[i].label != b[i].label ||
           // 0.05 mi (~264 ft) threshold: small enough to catch meaningful
           // position changes, large enough to suppress spurious rebuilds.
@@ -7538,7 +10257,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return true;
   }
 
-  /// Builds the closest weigh-station chip shown on the right side of the map
+  /// Builds the closest weigh-station chip high on the left side of the map
   /// during active navigation.
   ///
   /// Returns [SizedBox.shrink] when:
@@ -7552,17 +10271,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Hidden when the weigh-station layer is toggled off in nav settings.
     if (!_navSettings.viewWeighStation) return const SizedBox.shrink();
     // Hidden when not navigating or when no weigh stations are ahead on route.
-    if (!_isNavigating || _closestWeighStationsAhead.isEmpty) {
+    if (!_isLiveRouteAssistanceActive || _closestWeighStationsAhead.isEmpty) {
       return const SizedBox.shrink();
     }
     return Positioned(
-      // top: 134 = satellite top(74) + satellite height(48) + gap(12).
-      top: 134,
-      right: 16,
+      top: 218,
+      left: 12,
       child: SafeArea(
         bottom: false,
         child: ClosestWeighStationsRow(
           stations: _closestWeighStationsAhead,
+          onTap: _showAheadWeighStationDetails,
         ),
       ),
     );
@@ -7579,17 +10298,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// updates on every GPS fix via [_refreshClosestRestAreasAhead].
   Widget _buildClosestRestAreasRow() {
     // Hidden when not navigating or when no rest areas are ahead on route.
-    if (!_isNavigating || _closestRestAreasAhead.isEmpty) {
+    if (!_isLiveRouteAssistanceActive || _closestRestAreasAhead.isEmpty) {
       return const SizedBox.shrink();
     }
     return Positioned(
-      // top: 206 = weigh station top(134) + chip height(60) + gap(12).
-      top: 206,
-      right: 16,
+      top: 280,
+      left: 12,
       child: SafeArea(
         bottom: false,
         child: ClosestRestAreasRow(
           areas: _closestRestAreasAhead,
+          onTap: _showAheadRestAreaDetails,
         ),
       ),
     );
@@ -7598,6 +10317,258 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// When [fromPosition] is provided (e.g. during off-route rerouting), the
   /// route is requested from that live GPS position instead of the default
+  /// Calculates the active route with the backend's selected authoritative
+  /// truck provider. Passenger-car routes are never accepted for navigation.
+  Future<void> fetchRoute({
+    bool alternative = false,
+    LatLng? fromPosition,
+  }) async {
+    final destination = _selectedDestination ?? _destination;
+    await _submitRouteCalculation(
+      _RouteCalculationRequest(
+        kind: _RouteCalculationKind.backend,
+        reason: fromPosition == null ? 'route-build' : 'route-replacement',
+        destination: destination,
+        origin: fromPosition,
+        alternative: alternative,
+      ),
+    );
+  }
+
+  Future<LatestRequestCompletion> _submitRouteCalculation(
+    _RouteCalculationRequest request,
+  ) async {
+    _isLoadingRoute = true;
+    try {
+      return await _routeCalculationCoordinator.submit(
+        request,
+        _executeRouteCalculation,
+      );
+    } catch (_) {
+      return LatestRequestCompletion.failed;
+    } finally {
+      if (!_routeCalculationCoordinator.inProgress) {
+        _isLoadingRoute = false;
+      }
+    }
+  }
+
+  Future<void> _executeRouteCalculation(
+    _RouteCalculationRequest request,
+    int requestId,
+    bool Function() isCurrent,
+  ) async {
+    debugPrint(
+      '[Reroute][$requestId] BEGIN reason=${request.reason} '
+      'kind=${request.kind.name}',
+    );
+    try {
+      switch (request.kind) {
+        case _RouteCalculationKind.backend:
+          await _executeBackendRouteCalculation(request, requestId, isCurrent);
+        case _RouteCalculationKind.native:
+          await _executeNativeRouteCalculation(requestId, isCurrent);
+        case _RouteCalculationKind.restriction:
+          await _executeRestrictionRouteCalculation(
+            request,
+            requestId,
+            isCurrent,
+          );
+      }
+      debugPrint(
+        '[Reroute][$requestId] ${isCurrent() ? 'END' : 'STALE'} '
+        'reason=${request.reason}',
+      );
+    } catch (error, stackTrace) {
+      if (!isCurrent()) {
+        debugPrint('[Reroute][$requestId] STALE_ERROR ignored: $error');
+        return;
+      }
+      debugPrint('[Reroute][$requestId] ERROR: $error\n$stackTrace');
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isLoadingRouteWeighStations = false;
+        _navStatus = null;
+        _error = _truckRouteFailureMessage(error);
+      });
+      rethrow;
+    }
+  }
+
+  Future<void> _executeBackendRouteCalculation(
+    _RouteCalculationRequest request,
+    int requestId,
+    bool Function() isCurrent,
+  ) async {
+    var origin = request.origin ?? _truckPosition;
+    final replacingActiveRoute = _routePoints.length > 1;
+    final preserveLiveSession =
+        replacingActiveRoute && _isLiveRouteAssistanceActive;
+
+    unawaited(_resolveDestinationTimeZone(request.destination));
+    if (origin == null) {
+      if (mounted && isCurrent()) {
+        setState(() {
+          _isLoading = true;
+          _error = 'Getting a precise GPS location…';
+          _locationRecoveryAction = null;
+        });
+      }
+      origin = await _acquireRouteOrigin();
+      if (!mounted || !isCurrent()) return;
+      if (origin == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
+    }
+
+    if (mounted && isCurrent()) {
+      setState(() {
+        // Keep the active route and driving UI visible during replacement.
+        _isLoading = !replacingActiveRoute;
+        _navStatus = replacingActiveRoute ? 'Recalculating truck route…' : null;
+        _error = null;
+        _isLoadingRouteWeighStations = true;
+        _routeWeighStationsAvailable = false;
+      });
+    }
+
+    final primary = await _fetchRouteFromApi(origin, request.destination);
+    if (!mounted || !isCurrent()) return;
+    if (primary == null) {
+      throw StateError('The truck-routing provider returned no usable route.');
+    }
+
+    final routeResults = <RouteResult>[primary, ...primary.alternatives];
+    final selectedIndex = request.alternative && routeResults.length > 1
+        ? 1
+        : 0;
+    final selected = routeResults[selectedIndex];
+    final options = _buildProviderRouteOptions(routeResults);
+
+    _applyAuthoritativeRouteResult(
+      selected,
+      options: options,
+      selectedIndex: selectedIndex,
+      preserveLiveSession: preserveLiveSession,
+    );
+    debugPrint(
+      '[Reroute][$requestId] APPLIED provider=${selected.provider} '
+      'points=${selected.points.length} maneuvers=${selected.steps.length}',
+    );
+
+    _refreshLiveRoadContextFromCurrentPosition();
+    if (!replacingActiveRoute) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && isCurrent() && _routePoints.length > 1) {
+          _fitCameraToRoute(_routePoints);
+        }
+      });
+    }
+    _updateRouteViolationWarnings();
+    _updateTripProgressFromRoute(
+      selected.distanceMiles,
+      selected.durationSeconds,
+    );
+    unawaited(_refreshLiveWeighStations());
+    unawaited(_refreshProviderWeighStationsForRoute());
+    unawaited(_refreshLiveRoadData());
+    _scheduleRoadFeatureRefresh(center: origin, routeAware: true);
+    _refreshRoutePoiSourceIfNeeded(force: true);
+    if (preserveLiveSession && _navSteps.isNotEmpty) {
+      _activateNavigationStep(0, speak: false);
+    }
+  }
+
+  Future<void> _executeNativeRouteCalculation(
+    int requestId,
+    bool Function() isCurrent,
+  ) async {
+    if (mounted && isCurrent()) {
+      setState(() => _navStatus = 'Recalculating truck route…');
+    }
+    await NativeNavigationService.instance.recalculateRoute();
+    if (!mounted || !isCurrent()) return;
+    setState(() => _navStatus = null);
+    debugPrint('[Reroute][$requestId] Native provider accepted recalculation.');
+  }
+
+  List<RouteOption> _buildProviderRouteOptions(List<RouteResult> results) {
+    return results.indexed
+        .map((entry) {
+          final index = entry.$1;
+          final candidate = entry.$2;
+          final points = candidate.points.toSet().toList(growable: false);
+          final candidateData = <String, dynamic>{
+            'distance': candidate.distanceMiles * _metersPerMile,
+            'distanceMiles': candidate.distanceMiles,
+            'duration': candidate.durationSeconds,
+            'etaMinutes': (candidate.durationSeconds / 60).ceil(),
+            'provider': candidate.provider,
+            'truckWarnings': candidate.providerNotices,
+          };
+          return RouteOption(
+            id: '${candidate.provider.toLowerCase()}_truck_$index',
+            label: index == 0 ? 'Recommended' : 'Alternative $index',
+            points: points,
+            steps: candidate.steps,
+            distanceMiles: candidate.distanceMiles,
+            durationSeconds: candidate.durationSeconds,
+            restrictionCount: _evaluateRouteRestrictions(points).length,
+            fuelStopCount: _countFuelStopsForRoute(points),
+            weighStationCount: _countWeighStationsForRoute(points),
+            routeData: candidateData,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  void _applyAuthoritativeRouteResult(
+    RouteResult result, {
+    required List<RouteOption> options,
+    required int selectedIndex,
+    required bool preserveLiveSession,
+  }) {
+    if (!mounted) return;
+    final cleanPoints = result.points.toSet().toList(growable: false);
+    setState(() {
+      // Geometry, maneuvers, and every route-derived cache are swapped in one
+      // frame. Permanent provider POIs and physical road features are retained.
+      _activeRouteRevision++;
+      _routePoiRequestGeneration++;
+      _routePoints = cleanPoints;
+      _navSteps = result.steps;
+      _routeData = options[selectedIndex].routeData;
+      _routeOptions = options;
+      _selectedRouteOptionIndex = selectedIndex;
+      _currentStepIndex = 0;
+      _truckIndex = 0;
+      _previewPanelExpanded = false;
+      if (preserveLiveSession) {
+        _navigationActive = true;
+        _navigationMode = true;
+      }
+      _liveRoadName = null;
+      _liveRoadStepIndex = 0;
+      _truckStops = const <TruckStop>[];
+      _closestTruckStopsAhead = const [];
+      _closestWeighStationsAhead = const [];
+      _closestRestAreasAhead = const [];
+      _upcomingAlerts = const [];
+      _roadFeatureAhead = null;
+      _roadFeatureAheadMeters = null;
+      _roadFeatureRouteSignature = 0;
+      _roadFeatureRouteIndices.clear();
+      _roadFeatureCrossTrackMeters.clear();
+      _roadFeatureRouteOffsetsMeters.clear();
+      _routeCumulativeMeters = const [];
+      _isLoading = false;
+      _navStatus = null;
+      _error = null;
+    });
+  }
+
   /// origin.  The destination always remains [_destination].
   ///
   /// When [alternative] is `true` the second route returned by Mapbox is used
@@ -7605,16 +10576,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// fails the [_isTruckSafe] check.  In pre-navigation mode all returned
   /// routes are surfaced as selectable [RouteOption] cards; in active
   /// navigation / rerouting mode the single best route is used directly.
-  Future<void> fetchRoute({bool alternative = false, LatLng? fromPosition}) async {
+  Future<void> _fetchLegacyPassengerRoute({
+    bool alternative = false,
+    LatLng? fromPosition,
+  }) async {
+    if (_legacyPassengerRoutingDisabled) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _error = 'Truck-safe routing unavailable';
+          _routePoints = const [];
+          _routeOptions = const [];
+        });
+      }
+      return;
+    }
     // Guard: prevent simultaneous or repeated API calls that would layer a new
     // route on top of the previous one, causing "spaghetti" polyline artefacts.
     if (_isLoadingRoute) {
       // Only emit diagnostics in debug builds – suppress in release/profile.
-      if (kDebugMode) debugPrint("fetchRoute already in progress – skipping duplicate call");
+      if (kDebugMode)
+        debugPrint("fetchRoute already in progress – skipping duplicate call");
       return;
     }
     _isLoadingRoute = true;
-    if (kDebugMode) debugPrint("fetchRoute started (alternative: $alternative)");
+    if (kDebugMode)
+      debugPrint("fetchRoute started (alternative: $alternative)");
 
     // Hard-reset the route state before fetching to ensure no stale points
     // from a previous route are left in _routePoints or rendered on the map.
@@ -7650,9 +10637,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           "&exclude=ferry"
           "&access_token=$_mapboxToken";
 
-      final res = await http.get(Uri.parse(url)).timeout(
-        const Duration(seconds: 10),
-      );
+      final res = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
       // Log the raw Mapbox response only in debug builds to avoid leaking
       // route data (which may contain user location) to production logs.
       if (kDebugMode) debugPrint("MAPBOX RESPONSE: ${res.body}");
@@ -7682,23 +10669,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           final label = ri < routeLabels.length
               ? routeLabels[ri]
               : 'Alternative ${ri + 1}';
-          newOptions.add(RouteOption(
-            id: 'route_$ri',
-            label: label,
-            points: pts,
-            steps: steps,
-            distanceMiles: distMi,
-            durationSeconds: durSec,
-            restrictionCount: restrictions.length,
-            fuelStopCount: rFuel,
-            weighStationCount: rWeigh,
-            routeData: {
-              "distanceMiles": distMi.round(),
-              "etaMinutes": (durSec / 60).round(),
-              "turnByTurn":
-                  steps.map((s) => {'instruction': s.instruction}).toList(),
-            },
-          ));
+          newOptions.add(
+            RouteOption(
+              id: 'route_$ri',
+              label: label,
+              points: pts,
+              steps: steps,
+              distanceMiles: distMi,
+              durationSeconds: durSec,
+              restrictionCount: restrictions.length,
+              fuelStopCount: rFuel,
+              weighStationCount: rWeigh,
+              routeData: {
+                "distanceMiles": distMi.round(),
+                "etaMinutes": (durSec / 60).round(),
+                "turnByTurn": steps
+                    .map((s) => {'instruction': s.instruction})
+                    .toList(),
+              },
+            ),
+          );
         }
 
         // Prefer the first restriction-free option as the default selection.
@@ -7718,21 +10708,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           _selectedRouteOptionIndex = defaultIdx;
           _navSteps = selectedOpt.steps;
           _currentStepIndex = 0;
+          _halfMileAnnouncedStepIndex = null;
+          _nearTurnAnnouncedStepIndex = null;
           _routeData = selectedOpt.routeData;
           // Clean replacement – never use addAll() here.
           _routePoints = newPoints;
           _isLoading = false;
         });
 
-        if (kDebugMode) debugPrint("Route points count: ${_routePoints.length}");
+        if (kDebugMode)
+          debugPrint("Route points count: ${_routePoints.length}");
         if (selectedOpt.steps.isNotEmpty) {
           _speak(selectedOpt.steps.first.instruction);
         }
 
         // Filter POIs to only those within 10 km of the previewed route so
         // the map isn't cluttered with globally-distant stops.
-        setState(() => _truckStops =
-            _filterStopsNearRoute(_mockTruckStops, newPoints));
+        setState(() => _truckStops = const <TruckStop>[]);
         _fitCameraToRoute(newPoints);
         _updateRouteViolationWarnings();
         // Seed trip progress with the full-route distance and duration so
@@ -7749,8 +10741,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // ── ACTIVE NAVIGATION / REROUTING ─────────────────────────────────────
       // Use the alternative route (index 1) when requested and available,
       // otherwise fall back to the primary route (index 0).
-      final routeIndex =
-          (alternative && routes.length > 1) ? 1 : 0;
+      final routeIndex = (alternative && routes.length > 1) ? 1 : 0;
       final route = routes[routeIndex] as Map<String, dynamic>;
 
       // Decode polyline6 geometry (1×10⁶ precision) and simplify to remove
@@ -7763,7 +10754,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // When already on the alternative, we accept the route regardless —
       // no further candidates are available to try.
       if (!_isTruckSafe(newPoints) && !alternative) {
-        if (kDebugMode) debugPrint("Route is not truck-safe – fetching alternative route");
+        if (kDebugMode)
+          debugPrint("Route is not truck-safe – fetching alternative route");
         // Release the loading guard before the recursive call so the inner
         // fetchRoute() is not blocked by the guard we set above.
         _isLoadingRoute = false;
@@ -7794,29 +10786,33 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         final rRestrictions = _evaluateRouteRestrictions(rPoints).length;
         final rFuel = _countFuelStopsForRoute(rPoints);
         final rWeigh = _countWeighStationsForRoute(rPoints);
-        options.add(RouteOption(
-          id: 'route_$i',
-          label: i < routeLabels.length ? routeLabels[i] : 'Route ${i + 1}',
-          points: rPoints,
-          steps: rSteps,
-          distanceMiles: rMiles,
-          durationSeconds: rSeconds,
-          restrictionCount: rRestrictions,
-          fuelStopCount: rFuel,
-          weighStationCount: rWeigh,
-          routeData: {
-            "distanceMiles": rMiles.round(),
-            "etaMinutes": (rSeconds / 60).round(),
-            "turnByTurn": rSteps
-                .map((s) => {'instruction': s.instruction})
-                .toList(),
-          },
-        ));
+        options.add(
+          RouteOption(
+            id: 'route_$i',
+            label: i < routeLabels.length ? routeLabels[i] : 'Route ${i + 1}',
+            points: rPoints,
+            steps: rSteps,
+            distanceMiles: rMiles,
+            durationSeconds: rSeconds,
+            restrictionCount: rRestrictions,
+            fuelStopCount: rFuel,
+            weighStationCount: rWeigh,
+            routeData: {
+              "distanceMiles": rMiles.round(),
+              "etaMinutes": (rSeconds / 60).round(),
+              "turnByTurn": rSteps
+                  .map((s) => {'instruction': s.instruction})
+                  .toList(),
+            },
+          ),
+        );
       }
 
       setState(() {
         _navSteps = allSteps;
         _currentStepIndex = 0;
+        _halfMileAnnouncedStepIndex = null;
+        _nearTurnAnnouncedStepIndex = null;
         _routeData = {
           "distanceMiles": (route["distance"] / 1609.34).round(),
           "etaMinutes": (route["duration"] / 60).round(),
@@ -7846,9 +10842,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // selected, etc.) so only stops within 10 km of the new polyline are
       // shown.  The list is sorted by proximity to the driver and capped at 50
       // for rendering performance.
-      setState(() {
-        _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
-      });
+      setState(() => _truckStops = const <TruckStop>[]);
 
       // ── Evaluate truck restrictions along the new route ────────────────────
       // Use smart rerouting to attempt to find a restriction-free route before
@@ -7919,19 +10913,63 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final opt = _routeOptions[index];
     final List<LatLng> newPoints = opt.points.toSet().toList();
     setState(() {
+      _activeRouteRevision++;
+      _routePoiRequestGeneration++;
       _selectedRouteOptionIndex = index;
       _routePoints = newPoints;
       _navSteps = opt.steps;
       _currentStepIndex = 0;
+      _halfMileAnnouncedStepIndex = null;
+      _nearTurnAnnouncedStepIndex = null;
       _routeData = opt.routeData;
       // Re-filter POIs for the newly selected route alternative so only stops
       // within 10 km of this specific polyline are displayed.
-      _truckStops = _filterStopsNearRoute(_mockTruckStops, newPoints);
+      _truckStops = const <TruckStop>[];
     });
+    _refreshLiveRoadContextFromCurrentPosition();
     _fitCameraToRoute(_routePoints);
     _updateRouteViolationWarnings();
     // Keep trip-progress strip in sync with the newly selected route option.
     _updateTripProgressFromRoute(opt.distanceMiles, opt.durationSeconds);
+  }
+
+  /// Selects the route line directly touched by the driver in preview mode.
+  ///
+  /// Route-line selection is intentionally disabled after native guidance has
+  /// started. Changing a live route must go through the native reroute API so
+  /// route progress, maneuvers, voice guidance, and warnings stay synchronized.
+  void _handleRoutePolylineTap() {
+    if (_isNavigating || _routeOptions.length < 2) return;
+    final hitResult = _routeHitNotifier.value;
+    if (hitResult == null || hitResult.hitValues.isEmpty) return;
+
+    // flutter_map reports hit values from the visually top-most polyline
+    // downward. Selecting the first one matches what the driver sees.
+    final index = hitResult.hitValues.first;
+    if (index < 0 || index >= _routeOptions.length) return;
+
+    HapticFeedback.selectionClick();
+    if (index != _selectedRouteOptionIndex) {
+      _applyRouteOption(index);
+    }
+
+    final option = _routeOptions[index];
+    final hours = option.durationSeconds ~/ 3600;
+    final minutes = (option.durationSeconds % 3600) ~/ 60;
+    final durationLabel = hours > 0 ? '${hours}h ${minutes}m' : '${minutes}m';
+    final routeLabel = index == 0 ? 'Recommended' : 'Alternative $index';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(milliseconds: 1800),
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            '$routeLabel selected • '
+            '${_formatRemainingDistance(option.distanceMiles)} • $durationLabel',
+          ),
+        ),
+      );
   }
 
   /// Opens a modal bottom sheet listing all available [_routeOptions] so the
@@ -7987,8 +11025,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     final isSelected = i == _selectedRouteOptionIndex;
                     final etaH = opt.durationSeconds ~/ 3600;
                     final etaM = (opt.durationSeconds % 3600) ~/ 60;
-                    final etaLabel =
-                        etaH > 0 ? '${etaH}h ${etaM}m' : '${etaM}m';
+                    final etaLabel = etaH > 0
+                        ? '${etaH}h ${etaM}m'
+                        : '${etaM}m';
                     return GestureDetector(
                       onTap: () {
                         _applyRouteOption(i);
@@ -8029,7 +11068,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                                   const SizedBox(width: 8),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 2),
+                                      horizontal: 8,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: Colors.blue.shade600,
                                       borderRadius: BorderRadius.circular(10),
@@ -8053,7 +11094,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                               children: [
                                 _routeChip(
                                   '🚚',
-                                  '${opt.distanceMiles.toStringAsFixed(0)} mi',
+                                  _formatRemainingDistance(opt.distanceMiles),
                                 ),
                                 _routeChip('⏱', etaLabel),
                                 _routeChip(
@@ -8070,10 +11111,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                                       : null,
                                 ),
                                 _routeChip(
-                                    '⛽', '${opt.fuelStopCount} fuel stops'),
+                                  '⛽',
+                                  '${opt.fuelStopCount} truck fuel stops',
+                                ),
                                 _routeChip(
-                                    '⚖️',
-                                    '${opt.weighStationCount} weigh stations'),
+                                  '⚖️',
+                                  '${opt.weighStationCount} weigh stations',
+                                ),
                               ],
                             ),
                           ],
@@ -8129,7 +11173,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
       bool hit = false;
       for (final pt in _routePoints) {
-        if (_distanceBetween(pt, zonePt) <= _restrictionProximityThresholdMeters) {
+        if (_distanceBetween(pt, zonePt) <=
+            _restrictionProximityThresholdMeters) {
           hit = true;
           break;
         }
@@ -8139,10 +11184,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         final limit = zone['limit_value'] as double;
         if (type == 'low_bridge') {
           violations.add(
-              'Low bridge (${limit.toStringAsFixed(1)} ft clearance) near route');
+            'Low bridge (${limit.toStringAsFixed(1)} ft clearance) near route',
+          );
         } else if (type == 'weight_limit') {
           violations.add(
-              'Weight limit (${limit.toStringAsFixed(0)} tons) near route');
+            'Weight limit (${limit.toStringAsFixed(0)} tons) near route',
+          );
         } else {
           violations.add('Truck restriction ($type) near route');
         }
@@ -8165,7 +11212,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final segments = <List<LatLng>>[];
     if (routePoints.isEmpty) return segments;
     final threshold =
-        _restrictionProximityThresholdMeters * _restrictionSegmentThresholdMultiplier;
+        _restrictionProximityThresholdMeters *
+        _restrictionSegmentThresholdMultiplier;
     for (int i = 0; i < routePoints.length; i++) {
       final pt = routePoints[i];
       bool isRestricted = false;
@@ -8179,8 +11227,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Also check _restrictedZones
       if (!isRestricted) {
         for (final zone in _restrictedZones) {
-          final zonePt =
-              LatLng(zone['lat']! as double, zone['lng']! as double);
+          final zonePt = LatLng(zone['lat']! as double, zone['lng']! as double);
           if (_distanceBetween(pt, zonePt) <= threshold) {
             isRestricted = true;
             break;
@@ -8195,128 +11242,675 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return segments;
   }
 
-  /// Shows a modal bottom sheet with a Mapbox geocoding search field.
-  ///
-  /// The driver types a destination query; results are fetched from the
-  /// Mapbox Geocoding v5 API and displayed as tappable list tiles.  On
-  /// selection, [_selectedDestination] and [_selectedDestinationName] are
-  /// updated and [_startRouteToSelectedDestination] is called.
-  Future<void> _showDestinationSearch() async {
-    final controller = TextEditingController();
-    List<Map<String, dynamic>> results = [];
-    // Track the destination before the sheet opened so we can detect changes.
-    final prevDestination = _selectedDestination;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-                left: 16,
-                right: 16,
-                top: 20,
+  Widget _destinationCategoryShortcut(
+    BuildContext sheetContext,
+    IconData icon,
+    String label,
+    Color color,
+    String? category,
+    String title,
+  ) {
+    return SizedBox(
+      width: 82,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () {
+          final selection = category == null
+              ? const _DestinationSearchSelection.more()
+              : _DestinationSearchSelection.category(category, title);
+          FocusScope.of(sheetContext).unfocus();
+          Navigator.of(sheetContext).pop(selection);
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: Colors.white, size: 27),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // ── Search field ─────────────────────────────────────────
-                  TextField(
-                    controller: controller,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: 'Search destination...',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.send),
-                        onPressed: () async {
-                          final q = controller.text.trim();
-                          if (q.isEmpty) return;
-                          final r = await _geocodeAddress(q);
-                          setModalState(() => results = r);
+              const SizedBox(height: 6),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the dedicated destination-search stage used by the truck-planning
+  /// flow. Results remain provider-backed; no fake recent destinations are
+  /// inserted when the driver has no history.
+  Future<void> _showDestinationSearch({
+    String initialQuery = '',
+    bool searchImmediately = false,
+  }) async {
+    // Do not stack two search routes when the search icon or microphone is
+    // tapped repeatedly. Stacked modal teardown is a common cause of inherited
+    // element lifecycle assertions.
+    if (_destinationSearchOpen) return;
+    if (_mapboxToken.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Destination search is not configured. Rebuild with the Mapbox public access token.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    _destinationSearchOpen = true;
+    final requestGeneration = ++_destinationSearchRequestGeneration;
+    final controller = _destinationSearchController;
+    controller.value = TextEditingValue(
+      text: initialQuery,
+      selection: TextSelection.collapsed(offset: initialQuery.length),
+    );
+    List<Map<String, dynamic>> results = [];
+    String? searchError;
+    bool isSearching = false;
+    bool initialSearchScheduled = false;
+
+    _DestinationSearchSelection? selection;
+    try {
+      selection = await showModalBottomSheet<_DestinationSearchSelection>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) {
+          return StatefulBuilder(
+            builder: (sheetContext, setModalState) {
+              Future<void> search(String query) async {
+                final q = query.trim();
+                if (q.isEmpty ||
+                    isSearching ||
+                    !_destinationSearchOpen ||
+                    requestGeneration != _destinationSearchRequestGeneration) {
+                  return;
+                }
+                setModalState(() {
+                  isSearching = true;
+                  searchError = null;
+                });
+                try {
+                  final matches = await _geocodeAddress(q);
+                  if (!sheetContext.mounted ||
+                      !_destinationSearchOpen ||
+                      requestGeneration !=
+                          _destinationSearchRequestGeneration) {
+                    return;
+                  }
+                  setModalState(() {
+                    results = matches;
+                    isSearching = false;
+                    searchError = matches.isEmpty
+                        ? 'No destinations found.'
+                        : null;
+                  });
+                } catch (error) {
+                  if (!sheetContext.mounted ||
+                      !_destinationSearchOpen ||
+                      requestGeneration !=
+                          _destinationSearchRequestGeneration) {
+                    return;
+                  }
+                  setModalState(() {
+                    results = [];
+                    isSearching = false;
+                    searchError = error.toString().replaceFirst(
+                      'Bad state: ',
+                      '',
+                    );
+                  });
+                }
+              }
+
+              if (searchImmediately &&
+                  !initialSearchScheduled &&
+                  initialQuery.trim().isNotEmpty) {
+                initialSearchScheduled = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (sheetContext.mounted) {
+                    unawaited(search(initialQuery));
+                  }
+                });
+              }
+
+              final media = MediaQuery.of(sheetContext);
+              final height = math.max(
+                360.0,
+                media.size.height * 0.91 - media.viewInsets.bottom,
+              );
+              final scheme = Theme.of(sheetContext).colorScheme;
+              return Container(
+                margin: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                height: height,
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(28),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 10),
+                    Container(
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: scheme.onSurface.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                      child: TextField(
+                        controller: controller,
+                        autofocus: true,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'Set destination for truck routes',
+                          prefixIcon: IconButton(
+                            tooltip: 'Close search',
+                            onPressed: () {
+                              FocusScope.of(sheetContext).unfocus();
+                              Navigator.of(sheetContext).pop();
+                            },
+                            icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                          ),
+                          suffixIcon: isSearching
+                              ? const Padding(
+                                  padding: EdgeInsets.all(13),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.2,
+                                    ),
+                                  ),
+                                )
+                              : Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Speak destination',
+                                      onPressed: () async {
+                                        try {
+                                          final spoken =
+                                              await _captureVoiceDestination();
+                                          if (!sheetContext.mounted ||
+                                              spoken == null ||
+                                              spoken.trim().isEmpty) {
+                                            return;
+                                          }
+                                          controller.value = TextEditingValue(
+                                            text: spoken.trim(),
+                                            selection: TextSelection.collapsed(
+                                              offset: spoken.trim().length,
+                                            ),
+                                          );
+                                          await search(spoken);
+                                        } on VoiceDestinationException catch (
+                                          error
+                                        ) {
+                                          if (!sheetContext.mounted) return;
+                                          setModalState(
+                                            () => searchError = error.message,
+                                          );
+                                        }
+                                      },
+                                      icon: const Icon(
+                                        Icons.mic_rounded,
+                                        color: SemiTrackColors.orange,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Search',
+                                      onPressed: () => search(controller.text),
+                                      icon: const Icon(Icons.search_rounded),
+                                    ),
+                                  ],
+                                ),
+                          filled: true,
+                          fillColor: scheme.surfaceContainerHighest,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(18),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        onSubmitted: search,
+                      ),
+                    ),
+                    SizedBox(
+                      height: 91,
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.restaurant_rounded,
+                            'Truck Stops',
+                            const Color(0xFFE8583E),
+                            'truck_stop',
+                            'Truck Stops',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.scale_rounded,
+                            'Weigh',
+                            const Color(0xFF008F7D),
+                            'weigh_station',
+                            'Weigh Stations',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.local_parking_rounded,
+                            'Parking',
+                            const Color(0xFF0B68E8),
+                            'truck_parking',
+                            'Truck Parking',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.local_gas_station_rounded,
+                            'Truck Fuel',
+                            const Color(0xFFFF8A00),
+                            'truck_stop',
+                            'Truck Fuel & Stops',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.park_rounded,
+                            'Rest Areas',
+                            const Color(0xFF0A9FC1),
+                            'rest_area',
+                            'Rest Areas',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.storefront_rounded,
+                            'Walmarts',
+                            const Color(0xFF146DE0),
+                            'walmart_store',
+                            'Walmarts',
+                          ),
+                          _destinationCategoryShortcut(
+                            sheetContext,
+                            Icons.more_horiz_rounded,
+                            'More',
+                            const Color(0xFF7189AC),
+                            null,
+                            'More',
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: Builder(
+                        builder: (_) {
+                          if (searchError != null) {
+                            return Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Text(
+                                  searchError!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: scheme.error),
+                                ),
+                              ),
+                            );
+                          }
+                          if (results.isEmpty) {
+                            return Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(28),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.route_rounded,
+                                      size: 52,
+                                      color: scheme.primary.withOpacity(0.65),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    const Text(
+                                      'Where are you hauling to?',
+                                      style: TextStyle(
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 7),
+                                    Text(
+                                      'Search a city, address, business, or choose a live truck place above.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: scheme.onSurface.withOpacity(
+                                          0.62,
+                                        ),
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
+                          return ListView.separated(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            itemCount: results.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1, indent: 72),
+                            itemBuilder: (_, index) {
+                              final result = results[index];
+                              final suggestion = PlaceSuggestion(
+                                name: result['name'] as String? ?? '',
+                                placeName: result['place'] as String? ?? '',
+                                position: result['position'] as LatLng,
+                              );
+                              final current = _truckPosition;
+                              final distanceMiles = current == null
+                                  ? null
+                                  : geo.Geolocator.distanceBetween(
+                                          current.latitude,
+                                          current.longitude,
+                                          suggestion.position.latitude,
+                                          suggestion.position.longitude,
+                                        ) /
+                                        _metersPerMile;
+                              return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 7,
+                                ),
+                                leading: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: scheme.primaryContainer,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    Icons.location_on_outlined,
+                                    color: scheme.onPrimaryContainer,
+                                  ),
+                                ),
+                                title: Text(
+                                  suggestion.name,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  suggestion.placeName,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: distanceMiles == null
+                                    ? const Icon(Icons.chevron_right_rounded)
+                                    : Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.alt_route_rounded,
+                                            size: 18,
+                                          ),
+                                          Text(
+                                            _formatRemainingDistance(
+                                              distanceMiles,
+                                            ),
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                onTap: () {
+                                  FocusScope.of(sheetContext).unfocus();
+                                  Navigator.of(sheetContext).pop(
+                                    _DestinationSearchSelection.place(
+                                      suggestion,
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          );
                         },
                       ),
-                      border: const OutlineInputBorder(),
                     ),
-                    onSubmitted: (q) async {
-                      if (q.trim().isEmpty) return;
-                      final r = await _geocodeAddress(q.trim());
-                      setModalState(() => results = r);
-                    },
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      // showModalBottomSheet completes at the start of the reverse transition.
+      // Mark requests stale immediately and release keyboard dependencies.
+      _destinationSearchOpen = false;
+      _destinationSearchRequestGeneration++;
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
+
+    if (!mounted || selection == null) return;
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    if (!mounted) return;
+    final suggestion = selection.suggestion;
+    if (suggestion != null) {
+      await _showDestinationDetails(suggestion);
+      return;
+    }
+    if (selection.showMore) {
+      _showMoreMapFeaturesSheet();
+      return;
+    }
+    final category = selection.category;
+    final title = selection.title;
+    if (category != null && title != null) {
+      await _showLivePlaceCategory(category, title);
+    }
+  }
+
+  /// Shows a separate destination-detail stage before route calculation. Only
+  /// real provider fields are displayed; availability, deals, loads, and
+  /// parking counts are omitted unless a future provider supplies them.
+  Future<void> _showDestinationDetails(PlaceSuggestion suggestion) async {
+    final current = _truckPosition;
+    final distanceMiles = current == null
+        ? null
+        : geo.Geolocator.distanceBetween(
+                current.latitude,
+                current.longitude,
+                suggestion.position.latitude,
+                suggestion.position.longitude,
+              ) /
+              _metersPerMile;
+
+    final buildNow = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: scheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Icon(
+                      Icons.location_on_rounded,
+                      color: scheme.onPrimaryContainer,
+                      size: 29,
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  // ── Geocoding results ────────────────────────────────────
-                  if (results.isNotEmpty)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 260),
-                      child: ListView(
-                        shrinkWrap: true,
-                        children: results
-                            .map(
-                              (r) => ListTile(
-                                leading: const Icon(Icons.place),
-                                title: Text(r['name'] as String),
-                                subtitle: Text(r['place'] as String? ?? ''),
-                                onTap: () {
-                                  setState(() {
-                                    _selectedDestination =
-                                        r['position'] as LatLng;
-                                    _selectedDestinationName =
-                                        r['name'] as String;
-                                  });
-                                  Navigator.of(ctx).pop();
-                                },
-                              ),
-                            )
-                            .toList(),
-                      ),
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          suggestion.name,
+                          style: const TextStyle(
+                            fontSize: 23,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          suggestion.placeName,
+                          style: TextStyle(
+                            color: scheme.onSurface.withOpacity(0.65),
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
                     ),
-                  if (results.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text(
-                        'Type a destination and press Search or ↵',
-                        style: TextStyle(color: Colors.grey),
+                  ),
+                  if (distanceMiles != null)
+                    Text(
+                      _formatRemainingDistance(distanceMiles),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
                       ),
                     ),
                 ],
               ),
-            );
-          },
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.verified_user_rounded,
+                      color: SemiTrackColors.green,
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Truck dimensions, weight, axles and hazmat settings will be applied to route calculation.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(sheetContext).pop(false),
+                icon: const Icon(Icons.push_pin_outlined),
+                label: const Text('Set destination only'),
+              ),
+              const SizedBox(height: 9),
+              SizedBox(
+                height: 54,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: SemiTrackColors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.of(sheetContext).pop(true),
+                  icon: const Icon(Icons.alt_route_rounded),
+                  label: const Text(
+                    'Build truck route',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
 
-    // Start routing only when a *new* destination was chosen in this session.
-    if (_selectedDestination != null &&
-        _selectedDestination != prevDestination) {
+    if (buildNow == null || !mounted) return;
+    _selectDestinationFromSearch(suggestion);
+    if (!buildNow) return;
+    setState(() => _isBuildingRoute = true);
+    try {
       await _startRouteToSelectedDestination();
+    } finally {
+      if (mounted) setState(() => _isBuildingRoute = false);
     }
   }
 
-  /// Queries the Mapbox Geocoding v5 API for [query] and returns up to 5
-  /// results as maps with keys 'name', 'place', and 'position' (LatLng).
+  /// Queries the Mapbox Geocoding v5 API for [query] and returns up to 5  /// results as maps with keys 'name', 'place', and 'position' (LatLng).
   Future<List<Map<String, dynamic>>> _geocodeAddress(String query) async {
     try {
       final encoded = Uri.encodeComponent(query);
+      final position = _truckPosition;
+      final proximity = position == null
+          ? ''
+          : '&proximity=${position.longitude},${position.latitude}';
       final url =
           'https://api.mapbox.com/geocoding/v5/mapbox.places/$encoded.json'
           '?types=address,place,poi'
           '&limit=5'
+          '$proximity'
           '&access_token=$_mapboxToken';
       final res = await http.get(Uri.parse(url));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw StateError(
+          'Destination search credential was rejected. Rebuild with a valid Mapbox public token.',
+        );
+      }
+      if (res.statusCode == 429) {
+        throw StateError(
+          'Destination search is temporarily rate limited. Try again shortly.',
+        );
+      }
+      if (res.statusCode != 200) {
+        throw StateError('Destination search is unavailable right now.');
+      }
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       final features = (data['features'] as List?) ?? const [];
       return features.map<Map<String, dynamic>>((dynamic f) {
         final props = f as Map<String, dynamic>;
-        final coords = (props['geometry'] as Map<String, dynamic>)['coordinates']
-            as List;
+        final coords =
+            (props['geometry'] as Map<String, dynamic>)['coordinates'] as List;
         final name = props['text'] as String? ?? '';
         final place = props['place_name'] as String? ?? '';
         return {
@@ -8331,9 +11925,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     } catch (e) {
       // Log the error so developers can diagnose API or network failures.
       // Only emit in debug builds – suppressed in release/profile mode.
-      // The empty list return lets the search sheet show "no results" gracefully.
       if (kDebugMode) debugPrint('Geocoding error for "$query": $e');
-      return [];
+      if (e is StateError) rethrow;
+      throw StateError('Unable to search destinations. Check the connection.');
     }
   }
 
@@ -8348,8 +11942,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Results are cached in [_reverseGeocodeCache] to avoid redundant requests
   /// for the same coordinate during a session.
   Future<String?> _reverseGeocode(double lat, double lng) async {
-    final String key =
-        '${lat.toStringAsFixed(6)},${lng.toStringAsFixed(6)}';
+    final String key = '${lat.toStringAsFixed(6)},${lng.toStringAsFixed(6)}';
     if (_reverseGeocodeCache.containsKey(key)) {
       final cached = _reverseGeocodeCache[key]!;
       return cached.isEmpty ? null : cached;
@@ -8373,8 +11966,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         return null;
       }
       final feature = features.first as Map<String, dynamic>;
-      final String placeName =
-          (feature['place_name'] as String?) ?? '';
+      final String placeName = (feature['place_name'] as String?) ?? '';
       final String featureType =
           ((feature['place_type'] as List?)?.first as String?) ?? '';
 
@@ -8391,8 +11983,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
   }
 
-  /// Handles a long-press on the map to immediately set a destination and
-  /// start routing to the tapped coordinate.
+  /// Handles a long-press on the map to place a destination pin at the tapped
+  /// coordinate. Route building remains an explicit driver action.
   ///
   /// The destination name is set to the coordinate string so the driver has
   /// immediate visual feedback while a geocoding lookup could be added later.
@@ -8403,7 +11995,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           '${point.latitude.toStringAsFixed(4)}, '
           '${point.longitude.toStringAsFixed(4)}';
     });
-    _startRouteToSelectedDestination();
+    // Match search selection: show the pin first, then let the driver confirm
+    // it with Start Route.
   }
 
   // ── Inline search bar logic ───────────────────────────────────────────────
@@ -8421,10 +12014,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       setState(() {
         _searchResults = const [];
         _isSearching = false;
+        _searchError = null;
       });
       return;
     }
-    setState(() => _isSearching = true);
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
     _searchDebounce = Timer(
       const Duration(milliseconds: 350),
       () => _searchPlaces(q),
@@ -8455,7 +12052,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// the user presses the keyboard "done"/"search" button.
   Future<void> _executeSearch(String q) async {
     if (!mounted || q.isEmpty) return;
-    setState(() => _isSearching = true);
+    if (_mapboxToken.isEmpty) {
+      setState(() {
+        _searchResults = const [];
+        _isSearching = false;
+        _searchError =
+            'Destination search is not configured. Rebuild with a Mapbox public access token.';
+      });
+      return;
+    }
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
     try {
       final encoded = Uri.encodeComponent(q);
       final url =
@@ -8468,8 +12077,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Log non-200 responses (e.g. 401 bad token, 429 rate limit) to aid
         // debugging without surfacing raw HTTP details to the end user.
         // Only emit in debug builds to avoid leaking response bodies in production.
-        if (kDebugMode) debugPrint('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
-        if (mounted) setState(() => _isSearching = false);
+        if (kDebugMode)
+          debugPrint('Geocoding HTTP ${res.statusCode} for "$q": ${res.body}');
+        if (mounted) {
+          setState(() {
+            _isSearching = false;
+            _searchResults = const [];
+            _searchError = res.statusCode == 401 || res.statusCode == 403
+                ? 'Destination search credential was rejected. Rebuild with a valid Mapbox public token.'
+                : res.statusCode == 429
+                ? 'Destination search is temporarily rate limited. Try again shortly.'
+                : 'Destination search is unavailable right now.';
+          });
+        }
         return;
       }
       final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -8481,14 +12101,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           final geometry = props['geometry'] as Map<String, dynamic>?;
           final coords = geometry?['coordinates'] as List?;
           if (coords == null || coords.length < 2) continue;
-          suggestions.add(PlaceSuggestion(
-            name: props['text'] as String? ?? '',
-            placeName: props['place_name'] as String? ?? '',
-            position: LatLng(
-              (coords[1] as num).toDouble(),
-              (coords[0] as num).toDouble(),
+          suggestions.add(
+            PlaceSuggestion(
+              name: props['text'] as String? ?? '',
+              placeName: props['place_name'] as String? ?? '',
+              position: LatLng(
+                (coords[1] as num).toDouble(),
+                (coords[0] as num).toDouble(),
+              ),
             ),
-          ));
+          );
         } catch (_) {
           // Skip malformed features rather than aborting the whole batch.
         }
@@ -8497,6 +12119,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         setState(() {
           _searchResults = suggestions;
           _isSearching = false;
+          _searchError = suggestions.isEmpty ? 'No destinations found.' : null;
         });
       }
     } catch (e) {
@@ -8507,6 +12130,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         setState(() {
           _searchResults = const [];
           _isSearching = false;
+          _searchError = 'Unable to search destinations. Check the connection.';
         });
       }
     }
@@ -8526,6 +12150,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           : suggestion.placeName;
       _searchResults = const [];
       _isSearching = false;
+      _searchError = null;
     });
     _searchController.clear();
     if (_mapReady) {
@@ -8541,20 +12166,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// on every keystroke without waiting for a setState call.
   Widget _buildSearchBar() {
     return Positioned(
-      top: 8,
-      left: 12,
-      right: 12,
+      top: 12,
+      left: 14,
+      right: 14,
       child: Material(
-        elevation: 4,
-        borderRadius: BorderRadius.circular(12),
+        elevation: 9,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(18),
         child: ValueListenableBuilder<TextEditingValue>(
           valueListenable: _searchController,
           builder: (_, value, __) {
             return TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Search destination...',
-                prefixIcon: const Icon(Icons.search),
+                hintText: 'Where do you want to go?',
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: SemiTrackColors.orange,
+                ),
                 suffixIcon: _isSearching
                     ? const Padding(
                         padding: EdgeInsets.all(12),
@@ -8565,20 +12194,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         ),
                       )
                     : value.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchResults = const []);
-                            },
-                          )
-                        : null,
+                    ? IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchResults = const [];
+                            _searchError = null;
+                          });
+                        },
+                      )
+                    : null,
                 filled: true,
-                fillColor: Colors.white,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                fillColor: Theme.of(context).colorScheme.surface,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 17,
+                ),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
                   borderSide: BorderSide.none,
                 ),
               ),
@@ -8594,6 +12232,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
     );
   }
+
   /// Builds the search results overlay below the search bar.
   ///
   /// Shows a loading spinner while [_isSearching] is true, a "No results
@@ -8604,7 +12243,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// destination and dismiss the list.
   Widget _buildSearchResults() {
     final hasText = _searchController.text.trim().isNotEmpty;
-    if (!hasText && !_isSearching && _searchResults.isEmpty) {
+    if (!hasText &&
+        !_isSearching &&
+        _searchResults.isEmpty &&
+        _searchError == null) {
       return const SizedBox.shrink();
     }
 
@@ -8614,13 +12256,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         padding: EdgeInsets.symmetric(vertical: 20),
         child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
       );
+    } else if (_searchError != null) {
+      content = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.deepOrange),
+            const SizedBox(width: 10),
+            Expanded(child: Text(_searchError!)),
+          ],
+        ),
+      );
     } else if (_searchResults.isEmpty) {
       content = const Padding(
         padding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-        child: Text(
-          'No results found',
-          style: TextStyle(color: Colors.grey),
-        ),
+        child: Text('No results found', style: TextStyle(color: Colors.grey)),
       );
     } else {
       content = ConstrainedBox(
@@ -8654,17 +12304,106 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     return Positioned(
-      top: 68,
-      left: 12,
-      right: 12,
+      top: 78,
+      left: 14,
+      right: 14,
       child: Material(
         elevation: 8,
-        borderRadius: BorderRadius.circular(12),
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(18),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(18),
           child: Container(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surface,
             child: content,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _cancelRouteCalculation() {
+    _routeCalculationCoordinator.invalidate();
+    _isLoadingRoute = false;
+    setState(() {
+      _isLoading = false;
+      _isBuildingRoute = false;
+      _isLoadingRouteWeighStations = false;
+      _routePoints = const [];
+      _routeOptions = const [];
+    });
+  }
+
+  Widget _buildRouteLoadingOverlay() {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0x990B1420),
+        child: Center(
+          child: Container(
+            width: 292,
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x55000000),
+                  blurRadius: 28,
+                  offset: Offset(0, 12),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEAF3FF),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: const Icon(
+                    Icons.alt_route_rounded,
+                    size: 44,
+                    color: Color(0xFF0B68E8),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Calculating truck routes',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: SemiTrackColors.navy,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Checking dimensions, weight, hazmat, tolls, ferries and road restrictions…',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF697586),
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const LinearProgressIndicator(
+                  minHeight: 4,
+                  borderRadius: BorderRadius.all(Radius.circular(99)),
+                ),
+                const SizedBox(height: 15),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: _cancelRouteCalculation,
+                    child: const Text('Cancel'),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -8678,40 +12417,95 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// is true the button shows a spinner so the driver knows the request is
   /// in flight.
   Widget _buildStartRouteButton() {
-    return Positioned.fill(
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.deepOrange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+    return Positioned(
+      left: 14,
+      right: 14,
+      bottom: 14,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: SemiTrackColors.navy,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x40101820),
+                blurRadius: 22,
+                offset: Offset(0, 10),
               ),
-              elevation: 6,
-            ),
-            icon: _isBuildingRoute
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.directions),
-            label: Text(
-              _isBuildingRoute ? 'Building route…' : 'Start Route',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            onPressed: _isBuildingRoute
-                ? null
-                : () async {
-                    setState(() => _isBuildingRoute = true);
-                    await _startRouteToSelectedDestination();
-                    if (mounted) setState(() => _isBuildingRoute = false);
-                  },
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.location_on_rounded,
+                    color: SemiTrackColors.orange,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'DESTINATION',
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _selectedDestinationName ?? 'Selected map location',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: SemiTrackColors.orange,
+                  foregroundColor: Colors.white,
+                ),
+                icon: _isBuildingRoute
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.route_rounded),
+                label: Text(
+                  _isBuildingRoute
+                      ? 'Building truck route…'
+                      : 'Build truck route',
+                ),
+                onPressed: _isBuildingRoute
+                    ? null
+                    : () async {
+                        setState(() => _isBuildingRoute = true);
+                        await _startRouteToSelectedDestination();
+                        if (mounted) setState(() => _isBuildingRoute = false);
+                      },
+              ),
+            ],
           ),
         ),
       ),
@@ -8731,82 +12525,261 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Tapping "Start Navigation" calls [_startNavigation] to begin GPS tracking
   /// and trip stats.  Hidden once [_isNavigating] is true.
   Widget _buildStartNavigationButton() {
+    final guidanceAvailable =
+        _nativeNavigationStatus?.truckSafeGuidanceAvailable == true;
+    final checkingGuidance = _nativeNavigationStatusLoading;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_routeOptions.length > 1) ...[
+        if (_previewPanelExpanded && _routeOptions.length > 1) ...[
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.blue.shade700,
-              side: BorderSide(color: Colors.blue.shade600, width: 1.5),
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              foregroundColor: SemiTrackColors.navy,
+              side: const BorderSide(color: SemiTrackColors.navy, width: 1.5),
+              padding: const EdgeInsets.symmetric(vertical: 11),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
-              backgroundColor: Colors.white.withOpacity(0.95),
+              backgroundColor: Colors.white,
             ),
             icon: const Icon(Icons.compare_arrows, size: 20),
             label: Text(
-              'See Route Details (${_routeOptions.length} options)',
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600),
+              'Compare ${_routeOptions.length} truck routes',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
             ),
             onPressed: _showRouteOptionsBottomSheet,
           ),
           const SizedBox(height: 8),
         ],
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 6,
-                ),
-                icon: const Icon(Icons.navigation),
-                label: const Text(
-                  'Start Navigation',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                onPressed: _startNavigation,
+        SizedBox(
+          height: 54,
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SemiTrackColors.orange,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: SemiTrackColors.orange.withOpacity(0.55),
+              disabledForegroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
               ),
+              elevation: 5,
             ),
-            if (_routeViolations.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+            icon: checkingGuidance
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(
+                    guidanceAvailable
+                        ? Icons.navigation_rounded
+                        : Icons.map_rounded,
                   ),
-                  elevation: 6,
-                ),
-                icon: const Icon(Icons.alt_route),
-                label: const Text(
-                  'Optimize for Truck',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                ),
-                onPressed:
-                    _isRestrictionRerouting ? null : _smartRerouteAroundRestrictions,
-              ),
-            ],
-          ],
+            label: Text(
+              checkingGuidance
+                  ? 'Checking navigation…'
+                  : guidanceAvailable
+                  ? 'Start truck navigation'
+                  : 'Start route assistance',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            onPressed: checkingGuidance
+                ? null
+                : () => unawaited(
+                    _beginSelectedRouteAssistance(
+                      nativeGuidanceAvailable: guidanceAvailable,
+                    ),
+                  ),
+          ),
         ),
+        if (!checkingGuidance && !guidanceAvailable) ...[
+          const SizedBox(height: 7),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F4F7),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.lock_outline_rounded,
+                  size: 15,
+                  color: Color(0xFF5F6E7C),
+                ),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    _routeOptions.length > 1
+                        ? 'Tap any route line to select it. Foreground voice uses the selected HERE truck route.'
+                        : 'Foreground GPS, maneuvers, voice, alerts, and truck-safe rerouting are available.',
+                    style: const TextStyle(
+                      color: Color(0xFF5F6E7C),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const IconButton(
+                  tooltip: 'Recheck navigation availability',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: null,
+                  icon: Icon(Icons.info_outline_rounded, size: 17),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (_routeViolations.isNotEmpty && _previewPanelExpanded) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _isRestrictionRerouting
+                ? null
+                : _smartRerouteAroundRestrictions,
+            icon: const Icon(Icons.alt_route_rounded),
+            label: const Text('Optimize around restrictions'),
+          ),
+        ],
       ],
     );
   }
 
-  // ── Leg breakdown UI helpers ───────────────────────────────────────────────
+  Future<void> _beginSelectedRouteAssistance({
+    required bool nativeGuidanceAvailable,
+  }) async {
+    if (!await _confirmHosPlanningWarningIfNeeded()) return;
+    if (!mounted) return;
+    if (nativeGuidanceAvailable) {
+      await _startNavigation();
+    } else {
+      _startRoutePreview();
+    }
+  }
 
+  Future<bool> _confirmHosPlanningWarningIfNeeded() async {
+    final etaMinutes = (_routeData?['etaMinutes'] as num?)?.toInt() ?? 0;
+    const federalDrivingLimitMinutes = 11 * 60;
+    if (etaMinutes <= federalDrivingLimitMinutes) return true;
+
+    _analyticsService.updateNavigationSnapshot(hosWarningShown: true);
+    unawaited(
+      _analyticsService.recordEvent(
+        'HOS_WARNING_SHOWN',
+        numericValue: etaMinutes.toDouble(),
+        durationSeconds: etaMinutes * 60,
+      ),
+    );
+
+    final eldMinutesLeft = _intelligence['driveMinutesLeft'] as int?;
+    final routeDuration = _formatEta(etaMinutes);
+    final hosStatus = _eldHosAvailable && eldMinutesLeft != null
+        ? 'Connected ELD reports ${_formatEta(eldMinutesLeft)} of driving time remaining.'
+        : 'No current ELD HOS clock is available. SemiTraX will not estimate your legal remaining hours.';
+
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            icon: const Icon(
+              Icons.schedule_rounded,
+              color: Color(0xFFF45A13),
+              size: 34,
+            ),
+            title: const Text('HOS planning required'),
+            content: Text(
+              'This truck route is approximately $routeDuration and exceeds the federal 11-hour driving limit. $hosStatus\n\nPlan required breaks and verify your current duty status before departure. This warning supports planning and is not a legal HOS determination.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Review route'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Continue planning'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// Starts GPS-following assistance for the authenticated HERE truck route.
+  ///
+  /// This fallback uses only provider route steps and fresh truck-safe route
+  /// calculations. It does not claim lane-level, offline, or licensed native
+  /// HERE Navigate guidance, and it never substitutes a passenger-car route.
+  void _startRoutePreview() {
+    _gestureReturnTimer?.cancel();
+    final now = DateTime.now();
+    setState(() {
+      _cameraMode = NavigationCameraMode.follow;
+      _previewPanelExpanded = false;
+      _routePreviewActive = true;
+      _navigationActive = true;
+      _navigationMode = true;
+      _navigationStartedAt = now;
+      _lastRerouteAt = null;
+      _offRouteDetectedAt = null;
+      _hasStableFixForNavigation =
+          _lastAcceptedPosition != null &&
+          _lastAcceptedPosition!.accuracy >= 0 &&
+          _lastAcceptedPosition!.accuracy < 30 &&
+          _lastAcceptedPosition!.speed >= 0;
+      _isUserInteractingWithMap = false;
+      _lastManualMapInteractionAt = null;
+    });
+    // HERE Explore assistance is still a live driving session even though it
+    // is not licensed native Navigate guidance. Hide AppShell's planning tabs
+    // and use the same distraction-reduced map layout for both modes.
+    TruckMapScreen.isNavigatingNotifier.value = true;
+    unawaited(
+      _analyticsService.startNavigation(
+        estimatedDriveMinutes: (_routeTotalDurationSeconds / 60).ceil(),
+      ),
+    );
+    _warningManager.startNavigation();
+    _startTripStats();
+    unawaited(_startGps());
+    if (_navSteps.isNotEmpty) {
+      final context = _roadContextForRouteIndex(_truckIndex);
+      final stepIndex = (context?.key ?? 0).clamp(0, _navSteps.length - 1);
+      _activateNavigationStep(stepIndex, speak: false);
+      final instruction = _navSteps[stepIndex].instruction.trim();
+      unawaited(
+        _speak(
+          instruction.isEmpty
+              ? 'Live truck route assistance started'
+              : 'Live truck route assistance started. $instruction',
+        ),
+      );
+    }
+    _refreshClosestTruckStopsAhead();
+    _refreshClosestWeighStationsAhead();
+    _refreshClosestRestAreasAhead();
+    _refreshTripProgress();
+    _refreshUpcomingAlerts();
+    _refreshRoutePoiSourceIfNeeded(force: true);
+    _scheduleRoadFeatureRefresh(center: _truckPosition, routeAware: true);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Live truck-route assistance started. Tap Navigation controls to continue, reroute, or quit.',
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 4),
+        ),
+      );
+  }
+
+  // ── Leg breakdown UI helpers ───────────────────────────────────────────────
   /// Formats [seconds] into a human-readable duration string such as
   /// "1h 24m" or "38m".
   String _formatDuration(int seconds) {
@@ -8821,7 +12794,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// colour-coded restriction warning.  Hidden when no legs exist or
   /// navigation has not started.
   Widget _buildCurrentLegCard() {
-    if (_tripLegs.isEmpty || !_isNavigating) {
+    if (_tripLegs.isEmpty || !_isLiveRouteAssistanceActive) {
       return const SizedBox.shrink();
     }
     if (_activeLegIndex >= _tripLegs.length) return const SizedBox.shrink();
@@ -8840,10 +12813,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 10,
-            ),
+            BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 10),
           ],
         ),
         child: Column(
@@ -8851,16 +12821,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           children: [
             Text(
               'Leg ${_activeLegIndex + 1} of ${_tripLegs.length}',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             const SizedBox(height: 8),
             Text('${leg.fromName} → ${leg.toName}'),
             const SizedBox(height: 6),
             Text(
-              '${leg.distanceMiles.toStringAsFixed(0)} mi • ${_formatDuration(leg.durationSeconds)}',
+              '${_formatRemainingDistance(leg.distanceMiles)} • ${_formatDuration(leg.durationSeconds)}',
             ),
             const SizedBox(height: 6),
             Text(
@@ -8868,8 +12835,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ? 'No known restrictions'
                   : '${leg.restrictionCount} restriction warning(s)',
               style: TextStyle(
-                color:
-                    leg.restrictionCount == 0 ? Colors.green : Colors.red,
+                color: leg.restrictionCount == 0 ? Colors.green : Colors.red,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -8898,10 +12864,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
             children: [
               const Text(
                 'Trip Legs',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 14),
               ...List.generate(_tripLegs.length, (index) {
@@ -8911,13 +12874,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   margin: const EdgeInsets.only(bottom: 12),
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color:
-                        active ? Colors.green.shade50 : Colors.white,
+                    color: active ? Colors.green.shade50 : Colors.white,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: active
-                          ? Colors.green
-                          : Colors.grey.shade300,
+                      color: active ? Colors.green : Colors.grey.shade300,
                     ),
                   ),
                   child: Column(
@@ -8934,7 +12894,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       Text('${leg.fromName} → ${leg.toName}'),
                       const SizedBox(height: 6),
                       Text(
-                        '${leg.distanceMiles.toStringAsFixed(0)} mi • ${_formatDuration(leg.durationSeconds)}',
+                        '${_formatRemainingDistance(leg.distanceMiles)} • ${_formatDuration(leg.durationSeconds)}',
                       ),
                       const SizedBox(height: 6),
                       Text(
@@ -8967,6 +12927,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// features like map type, layer visibility, and audio mode take effect
   /// in real time even while the settings screen is open.
   void _showMoreMapFeaturesSheet() {
+    if (_isLiveRouteAssistanceActive) {
+      unawaited(_showActiveNavigationMenu());
+      return;
+    }
+    _showNavigationSettings();
+  }
+
+  void _showNavigationSettings() {
     Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
@@ -8989,11 +12957,79 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
+  Future<void> _showActiveNavigationMenu() async {
+    final instruction = _topInstructionData;
+    final headline = instruction == null
+        ? 'Continue on truck route'
+        : [
+            instruction.primaryText.trim(),
+            instruction.roadName.trim(),
+          ].where((part) => part.isNotEmpty).join(' ');
+    final remainingMiles = _formatRemainingDistance(
+      _tripProgressInfo.milesRemaining,
+    );
+    final remainingDuration = _fmtDuration(_tripProgressInfo.durationRemaining);
+    final arrival = _fmtArrival(_tripProgressInfo);
+    final timezone = _tripProgressInfo.timezoneLabel.trim();
+    final audioLabel = switch (_navSettings.audioMode) {
+      0 => 'Muted',
+      1 => 'Safety alerts only',
+      _ => 'Voice guidance on',
+    };
+
+    final action = await Navigator.push<ActiveNavigationMenuAction>(
+      context,
+      MaterialPageRoute<ActiveNavigationMenuAction>(
+        fullscreenDialog: true,
+        builder: (_) => ActiveNavigationMenuScreen(
+          instruction: headline,
+          towardRoad: instruction?.towardRoadName,
+          maneuverIcon: instruction == null
+              ? Icons.straight_rounded
+              : _maneuverVisualIcon(instruction.visualType),
+          maneuverDistance: _formatDistance(_distanceToNextStep()),
+          remainingDistance: remainingMiles,
+          remainingDuration: remainingDuration,
+          arrivalTime: timezone.isEmpty ? arrival : '$arrival $timezone',
+          audioLabel: audioLabel,
+          truckName: _activeTruckProfile?.name ?? 'Active truck profile',
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case ActiveNavigationMenuAction.quit:
+        await _stopNavigation();
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Navigation stopped')));
+        }
+      case ActiveNavigationMenuAction.reroute:
+        _shortcutReroute();
+      case ActiveNavigationMenuAction.poiAhead:
+        _shortcutPoiAhead();
+      case ActiveNavigationMenuAction.searchPlaces:
+        _shortcutSearchPlaces();
+      case ActiveNavigationMenuAction.report:
+        _shortcutReport();
+      case ActiveNavigationMenuAction.placesFilter:
+        _shortcutPlacesFilter();
+      case ActiveNavigationMenuAction.shareTrip:
+        _shortcutShareTrip();
+      case ActiveNavigationMenuAction.routeOptions:
+        _showRouteOptionsBottomSheet();
+      case ActiveNavigationMenuAction.audioSettings:
+        _showNavigationSettings();
+    }
+  }
+
   /// Builds a mini FAB that opens the leg breakdown sheet during navigation.
   ///
   /// Hidden when there are no legs or navigation has not started.
   Widget _buildLegBreakdownButton() {
-    if (_tripLegs.isEmpty || !_isNavigating) {
+    if (_tripLegs.isEmpty || !_isLiveRouteAssistanceActive) {
       return const SizedBox.shrink();
     }
     return Positioned(
@@ -9018,58 +13054,70 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [NavSettingsScreen] Shortcut section are shown.  Returns
   /// [SizedBox.shrink] when no shortcuts are active or navigation is idle.
   Widget _buildShortcutBar() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_isLiveRouteAssistanceActive) return const SizedBox.shrink();
 
     final items = <_ShortcutBarItem>[];
     if (_navSettings.shortcutReroute) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.alt_route,
-        label: 'Reroute',
-        onTap: _shortcutReroute,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.alt_route,
+          label: 'Reroute',
+          onTap: _shortcutReroute,
+        ),
+      );
     }
     if (_navSettings.shortcutPoiAhead) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.local_parking,
-        label: 'POI Ahead',
-        onTap: _shortcutPoiAhead,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.local_parking,
+          label: 'POI Ahead',
+          onTap: _shortcutPoiAhead,
+        ),
+      );
     }
     if (_navSettings.shortcutSearchPlaces) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.search,
-        label: 'Search',
-        onTap: _shortcutSearchPlaces,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.search,
+          label: 'Search',
+          onTap: _shortcutSearchPlaces,
+        ),
+      );
     }
     if (_navSettings.shortcutReport) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.flag_outlined,
-        label: 'Report',
-        onTap: _shortcutReport,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.flag_outlined,
+          label: 'Report',
+          onTap: _shortcutReport,
+        ),
+      );
     }
     if (_navSettings.shortcutPlacesFilter) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.filter_list,
-        label: 'Filter',
-        onTap: _shortcutPlacesFilter,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.filter_list,
+          label: 'Filter',
+          onTap: _shortcutPlacesFilter,
+        ),
+      );
     }
     if (_navSettings.shortcutShareTrip) {
-      items.add(_ShortcutBarItem(
-        icon: Icons.share,
-        label: 'Share',
-        onTap: _shortcutShareTrip,
-      ));
+      items.add(
+        _ShortcutBarItem(
+          icon: Icons.share,
+          label: 'Share',
+          onTap: _shortcutShareTrip,
+        ),
+      );
     }
 
     if (items.isEmpty) return const SizedBox.shrink();
 
     return Positioned(
       left: 16,
-      // Position just above the bottom trip strip (~45 px tall at bottom: 18).
-      bottom: 74,
+      // Position above the full-width navigation summary card.
+      bottom: 112,
       child: SafeArea(
         top: false,
         child: SingleChildScrollView(
@@ -9127,15 +13175,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       _showSnack('GPS position not yet available.  Try again in a moment.');
       return;
     }
-    if (!_isNavigating) {
+    if (!_isLiveRouteAssistanceActive) {
       _showSnack('Start navigation first to use Reroute.');
       return;
     }
-    setState(() => _navStatus = 'Rerouting...');
     _speakAlert('Rerouting');
-    fetchRoute(fromPosition: _truckPosition).then((_) {
-      if (mounted) setState(() => _navStatus = null);
-    });
+    unawaited(_requestReroute(_truckPosition!, reason: 'manual'));
   }
 
   /// Shows a bottom sheet listing nearby POIs ahead on the active route.
@@ -9151,16 +13196,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final nearby = <MapPoi>[];
     for (final poi in _mapPois) {
       final dist = geo.Geolocator.distanceBetween(
-        pos.latitude, pos.longitude,
-        poi.position.latitude, poi.position.longitude,
+        pos.latitude,
+        pos.longitude,
+        poi.position.latitude,
+        poi.position.longitude,
       );
       if (dist <= radiusMeters) nearby.add(poi);
     }
     nearby.sort((a, b) {
       final da = geo.Geolocator.distanceBetween(
-          pos.latitude, pos.longitude, a.position.latitude, a.position.longitude);
+        pos.latitude,
+        pos.longitude,
+        a.position.latitude,
+        a.position.longitude,
+      );
       final db = geo.Geolocator.distanceBetween(
-          pos.latitude, pos.longitude, b.position.latitude, b.position.longitude);
+        pos.latitude,
+        pos.longitude,
+        b.position.latitude,
+        b.position.longitude,
+      );
       return da.compareTo(db);
     });
 
@@ -9201,19 +13256,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 itemBuilder: (_, i) {
                   final poi = nearby[i];
                   final dist = geo.Geolocator.distanceBetween(
-                    pos.latitude, pos.longitude,
-                    poi.position.latitude, poi.position.longitude,
+                    pos.latitude,
+                    pos.longitude,
+                    poi.position.latitude,
+                    poi.position.longitude,
                   );
                   final miles = (dist / 1609.34);
                   return ListTile(
-                    leading: const Icon(Icons.place_outlined,
-                        color: Color(0xFF2196F3)),
+                    leading: const Icon(
+                      Icons.place_outlined,
+                      color: Color(0xFF2196F3),
+                    ),
                     title: Text(
                       poi.name,
                       style: const TextStyle(color: Colors.white),
                     ),
                     subtitle: Text(
-                      '${miles.toStringAsFixed(1)} mi away',
+                      '${_formatRemainingDistance(miles)} away',
                       style: const TextStyle(color: Color(0xFF8A9BB0)),
                     ),
                     onTap: () {
@@ -9260,10 +13319,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     hintText: 'City, address, or place…',
-                    hintStyle:
-                        const TextStyle(color: Color(0xFF8A9BB0)),
-                    prefixIcon: const Icon(Icons.search,
-                        color: Color(0xFF8A9BB0)),
+                    hintStyle: const TextStyle(color: Color(0xFF8A9BB0)),
+                    prefixIcon: const Icon(
+                      Icons.search,
+                      color: Color(0xFF8A9BB0),
+                    ),
                     suffixIcon: searching
                         ? const Padding(
                             padding: EdgeInsets.all(12),
@@ -9303,17 +13363,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       itemCount: results.length,
                       itemBuilder: (_, i) => ListTile(
                         dense: true,
-                        leading: const Icon(Icons.place_outlined,
-                            color: Color(0xFF2196F3), size: 18),
+                        leading: const Icon(
+                          Icons.place_outlined,
+                          color: Color(0xFF2196F3),
+                          size: 18,
+                        ),
                         title: Text(
                           results[i].name,
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 13),
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
                         ),
                         subtitle: Text(
                           results[i].placeName,
                           style: const TextStyle(
-                              color: Color(0xFF8A9BB0), fontSize: 11),
+                            color: Color(0xFF8A9BB0),
+                            fontSize: 11,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -9331,8 +13398,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Color(0xFF8A9BB0))),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF8A9BB0)),
+              ),
             ),
           ],
         ),
@@ -9369,7 +13438,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               Text(
                 'Report Incident',
                 style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w700),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -9392,7 +13463,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 150),
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
                             color: selected == t
                                 ? const Color(0xFFF44336).withOpacity(0.18)
@@ -9426,8 +13499,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Color(0xFF8A9BB0))),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF8A9BB0)),
+              ),
             ),
             TextButton(
               onPressed: selected == null
@@ -9435,10 +13510,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   : () {
                       Navigator.pop(ctx);
                       _showSnack(
-                          'Thanks! "$selected" reported near your location.');
+                        'Thanks! "$selected" reported near your location.',
+                      );
                     },
-              child: const Text('Submit',
-                  style: TextStyle(color: Color(0xFF2196F3))),
+              child: const Text(
+                'Submit',
+                style: TextStyle(color: Color(0xFF2196F3)),
+              ),
             ),
           ],
         ),
@@ -9470,7 +13548,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               Text(
                 'Places Filter',
                 style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w700),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -9506,8 +13586,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Color(0xFF8A9BB0))),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF8A9BB0)),
+              ),
             ),
             TextButton(
               onPressed: () {
@@ -9519,8 +13601,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 });
                 Navigator.pop(ctx);
               },
-              child: const Text('Apply',
-                  style: TextStyle(color: Color(0xFF2196F3))),
+              child: const Text(
+                'Apply',
+                style: TextStyle(color: Color(0xFF2196F3)),
+              ),
             ),
           ],
         ),
@@ -9544,7 +13628,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         children: [
           Icon(icon, color: const Color(0xFF8A9BB0), size: 18),
           const SizedBox(width: 8),
-          Text(label, style: const TextStyle(color: Colors.white, fontSize: 14)),
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
         ],
       ),
       contentPadding: EdgeInsets.zero,
@@ -9558,8 +13645,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final info = StringBuffer('🚛 Semitrack Trip Share\n');
     if (pos != null) {
       info.writeln(
-          'Current position: ${pos.latitude.toStringAsFixed(5)}, '
-          '${pos.longitude.toStringAsFixed(5)}');
+        'Current position: ${pos.latitude.toStringAsFixed(5)}, '
+        '${pos.longitude.toStringAsFixed(5)}',
+      );
     }
     if (_hasActiveDestination) {
       final dest = _selectedDestination ?? _destination;
@@ -9567,12 +13655,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final destLabel = hasName
           ? _selectedDestinationName!
           : '${dest.latitude.toStringAsFixed(4)}, '
-              '${dest.longitude.toStringAsFixed(4)}';
+                '${dest.longitude.toStringAsFixed(4)}';
       info.writeln('Destination: $destLabel');
       final miles = _tripProgressInfo.milesRemaining;
       final mins = _tripProgressInfo.durationRemaining.inMinutes;
       if (miles > 0) {
-        info.writeln('Remaining: ${miles.toStringAsFixed(1)} mi, ~${mins}m');
+        info.writeln(
+          'Remaining: ${_formatRemainingDistance(miles)}, ~${mins}m',
+        );
       }
     }
     final shareText = info.toString().trim();
@@ -9581,17 +13671,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A2535),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
             Icon(Icons.share, color: Color(0xFF2196F3), size: 22),
             SizedBox(width: 8),
             Text(
               'Share Trip',
-              style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
@@ -9606,9 +13696,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                shareText.isEmpty
-                    ? 'No active trip to share.'
-                    : shareText,
+                shareText.isEmpty ? 'No active trip to share.' : shareText,
                 style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 13,
@@ -9621,8 +13709,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close',
-                style: TextStyle(color: Color(0xFF8A9BB0))),
+            child: const Text(
+              'Close',
+              style: TextStyle(color: Color(0xFF8A9BB0)),
+            ),
           ),
           if (shareText.isNotEmpty)
             TextButton(
@@ -9631,8 +13721,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 Navigator.pop(ctx);
                 _showSnack('Trip info copied to clipboard.');
               },
-              child: const Text('Copy',
-                  style: TextStyle(color: Color(0xFF2196F3))),
+              child: const Text(
+                'Copy',
+                style: TextStyle(color: Color(0xFF2196F3)),
+              ),
             ),
         ],
       ),
@@ -9650,38 +13742,68 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       ),
     );
   }
-  ///
-  /// [emoji] is a leading emoji icon, [label] is the category name, and
-  /// [value] is the computed display string.  [valueColor] may override the
-  /// default text colour for warnings.
-  Widget _previewRow(
-    String emoji,
-    String label,
-    String value, {
-    Color? valueColor,
+
+  Widget _previewStat(
+    IconData icon,
+    String value,
+    String label, {
+    Color color = SemiTrackColors.navy,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(emoji, style: const TextStyle(fontSize: 16)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Colors.black87,
-                fontWeight: FontWeight.w500,
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF687583),
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _previewChip(IconData icon, String label, {Color? color}) {
+    final chipColor = color ?? SemiTrackColors.blue;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+      decoration: BoxDecoration(
+        color: chipColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: chipColor),
+          const SizedBox(width: 5),
           Text(
-            value,
+            label,
             style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              color: valueColor ?? Colors.black87,
+              color: chipColor,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -9694,23 +13816,26 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds the route stats summary section of the preview panel.
   Widget _buildPreviewIntelligencePanel() {
     final distanceMiles =
-        (_routeData?['distanceMiles'] as num?)?.toInt() ?? 0;
-    final etaMinutes =
-        (_routeData?['etaMinutes'] as num?)?.toInt() ?? 0;
-    final etaHours = etaMinutes ~/ 60;
-    final etaMins = etaMinutes % 60;
-    final etaLabel = etaHours > 0 ? '${etaHours}h ${etaMins}m' : '${etaMins}m';
+        (_routeData?['distanceMiles'] as num?)?.toDouble() ?? 0;
+    final etaMinutes = (_routeData?['etaMinutes'] as num?)?.toInt() ?? 0;
+    final etaLabel = _fmtDuration(Duration(minutes: etaMinutes));
+    final provider = _routeData?['provider']?.toString().trim();
+    final providerLabel = provider == null || provider.isEmpty
+        ? 'TRUCK ROUTE'
+        : '${provider.toUpperCase()} TRUCK';
 
     // Fuel stops: truck stops near the route that are actual fuel providers
     // (exclude rest-area and weigh-station brands which don't sell diesel).
-    final fuelStops = _truckStops
-        .where((s) => s.brand != 'Rest Area' && s.brand != 'Weigh Station')
-        .length;
+    final fuelStops = _countFuelStopsForRoute(_routePoints);
 
-    // Weigh stations: map POIs of weighStation type.
-    final weighStations = _mapPois
-        .where((p) => p.type == PoiType.weighStation)
-        .length;
+    final weighStations = _selectedRouteOptionIndex < _routeOptions.length
+        ? _routeOptions[_selectedRouteOptionIndex].weighStationCount
+        : _countWeighStationsForRoute(_routePoints);
+    final weighStationLabel = _isLoadingRouteWeighStations
+        ? 'Finding weigh stations…'
+        : _routeWeighStationsAvailable
+        ? '$weighStations weigh stations'
+        : 'Weigh data unavailable';
 
     // Closest upcoming weigh station on this route (preview mode).
     // Re-uses the same ahead-on-route logic used during live navigation so the
@@ -9718,8 +13843,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final previewStations = _routePoints.isNotEmpty
         ? _getClosestWeighStationsAheadOnRoute()
         : const <AheadWeighStation>[];
-    final AheadWeighStation? nextPreviewStation =
-        previewStations.isNotEmpty ? previewStations.first : null;
+    final AheadWeighStation? nextPreviewStation = previewStations.isNotEmpty
+        ? previewStations.first
+        : null;
 
     final restrictionCount = _selectedRouteOptionIndex < _routeOptions.length
         ? _routeOptions[_selectedRouteOptionIndex].restrictionCount
@@ -9727,10 +13853,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final hasRestrictions = restrictionCount > 0;
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: const [
           BoxShadow(
             color: Color(0x29000000),
@@ -9743,49 +13869,135 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'Route Preview',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _routePreviewActive
+                      ? 'Truck route assistance'
+                      : 'Truck route preview',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: SemiTrackColors.navy,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: SemiTrackColors.green.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.verified_rounded,
+                      size: 13,
+                      color: SemiTrackColors.green,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      providerLabel,
+                      style: const TextStyle(
+                        color: SemiTrackColors.green,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          _previewRow('🚚', 'Distance:', '$distanceMiles mi'),
-          _previewRow('⏱', 'ETA:', etaLabel),
-          _previewRow('⛽', 'Fuel Stops:', '$fuelStops'),
-          _previewRow('⚖️', 'Weigh Stations:', '$weighStations'),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _previewStat(
+                Icons.route_rounded,
+                '$distanceMiles mi',
+                'DISTANCE',
+              ),
+              Container(width: 1, height: 36, color: const Color(0xFFE2E7EC)),
+              const SizedBox(width: 12),
+              _previewStat(Icons.schedule_rounded, etaLabel, 'DRIVE TIME'),
+              Container(width: 1, height: 36, color: const Color(0xFFE2E7EC)),
+              const SizedBox(width: 12),
+              _previewStat(
+                hasRestrictions
+                    ? Icons.warning_amber_rounded
+                    : Icons.check_circle_rounded,
+                hasRestrictions ? '$restrictionCount' : 'Clear',
+                'RESTRICTIONS',
+                color: hasRestrictions
+                    ? Colors.red.shade700
+                    : SemiTrackColors.green,
+              ),
+            ],
+          ),
+          const SizedBox(height: 11),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              _previewChip(
+                Icons.local_gas_station_rounded,
+                '$fuelStops truck fuel stops',
+              ),
+              _previewChip(
+                Icons.scale_rounded,
+                weighStationLabel,
+                color: SemiTrackColors.orange,
+              ),
+              _previewChip(
+                Icons.flag_rounded,
+                'Arrive ${_fmtArrival(_tripProgressInfo)} ${_tripProgressInfo.timezoneLabel}',
+                color: SemiTrackColors.green,
+              ),
+              if (_weatherRisk != null)
+                _previewChip(
+                  Icons.cloud_rounded,
+                  '$_weatherRisk weather',
+                  color: Colors.blueGrey,
+                ),
+            ],
+          ),
           // If the route passes a weigh station, show the first one ahead
           // with its name and distance so the driver can plan compliance stops.
           if (nextPreviewStation != null) ...[
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.only(left: 24, bottom: 2),
+            const SizedBox(height: 9),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F6F8),
+                borderRadius: BorderRadius.circular(10),
+              ),
               child: Row(
                 children: [
-                  const Icon(Icons.scale,
-                      size: 13, color: Colors.orange),
-                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.scale_rounded,
+                    size: 14,
+                    color: SemiTrackColors.orange,
+                  ),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       'Next: ${nextPreviewStation.poi.name}',
                       style: const TextStyle(
                         fontSize: 11,
-                        color: Colors.black54,
-                        fontWeight: FontWeight.w500,
+                        color: SemiTrackColors.navy,
+                        fontWeight: FontWeight.w700,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   Text(
-                    nextPreviewStation.milesAhead < 10
-                        ? '${nextPreviewStation.milesAhead.toStringAsFixed(1)} mi'
-                        : '${nextPreviewStation.milesAhead.round()} mi',
+                    _formatRemainingDistance(nextPreviewStation.milesAhead),
                     style: const TextStyle(
                       fontSize: 11,
-                      color: Colors.orange,
+                      color: SemiTrackColors.orange,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -9793,22 +14005,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               ),
             ),
           ],
-          _previewRow(
-            '⚠️',
-            'Restrictions:',
-            '$restrictionCount',
-            valueColor: hasRestrictions ? Colors.red : null,
-          ),
-          if (_weatherRisk != null)
-            _previewRow('🌧', 'Weather Risk:', _weatherRisk!),
           if (hasRestrictions) ...[
-            const SizedBox(height: 6),
-            const Text(
-              '⚠️ Route has truck restrictions.',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.red,
-                fontWeight: FontWeight.w600,
+            const SizedBox(height: 9),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFECEA),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Review truck restrictions before departure.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFFB42318),
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           ],
@@ -9824,6 +14035,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// in blue; others are shown with a grey border.
   Widget _buildRouteAlternativesCard() {
     if (_routeOptions.length < 2) return const SizedBox.shrink();
+
+    final textScale = MediaQuery.textScalerOf(context).scale(1);
+    final optionHeight = (88.0 * textScale).clamp(88.0, 120.0);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
@@ -9852,7 +14066,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 80,
+            height: optionHeight,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: _routeOptions.length,
@@ -9871,7 +14085,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     duration: const Duration(milliseconds: 200),
                     width: 110,
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 8),
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: isSelected
                           ? Colors.blue.shade50
@@ -9903,7 +14119,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                         Text(
                           '$distMi mi · $etaLabel',
                           style: const TextStyle(
-                              fontSize: 11, color: Colors.black54),
+                            fontSize: 11,
+                            color: Colors.black54,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         Row(
                           children: [
@@ -9917,16 +14137,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                                   : Colors.green,
                             ),
                             const SizedBox(width: 3),
-                            Text(
-                              opt.restrictionCount > 0
-                                  ? '${opt.restrictionCount} restrict.'
-                                  : 'Clear',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: opt.restrictionCount > 0
-                                    ? Colors.red
-                                    : Colors.green.shade700,
-                                fontWeight: FontWeight.w600,
+                            Expanded(
+                              child: Text(
+                                opt.restrictionCount > 0
+                                    ? '${opt.restrictionCount} restrict.'
+                                    : 'Clear',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: opt.restrictionCount > 0
+                                      ? Colors.red
+                                      : Colors.green.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
@@ -9948,9 +14172,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Positioned in the top-right of the map below the search bar so it does
   /// not overlap with the search field or the navigation banner.
   Widget _buildMapLegend() {
+    final hasAlternatives = _routeOptions.length > 1;
+    final hasRestrictions = _routeViolations.isNotEmpty;
+    if (!hasAlternatives && !hasRestrictions) {
+      return const SizedBox.shrink();
+    }
     return Positioned(
-      top: 68,
-      right: 12,
+      top: 14,
+      left: 14,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
@@ -9968,11 +14197,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _legendRow(Colors.blue, 'Selected route'),
-            const SizedBox(height: 4),
-            _legendRow(Colors.grey.shade400, 'Alternative'),
-            const SizedBox(height: 4),
-            _legendRow(Colors.red, 'Restriction'),
+            if (hasAlternatives)
+              _legendRow(Colors.grey.shade500, 'Alternative route'),
+            if (hasAlternatives && hasRestrictions) const SizedBox(height: 4),
+            if (hasRestrictions)
+              _legendRow(Colors.red.shade700, 'Restricted segment'),
           ],
         ),
       ),
@@ -10042,37 +14271,45 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Layer IDs used by Mapbox Streets v12 for road/highway labels.
     // Each entry is: (layerId, textSize, haloWidth, haloBlur).
     const List<(String, double, double, double)> roadLabelLayers = [
-      ('road-label',            14.0, 2.5, 1.0),
-      ('road-label-simple',     14.0, 2.5, 1.0),
-      ('road-number-shield',    13.0, 2.0, 1.0),
-      ('motorway-label',        15.0, 3.0, 1.5),
-      ('motorway-junction',     13.0, 2.5, 1.0),
-      ('road-exit-shield',      13.0, 2.0, 1.0),
-      ('road-intersection',     12.0, 2.0, 1.0),
-      ('road-oneway-arrow-blue',11.0, 1.5, 0.5),
-      ('bridge-label',          13.0, 2.5, 1.0),
-      ('tunnel-label',          13.0, 2.5, 1.0),
+      ('road-label', 14.0, 2.5, 1.0),
+      ('road-label-simple', 14.0, 2.5, 1.0),
+      ('road-number-shield', 13.0, 2.0, 1.0),
+      ('motorway-label', 15.0, 3.0, 1.5),
+      ('motorway-junction', 13.0, 2.5, 1.0),
+      ('road-exit-shield', 13.0, 2.0, 1.0),
+      ('road-intersection', 12.0, 2.0, 1.0),
+      ('road-oneway-arrow-blue', 11.0, 1.5, 0.5),
+      ('bridge-label', 13.0, 2.5, 1.0),
+      ('tunnel-label', 13.0, 2.5, 1.0),
     ];
 
     for (final (layerId, size, haloWidth, haloBlur) in roadLabelLayers) {
       try {
         if (!await map.style.styleLayerExists(layerId)) continue;
         // Bold text size
-        await map.style.setStyleLayerProperty(
-          layerId, 'text-size', size);
+        await map.style.setStyleLayerProperty(layerId, 'text-size', size);
         // White halo for legibility over any background
         await map.style.setStyleLayerProperty(
-          layerId, 'text-halo-color', '#ffffff');
+          layerId,
+          'text-halo-color',
+          '#ffffff',
+        );
         await map.style.setStyleLayerProperty(
-          layerId, 'text-halo-width', haloWidth);
+          layerId,
+          'text-halo-width',
+          haloWidth,
+        );
         await map.style.setStyleLayerProperty(
-          layerId, 'text-halo-blur', haloBlur);
+          layerId,
+          'text-halo-blur',
+          haloBlur,
+        );
         // Dark text for contrast
-        await map.style.setStyleLayerProperty(
-          layerId, 'text-color', '#1a1a1a');
+        await map.style.setStyleLayerProperty(layerId, 'text-color', '#1a1a1a');
       } catch (e) {
         debugPrint(
-          'TruckMapScreen: _enhanceRoadLabels failed for layer "$layerId": $e');
+          'TruckMapScreen: _enhanceRoadLabels failed for layer "$layerId": $e',
+        );
       }
     }
 
@@ -10081,15 +14318,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     try {
       if (await map.style.styleLayerExists('motorway-label')) {
         await map.style.setStyleLayerProperty(
-          'motorway-label', 'text-color', '#ffffff');
+          'motorway-label',
+          'text-color',
+          '#ffffff',
+        );
         await map.style.setStyleLayerProperty(
-          'motorway-label', 'text-halo-color', '#003399');
+          'motorway-label',
+          'text-halo-color',
+          '#003399',
+        );
         await map.style.setStyleLayerProperty(
-          'motorway-label', 'text-halo-width', 2.0);
+          'motorway-label',
+          'text-halo-width',
+          2.0,
+        );
       }
     } catch (e) {
       debugPrint(
-        'TruckMapScreen: _enhanceRoadLabels failed for motorway-label: $e');
+        'TruckMapScreen: _enhanceRoadLabels failed for motorway-label: $e',
+      );
     }
   }
 
@@ -10138,7 +14385,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // Note: this loop logs one line per POI entry, which may produce many
       // lines for large datasets — it is intentional for a full audit pass.
       // TODO(production): Remove this per-POI loop before releasing.
-      debugPrint('[POI Audit] ${pois.length} POI(s) loaded from locations.json:');
+      debugPrint(
+        '[POI Audit] ${pois.length} POI(s) loaded from locations.json:',
+      );
       for (var i = 0; i < pois.length; i++) {
         final p = pois[i];
         debugPrint('[POI Audit]   [$i] name="${p.name}"  icon="${p.icon}"');
@@ -10149,8 +14398,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       // All POIs are included in the Mapbox source — verified ones (entranceLat
       // present + verified=true) show a colored marker; approximate ones show
       // a grey marker.  No POIs are hidden due to missing entrance coordinates.
-      final int verifiedCount =
-          pois.where((p) => p.entranceLat != null && p.verified).length;
+      final int verifiedCount = pois
+          .where((p) => p.entranceLat != null && p.verified)
+          .length;
       debugPrint(
         '[POI] ${pois.length} total POIs loaded; '
         '$verifiedCount verified (colored marker), '
@@ -10201,10 +14451,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         jsonEncode({
           'type': 'geojson',
           'data': geoJson,
-          'cluster': true,          // Enable Mapbox native clustering.
-          'clusterMaxZoom': 13,     // Clusters dissolve above zoom 13.5.
-          'clusterRadius': 50,      // Grouping radius in screen pixels.
-          'minzoom': 10.5,          // Hide source tiles below _poiHideZoomThreshold.
+          'cluster': true, // Enable Mapbox native clustering.
+          'clusterMaxZoom': 13, // Clusters dissolve above zoom 13.5.
+          'clusterRadius': 50, // Grouping radius in screen pixels.
+          'minzoom': 10.5, // Hide source tiles below _poiHideZoomThreshold.
         }),
       );
 
@@ -10216,12 +14466,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'source': 'poi-source',
           'filter': ['has', 'point_count'],
           'minzoom': 10.5, // _poiHideZoomThreshold
-          'maxzoom': 14,   // Just above _poiClusterZoomThreshold (13.5)
+          'maxzoom': 14, // Just above _poiClusterZoomThreshold (13.5)
           'paint': {
             'circle-color': '#1E90FF',
             'circle-radius': [
-              'step', ['get', 'point_count'],
-              16, 10, 22, 50, 28,
+              'step',
+              ['get', 'point_count'],
+              16,
+              10,
+              22,
+              50,
+              28,
             ],
             'circle-stroke-width': 2,
             'circle-stroke-color': '#ffffff',
@@ -10238,15 +14493,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'source': 'poi-source',
           'filter': ['has', 'point_count'],
           'minzoom': 10.5, // _poiHideZoomThreshold
-          'maxzoom': 14,   // Just above _poiClusterZoomThreshold (13.5)
+          'maxzoom': 14, // Just above _poiClusterZoomThreshold (13.5)
           'layout': {
             'text-field': '{point_count_abbreviated}',
             'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
             'text-size': 13,
           },
-          'paint': {
-            'text-color': '#ffffff',
-          },
+          'paint': {'text-color': '#ffffff'},
         }),
         null,
       );
@@ -10260,15 +14513,21 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           'id': 'poi-unclustered',
           'type': 'symbol',
           'source': 'poi-source',
-          'filter': ['!', ['has', 'point_count']],
+          'filter': [
+            '!',
+            ['has', 'point_count'],
+          ],
           'minzoom': 13.5, // _poiClusterZoomThreshold
           'layout': {
             'icon-image': [
               'coalesce',
-              ['image', ['get', 'icon']],
+              [
+                'image',
+                ['get', 'icon'],
+              ],
               ['image', 'truck_parking'],
             ],
-            'icon-size': 1.0,
+            'icon-size': 1.2,
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
           },
@@ -10289,8 +14548,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Called from [_onStyleLoaded] and defensively from
   /// [_refreshRoutePoiSourceIfNeeded] so they are created lazily if the style
   /// reloaded after initial setup.  The layer is configured with slightly
-  /// larger icons than the browse `poi-unclustered` layer (icon-size 1.3 vs
-  /// 1.0) and [icon-allow-overlap] true, because the source is already
+  /// larger icons than the browse `poi-unclustered` layer (icon-size 1.45 vs
+  /// 1.2) and [icon-allow-overlap] true, because the source is already
   /// filtered down to ≤10 high-priority POIs.
   Future<void> _ensureRoutePoiSourceAndLayer() async {
     final mbx.MapboxMap? map = _mapboxMap;
@@ -10325,12 +14584,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               // parking icon so every feature always renders.
               'icon-image': [
                 'coalesce',
-                ['image', ['get', 'icon']],
+                [
+                  'image',
+                  ['get', 'icon'],
+                ],
                 ['image', 'truck_parking'],
               ],
-              // Slightly larger than the browse layer (1.0) so route-ahead
+              // Slightly larger than the browse layer (1.2) so route-ahead
               // POIs stand out as visually prominent.
-              'icon-size': 1.3,
+              'icon-size': 1.45,
               // Allow overlap because the list is already filtered to ≤10
               // high-priority POIs — clutter is controlled by filter rules,
               // not by Mapbox placement collision.
@@ -10358,16 +14620,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// The method returns `false` while not navigating so the source is only
   /// populated during active navigation.
   bool _shouldRefreshRoutePois() {
-    if (!_isNavigating) return false;
+    if (!_isLiveRouteAssistanceActive) return false;
     if (_lastRoutePoiRefreshAt == null) return true;
 
     final double progressDelta =
         (_currentRouteProgressMiles - _lastRoutePoiRefreshMiles).abs();
     if (progressDelta >= _routePoiRefreshMilesThreshold) return true;
 
-    final Duration elapsed =
-        DateTime.now().difference(_lastRoutePoiRefreshAt!);
-    if (elapsed >= _routePoiMinRefreshInterval && progressDelta > 0) return true;
+    final Duration elapsed = DateTime.now().difference(_lastRoutePoiRefreshAt!);
+    if (elapsed >= _routePoiMinRefreshInterval && progressDelta > 0)
+      return true;
 
     return false;
   }
@@ -10400,7 +14662,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns an empty list when not navigating or when no route / position is
   /// available.
   List<PoiItem> _buildRouteRelevantPois() {
-    if (!_isNavigating ||
+    if (!_isLiveRouteAssistanceActive ||
         _truckPosition == null ||
         _routePoints.isEmpty ||
         _loadedPois.isEmpty) {
@@ -10410,8 +14672,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final LatLng pos = _truckPosition!;
 
     // Pre-filter: keep only POIs within the route corridor ahead of the truck.
-    final List<LatLng> aheadPoints =
-        _routePoints.sublist(_truckIndex.clamp(0, _routePoints.length));
+    final List<LatLng> aheadPoints = _routePoints.sublist(
+      _truckIndex.clamp(0, _routePoints.length),
+    );
     final List<PoiItem> corridorCandidates = getPOIsOnRoute(
       _loadedPois,
       aheadPoints,
@@ -10422,9 +14685,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final List<_ScoredPoi> scored = [];
     for (final poi in corridorCandidates) {
       final double milesAhead = _distanceMiles(
-          pos.latitude, pos.longitude, poi.displayLat, poi.displayLng);
+        pos.latitude,
+        pos.longitude,
+        poi.displayLat,
+        poi.displayLng,
+      );
       if (milesAhead < _poiPassedThresholdMiles) continue; // Already passed.
-      if (milesAhead > _poiRouteMaxAheadMiles) continue;   // Too far ahead.
+      if (milesAhead > _poiRouteMaxAheadMiles) continue; // Too far ahead.
       scored.add(_ScoredPoi(poi, milesAhead));
     }
 
@@ -10472,10 +14739,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       result.add(sp.poi);
     }
 
-    debugPrint('[RoutePOI] ${result.length} route POIs selected '
-        '(truckStops=$truckStopCount, weighStations=$weighStationCount, '
-        'safety=$safetyCount) from ${scored.length} ahead-on-route '
-        'candidates (${corridorCandidates.length} in corridor).');
+    debugPrint(
+      '[RoutePOI] ${result.length} route POIs selected '
+      '(truckStops=$truckStopCount, weighStations=$weighStationCount, '
+      'safety=$safetyCount) from ${scored.length} ahead-on-route '
+      'candidates (${corridorCandidates.length} in corridor).',
+    );
     return result;
   }
 
@@ -10485,24 +14754,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// matching the schema used by `poi-source` so the same registered Mapbox
   /// images work for both layers.
   String _routePoiSourceGeoJson(List<PoiItem> pois) {
-    final features = pois.map((poi) => {
-          'type': 'Feature',
-          'id': poi.id,
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [poi.displayLng, poi.displayLat],
-          },
-          'properties': {
+    final features = pois
+        .map(
+          (poi) => {
+            'type': 'Feature',
             'id': poi.id,
-            'name': poi.name,
-            'category': poi.category,
-            'icon': poi.icon,
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [poi.displayLng, poi.displayLat],
+            },
+            'properties': {
+              'id': poi.id,
+              'name': poi.name,
+              'category': poi.category,
+              'icon': poi.icon,
+            },
           },
-        }).toList();
-    return jsonEncode({
-      'type': 'FeatureCollection',
-      'features': features,
-    });
+        )
+        .toList();
+    return jsonEncode({'type': 'FeatureCollection', 'features': features});
   }
 
   /// Refreshes the `route-pois-source` with the current navigation-relevant
@@ -10517,6 +14787,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Future<void> _refreshRoutePoiSourceIfNeeded({bool force = false}) async {
     final mbx.MapboxMap? map = _mapboxMap;
     if (map == null) return;
+    final int routeRevision = _activeRouteRevision;
 
     // Update the current route-progress counter before checking the throttle
     // so _shouldRefreshRoutePois() has an accurate value.
@@ -10525,13 +14796,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           .map((p) => RoutePoint(lat: p.latitude, lng: p.longitude))
           .toList(growable: false);
       _currentRouteProgressMiles = _routeDistanceMilesBetweenIndices(
-          routePts, 0, _truckIndex.clamp(0, routePts.length - 1));
+        routePts,
+        0,
+        _truckIndex.clamp(0, routePts.length - 1),
+      );
     }
 
     if (!force && !_shouldRefreshRoutePois()) return;
+    final int requestGeneration = ++_routePoiRequestGeneration;
 
     // Ensure source and layer exist (e.g. after a style reload).
     await _ensureRoutePoiSourceAndLayer();
+    if (!mounted ||
+        requestGeneration != _routePoiRequestGeneration ||
+        routeRevision != _activeRouteRevision ||
+        !identical(map, _mapboxMap)) {
+      return;
+    }
 
     final List<PoiItem> pois = _buildRouteRelevantPois();
 
@@ -10553,6 +14834,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         'data',
         geoJson,
       );
+      if (!mounted ||
+          requestGeneration != _routePoiRequestGeneration ||
+          routeRevision != _activeRouteRevision ||
+          !identical(map, _mapboxMap)) {
+        return;
+      }
       _lastRoutePoiSourceHash = hash;
       _markRoutePoiRefresh();
       debugPrint('[RoutePOI] Source updated with ${pois.length} POI(s).');
@@ -10579,6 +14866,25 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Replaces the previous separate Positioned widgets for the intelligence
   /// panel and start button, providing a unified layout that avoids overlap.
   Widget _buildPreviewBottomPanel() {
+    final RouteOption? selected = _routeOptions.isEmpty
+        ? null
+        : _routeOptions[_selectedRouteOptionIndex >= 0 &&
+                  _selectedRouteOptionIndex < _routeOptions.length
+              ? _selectedRouteOptionIndex
+              : 0];
+    final distanceLabel = _routePreviewActive
+        ? _formatRemainingDistance(_tripProgressInfo.milesRemaining)
+        : selected == null
+        ? 'Truck route ready'
+        : _formatRemainingDistance(selected.distanceMiles);
+    final durationLabel = _routePreviewActive
+        ? _formatDuration(_tripProgressInfo.durationRemaining.inSeconds)
+        : selected == null
+        ? ''
+        : _formatDuration(selected.durationSeconds);
+    final arrivalLabel = _fmtArrival(_tripProgressInfo);
+    final arrivalZone = _tripProgressInfo.timezoneLabel.trim();
+
     return Positioned(
       bottom: 0,
       left: 0,
@@ -10586,25 +14892,195 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildRouteAlternativesCard(),
-              if (_routeOptions.length >= 2) const SizedBox(height: 8),
-              _buildPreviewIntelligencePanel(),
-              const SizedBox(height: 8),
-              _buildStartNavigationButton(),
-            ],
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 7, 12, 12),
+              decoration: BoxDecoration(
+                color: const Color(0xF9FFFFFF),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0xFFDCE3E9)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x3D0B1420),
+                    blurRadius: 24,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 42,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFCAD2DA),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(13),
+                    onTap: () => setState(
+                      () => _previewPanelExpanded = !_previewPanelExpanded,
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 5,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8F2FF),
+                              borderRadius: BorderRadius.circular(11),
+                            ),
+                            child: const Icon(
+                              Icons.alt_route_rounded,
+                              color: Color(0xFF0B68E8),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _routePreviewActive
+                                      ? 'Live truck-route assistance'
+                                      : _routeOptions.length > 1
+                                      ? '${_routeOptions.length} truck routes ready'
+                                      : 'Truck route ready',
+                                  style: const TextStyle(
+                                    color: SemiTrackColors.navy,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  durationLabel.isEmpty
+                                      ? distanceLabel
+                                      : '$distanceLabel  •  $durationLabel  •  ${selected?.label ?? ''}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Color(0xFF697586),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _previewPanelExpanded
+                                    ? Icons.keyboard_arrow_down_rounded
+                                    : Icons.keyboard_arrow_up_rounded,
+                                color: SemiTrackColors.navy,
+                              ),
+                              Text(
+                                _previewPanelExpanded ? 'Hide' : 'Routes',
+                                style: const TextStyle(
+                                  color: SemiTrackColors.navy,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_previewPanelExpanded) ...[
+                    const SizedBox(height: 7),
+                    _buildRouteAlternativesCard(),
+                    if (_routeOptions.length >= 2) const SizedBox(height: 8),
+                    _buildPreviewIntelligencePanel(),
+                  ],
+                  const SizedBox(height: 8),
+                  if (!_routePreviewActive)
+                    _buildStartNavigationButton()
+                  else
+                    Material(
+                      color: SemiTrackColors.navy,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        key: const ValueKey('active_navigation_controls'),
+                        onTap: () => unawaited(_showActiveNavigationMenu()),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.tune_rounded,
+                                size: 22,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'Navigation controls',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Quit or continue  •  Arrive $arrivalLabel${arrivalZone.isEmpty ? '' : ' $arrivalZone'}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xFFCAD7E5),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                color: Colors.white,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// Extracts all turn-by-turn navigation steps from [route].
-  ///
+  /// Extracts all turn-by-turn navigation steps from [route].  ///
   /// Each [_NavStep] carries the maneuver instruction and its geographic
   /// location so that proximity checks can trigger step advancement at
   /// runtime.  Falls back to a single "Follow mapped route" step when the
@@ -10642,8 +15118,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       final stepName = (step['name'] as String?) ?? '';
       // Highway exit number from the Mapbox `exits` field (e.g. "13", "13A").
       final rawExits = (step['exits'] as String?)?.trim();
-      final stepExitNumber =
-          (rawExits != null && rawExits.isNotEmpty) ? rawExits : null;
+      final stepExitNumber = (rawExits != null && rawExits.isNotEmpty)
+          ? rawExits
+          : null;
       return _NavStep(
         instruction,
         LatLng(lat, lng),
@@ -10663,13 +15140,22 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// keeps the camera close to the truck instead.
   void _fitCameraToRoute(List<LatLng> points) {
     if (!_mapReady || points.length < 2) return;
-    // Overview: fit the full route bounding box so all waypoints are visible.
+    _cameraMode = NavigationCameraMode.overview;
+    // Keep the full route above the preview controls instead of centering it
+    // behind the bottom sheet. This is especially important for long-haul
+    // routes where a generic 50 px inset can make the route appear as a short,
+    // disconnected line near the origin.
     final bounds = LatLngBounds.fromPoints(points);
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: bounds,
-        padding: const EdgeInsets.all(50),
-        maxZoom: 14.0,
+        padding: EdgeInsets.fromLTRB(
+          42,
+          _isNavigating ? 92 : 72,
+          42,
+          _isNavigating ? 110 : 270,
+        ),
+        maxZoom: 13.5,
       ),
     );
   }
@@ -10811,6 +15297,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   String _formatDistance(double meters) {
     // Imminent maneuver — tell the driver to act right away.
     if (meters < _imminentManeuverThresholdMeters) return 'Now';
+    if (!_navSettings.usesMetric) {
+      final feet = meters * 3.28084;
+      if (feet < 1000) return '${feet.round()} ft';
+      final miles = meters / _metersPerMile;
+      return '${miles.toStringAsFixed(miles < 10 ? 1 : 0)} mi';
+    }
     // Close range: show exact metres for precision.
     if (meters < 200.0) return '${meters.toInt()} m';
     // Medium range: round to nearest 10 m to avoid jitter.
@@ -10818,9 +15310,24 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return '${(meters / 1000.0).toStringAsFixed(1)} km';
   }
 
+  String _formatRemainingDistance(double miles) {
+    if (!miles.isFinite || miles <= 0) {
+      return _navSettings.usesMetric ? '0 km' : '0 mi';
+    }
+    final value = _navSettings.usesMetric ? miles * 1.609344 : miles;
+    final unit = _navSettings.distanceUnit.shortLabel;
+    if (value < 0.1) return '<0.1 $unit';
+    return '${value.toStringAsFixed(value < 10 ? 1 : 0)} $unit';
+  }
+
   /// Formats a distance in metres as a human-readable miles string for the
   /// road info card, e.g. "33.6 mi".
   String _formatDistanceMiles(double meters) {
+    if (_navSettings.usesMetric) {
+      final kilometers = meters / 1000.0;
+      if (kilometers < 0.1) return '< 0.1 km';
+      return '${kilometers.toStringAsFixed(kilometers < 10 ? 1 : 0)} km';
+    }
     final miles = meters / 1609.344;
     if (miles < 0.1) return '< 0.1 mi';
     if (miles < 10.0) return '${miles.toStringAsFixed(1)} mi';
@@ -10858,6 +15365,15 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Falls back to the current step's stored [distanceMeters] when the truck
   /// position is not yet known (e.g. before the first GPS fix).
   double _distanceToNextStep() {
+    final nativeGuidanceActive =
+        _nativeNavigationPhase == NativeNavigationPhase.navigating ||
+        _nativeNavigationPhase == NativeNavigationPhase.rerouting;
+    if (nativeGuidanceActive &&
+        _distanceToNextManeuverMiles.isFinite &&
+        _distanceToNextManeuverMiles >= 0 &&
+        _distanceToNextManeuverMiles < 999) {
+      return _distanceToNextManeuverMiles * _metersPerMile;
+    }
     if (_navSteps.isEmpty) return 0.0;
     final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     // Point to the *upcoming* maneuver (one step ahead of the current step)
@@ -10865,8 +15381,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // On the final step there is no further maneuver, so we measure the
     // remaining distance to the destination (the last step's location).
     final bool isLastStep = safeIndex >= _navSteps.length - 1;
-    final int targetIndex =
-        isLastStep ? safeIndex : safeIndex + 1;
+    final int targetIndex = isLastStep ? safeIndex : safeIndex + 1;
     final upcomingStep = _navSteps[targetIndex];
     // Use the live truck position when available for real-time accuracy.
     if (_truckPosition != null) {
@@ -10967,10 +15482,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.18),
-              blurRadius: 10,
-            ),
+            BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 10),
           ],
         ),
         child: Column(
@@ -10979,10 +15491,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           children: [
             const Text(
               'Trip Stats',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             // ── Top row: miles driven + elapsed time ─────────────────────
@@ -11016,20 +15525,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 12,
-          ),
-        ),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
         const SizedBox(height: 4),
         Text(
           value,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
       ],
     );
@@ -11073,10 +15573,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               // ── Heading ────────────────────────────────────────────────
               const Text(
                 'Trip Complete',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               const Text(
@@ -11129,10 +15626,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   },
                   child: const Text(
                     'Done',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -11155,15 +15649,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         const SizedBox(height: 4),
         Text(
           value,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: Colors.grey),
-        ),
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
       ],
     );
   }
@@ -11199,12 +15687,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
     // isImminent flags when the driver is within the alert threshold —
     // may be used for accessibility cues or future audio feedback.
-    final bool isImminent =
-        distanceToNext < _imminentManeuverThresholdMeters;
+    final bool isImminent = distanceToNext < _imminentManeuverThresholdMeters;
 
     // Banner background color: green on arrival, urgency-based otherwise.
-    final Color bannerColor =
-        isArrived ? Colors.green.shade600 : _getBannerColor(distanceToNext);
+    final Color bannerColor = isArrived
+        ? Colors.green.shade600
+        : _getBannerColor(distanceToNext);
 
     // Next step for driver preview (shown in a smaller, dimmed font below).
     final hasNextStep = !isArrived && safeIndex + 1 < _navSteps.length;
@@ -11245,7 +15733,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   // On arrival show a filled check circle; during navigation
                   // show the maneuver direction icon (turn, straight, etc.).
                   Icon(
-                    isArrived ? Icons.check_circle : _maneuverIcon(step.maneuver),
+                    isArrived
+                        ? Icons.check_circle
+                        : _maneuverIcon(step.maneuver),
                     color: Colors.white,
                     size: 34,
                   ),
@@ -11449,9 +15939,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// reports a fresh distance-to-maneuver measurement so that
   /// [_shouldShowLaneGuidance] always operates on current data.
   ///
-  /// [lanes] may be supplied directly from the route SDK; when omitted or
-  /// empty the method falls back to a four-lane sample array so the panel
-  /// always has data to display.
+  /// [lanes] may be supplied directly from the route SDK. When omitted, lane
+  /// guidance remains hidden rather than presenting invented recommendations.
   void _updateUpcomingManeuver({
     required String? maneuverType,
     required double distanceMiles,
@@ -11459,38 +15948,29 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     String? roadName,
     List<LaneInfo>? lanes,
   }) {
-    // Fall back to sample lane data when the SDK does not provide lane info.
-    final List<LaneInfo> resolvedLanes =
-        (lanes != null && lanes.isNotEmpty)
-            ? lanes
-            : const [
-                LaneInfo(directions: [LaneDirection.left],       isRecommended: false),
-                LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
-                LaneInfo(directions: [LaneDirection.straight],   isRecommended: true),
-                LaneInfo(directions: [LaneDirection.right],      isRecommended: false),
-              ];
+    final List<LaneInfo> resolvedLanes = lanes ?? const [];
 
     // Build junction-view snapshot when the maneuver warrants one.
     final JunctionViewData? newJunctionData =
         _maneuverNeedsJunctionView(maneuverType)
-            ? _buildJunctionViewSnapshot(
-                maneuverType:    maneuverType!,
-                distanceMiles:   distanceMiles,
-                roadName:        roadName,
-                resolvedLanes:   resolvedLanes,
-              )
-            : null;
+        ? _buildJunctionViewSnapshot(
+            maneuverType: maneuverType!,
+            distanceMiles: distanceMiles,
+            roadName: roadName,
+            resolvedLanes: resolvedLanes,
+          )
+        : null;
 
     setState(() {
-      _nextManeuverType              = maneuverType;
-      _distanceToNextManeuverMiles   = distanceMiles;
-      _isHighwayManeuver             = isHighwayManeuver;
+      _nextManeuverType = maneuverType;
+      _distanceToNextManeuverMiles = distanceMiles;
+      _isHighwayManeuver = isHighwayManeuver;
       _upcomingManeuverStep = UpcomingManeuverStep(
-        maneuverType:       maneuverType,
-        distanceMiles:      distanceMiles,
-        isHighwayManeuver:  isHighwayManeuver,
-        roadName:           roadName,
-        lanes:              resolvedLanes,
+        maneuverType: maneuverType,
+        distanceMiles: distanceMiles,
+        isHighwayManeuver: isHighwayManeuver,
+        roadName: roadName,
+        lanes: resolvedLanes,
       );
       _junctionViewData = newJunctionData;
     });
@@ -11528,12 +16008,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Converts a [LaneDirection] value to the equivalent [LaneArrowType].
   LaneArrowType _laneDirectionToArrowType(LaneDirection direction) {
     switch (direction) {
-      case LaneDirection.left:        return LaneArrowType.left;
-      case LaneDirection.slightLeft:  return LaneArrowType.slightLeft;
-      case LaneDirection.straight:    return LaneArrowType.straight;
-      case LaneDirection.slightRight: return LaneArrowType.slightRight;
-      case LaneDirection.right:       return LaneArrowType.right;
-      case LaneDirection.uTurn:       return LaneArrowType.uTurn;
+      case LaneDirection.left:
+        return LaneArrowType.left;
+      case LaneDirection.slightLeft:
+        return LaneArrowType.slightLeft;
+      case LaneDirection.straight:
+        return LaneArrowType.straight;
+      case LaneDirection.slightRight:
+        return LaneArrowType.slightRight;
+      case LaneDirection.right:
+        return LaneArrowType.right;
+      case LaneDirection.uTurn:
+        return LaneArrowType.uTurn;
     }
   }
 
@@ -11569,11 +16055,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     }
 
     return JunctionViewData(
-      maneuverType:     maneuverType,
+      maneuverType: maneuverType,
       incomingRoadName: incoming,
       outgoingRoadName: outgoing,
-      lanes:            jvLanes,
-      distanceMiles:    distanceMiles,
+      lanes: jvLanes,
+      distanceMiles: distanceMiles,
     );
   }
 
@@ -11584,22 +16070,32 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Used by [_buildCompactTopInstructionCard] to render the maneuver icon.
   IconData _maneuverVisualIcon(ManeuverVisualType type) {
     switch (type) {
-      case ManeuverVisualType.straight:    return Icons.arrow_upward;
-      case ManeuverVisualType.left:        return Icons.turn_left;
-      case ManeuverVisualType.slightLeft:  return Icons.turn_slight_left;
-      case ManeuverVisualType.right:       return Icons.turn_right;
-      case ManeuverVisualType.slightRight: return Icons.turn_slight_right;
-      case ManeuverVisualType.uTurnLeft:   return Icons.u_turn_left;
-      case ManeuverVisualType.uTurnRight:  return Icons.u_turn_right;
-      case ManeuverVisualType.merge:       return Icons.merge;
-      case ManeuverVisualType.exit:        return Icons.exit_to_app;
+      case ManeuverVisualType.straight:
+        return Icons.arrow_upward;
+      case ManeuverVisualType.left:
+        return Icons.turn_left;
+      case ManeuverVisualType.slightLeft:
+        return Icons.turn_slight_left;
+      case ManeuverVisualType.right:
+        return Icons.turn_right;
+      case ManeuverVisualType.slightRight:
+        return Icons.turn_slight_right;
+      case ManeuverVisualType.uTurnLeft:
+        return Icons.u_turn_left;
+      case ManeuverVisualType.uTurnRight:
+        return Icons.u_turn_right;
+      case ManeuverVisualType.merge:
+        return Icons.merge;
+      case ManeuverVisualType.exit:
+        return Icons.exit_to_app;
       case ManeuverVisualType.forkLeft:
         // call_split is used for both fork directions; the left/right
         // distinction is communicated by the primary text label.
         return Icons.call_split;
       case ManeuverVisualType.forkRight:
         return Icons.call_split;
-      case ManeuverVisualType.roundabout:  return Icons.roundabout_left;
+      case ManeuverVisualType.roundabout:
+        return Icons.roundabout_left;
     }
   }
 
@@ -11609,6 +16105,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// decimal place.  (This differs from [_formatDistanceMiles] which accepts
   /// metres.)
   String _formatMilesDisplay(double miles) {
+    if (_navSettings.usesMetric) {
+      final kilometers = miles * 1.609344;
+      if (kilometers < 1) return '${(kilometers * 1000).round()} m';
+      return '${kilometers.toStringAsFixed(kilometers < 10 ? 1 : 0)} km';
+    }
     if (miles >= 1) return '${miles.toStringAsFixed(1)} mi';
     final feet = miles * 5280;
     return '${feet.round()} ft';
@@ -11633,31 +16134,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     String? currentRoadName,
     String? highwayName,
   }) {
-    if (!_isBadRoadName(roadName))        return roadName!.trim();
-    if (!_isBadRoadName(nextRoadName))    return nextRoadName!.trim();
+    if (!_isBadRoadName(roadName)) return roadName!.trim();
+    if (!_isBadRoadName(nextRoadName)) return nextRoadName!.trim();
     if (!_isBadRoadName(currentRoadName)) return currentRoadName!.trim();
-    if (!_isBadRoadName(highwayName))     return highwayName!.trim();
+    if (!_isBadRoadName(highwayName)) return highwayName!.trim();
     return '';
-  }
-
-  /// Returns the short action-verb phrase for [maneuverType] + [modifier].
-  ///
-  /// For example: ("turn", null) → "Turn onto",
-  ///              ("continue", null) → "Stay on".
-  String _buildPrimaryInstructionText(
-    String? maneuverType,
-    String? modifier, {
-    required bool hasRoadName,
-  }) {
-    final type = (maneuverType ?? '').toLowerCase();
-
-    if (type == 'depart') return 'Head out';
-    if (type == 'continue' || type == 'new name') return 'Stay on';
-    if (type == 'merge') return 'Stay on';
-    if (type == 'off ramp' || type == 'exit') return 'Take exit';
-    if (type == 'fork') return 'Stay on';
-    if (type == 'turn') return hasRoadName ? 'Turn onto' : 'Turn';
-    return hasRoadName ? 'Stay on' : 'Continue ahead';
   }
 
   /// Maps a Mapbox maneuver type + modifier pair to a [ManeuverVisualType].
@@ -11665,9 +16146,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Covers all common Mapbox maneuver type strings and falls back to
   /// [ManeuverVisualType.straight] for unknown combinations.
   ManeuverVisualType _mapStepToVisualType(
-      String? maneuverType, String? modifier) {
+    String? maneuverType,
+    String? modifier,
+  ) {
     final type = (maneuverType ?? '').toLowerCase();
-    final mod  = (modifier     ?? '').toLowerCase();
+    final mod = (modifier ?? '').toLowerCase();
 
     if (type == 'merge') return ManeuverVisualType.merge;
     if (type == 'exit' || type == 'off ramp') return ManeuverVisualType.exit;
@@ -11678,12 +16161,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           : ManeuverVisualType.forkRight;
     }
     if (type == 'turn') {
-      if (mod.contains('uturn') && mod.contains('left'))  return ManeuverVisualType.uTurnLeft;
-      if (mod.contains('uturn') && mod.contains('right')) return ManeuverVisualType.uTurnRight;
-      if (mod.contains('slight left'))  return ManeuverVisualType.slightLeft;
+      if (mod.contains('uturn') && mod.contains('left'))
+        return ManeuverVisualType.uTurnLeft;
+      if (mod.contains('uturn') && mod.contains('right'))
+        return ManeuverVisualType.uTurnRight;
+      if (mod.contains('slight left')) return ManeuverVisualType.slightLeft;
       if (mod.contains('slight right')) return ManeuverVisualType.slightRight;
-      if (mod.contains('left'))         return ManeuverVisualType.left;
-      if (mod.contains('right'))        return ManeuverVisualType.right;
+      if (mod.contains('left')) return ManeuverVisualType.left;
+      if (mod.contains('right')) return ManeuverVisualType.right;
     }
     return ManeuverVisualType.straight;
   }
@@ -11702,6 +16187,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   void _updateTopInstructionFromNavigationStep({
     required String? maneuverType,
     required String? modifier,
+    required String? instruction,
     required String? roadName,
     required double distanceMiles,
     String? currentRoadName,
@@ -11709,45 +16195,50 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     String? highwayName,
     String? exitNumber,
   }) {
-    final displayRoadName = _resolveDisplayRoadName(
-      roadName:        roadName,
-      nextRoadName:    nextRoadName,
+    final fallbackRoadName = _resolveDisplayRoadName(
+      roadName: roadName,
       currentRoadName: currentRoadName,
-      highwayName:     highwayName,
+      highwayName: highwayName,
     );
-
-    final hasRoadName = displayRoadName.isNotEmpty;
-    final primary = _buildPrimaryInstructionText(
-      maneuverType,
-      modifier,
-      hasRoadName: hasRoadName,
+    final guidance = buildStreetGuidanceText(
+      maneuverType: maneuverType,
+      modifier: modifier,
+      instruction: instruction,
+      roadName: fallbackRoadName,
+      currentRoadName: currentRoadName,
+      nextRoadName: nextRoadName,
     );
 
     setState(() {
       _topInstructionData = TopInstructionData(
-        visualType:    _mapStepToVisualType(maneuverType, modifier),
-        primaryText:   primary,
-        roadName:      hasRoadName ? displayRoadName : '',
+        visualType: _mapStepToVisualType(maneuverType, modifier),
+        primaryText: guidance.actionText,
+        roadName: guidance.roadName,
+        towardRoadName: guidance.towardRoadName,
         distanceMiles: distanceMiles,
         bottomChipText: null,
-        exitNumber:    exitNumber,
+        exitNumber: exitNumber,
       );
 
-      // Populate secondary "Then" card from the next navigation step.
+      // Populate the compact "Then" card from the following route maneuver.
       final nextIdx = _currentStepIndex + 1;
       if (nextIdx < _navSteps.length) {
         final next = _navSteps[nextIdx];
-        final nextRoad = next.name.isNotEmpty ? next.name : next.instruction;
-        final nextHasRoadName = nextRoad.isNotEmpty;
+        final secondaryGuidance = buildStreetGuidanceText(
+          maneuverType: next.type,
+          modifier: next.maneuver,
+          instruction: next.instruction,
+          roadName: next.nextRoadName ?? next.name,
+          currentRoadName: next.currentRoadName,
+          nextRoadName: _nextNamedRoadAfter(nextIdx),
+        );
         _secondaryInstructionData = TopInstructionData(
-          visualType:    _mapStepToVisualType(next.type, next.maneuver),
-          primaryText:   _buildPrimaryInstructionText(
-            next.type,
-            next.maneuver,
-            hasRoadName: nextHasRoadName,
-          ),
-          roadName:      nextRoad,
+          visualType: _mapStepToVisualType(next.type, next.maneuver),
+          primaryText: secondaryGuidance.actionText,
+          roadName: secondaryGuidance.roadName,
+          towardRoadName: secondaryGuidance.towardRoadName,
           distanceMiles: next.distanceMeters / _metersPerMile,
+          exitNumber: next.exitNumber,
         );
       } else {
         _secondaryInstructionData = null;
@@ -11758,12 +16249,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Maps a [LaneDirection] value to the [IconData] that best represents it.
   IconData _laneDirectionIcon(LaneDirection direction) {
     switch (direction) {
-      case LaneDirection.left:        return Icons.turn_left;
-      case LaneDirection.slightLeft:  return Icons.turn_slight_left;
-      case LaneDirection.straight:    return Icons.straight;
-      case LaneDirection.slightRight: return Icons.turn_slight_right;
-      case LaneDirection.right:       return Icons.turn_right;
-      case LaneDirection.uTurn:       return Icons.u_turn_left;
+      case LaneDirection.left:
+        return Icons.turn_left;
+      case LaneDirection.slightLeft:
+        return Icons.turn_slight_left;
+      case LaneDirection.straight:
+        return Icons.straight;
+      case LaneDirection.slightRight:
+        return Icons.turn_slight_right;
+      case LaneDirection.right:
+        return Icons.turn_right;
+      case LaneDirection.uTurn:
+        return Icons.u_turn_left;
     }
   }
 
@@ -11774,7 +16271,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// recommended lanes use a dark-grey background.
   Widget _buildLaneBox(LaneInfo lane) {
     const Color recommendedColor = Color(0xFF1565C0); // blue 800
-    const Color normalColor      = Color(0xFF37474F); // blue-grey 800
+    const Color normalColor = Color(0xFF37474F); // blue-grey 800
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.all(8),
@@ -11797,7 +16294,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: lane.directions
-            .map((d) => Icon(_laneDirectionIcon(d), color: Colors.white, size: 26))
+            .map(
+              (d) => Icon(_laneDirectionIcon(d), color: Colors.white, size: 26),
+            )
             .toList(),
       ),
     );
@@ -11845,7 +16344,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns [SizedBox.shrink] at zero cost when not navigating or when the
   /// maneuver/distance conditions are not met.
   Widget _buildLaneGuidance() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    // Render only provider-supplied lane data. Explore assistance can display
+    // it when present without claiming licensed HERE Navigate guidance.
+    if (!_drivingUiActive) return const SizedBox.shrink();
     // Lane assist is hidden when disabled in navigation settings.
     if (!_navSettings.viewLaneAssist) return const SizedBox.shrink();
 
@@ -11870,7 +16371,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   bottom: false,
                   key: const ValueKey('laneGuidanceOn'),
                   child: Padding(
-                    padding: const EdgeInsets.only(top: 118),
+                    padding: const EdgeInsets.only(top: 184),
                     child: _buildDynamicLaneAssist(_upcomingManeuverStep!),
                   ),
                 )
@@ -11887,10 +16388,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   bool _shouldShowExitPreview(String? maneuverType, double distanceMiles) {
     if (distanceMiles > 0.8) return false;
     final t = (maneuverType ?? '').toLowerCase();
-    return t == 'exit' ||
-        t == 'off ramp' ||
-        t == 'ramp' ||
-        t == 'fork';
+    return t == 'exit' || t == 'off ramp' || t == 'ramp' || t == 'fork';
   }
 
   /// Builds an [ExitPreviewData] snapshot from the current navigation step
@@ -11904,8 +16402,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   }) {
     if (!_shouldShowExitPreview(maneuverType, distanceMiles)) return null;
     final visualType = _mapStepToVisualType(maneuverType, modifier);
-    final displayName =
-        (roadName == null || roadName.trim().isEmpty) ? 'Upcoming exit' : roadName.trim();
+    final displayName = (roadName == null || roadName.trim().isEmpty)
+        ? 'Upcoming exit'
+        : roadName.trim();
     return ExitPreviewData(
       distanceMiles: distanceMiles,
       roadName: displayName,
@@ -11920,7 +16419,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Should be called on every GPS tick while [_isNavigating] is true and
   /// whenever the step index advances.
   void _refreshExitPreview() {
-    if (!_isNavigating || _navSteps.isEmpty) {
+    if (!_isLiveRouteAssistanceActive || _navSteps.isEmpty) {
       if (_exitPreviewData != null) setState(() => _exitPreviewData = null);
       return;
     }
@@ -11943,7 +16442,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         updated?.roadName != _exitPreviewData?.roadName ||
         updated?.exitNumber != _exitPreviewData?.exitNumber ||
         (updated != null &&
-            (updated.distanceMiles - (_exitPreviewData?.distanceMiles ?? 999.0)).abs() > 0.005)) {
+            (updated.distanceMiles - (_exitPreviewData?.distanceMiles ?? 999.0))
+                    .abs() >
+                0.005)) {
       setState(() => _exitPreviewData = updated);
     }
   }
@@ -11951,6 +16452,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Formats [miles] as a compact distance string suitable for the exit
   /// preview card header (e.g. "318 ft" or "0.6 mi").
   String _formatExitPreviewDistance(double miles) {
+    if (_navSettings.usesMetric) {
+      final kilometers = miles * 1.609344;
+      if (kilometers < 1) return '${(kilometers * 1000).round()} m';
+      return '${kilometers.toStringAsFixed(1)} km';
+    }
     if (miles < (1.0 / 5.0)) {
       return '${(miles * 5280).round()} ft';
     }
@@ -11962,7 +16468,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// of the exit preview card.  Uses a [CustomPaint] to draw lane lines and
   /// a blue exit-ramp path.
   Widget _buildExitPreviewGraphic(ExitPreviewData data) {
-    final bool exitRight = data.visualType != ManeuverVisualType.forkLeft &&
+    final bool exitRight =
+        data.visualType != ManeuverVisualType.forkLeft &&
         data.visualType != ManeuverVisualType.left &&
         data.visualType != ManeuverVisualType.slightLeft;
 
@@ -11972,9 +16479,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         fit: StackFit.expand,
         children: [
           // Lane lines background
-          CustomPaint(
-            painter: _ExitLanePainter(exitRight: exitRight),
-          ),
+          CustomPaint(painter: _ExitLanePainter(exitRight: exitRight)),
           // Exit sign block on the appropriate side
           Positioned(
             top: 10,
@@ -12081,8 +16586,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Exit number chip
                 if ((data.exitNumber ?? '').isNotEmpty)
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(8),
@@ -12129,13 +16636,20 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Maps a [LaneArrowType] value to the best matching [IconData].
   IconData _junctionArrowIcon(LaneArrowType type) {
     switch (type) {
-      case LaneArrowType.left:        return Icons.turn_left;
-      case LaneArrowType.slightLeft:  return Icons.turn_slight_left;
-      case LaneArrowType.straight:    return Icons.straight;
-      case LaneArrowType.slightRight: return Icons.turn_slight_right;
-      case LaneArrowType.right:       return Icons.turn_right;
-      case LaneArrowType.uTurn:       return Icons.u_turn_left;
-      case LaneArrowType.none:        return Icons.straight;
+      case LaneArrowType.left:
+        return Icons.turn_left;
+      case LaneArrowType.slightLeft:
+        return Icons.turn_slight_left;
+      case LaneArrowType.straight:
+        return Icons.straight;
+      case LaneArrowType.slightRight:
+        return Icons.turn_slight_right;
+      case LaneArrowType.right:
+        return Icons.turn_right;
+      case LaneArrowType.uTurn:
+        return Icons.u_turn_left;
+      case LaneArrowType.none:
+        return Icons.straight;
     }
   }
 
@@ -12144,7 +16658,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Active (recommended) lanes are highlighted in blue with a border;
   /// non-active lanes use a dark-grey background.
   Widget _buildJunctionLaneTile(LaneGuidanceData lane) {
-    const Color activeColor   = Color(0xFF1565C0); // blue 800
+    const Color activeColor = Color(0xFF1565C0); // blue 800
     const Color inactiveColor = Color(0xFF37474F); // blue-grey 800
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 2),
@@ -12159,7 +16673,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: lane.arrows
-            .map((a) => Icon(_junctionArrowIcon(a), color: Colors.white, size: 16))
+            .map(
+              (a) => Icon(_junctionArrowIcon(a), color: Colors.white, size: 16),
+            )
             .toList(),
       ),
     );
@@ -12179,7 +16695,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Returns [SizedBox.shrink] at zero cost when conditions are not met.
   Widget _buildJunctionView() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_drivingUiActive) return const SizedBox.shrink();
     if (!_navSettings.viewJunctionView) return const SizedBox.shrink();
 
     final bool visible = _shouldShowJunctionView(_upcomingManeuverStep);
@@ -12187,7 +16703,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Positioned(
       // top: 130 positions the card below the satellite toggle (top:74 + 48 + 8)
       // so it never overlaps the compass or satellite buttons.
-      top: 130,
+      top: 236,
       right: 16,
       child: SafeArea(
         bottom: false,
@@ -12279,140 +16795,222 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Builds the collapsible floating dashboard panel shown in the idle/planning
   /// state (no destination selected, no route loaded, not navigating).
   ///
-  /// Collapsed: shows a destination-hint prompt and HOS drive-time remaining
-  /// with an expand chevron.
-  /// Expanded: also shows HOS and Fuel summary cards plus quick-action chips.
+  /// Collapsed: shows a destination hint and provider HOS state.
+  /// Expanded: shows provider HOS/fuel cards plus quick-action chips.
   ///
   /// Hidden during active navigation ([_isNavigating] == true) so the driver's
   /// view is not cluttered during a live trip.
   Widget _buildFloatingDashboard() {
-    final driveMinLeft =
-        (_intelligence['driveMinutesLeft'] as num?)?.toInt() ?? 0;
-    final hosH = driveMinLeft ~/ 60;
-    final hosM = driveMinLeft % 60;
-    final hosLabel = hosH > 0 ? '${hosH}h ${hosM}m' : '${hosM}m';
-
+    final colorScheme = Theme.of(context).colorScheme;
     return Positioned(
-      left: 16,
-      right: 16,
-      bottom: 16,
+      left: 0,
+      right: 0,
+      bottom: 0,
       child: SafeArea(
         top: false,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.all(18),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.97),
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
+            color: colorScheme.surface.withOpacity(0.99),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+            boxShadow: const [
               BoxShadow(
-                color: Colors.black.withOpacity(0.13),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
+                color: Color(0x3D101820),
+                blurRadius: 24,
+                offset: Offset(0, -6),
               ),
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── Header row: hint text + chevron ──────────────────────────
-              GestureDetector(
-                onTap: () =>
-                    setState(() => _panelExpanded = !_panelExpanded),
-                child: Row(
-                  children: [
-                    const Icon(Icons.map_outlined,
-                        size: 22, color: Color(0xFF6C52A6)),
-                    const SizedBox(width: 10),
-                    const Expanded(
-                      child: Text(
-                        'Search or long-press map to set destination',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black87,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      _panelExpanded
-                          ? Icons.keyboard_arrow_down
-                          : Icons.keyboard_arrow_up,
-                      size: 26,
-                      color: Colors.black54,
-                    ),
-                  ],
+              Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurface.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(99),
                 ),
               ),
-              // ── Summary row: HOS remaining ────────────────────────────────
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
+              Material(
+                color: colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(17),
+                child: InkWell(
+                  onTap: () => _showDestinationSearch(),
+                  borderRadius: BorderRadius.circular(17),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(15, 8, 6, 8),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.search_rounded,
+                          color: SemiTrackColors.orange,
+                          size: 28,
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Set destination for truck routes',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Speak destination',
+                          onPressed: _startVoiceDestinationSearch,
+                          icon: const Icon(
+                            Icons.mic_rounded,
+                            color: SemiTrackColors.orange,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 4,
+                childAspectRatio: 1.03,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                children: [
+                  _placeQuickAction(
+                    Icons.restaurant_rounded,
+                    'Truck Stops',
+                    const Color(0xFFE8583E),
+                    () => _showLivePlaceCategory('truck_stop', 'Truck Stops'),
+                  ),
+                  _placeQuickAction(
+                    Icons.scale_rounded,
+                    'Weigh Stations',
+                    const Color(0xFF008F7D),
+                    () => _showLivePlaceCategory(
+                      'weigh_station',
+                      'Weigh Stations',
+                    ),
+                  ),
+                  _placeQuickAction(
+                    Icons.local_parking_rounded,
+                    'Parking',
+                    const Color(0xFF0B68E8),
+                    () => _showLivePlaceCategory(
+                      'truck_parking',
+                      'Truck Parking',
+                    ),
+                  ),
+                  _placeQuickAction(
+                    Icons.local_gas_station_rounded,
+                    'Truck Fuel',
+                    const Color(0xFFFF8A00),
+                    () => _showLivePlaceCategory(
+                      'truck_stop',
+                      'Truck Fuel & Stops',
+                    ),
+                  ),
+                  _placeQuickAction(
+                    Icons.park_rounded,
+                    'Rest Areas',
+                    const Color(0xFF0A9FC1),
+                    () => _showLivePlaceCategory('rest_area', 'Rest Areas'),
+                  ),
+                  _placeQuickAction(
+                    Icons.storefront_rounded,
+                    'Walmarts',
+                    const Color(0xFF146DE0),
+                    () => _showLivePlaceCategory('walmart_store', 'Walmarts'),
+                  ),
+                  _placeQuickAction(
+                    Icons.local_car_wash_rounded,
+                    'Truck Washes',
+                    const Color(0xFF008F7D),
+                    () => _showLivePlaceCategory('truck_wash', 'Truck Washes'),
+                  ),
+                  _placeQuickAction(
+                    Icons.more_horiz_rounded,
+                    'More',
+                    const Color(0xFF7189AC),
+                    _showMoreMapFeaturesSheet,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
               Row(
                 children: [
-                  const Icon(Icons.access_time_outlined,
-                      size: 16, color: Colors.black54),
-                  const SizedBox(width: 4),
-                  Text(
-                    'HOS: $hosLabel remaining',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black54,
+                  const Icon(
+                    Icons.verified_user_rounded,
+                    size: 14,
+                    color: SemiTrackColors.green,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      _isLoadingLivePois
+                          ? 'Refreshing real HERE places near your GPS position…'
+                          : 'Live provider places • approximate Walmart pins hidden',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: colorScheme.onSurface.withOpacity(0.58),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
               ),
-              // ── Expanded section: cards + quick actions ───────────────────
-              if (_panelExpanded) ...[
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _dashboardInfoCard(
-                        title: 'HOS',
-                        value: hosLabel,
-                        subtitle: 'Drive time left',
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _dashboardInfoCard(
-                        title: 'Fuel',
-                        value: '--',
-                        subtitle: 'Connect ELD for data',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Quick Actions',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black.withOpacity(0.85),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _dashboardActionChip(Icons.search, 'New Trip'),
-                    _dashboardActionChip(
-                        Icons.bookmark_outline, 'Saved Trips'),
-                    _dashboardActionChip(
-                        Icons.description_outlined, 'Documents'),
-                    _dashboardActionChip(Icons.star_border, 'Favorites'),
-                  ],
-                ),
-              ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _placeQuickAction(
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onTap,
+  ) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(15),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 47,
+              height: 47,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(13),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withOpacity(0.24),
+                    blurRadius: 7,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Icon(icon, color: Colors.white, size: 27),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -12453,10 +17051,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           const SizedBox(height: 4),
           Text(
             subtitle,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Colors.black54,
-            ),
+            style: const TextStyle(fontSize: 12, color: Colors.black54),
           ),
         ],
       ),
@@ -12467,8 +17062,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///
   /// Tapping the chip provides ink-splash feedback.  The [onTap] callback
   /// is optional; when omitted the chip is still visually interactive.
-  Widget _dashboardActionChip(IconData icon, String label,
-      {VoidCallback? onTap}) {
+  Widget _dashboardActionChip(
+    IconData icon,
+    String label, {
+    VoidCallback? onTap,
+  }) {
     return Material(
       color: const Color(0xFFF0E9F9),
       borderRadius: BorderRadius.circular(18),
@@ -12476,8 +17074,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Padding(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -12505,7 +17102,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns [SizedBox.shrink] when not navigating or when the list is empty.
   /// Positioned on the left edge of the map, centered vertically.
   Widget _buildClosestTruckStopsRow() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_isLiveRouteAssistanceActive) return const SizedBox.shrink();
     // Gate: hidden when POI Ahead is disabled in nav settings.
     if (!_navSettings.viewPoiAhead) return const SizedBox.shrink();
     if (_closestTruckStopsAhead.isEmpty) return const SizedBox.shrink();
@@ -12564,10 +17161,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// This is an inline widget (not [Positioned]) intended to be used inside
   /// the maneuver-card [Column].
   Widget _buildCurrentRoadNameLabel() {
-    if (!_isNavigating || _navSteps.isEmpty) return const SizedBox.shrink();
-    final safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
+    if (!_drivingUiActive || _navSteps.isEmpty) return const SizedBox.shrink();
+    final safeIndex =
+        (_liveRoadName == null ? _currentStepIndex : _liveRoadStepIndex).clamp(
+          0,
+          _navSteps.length - 1,
+        );
     final step = _navSteps[safeIndex];
-    final String roadName = step.name.trim();
+    final String roadName = (_liveRoadName ?? step.name).trim();
     if (roadName.isEmpty || roadName.toLowerCase() == 'unnamed road') {
       return const SizedBox.shrink();
     }
@@ -12620,10 +17221,91 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// @deprecated — replaced by [_buildCurrentRoadNameLabel] which is shown
-  /// directly below the navigation card.  Retained as a no-op so callers
-  /// in the [Stack] compile without changes.
-  Widget _buildCurrentRoadNameBadge() => const SizedBox.shrink();
+  /// Shows the road matched to the latest GPS fix while the user is viewing a
+  /// route preview. Tapping it switches the map from full-route overview to a
+  /// close follow view, making real movement visible on long routes.
+  Widget _buildCurrentRoadNameBadge() {
+    final roadName = _liveRoadName?.trim() ?? '';
+    if (_isLiveRouteAssistanceActive ||
+        _routePoints.isEmpty ||
+        roadName.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final shield = _parseHighwayShield(roadName);
+    return Positioned(
+      top: _gpsStale ? 88 : 12,
+      left: 16,
+      right: 112,
+      child: SafeArea(
+        bottom: false,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _onRecenterPressed,
+            borderRadius: BorderRadius.circular(16),
+            child: Ink(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xED132231),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white24),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black38,
+                    blurRadius: 8,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  if (shield != null) ...[
+                    _buildHighwayShieldWidget(shield, fontSize: 11),
+                    const SizedBox(width: 9),
+                  ] else ...[
+                    const Icon(Icons.route, color: Color(0xFFFF6B35), size: 22),
+                    const SizedBox(width: 9),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          roadName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const Text(
+                          'LIVE ROAD  •  TAP TO FOLLOW GPS',
+                          style: TextStyle(
+                            color: Color(0xFFB9C6D3),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.gps_fixed,
+                    color: Color(0xFF42A5F5),
+                    size: 19,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Builds a GPS-style road name + distance info card shown during active
   /// navigation.  The card floats below the [RoadGuidanceBanner] and displays:
@@ -12648,8 +17330,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         ? nextStep.name
         : '';
     final _HighwayShield? currentShield = _parseHighwayShield(currentRoad);
-    final _HighwayShield? nextShield =
-        nextRoad.isNotEmpty ? _parseHighwayShield(nextRoad) : null;
+    final _HighwayShield? nextShield = nextRoad.isNotEmpty
+        ? _parseHighwayShield(nextRoad)
+        : null;
 
     return Positioned(
       // Positioned below the RoadGuidanceBanner (~170 px tall) with a small gap.
@@ -12697,10 +17380,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   children: [
                     const Text(
                       'Stay on',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
                     ),
                     const SizedBox(height: 2),
                     // Current road name with optional highway shield
@@ -12708,8 +17388,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         if (currentShield != null) ...[
-                          _buildHighwayShieldWidget(currentShield,
-                              fontSize: 13),
+                          _buildHighwayShieldWidget(
+                            currentShield,
+                            fontSize: 13,
+                          ),
                           const SizedBox(width: 8),
                         ],
                         Expanded(
@@ -12752,8 +17434,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (nextShield != null) ...[
-                              _buildHighwayShieldWidget(nextShield,
-                                  fontSize: 10),
+                              _buildHighwayShieldWidget(
+                                nextShield,
+                                fontSize: 10,
+                              ),
                               const SizedBox(width: 6),
                             ],
                             Flexible(
@@ -12828,8 +17512,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           setState(() {
             final idx = _navAlerts.indexWhere((a) => a.id == primary.id);
             if (idx != -1) {
-              _navAlerts[idx] = _navAlerts[idx]
-                  .copyWith(isExpanded: !_navAlerts[idx].isExpanded);
+              _navAlerts[idx] = _navAlerts[idx].copyWith(
+                isExpanded: !_navAlerts[idx].isExpanded,
+              );
             }
           });
         },
@@ -12852,10 +17537,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.84),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: accent.withOpacity(0.9),
-          width: 1.3,
-        ),
+        border: Border.all(color: accent.withOpacity(0.9), width: 1.3),
         boxShadow: [
           BoxShadow(
             color: accent.withOpacity(0.14),
@@ -12878,11 +17560,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               color: accent.withOpacity(0.14),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.air,
-              color: accent,
-              size: 22,
-            ),
+            child: Icon(Icons.air, color: accent, size: 22),
           ),
           const SizedBox(width: 10),
           const Expanded(
@@ -12944,11 +17622,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 color: Colors.white10,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.close,
-                color: Colors.white70,
-                size: 18,
-              ),
+              child: const Icon(Icons.close, color: Colors.white70, size: 18),
             ),
           ),
         ],
@@ -12966,7 +17640,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     return Container(
       height: 52,
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.86),
+        color: Colors.black.withValues(alpha: 0.86),
         borderRadius: BorderRadius.circular(26),
         border: Border.all(
           color: const Color(0xFFD94A4A).withOpacity(0.9),
@@ -13020,7 +17694,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Always visible while [_navigationMode] is active, positioned at the
   /// bottom-right corner of the map.  The panel displays:
   ///   • Current speed in mph (computed from GPS m/s via [_mpsToMph]).
-  ///   • Estimated speed limit badge (from [_estimateSpeedLimit] mock logic).
+  ///   • Provider speed limit when available; otherwise an unknown badge.
   ///   • Red text + red border when the driver exceeds the speed limit.
   ///   • Orange border + "GPS" warning label when [_gpsStale] is true.
   ///
@@ -13029,9 +17703,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Convert m/s → mph; show "--" when speed is unavailable (stale or cold).
     final bool speedAvailable = _currentSpeedMps >= 0 && !_gpsStale;
     final double speedMph = speedAvailable ? _currentSpeedMps * _mpsToMph : 0.0;
-    final String speedLabel = speedAvailable ? speedMph.toStringAsFixed(0) : '--';
+    final String speedLabel = speedAvailable
+        ? speedMph.toStringAsFixed(0)
+        : '--';
     // Overspeed flag: only active when we have a valid speed reading.
-    final bool overLimit = speedAvailable && speedMph > _speedLimitMph;
+    final bool overLimit =
+        speedAvailable && _speedLimitMph > 0 && speedMph > _speedLimitMph;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -13042,8 +17719,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         border: _gpsStale
             ? Border.all(color: Colors.orange, width: 2)
             : overLimit
-                ? Border.all(color: Colors.red, width: 2)
-                : Border.all(color: Colors.transparent, width: 2),
+            ? Border.all(color: Colors.red, width: 2)
+            : Border.all(color: Colors.transparent, width: 2),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.35),
@@ -13083,8 +17760,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               color: _gpsStale
                   ? Colors.orange
                   : overLimit
-                      ? Colors.red
-                      : Colors.white,
+                  ? Colors.red
+                  : Colors.white,
               fontSize: 28,
               fontWeight: FontWeight.bold,
               height: 1.0,
@@ -13092,18 +17769,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
           const Text(
             'mph',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 11,
-            ),
+            style: TextStyle(color: Colors.white70, fontSize: 11),
           ),
           const SizedBox(height: 6),
           // ── Speed-limit badge ─────────────────────────────────────────────
           // Styled like a US road speed-limit sign: white background, black
           // text, "LIMIT" caption above the numeric value.
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(4),
@@ -13121,7 +17794,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   ),
                 ),
                 Text(
-                  _speedLimitMph.toStringAsFixed(0),
+                  _speedLimitMph > 0 ? _speedLimitMph.toStringAsFixed(0) : '--',
                   style: const TextStyle(
                     color: Colors.black,
                     fontSize: 18,
@@ -13139,662 +17812,708 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Pre-compute the approx POI count once per build to avoid the getter
-    // recreating the filtered list multiple times in the AppBar actions list.
-    final int approxPoiCount = _loadedPois
-        .where((p) =>
-            !p.verified || p.entranceLat == null || p.entranceLng == null)
-        .length;
     return Scaffold(
       // AppBar is hidden during active navigation so the full screen is used
       // for the map and turn-by-turn components.
-      appBar: _isNavigating ? null : AppBar(
-        // Show destination name in the title when one is selected.
-        title: _selectedDestinationName != null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+      appBar: _drivingUiActive
+          ? null
+          : AppBar(
+              toolbarHeight: 66,
+              backgroundColor: SemiTrackColors.navy,
+              foregroundColor: Colors.white,
+              title: Row(
                 children: [
-                  const Text('Semitrack NEW',
-                      style: TextStyle(fontSize: 14, color: Colors.white70)),
-                  Text(
-                    _selectedDestinationName!,
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              )
-            : const Text('Semitrack NEW'),
-        actions: [
-          // ── Destination search button ──────────────────────────────────
-          // Opens the geocoding search sheet so the driver can type a
-          // destination address or place name before starting navigation.
-          IconButton(
-            tooltip: 'Search destination',
-            icon: const Icon(Icons.search),
-            onPressed: _showDestinationSearch,
-          ),
-          // ── Admin / maintenance: approx POI data view ──────────────────
-          // Shows a badge with the number of POIs hidden due to approximate
-          // (unverified) location data.  Tapping opens a maintenance sheet
-          // listing all hidden POIs so data editors can correct the entries.
-          if (approxPoiCount > 0)
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                IconButton(
-                  tooltip: 'POI Data Quality ($approxPoiCount hidden)',
-                  icon: const Icon(Icons.location_off_outlined),
-                  onPressed: _showApproxPoiAdminSheet,
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IgnorePointer(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: Colors.amber,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '$approxPoiCount',
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
+                  const SemiTrackWordmark(compact: true),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _selectedDestinationName ??
+                          _activeTruckProfile?.name ??
+                          'Truck route planner',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
+                ],
+              ),
+              actions: [
+                IconButton(
+                  tooltip: 'Search destination',
+                  icon: const Icon(Icons.search_rounded),
+                  onPressed: () => _showDestinationSearch(),
+                ),
+                IconButton(
+                  tooltip: _navSettings.audioMode == 0
+                      ? 'Turn GPS voice on'
+                      : 'Mute GPS voice',
+                  icon: Icon(
+                    _navSettings.audioMode == 0
+                        ? Icons.volume_off_rounded
+                        : Icons.volume_up_rounded,
+                  ),
+                  onPressed: _toggleVoiceMute,
+                ),
+                IconButton(
+                  tooltip: 'Map and navigation settings',
+                  icon: const Icon(Icons.tune_rounded),
+                  onPressed: _showMoreMapFeaturesSheet,
                 ),
               ],
             ),
-          // Pause / resume navigation tracking.
-          // When paused, GPS updates and camera follow are suspended so the
-          // driver can review the route without the map moving.
-          IconButton(
-            tooltip: _navigationPaused ? 'Resume navigation' : 'Pause navigation',
-            icon: Icon(
-              _navigationPaused ? Icons.play_arrow : Icons.pause,
-            ),
-            onPressed: () => setState(() => _navigationPaused = !_navigationPaused),
-          ),
-          // Toggle between navigation mode (close zoom, follows truck) and
-          // overview mode (full-route view so the driver can see the whole trip).
-          // Disabled after arrival — no further navigation mode switching needed.
-          IconButton(
-            tooltip: _navigationMode ? 'Show full route' : 'Navigation mode',
-            icon: Icon(
-              _navigationMode ? Icons.map_outlined : Icons.navigation,
-              color: _isArrived ? Colors.grey : null,
-            ),
-            // Disable the toggle after arrival so the driver cannot re-enter
-            // navigation mode (which would restart camera-follow with no GPS).
-            onPressed: _isArrived
-                ? null
-                : () {
-                    setState(() => _navigationMode = !_navigationMode);
-                    if (_navigationMode && _truckPosition != null && _mapReady) {
-                      // Switch to navigation mode: zoom close to truck and
-                      // re-engage camera follow.
-                      _onRecenterPressed();
-                    } else if (!_navigationMode && _routePoints.isNotEmpty && _mapReady) {
-                      // Switch to overview mode: fit the full route.
-                      _setOverviewCamera();
-                    }
-                  },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            // Disable refresh while loading or after arrival (trip is done).
-            onPressed: (_isLoading || _isArrived) ? null : () => fetchRoute(),
-          ),
-        ],
-      ),
       body: SafeArea(
         // Apply top inset only during navigation (when AppBar is hidden and
         // the Stack fills the full screen height from the top).  When the
         // AppBar is visible the Scaffold already positions the body below it,
         // so enabling `top` would add redundant padding.
-        top: _isNavigating,
+        top: _drivingUiActive,
         child: Column(
           children: [
-          // ── Mapbox map widget (flutter_map) ──────────────────────────────
-          Expanded(
-            flex: 2,
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _truckPosition ?? const LatLng(39.5, -98.35),
-                    initialZoom: 6,
-                    onMapReady: () {
-                      _mapReady = true;
-                      // Do NOT auto-start a route here.  Navigation only begins
-                      // after the user picks a destination and taps "Start Route".
-                    },
-                    // Long-press on map sets the tapped coordinate as the new
-                    // destination and immediately starts routing.
-                    onLongPress: (tapPosition, point) {
-                      _onMapLongPress(point);
-                    },
-                    // Gesture detection: switch to free mode when the user
-                    // manually interacts with the map (drag / pinch / rotate).
-                    // Auto-return to follow mode after 8 s of idle.
-                    onMapEvent: (MapEvent event) {
-                      if (event.source != MapEventSource.mapController) {
-                        if (event is MapEventMoveStart) {
-                          _onMapGestureStarted();
-                        } else if (event is MapEventMoveEnd) {
-                          _onMapGestureEnded();
-                        } else if (event is MapEventScrollWheelZoom) {
-                          // Scroll wheel has no separate start event, so
-                          // switch to free mode and reset the idle timer.
-                          _onMapGestureStarted();
-                          _onMapGestureEnded();
-                        }
-                      }
-                    },
-                  ),
-                  children: [
-                    TileLayer(
-                      // When a MAPBOX_TOKEN is provided (via --dart-define),
-                      // use Mapbox Streets or Satellite tiles depending on
-                      // _isSatelliteView. Restrict the token to your app's
-                      // bundle ID in the Mapbox dashboard to limit its
-                      // exposure. Falls back to OpenStreetMap otherwise.
-                      urlTemplate: _mapboxToken.isNotEmpty
-                          ? _navSettings.mapType == 1
-                              ? 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}'
-                                  '?access_token=$_mapboxToken'
-                              : 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
-                                  '?access_token=$_mapboxToken'
-                          : _navSettings.mapType == 1
-                              ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-                              : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.semitrack.mobile',
-                    ),
-                    PolylineLayer(
-                      polylines: [
-                        // ── Alternative routes (gray, behind selected) ──────
-                        for (int i = 0; i < _routeOptions.length; i++)
-                          if (i != _selectedRouteOptionIndex &&
-                              _routeOptions[i].points.isNotEmpty)
-                            Polyline(
-                              points: _routeOptions[i].points,
-                              strokeWidth: 6,
-                              color: Colors.grey.shade400,
-                              strokeJoin: StrokeJoin.round,
-                              strokeCap: StrokeCap.round,
-                            ),
-                        // ── Selected route: outline + bright blue active line ──
-                        if (_routePoints.isNotEmpty)
-                          Polyline(
-                            points: _routePoints,
-                            strokeWidth: 16,
-                            color: Colors.white.withOpacity(0.3),
-                            strokeJoin: StrokeJoin.round,
-                            strokeCap: StrokeCap.round,
-                          ),
-                        if (_routePoints.isNotEmpty)
-                          Polyline(
-                            points: _routePoints,
-                            strokeWidth: 13,
-                            color: const Color(0xFF1E90FF),
-                            strokeJoin: StrokeJoin.round,
-                            strokeCap: StrokeCap.round,
-                          ),
-                        // ── Restriction overlays on selected route (red) ────
-                        for (final seg in _buildRestrictionSegments(_routePoints))
-                          Polyline(
-                            points: seg,
-                            strokeWidth: 11,
-                            color: Colors.red.withOpacity(0.85),
-                            strokeJoin: StrokeJoin.round,
-                            strokeCap: StrokeCap.round,
-                          ),
-                      ],
-                    ),
-                    // ── Road-label overlay ────────────────────────────────
-                    // Renders road names/numbers on a transparent background
-                    // so they always appear above the blue route polyline.
-                    // Uses dark labels on satellite view, light labels on
-                    // standard map, ensuring readability in both modes.
-                    TileLayer(
-                      urlTemplate: _navSettings.mapType == 1
-                          ? 'https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png'
-                          : 'https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.semitrack.mobile',
-                    ),
-                    MarkerLayer(
-                      // _buildTruckMarker() + _buildDestinationMarker() are
-                      // _buildMarkers() assembles the truck marker, the optional
-                      // destination pin, and all visible truck stop POI markers
-                      // into a single list.  Adding new POI types in the future
-                      // only requires updating _buildMarkers() in one place.
-                      markers: _buildMarkers(),
-                    ),
-                  ],
-                ),
-                if (_isLoading)
-                  const Center(child: CircularProgressIndicator()),
-                // ── Navigation banner ─────────────────────────────────────
-                // Shown in route-preview / arrival state (not during active
-                // turn-by-turn navigation – the compact next-step card takes
-                // that role to keep the top zone minimal).
-                if (!_isNavigating && (_hasActiveDestination || _isArrived) && _navSteps.isNotEmpty)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: _buildNavBanner(),
-                  ),
-                // ── Lane guidance panel ───────────────────────────────────
-                // GPS-style lane indicator tiles shown below the navigation
-                // banner during active navigation.  Returns SizedBox.shrink()
-                // when not navigating, so it is zero-cost outside nav mode.
-                _buildLaneGuidance(),
-                // ── Exit Preview / Junction View card ─────────────────────
-                // Shown top-center during exit/ramp/fork maneuvers when
-                // within 0.8 mi.  Returns SizedBox.shrink() otherwise.
-                if (_isNavigating && _exitPreviewData != null && (_exitPreviewData?.show ?? false))
-                  Positioned(
-                    top: 16,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: Center(
-                        child: _buildExitPreviewCard(),
+            // ── Mapbox map widget (flutter_map) ──────────────────────────────
+            Expanded(
+              flex: 2,
+              child: Stack(
+                children: [
+                  FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter:
+                          _truckPosition ?? const LatLng(39.5, -98.35),
+                      initialZoom: 6,
+                      minZoom: _minimumMapZoom,
+                      maxZoom: _maximumMapZoom,
+                      interactionOptions: const InteractionOptions(
+                        flags: InteractiveFlag.all,
                       ),
-                    ),
-                  ),
-                // ── Junction-view card ────────────────────────────────────
-                // Compact top-right lane diagram shown when the driver is
-                // within 0.5 mi (highway) / 0.3 mi (city) of a complex
-                // exit, fork, or merge.  Returns SizedBox.shrink() when
-                // conditions are not met, so it is zero-cost otherwise.
-                _buildJunctionView(),
-                // ── Inline search bar ─────────────────────────────────────
-                // Hidden during active turn-by-turn navigation so it does not
-                // overlap the navigation banner.  Visible at all other times
-                // so the driver can search a destination without opening a
-                // modal sheet.
-                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
-                  _buildSearchBar(),
-                // ── Search results overlay ────────────────────────────────
-                // _buildSearchResults returns SizedBox.shrink() when there is
-                // nothing to show, so the condition here is simply the same
-                // guard used for the search bar itself.
-                if (!_isNavigating && !_hasActiveDestination && !_isArrived)
-                  _buildSearchResults(),
-                // ── Floating dashboard panel ───────────────────────────────
-                // Shown in the idle state (no destination selected, no route,
-                // not navigating) as a collapsible planning and status panel.
-                // Hidden once the driver picks a destination, starts a route,
-                // or begins active navigation so it never overlaps planning UI.
-                if (!_isNavigating &&
-                    !_isArrived &&
-                    !_isLoading &&
-                    _routePoints.isEmpty &&
-                    _selectedDestination == null)
-                  _buildFloatingDashboard(),
-                // ── Destination hint banner ───────────────────────────────
-                // Shown when no destination is selected and no route is loaded,
-                // prompting the driver to pick a destination to start navigation.
-                if (_selectedDestination == null && !_hasActiveDestination && !_isLoading)
-                  Positioned(
-                    bottom: 80,
-                    left: 16,
-                    right: 16,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.touch_app, color: Colors.white70, size: 18),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Long-press map or use search bar to set destination',
-                              style: TextStyle(
-                                  color: Colors.white, fontSize: 13),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                // ── Start Route button ─────────────────────────────────────
-                // Shown when a destination has been selected (via search or
-                // long-press) but no route has been built yet.
-                // Gives the driver an explicit confirmation step before routing begins.
-                if (_selectedDestination != null &&
-                    !_hasActiveDestination &&
-                    !_isLoading &&
-                    _routePoints.isEmpty)
-                  _buildStartRouteButton(),
-                // ── Preview bottom panel ────────────────────────────────────
-                // Shown while the route is built but navigation has not yet
-                // started.  Includes route alternatives cards, route stats
-                // summary, and the Start Navigation / Optimize buttons.
-                // ── Planning UI: hidden once navigation starts ─────────────
-                // Preview bottom panel + map legend are only shown in the
-                // route-preview state (_isNavigating == false).
-                if (_routePoints.isNotEmpty &&
-                    !_isNavigating &&
-                    !_isLoading)
-                  _buildPreviewBottomPanel(),
-                if (_routePoints.isNotEmpty && !_isNavigating && !_isLoading)
-                  _buildMapLegend(),
-                // ── Restriction ahead alert card ──────────────────────────
-                // Shown just below the nav banner when the truck is within
-                // 800 m of a restriction it violates, providing a prominent
-                // in-route warning with type icon and limit details.
-                // Only rendered during an active navigation session.
-                if (_hasActiveDestination && _restrictionAhead != null)
-                  Positioned(
-                    // Compact top nav card is ~90 px; use a consistent offset
-                    // whether navigating or in preview mode.
-                    top: _isNavigating ? 100 : (_navSteps.isNotEmpty ? 90 : 68),
-                    left: 0,
-                    right: 0,
-                    child: _buildRestrictionAlertCard(),
-                  ),
-                // ── Warning popup stack ───────────────────────────────────
-                // Stacked top-right cards for road-hazard warning signs along
-                // the active route.  Only visible during active navigation.
-                // Anchored to the right edge with SafeArea so it never sits
-                // behind the status bar or notch in any orientation.
-                if (_isNavigating)
-                  Positioned(
-                    top: 0,
-                    bottom: 0,
-                    right: 8,
-                    child: SafeArea(
-                      child: Align(
-                        alignment: Alignment.topRight,
-                        child: Padding(
-                          // 176 px below the safe-area top keeps the stack
-                          // clear of the primary nav card (~160 px tall).
-                          padding: const EdgeInsets.only(top: 176),
-                          child: WarningPopupStack(manager: _warningManager),
-                        ),
-                      ),
-                    ),
-                  ),
-                // ── Warning sign alert banner ─────────────────────────────
-                // Shown when a truck safety warning sign is within
-                // _warningAlertRadiusMeters of the truck's position on the
-                // active route.  Colour-coded by severity (red/orange/blue).
-                if (_hasActiveDestination && _warningAhead != null)
-                  Positioned(
-                    top: () {
-                      int offset = _isNavigating
-                          ? 100
-                          : (_navSteps.isNotEmpty ? 90 : 68);
-                      if (_restrictionAhead != null) offset += 64;
-                      return offset.toDouble();
-                    }(),
-                    left: 0,
-                    right: 0,
-                    child: _buildWarningAlertBanner(),
-                  ),
-                // ── Active leg card ───────────────────────────────────────
-                // Shows the current leg (from → to, miles, duration,
-                // restriction count) when navigating a multi-stop trip.
-                _buildCurrentLegCard(),
-                // ── Leg breakdown FAB ─────────────────────────────────────
-                // Opens the full trip leg breakdown sheet during navigation.
-                _buildLegBreakdownButton(),
-                // ── Smart restriction rerouting progress banner ───────────
-                // Shown as an overlay at the top of the map while an
-                // automatic avoid-restriction reroute is in progress.
-                if (_hasActiveDestination && _isRestrictionRerouting)
-                  _buildRestrictionRerouteBanner(),
-                // ── Recenter FAB ──────────────────────────────────────────
-                // Always visible in the bottom-right corner.
-                // Tap: returns to live follow mode.
-                // Long-press: switches to full-route overview mode.
-                Positioned(
-                  bottom: 16,
-                  right: 16,
-                  child: _buildRecenterButton(),
-                ),
-                // ── Rerouting status indicator ────────────────────────────
-                // Shown in the centre of the map while a new route is being
-                // fetched from the driver's live position to the destination.
-                if (_navStatus != null)
-                  Positioned(
-                    bottom: 16,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.92),
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 8,
-                            ),
-                          ],
-                        ),
-                        child: Text(
-                          _navStatus!,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                // ── Trip Stats panel ──────────────────────────────────────
-                // Overlays live trip metrics (miles, elapsed time, stopped
-                // time, average speed) at the bottom of the map.  Only shown
-                // once navigation has started with an active destination so the
-                // panel never appears in plain GPS-tracking mode.
-                // Hidden during active navigation so the map is unobstructed.
-                if (!_isNavigating && _hasActiveDestination && _tripStartTime != null)
-                  _buildTripStatsPanel(),
-                // ── POI toggle FAB ────────────────────────────────────────
-                // Hidden during navigation so the Stop Navigation button can
-                // occupy the same bottom-left slot without overlap.
-                if (!_isNavigating)
-                  Positioned(
-                    bottom: 24,
-                    left: 16,
-                    child: FloatingActionButton.small(
-                      heroTag: 'poi_toggle',
-                      tooltip: _showTruckStops
-                          ? 'Hide all POIs'
-                          : 'Show all POIs',
-                      backgroundColor: _showTruckStops
-                          ? Colors.blue.shade700
-                          : Colors.grey.shade700,
-                      onPressed: () {
-                        setState(() => _showTruckStops = !_showTruckStops);
+                      onMapReady: () {
+                        _mapReady = true;
+                        // Do NOT auto-start a route here.  Navigation only begins
+                        // after the user picks a destination and taps "Start Route".
                       },
-                      child: Icon(
-                        _showTruckStops
-                            ? Icons.local_gas_station
-                            : Icons.local_gas_station_outlined,
-                        color: Colors.white,
-                      ),
+                      // Long-press on map sets the tapped coordinate as the new
+                      // destination and immediately starts routing.
+                      onLongPress: (tapPosition, point) {
+                        _onMapLongPress(point);
+                      },
+                      // Gesture detection: switch to free mode when the user
+                      // manually interacts with the map (drag / pinch / rotate).
+                      // Auto-return to follow mode after 8 s of idle.
+                      onMapEvent: (MapEvent event) {
+                        if (event.source != MapEventSource.mapController) {
+                          if (event is MapEventMoveStart) {
+                            _onMapGestureStarted();
+                          } else if (event is MapEventMoveEnd) {
+                            _onMapGestureEnded();
+                          } else if (event is MapEventScrollWheelZoom) {
+                            // Scroll wheel has no separate start event, so
+                            // switch to free mode and reset the idle timer.
+                            _onMapGestureStarted();
+                            _onMapGestureEnded();
+                          }
+                        }
+                        if (event is MapEventMoveEnd ||
+                            event is MapEventScrollWheelZoom) {
+                          _scheduleRoadFeatureRefresh();
+                        }
+                      },
                     ),
-                  ),
-                // ── Zone 1 (top-left): primary + secondary maneuver cards ─
-                // Minimal translucent overlay: stacked in a single Column so
-                // they never overlap regardless of primary card height.
-                if (_isNavigating && _topInstructionData != null)
-                  Positioned(
-                    top: 16,
-                    left: 16,
-                    child: SafeArea(
-                      bottom: false,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildPrimaryManeuverCard(_topInstructionData!),
-                          if (_secondaryInstructionData != null &&
-                              _navSettings.viewJunctionView) ...[
-                            const SizedBox(height: 6),
-                            _buildSecondaryThenCard(
-                                _secondaryInstructionData!),
+                    children: [
+                      TileLayer(
+                        // When a MAPBOX_TOKEN is provided (via --dart-define),
+                        // use Mapbox Streets or Satellite tiles depending on
+                        // _isSatelliteView. Restrict the token to your app's
+                        // bundle ID in the Mapbox dashboard to limit its
+                        // exposure. Falls back to OpenStreetMap otherwise.
+                        urlTemplate: _mapboxToken.isNotEmpty
+                            ? _navSettings.mapType == 1
+                                  ? 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/{z}/{x}/{y}'
+                                        '?access_token=$_mapboxToken'
+                                  : 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}'
+                                        '?access_token=$_mapboxToken'
+                            : _navSettings.mapType == 1
+                            ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                            : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.semitrack.mobile',
+                      ),
+                      GestureDetector(
+                        onTap: _handleRoutePolylineTap,
+                        child: PolylineLayer<int>(
+                          hitNotifier: _routeHitNotifier,
+                          // A generous touch target lets a driver select a
+                          // thin alternative reliably without zooming in.
+                          minimumHitbox: 18,
+                          polylines: [
+                            // ── Alternative routes (gray, behind selected) ──────
+                            for (int i = 0; i < _routeOptions.length; i++)
+                              if (i != _selectedRouteOptionIndex &&
+                                  _routeOptions[i].points.isNotEmpty)
+                                Polyline<int>(
+                                  points: _routeOptions[i].points,
+                                  strokeWidth: 5,
+                                  color: Colors.blueGrey.shade300.withOpacity(
+                                    0.65,
+                                  ),
+                                  strokeJoin: StrokeJoin.round,
+                                  strokeCap: StrokeCap.round,
+                                  hitValue: i,
+                                ),
+                            // ── Selected route: dark casing + crisp blue core ─────
+                            if (_routePoints.isNotEmpty)
+                              Polyline<int>(
+                                points: _routePoints,
+                                strokeWidth: 10,
+                                color: const Color(0xCC12324A),
+                                strokeJoin: StrokeJoin.round,
+                                strokeCap: StrokeCap.round,
+                              ),
+                            if (_routePoints.isNotEmpty)
+                              Polyline<int>(
+                                points: _routePoints,
+                                strokeWidth: 6,
+                                color: const Color(0xFF168BE8),
+                                strokeJoin: StrokeJoin.round,
+                                strokeCap: StrokeCap.round,
+                                hitValue: _selectedRouteOptionIndex,
+                              ),
+                            // ── Restriction overlays on selected route (red) ────
+                            for (final seg in _buildRestrictionSegments(
+                              _routePoints,
+                            ))
+                              Polyline<int>(
+                                points: seg,
+                                strokeWidth: 7,
+                                color: Colors.red.shade700,
+                                strokeJoin: StrokeJoin.round,
+                                strokeCap: StrokeCap.round,
+                              ),
                           ],
-                          // ── Current road name pill ───────────────────────
-                          // Shows the road the driver is currently traveling
-                          // on in a large bold high-contrast pill, directly
-                          // below the navigation card so it is always visible
-                          // on the track.  Updates automatically as each new
-                          // route step is advanced.
-                          const SizedBox(height: 6),
-                          _buildCurrentRoadNameLabel(),
-                        ],
+                        ),
+                      ),
+                      // ── Road-label overlay ────────────────────────────────
+                      // Renders road names/numbers on a transparent background
+                      // so they always appear above the blue route polyline.
+                      // Uses dark labels on satellite view, light labels on
+                      // standard map, ensuring readability in both modes.
+                      TileLayer(
+                        urlTemplate: _navSettings.mapType == 1
+                            ? 'https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png'
+                            : 'https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.semitrack.mobile',
+                      ),
+                      MarkerLayer(
+                        // _buildTruckMarker() + _buildDestinationMarker() are
+                        // _buildMarkers() assembles the truck marker, the optional
+                        // destination pin, and all visible truck stop POI markers
+                        // into a single list.  Adding new POI types in the future
+                        // only requires updating _buildMarkers() in one place.
+                        markers: _buildMarkers(),
+                      ),
+                      if (_roadFeatures.isNotEmpty)
+                        const SimpleAttributionWidget(
+                          source: Text(
+                            'OpenStreetMap contributors',
+                            style: TextStyle(fontSize: 9),
+                          ),
+                          backgroundColor: Color(0xCCFFFFFF),
+                        ),
+                    ],
+                  ),
+                  if (_isLoading) _buildRouteLoadingOverlay(),
+                  // ── Navigation banner ─────────────────────────────────────
+                  // Shown in route-preview / arrival state (not during active
+                  // turn-by-turn navigation – the compact next-step card takes
+                  // that role to keep the top zone minimal).
+                  if (_isArrived && _navSteps.isNotEmpty)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _buildNavBanner(),
+                    ),
+                  // ── Lane guidance panel ───────────────────────────────────
+                  // GPS-style lane indicator tiles shown below the navigation
+                  // banner during active navigation.  Returns SizedBox.shrink()
+                  // when not navigating, so it is zero-cost outside nav mode.
+                  _buildLaneGuidance(),
+                  // ── Exit Preview / Junction View card ─────────────────────
+                  // Shown top-center during exit/ramp/fork maneuvers when
+                  // within 0.8 mi.  Returns SizedBox.shrink() otherwise.
+                  if (_isLiveRouteAssistanceActive &&
+                      _exitPreviewData != null &&
+                      (_exitPreviewData?.show ?? false))
+                    Positioned(
+                      top: 168,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: Center(child: _buildExitPreviewCard()),
                       ),
                     ),
-                  ),
-                // ── Zone 1a (top-right): compass / re-centre button ────────
-                // Round dark button at the top-right corner — always top-right.
-                _buildSmallCompassButton(),
-                // ── Zone 1c (top-right, below compass): satellite toggle ───
-                // Toggles between street and satellite tile layers.
-                _buildSatelliteToggle(),
-                // ── Zone 3 (right side): alert stack (hidden during nav) ───
-                // Hidden during active navigation to keep overlays minimal.
-                if (!_isNavigating) _buildRightSideAlertStack(),
-                // ── Zone 3a (top-right): upcoming route alert chips ────────
-                // Hidden during active navigation to keep overlays minimal.
-                if (!_isNavigating) _buildRightSideUpcomingAlerts(),
-                // ── Zone 4 (right edge, centered): voice + speed panel ──────
-                // Voice-mute toggle above the compact speed panel, anchored to
-                // the right edge and centered vertically.  Replaces the old
-                // bottom-center-right speed panel position.
-                _buildRightCenterPanel(),
-                // ── Zone 5b (left edge, centered): closest truck stops ────
-                // Vertically stacked chips on the left side showing up to 2
-                // upcoming truck stops with direction label and approaching badge.
-                _buildClosestTruckStopsRow(),
-                // ── Zone 5 (bottom-left): trip summary strip ──────────────
-                // Dark translucent card with remaining mi, time, ETA,
-                // More button, and compact Stop icon.
-                if (_isNavigating)
-                  Positioned(
-                    left: 16,
-                    bottom: 18,
-                    child: SafeArea(
-                      top: false,
-                      child: _buildBottomTripStrip(),
+                  // ── Junction-view card ────────────────────────────────────
+                  // Compact top-right lane diagram shown when the driver is
+                  // within 0.5 mi (highway) / 0.3 mi (city) of a complex
+                  // exit, fork, or merge.  Returns SizedBox.shrink() when
+                  // conditions are not met, so it is zero-cost otherwise.
+                  _buildJunctionView(),
+                  // ── Floating dashboard panel ───────────────────────────────
+                  // Shown in the idle state (no destination selected, no route,
+                  // not navigating) as a collapsible planning and status panel.
+                  // Hidden once the driver picks a destination, starts a route,
+                  // or begins active navigation so it never overlaps planning UI.
+                  if (!_drivingUiActive &&
+                      !_isArrived &&
+                      !_isLoading &&
+                      _routePoints.isEmpty &&
+                      _selectedDestination == null)
+                    _buildFloatingDashboard(),
+                  // ── Start Route button ─────────────────────────────────────
+                  // Shown when a destination has been selected (via search or
+                  // long-press) but no route has been built yet.
+                  // Gives the driver an explicit confirmation step before routing begins.
+                  if (_selectedDestination != null &&
+                      !_hasActiveDestination &&
+                      !_isLoading &&
+                      _routePoints.isEmpty)
+                    _buildStartRouteButton(),
+                  // ── Preview bottom panel ────────────────────────────────────
+                  // Shown while the route is built but navigation has not yet
+                  // started.  Includes route alternatives cards, route stats
+                  // summary, and the Start Navigation / Optimize buttons.
+                  // ── Planning UI: hidden once navigation starts ─────────────
+                  // Preview bottom panel + map legend are only shown in the
+                  // route-preview state (_isNavigating == false).
+                  if (_routePoints.isNotEmpty &&
+                      !_drivingUiActive &&
+                      !_isLoading)
+                    _buildPreviewBottomPanel(),
+                  if (_routePoints.isNotEmpty &&
+                      !_drivingUiActive &&
+                      !_isLoading)
+                    _buildMapLegend(),
+                  // ── Restriction ahead alert card ──────────────────────────
+                  // Shown just below the nav banner when the truck is within
+                  // 800 m of a restriction it violates, providing a prominent
+                  // in-route warning with type icon and limit details.
+                  // Only rendered during an active navigation session.
+                  if (_hasActiveDestination && _restrictionAhead != null)
+                    Positioned(
+                      // Compact top nav card is ~90 px; use a consistent offset
+                      // whether navigating or in preview mode.
+                      top: _drivingUiActive
+                          ? 176
+                          : (_navSteps.isNotEmpty ? 90 : 68),
+                      left: 0,
+                      right: 0,
+                      child: _buildRestrictionAlertCard(),
                     ),
-                  ),
-                // ── Zone 6 (bottom, above strip): next weigh station ──────
-                // Chip showing the single closest upcoming weigh station with
-                // its icon and miles to go.  Automatically advances to the
-                // next station once the driver passes the current one.
-                // Only visible during active navigation when a station exists.
-                _buildClosestWeighStationsRow(),
-                // ── Zone 6c (right side): next rest area ─────────────────
-                // Chip showing the single closest upcoming rest area with
-                // its icon and miles to go.  Automatically advances to the
-                // next rest area once the driver passes the current one.
-                // Only visible during active navigation when a rest area exists.
-                _buildClosestRestAreasRow(),
-                // ── Zone 6b (bottom-left, above strip): shortcut bar ─────
-                // Quick-action shortcut buttons for features the driver has
-                // enabled in the More > Shortcut settings section.
-                _buildShortcutBar(),
-                // ── Zone 7 (bottom-center): current road/highway name badge ─
-                // Compact pill showing the name of the road or highway the
-                // driver is currently on.  Sits between the bottom trip strip
-                // (left) and the speed panel (right), matching the layout of
-                // popular GPS apps.  Updates automatically as the driver
-                // advances to each new route step.
-                _buildCurrentRoadNameBadge(),
-                // ── GPS signal-loss banner ────────────────────────────────
-                // Shown across the top of the map whenever the GPS watchdog
-                // declares the position stream stale (no fix for ≥ 10 s).
-                // The banner is dismissible by the driver but reappears if
-                // the GPS remains silent so it serves as a persistent warning.
-                if (_gpsStale)
+                  // ── Warning popup stack ───────────────────────────────────
+                  // Stacked top-right cards for road-hazard warning signs along
+                  // the active route.  Only visible during active navigation.
+                  // Anchored to the right edge with SafeArea so it never sits
+                  // behind the status bar or notch in any orientation.
+                  if (_isLiveRouteAssistanceActive)
+                    Positioned(
+                      top: 0,
+                      bottom: 0,
+                      right: 8,
+                      child: SafeArea(
+                        child: Align(
+                          alignment: Alignment.topRight,
+                          child: Padding(
+                            // 176 px below the safe-area top keeps the stack
+                            // clear of the primary nav card (~160 px tall).
+                            padding: const EdgeInsets.only(top: 176),
+                            child: WarningPopupStack(manager: _warningManager),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // ── Warning sign alert banner ─────────────────────────────
+                  // Shown when a truck safety warning sign is within
+                  // _warningAlertRadiusMeters of the truck's position on the
+                  // active route.  Colour-coded by severity (red/orange/blue).
+                  if (_hasActiveDestination && _warningAhead != null)
+                    Positioned(
+                      top: () {
+                        int offset = _drivingUiActive
+                            ? 176
+                            : (_navSteps.isNotEmpty ? 90 : 68);
+                        if (_restrictionAhead != null) offset += 64;
+                        return offset.toDouble();
+                      }(),
+                      left: 0,
+                      right: 0,
+                      child: _buildWarningAlertBanner(),
+                    ),
+                  // ── Physical road-control approach alert ─────────────────
+                  if (_roadFeatureAhead != null &&
+                      (_isNavigating || _routePreviewActive))
+                    Positioned(
+                      top: () {
+                        int offset = _drivingUiActive
+                            ? 176
+                            : (_navSteps.isNotEmpty ? 90 : 68);
+                        if (_restrictionAhead != null) offset += 64;
+                        if (_warningAhead != null) offset += 64;
+                        return offset.toDouble();
+                      }(),
+                      left: 0,
+                      right: 0,
+                      child: _buildRoadFeatureAlertBanner(),
+                    ),
+                  // ── Active leg card ───────────────────────────────────────
+                  // Shows the current leg (from → to, miles, duration,
+                  // restriction count) when navigating a multi-stop trip.
+                  if (!_drivingUiActive) _buildCurrentLegCard(),
+                  // ── Leg breakdown FAB ─────────────────────────────────────
+                  // Opens the full trip leg breakdown sheet during navigation.
+                  if (!_drivingUiActive) _buildLegBreakdownButton(),
+                  // ── Smart restriction rerouting progress banner ───────────
+                  // Shown as an overlay at the top of the map while an
+                  // automatic avoid-restriction reroute is in progress.
+                  if (_hasActiveDestination && _isRestrictionRerouting)
+                    _buildRestrictionRerouteBanner(),
+                  // ── Recenter FAB ──────────────────────────────────────────
+                  // Always visible in the bottom-right corner.
+                  // Tap: returns to live follow mode.
+                  // Long-press: switches to full-route overview mode.
                   Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xEE1A1A1A),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                  color: Colors.orange.shade600, width: 1.5),
+                    bottom: _drivingUiActive ? 164 : 16,
+                    right: 16,
+                    child: _buildRecenterButton(),
+                  ),
+                  // ── Rerouting status indicator ────────────────────────────
+                  // Shown in the centre of the map while a new route is being
+                  // fetched from the driver's live position to the destination.
+                  if (_navStatus != null)
+                    Positioned(
+                      bottom: _drivingUiActive ? 104 : 16,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.92),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.2),
+                                blurRadius: 8,
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            _navStatus!,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
                             ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.gps_off,
-                                    color: Colors.orange.shade400, size: 18),
-                                const SizedBox(width: 10),
-                                const Expanded(
-                                  child: Text(
-                                    'GPS signal lost — speed and position may be out of date',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13,
-                                    ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // ── Trip Stats panel ──────────────────────────────────────
+                  // Overlays live trip metrics (miles, elapsed time, stopped
+                  // time, average speed) at the bottom of the map.  Only shown
+                  // once navigation has started with an active destination so the
+                  // panel never appears in plain GPS-tracking mode.
+                  // Hidden during active navigation so the map is unobstructed.
+                  if (!_drivingUiActive &&
+                      _hasActiveDestination &&
+                      _tripStartTime != null)
+                    _buildTripStatsPanel(),
+                  // ── POI toggle FAB ────────────────────────────────────────
+                  // Hidden during navigation so the Stop Navigation button can
+                  // occupy the same bottom-left slot without overlap.
+                  if (!_drivingUiActive &&
+                      (_selectedDestination != null || _routePoints.isNotEmpty))
+                    Positioned(
+                      bottom: 24,
+                      left: 16,
+                      child: FloatingActionButton.small(
+                        heroTag: 'poi_toggle',
+                        tooltip: _showTruckStops
+                            ? 'Hide all POIs'
+                            : 'Show all POIs',
+                        backgroundColor: _showTruckStops
+                            ? Colors.blue.shade700
+                            : Colors.grey.shade700,
+                        onPressed: () {
+                          setState(() => _showTruckStops = !_showTruckStops);
+                        },
+                        child: Icon(
+                          _showTruckStops
+                              ? Icons.local_gas_station
+                              : Icons.local_gas_station_outlined,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  // ── Zone 1: live current/incoming street guidance header ──
+                  if (_isLiveRouteAssistanceActive &&
+                      _topInstructionData != null)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildStreetGuidanceHeader(_topInstructionData!),
+                            if (_secondaryInstructionData != null &&
+                                _navSettings.viewJunctionView)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 16,
+                                    top: 8,
+                                  ),
+                                  child: _buildSecondaryThenCard(
+                                    _secondaryInstructionData!,
                                   ),
                                 ),
-                              ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ), // ── Zone 1a (top-right): compass / re-centre button ────────
+                  // Round dark button at the top-right corner — always top-right.
+                  _buildSmallCompassButton(),
+                  // ── Zone 1c (top-right, below compass): satellite toggle ───
+                  // Toggles between street and satellite tile layers.
+                  _buildSatelliteToggle(),
+                  // ── Zone 3: upcoming route-safety alerts ──────────────────
+                  // These builders require active navigation. Prefer the richer
+                  // route-ahead feed and fall back to native navigation alerts.
+                  if (_isLiveRouteAssistanceActive && _upcomingAlerts.isEmpty)
+                    _buildRightSideAlertStack(),
+                  if (_isLiveRouteAssistanceActive)
+                    _buildRightSideUpcomingAlerts(),
+                  // ── Zone 4 (right edge, centered): voice + speed panel ──────
+                  // Voice-mute toggle above the compact speed panel, anchored to
+                  // the right edge and centered vertically.  Replaces the old
+                  // bottom-center-right speed panel position.
+                  _buildRightCenterPanel(),
+                  // ── Zone 5b: next two commercial truck stops ──────────────
+                  // Compact vertical cards expose only marker, exit, and miles;
+                  // tapping a card opens the complete commercial-stop sheet.
+                  _buildTruckStopAheadRail(),
+                  // ── Zone 5c: road name and speed near the truck ─────────
+                  // Keep these high-value driving facts just above the trip
+                  // strip, matching the familiar commercial GPS layout.
+                  if (_drivingUiActive && _navSettings.viewSpeedLimit)
+                    Positioned(
+                      left: 12,
+                      bottom: 88 + _drivingBottomCardLift,
+                      child: SafeArea(
+                        top: false,
+                        child: _buildCompactSpeedPanel(),
+                      ),
+                    ),
+                  if (_drivingUiActive)
+                    Positioned(
+                      left: 112,
+                      right: 112,
+                      bottom: 91 + _drivingBottomCardLift,
+                      child: SafeArea(
+                        top: false,
+                        child: Center(child: _buildCurrentRoadNameLabel()),
+                      ),
+                    ),
+                  // ── Zone 5 (bottom-left): trip summary strip ──────────────
+                  // Dark translucent card with remaining mi, time, ETA,
+                  // More button, and compact Stop icon.
+                  if (_drivingUiActive)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: 12 + _drivingBottomCardLift,
+                      child: SafeArea(
+                        top: false,
+                        child: _buildBottomTripStrip(),
+                      ),
+                    ),
+                  // ── Zone 6 (bottom, above strip): next weigh station ──────
+                  // Chip showing the single closest upcoming weigh station with
+                  // its icon and miles to go.  Automatically advances to the
+                  // next station once the driver passes the current one.
+                  // Only visible during active navigation when a station exists.
+                  _buildClosestWeighStationsRow(),
+                  // ── Zone 6c: next two rest areas ────────────────────────
+                  // These remain visible and tappable during navigation so a
+                  // driver can inspect parking and live facility activity.
+                  _buildClosestRestAreasRow(),
+                  // ── Zone 6b (bottom-left, above strip): shortcut bar ─────
+                  // Quick-action shortcut buttons for features the driver has
+                  // enabled in the More > Shortcut settings section.
+                  if (!_drivingUiActive) _buildShortcutBar(),
+                  // ── Zone 7 (bottom-center): current road/highway name badge ─
+                  // Compact pill showing the name of the road or highway the
+                  // driver is currently on.  Sits between the bottom trip strip
+                  // (left) and the speed panel (right), matching the layout of
+                  // popular GPS apps.  Updates automatically as the driver
+                  // advances to each new route step.
+                  if (!_drivingUiActive) _buildCurrentRoadNameBadge(),
+                  // ── GPS signal-loss banner ────────────────────────────────
+                  // Shown across the top of the map whenever the GPS watchdog
+                  // declares the position stream stale (no fix for ≥ 10 s).
+                  // The banner is dismissible by the driver but reappears if
+                  // the GPS remains silent so it serves as a persistent warning.
+                  if (_gpsStale &&
+                      (!_drivingUiActive ||
+                          (_restrictionAhead == null &&
+                              _warningAhead == null &&
+                              _roadFeatureAhead == null)))
+                    Positioned(
+                      // Do not cover the live maneuver header. If a provider
+                      // safety alert already owns the alert lane, the compact
+                      // speed panel still carries the orange GPS indicator.
+                      top: _drivingUiActive ? 172 : 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xEE1A1A1A),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.orange.shade600,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.gps_off,
+                                    color: Colors.orange.shade400,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
+                                    child: Text(
+                                      'GPS signal lost — speed and position may be out of date',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-          ),
-
-          // ── Error banner ─────────────────────────────────────────────────
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                'Error: $_error',
-                style: const TextStyle(color: Colors.red),
+                ],
               ),
             ),
 
-          // ── Route info + Phase 5 intelligence ────────────────────────────
-          // Hidden during active navigation (_isNavigating) so Route Summary,
-          // Drive Intelligence, and other planning cards do not block the map.
-          if (!_isNavigating && (_hasActiveDestination || _isArrived) && _routeData != null)
-            Expanded(
-              flex: 1,
-              child: _buildRouteInfo(_routeData!),
-            ),
+            // ── Error banner ─────────────────────────────────────────────────
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.error_outline_rounded,
+                            size: 18,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onErrorContainer,
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onErrorContainer,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Dismiss message',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => setState(() {
+                              _error = null;
+                              _locationRecoveryAction = null;
+                            }),
+                            icon: Icon(
+                              Icons.close_rounded,
+                              size: 18,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_locationRecoveryAction != null)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: _isAcquiringGpsFix
+                                ? null
+                                : _handleLocationRecovery,
+                            icon: const Icon(
+                              Icons.my_location_rounded,
+                              size: 17,
+                            ),
+                            label: Text(_locationRecoveryLabel),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // ── Route info + Phase 5 intelligence ────────────────────────────
+            // Hidden during active navigation (_isNavigating) so Route Summary,
+            // Drive Intelligence, and other planning cards do not block the map.
+            if (!_drivingUiActive &&
+                (_hasActiveDestination || _isArrived) &&
+                _routeData != null)
+              Expanded(flex: 1, child: _buildRouteInfo(_routeData!)),
           ],
         ),
       ),
@@ -13822,8 +18541,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // is separate from the total trip ETA — a route with an initial 10 h Trip
     // ETA may show 6 h Time Left after 4 hours of driving (or sooner if HOS
     // rules, breaks, or real-time traffic adjustments are factored in).
-    final driveMinutesLeft =
-        _intelligence['driveMinutesLeft'] as int?;
+    final driveMinutesLeft = _intelligence['driveMinutesLeft'] as int?;
     final weather = _intelligence['weather'] as String?;
     final riskScore = _intelligence['riskScore'] as double?;
 
@@ -13846,14 +18564,13 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     const Text(
                       'Route Summary',
                       style: TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 18),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
                     ),
                     const Spacer(),
                     if (provider.isNotEmpty)
-                      Chip(
-                        label: Text(provider),
-                        padding: EdgeInsets.zero,
-                      ),
+                      Chip(label: Text(provider), padding: EdgeInsets.zero),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -13878,7 +18595,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 _labelValue('Distance', '${distanceMiles ?? "--"} mi'),
                 if (tollsUsd != null)
                   _labelValue(
-                      'Tolls', '\$${(tollsUsd as num).toStringAsFixed(2)}'),
+                    'Tolls',
+                    '\$${(tollsUsd as num).toStringAsFixed(2)}',
+                  ),
                 if (fuelGallons != null)
                   _labelValue('Fuel estimate', '$fuelGallons gal'),
                 if (live != null) ...[
@@ -13904,8 +18623,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               children: [
                 const Text(
                   'Drive Intelligence',
-                  style:
-                      TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 8),
                 // Time Left is derived from _intelligence['driveMinutesLeft'],
@@ -13930,8 +18648,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 children: [
                   const Text(
                     'Truck Warnings',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 8),
                   for (final w in warnings)
@@ -13940,8 +18657,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.warning_amber,
-                              size: 18, color: Colors.orange),
+                          const Icon(
+                            Icons.warning_amber,
+                            size: 18,
+                            color: Colors.orange,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(child: Text(w)),
                         ],
@@ -13971,9 +18691,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       Text(
                         'Route Restrictions',
                         style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.red),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.red,
+                        ),
                       ),
                     ],
                   ),
@@ -13984,8 +18705,11 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.error_outline,
-                              size: 16, color: Colors.red),
+                          const Icon(
+                            Icons.error_outline,
+                            size: 16,
+                            color: Colors.red,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -14014,14 +18738,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     const Text(
                       'Turn-by-Turn',
                       style: TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 16),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                     const Spacer(),
                     if (_navSteps.isNotEmpty)
                       Text(
                         'Step ${_currentStepIndex + 1}/${_navSteps.length}',
                         style: const TextStyle(
-                            fontSize: 12, color: Colors.grey),
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
                       ),
                   ],
                 ),
@@ -14032,10 +18760,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                   _navSteps.isNotEmpty
                       ? _navSteps[_currentStepIndex].instruction
                       : (steps != null && steps.isNotEmpty
-                          ? (steps[0] as Map<String, dynamic>)['instruction']
-                                  as String? ??
-                              'Continue'
-                          : 'Loading...'),
+                            ? (steps[0] as Map<String, dynamic>)['instruction']
+                                      as String? ??
+                                  'Continue'
+                            : 'Loading...'),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -14048,8 +18776,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       'Then: ${_navSteps[_currentStepIndex + 1].instruction}',
-                      style: const TextStyle(
-                          fontSize: 12, color: Colors.grey),
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                   ),
               ],
@@ -14084,17 +18811,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   // _TruckMapScreenState so they can read live state fields directly without
   // requiring extra wiring.
   //
-  // ⚠️  DEVELOPER NOTE — REPLACE STATIC DEMO DATA BEFORE SHIPPING:
-  //   Several values are hard-coded for demo/preview purposes.  Search for
-  //   the string "TODO(live-data)" in this file to find every location where
-  //   a static value should be replaced with a live data source.
-  //   For example:
-  //     • Next-step distance  → derive from _distanceToNextStep() / _navSteps
-  //     • Trip ETA / arrival  → compute from _tripProgressInfo
-  //     • Speed limit         → read _speedLimitMph
-  //     • Service chips list  → populate from _closestTruckStopsAhead
-  //     • Alert list          → populate from _navAlerts
-
   // ── GPS-style navigation overlay widgets ────────────────────────────────────
 
   /// Parses [roadName] into a structured [_HighwayShield] when it matches a
@@ -14107,13 +18823,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   _HighwayShield? _parseHighwayShield(String roadName) {
     final trimmed = roadName.trim();
     // Interstate
-    final interstate = RegExp(r'^I-(\d{1,3}[A-Z]?)$', caseSensitive: false);
+    final interstate = RegExp(
+      r'\b(?:I|Interstate)\s*-?\s*(\d{1,3}[A-Z]?)\b',
+      caseSensitive: false,
+    );
     var m = interstate.firstMatch(trimmed);
     if (m != null) {
       return _HighwayShield(_HighwayShieldType.interstate, m.group(1)!);
     }
     // US Highway
-    final us = RegExp(r'^US-(\d{1,3}[A-Z]?)$', caseSensitive: false);
+    final us = RegExp(
+      r'\b(?:US|U\.S\.)\s*-?\s*(\d{1,3}[A-Z]?)\b',
+      caseSensitive: false,
+    );
     m = us.firstMatch(trimmed);
     if (m != null) {
       return _HighwayShield(_HighwayShieldType.usHighway, m.group(1)!);
@@ -14124,14 +18846,18 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     //   group(3)/group(4) — for "SR/SH/Hwy nnn" patterns (e.g. "SR-520")
     // stateCode uses the actual matched prefix so the sign label is accurate.
     final state = RegExp(
-        r'^([A-Z]{2})-(\d{1,3}[A-Z]?)$|^(SR|SH|Hwy)\s*-?(\d{1,3}[A-Z]?)$',
-        caseSensitive: false);
+      r'\b([A-Z]{2})\s*-\s*(\d{1,3}[A-Z]?)\b|\b(SR|SH|Hwy)\s*-?\s*(\d{1,3}[A-Z]?)\b',
+      caseSensitive: false,
+    );
     m = state.firstMatch(trimmed);
     if (m != null) {
       final prefix = (m.group(1) ?? m.group(3) ?? 'ST').toUpperCase();
       final number = m.group(2) ?? m.group(4) ?? '';
       return _HighwayShield(
-          _HighwayShieldType.stateHighway, number, stateCode: prefix);
+        _HighwayShieldType.stateHighway,
+        number,
+        stateCode: prefix,
+      );
     }
     return null;
   }
@@ -14147,8 +18873,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   ///   • Interstate  — blue shield with red top-band and white text.
   ///   • US Highway  — black pentagon with white number and "US" label.
   ///   • State/Prov  — green rectangle with white route number.
-  Widget _buildHighwayShieldWidget(_HighwayShield shield,
-      {double fontSize = 11}) {
+  Widget _buildHighwayShieldWidget(
+    _HighwayShield shield, {
+    double fontSize = 11,
+  }) {
     switch (shield.type) {
       case _HighwayShieldType.interstate:
         // Classic blue/red Interstate shield
@@ -14166,7 +18894,9 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         // Green rounded-rectangle state sign
         return Container(
           padding: EdgeInsets.symmetric(
-              horizontal: fontSize * 0.55, vertical: fontSize * 0.25),
+            horizontal: fontSize * 0.55,
+            vertical: fontSize * 0.25,
+          ),
           decoration: BoxDecoration(
             color: const Color(0xFF1A7340),
             borderRadius: BorderRadius.circular(fontSize * 0.4),
@@ -14197,6 +18927,153 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           ),
         );
     }
+  }
+
+  /// Full-width live street header matching commercial GPS guidance layouts.
+  ///
+  /// The first line combines the maneuver action and the road being travelled;
+  /// the second line names the incoming route street. The live-region semantic
+  /// causes accessibility services to announce the change without stealing
+  /// focus from the map controls.
+  Widget _buildStreetGuidanceHeader(TopInstructionData data) {
+    final action = data.primaryText.trim();
+    final road = data.roadName.trim();
+    final headline = [action, road].where((part) => part.isNotEmpty).join(' ');
+    final towardRoad = data.towardRoadName?.trim();
+    final semanticLabel = [
+      headline,
+      if (towardRoad != null && towardRoad.isNotEmpty) 'toward $towardRoad',
+    ].join(', ');
+    final distanceLabel = _formatDistance(_distanceToNextStep());
+    final exitNumber = data.exitNumber?.trim();
+
+    final cardWidth = (MediaQuery.sizeOf(context).width * 0.68)
+        .clamp(250.0, 326.0)
+        .toDouble();
+
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Semantics(
+        liveRegion: true,
+        label: '$semanticLabel, $distanceLabel',
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: Container(
+            key: ValueKey<String>('$semanticLabel|$exitNumber'),
+            width: cardWidth,
+            margin: const EdgeInsets.fromLTRB(12, 10, 0, 0),
+            padding: const EdgeInsets.fromLTRB(13, 13, 13, 14),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xF7161618), Color(0xF72C2C2F)],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white24),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x70000000),
+                  blurRadius: 14,
+                  offset: Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  _maneuverVisualIcon(data.visualType),
+                  color: Colors.white,
+                  size: 52,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        action.isEmpty ? 'Continue' : action,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFB9B9BD),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        road.isEmpty ? 'Truck route' : road,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w900,
+                          height: 1.02,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      const SizedBox(height: 9),
+                      Text(
+                        distanceLabel,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 29,
+                          fontWeight: FontWeight.w900,
+                          height: 1,
+                        ),
+                      ),
+                      if (exitNumber != null &&
+                          exitNumber.isNotEmpty &&
+                          _navSettings.viewExit) ...[
+                        const SizedBox(height: 9),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF079447),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'EXIT $exitNumber',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ] else if (towardRoad != null &&
+                          towardRoad.isNotEmpty) ...[
+                        const SizedBox(height: 7),
+                        Text(
+                          'toward $towardRoad',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFFD7DCE2),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// GPS-style primary maneuver card shown at the top-left of the map
@@ -14273,8 +19150,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               _navSettings.viewExit) ...[
             const SizedBox(height: 6),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFF22C55E),
                 borderRadius: BorderRadius.circular(6),
@@ -14326,6 +19202,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Displays a "Then" label, the next maneuver icon, and the road name for
   /// the step after the current upcoming turn.
   Widget _buildSecondaryThenCard(TopInstructionData data) {
+    final exitNumber = data.exitNumber?.trim();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
@@ -14362,6 +19239,35 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               ),
             ),
           ),
+          const SizedBox(width: 7),
+          Text(
+            _formatMilesDisplay(data.distanceMiles),
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (exitNumber != null &&
+              exitNumber.isNotEmpty &&
+              _navSettings.viewExit) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A8F4D),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                'EXIT $exitNumber',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -14376,74 +19282,127 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget _buildBottomTripStrip() {
     final double milesLeft = _tripProgressInfo.milesRemaining;
     final Duration timeLeft = _tripProgressInfo.durationRemaining;
-    final DateTime eta = _tripProgressInfo.etaLocal;
 
-    final String milesStr = milesLeft < 10
-        ? milesLeft.toStringAsFixed(1)
-        : milesLeft.round().toString();
-
-    final int totalMinutes = timeLeft.inMinutes;
-    final String timeStr = totalMinutes >= 60
-        ? '${totalMinutes ~/ 60}h ${totalMinutes % 60}m'
-        : '${totalMinutes}m';
-
-    final int h = eta.hour % 12 == 0 ? 12 : eta.hour % 12;
-    final String etaStr =
-        '$h:${eta.minute.toString().padLeft(2, '0')} ${eta.hour < 12 ? 'AM' : 'PM'}';
+    final String milesStr = _formatRemainingDistance(milesLeft);
+    final String timeStr = _fmtDuration(timeLeft);
+    final String etaStr = _fmtArrival(_tripProgressInfo);
+    final String arrivalLabel = _tripProgressInfo.timezoneLabel.isEmpty
+        ? 'arrival'
+        : 'arrival ${_tripProgressInfo.timezoneLabel}';
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.84),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.white.withOpacity(0.97),
+        borderRadius: BorderRadius.circular(17),
         boxShadow: const [
           BoxShadow(
-              color: Colors.black54, blurRadius: 10, offset: Offset(0, 3)),
+            color: Color(0x40000000),
+            blurRadius: 14,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          _gpsStatCell('$milesStr mi', 'remaining'),
-          _gpsStripDivider(),
-          _gpsStatCell(timeStr, 'drive time'),
-          _gpsStripDivider(),
-          _gpsStatCell(etaStr, 'ETA'),
-          const SizedBox(width: 8),
-          // ── More button ──────────────────────────────────────────────
-          GestureDetector(
-            onTap: _showMoreMapFeaturesSheet,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.white12,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'More',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.asset(
+              'assets/images/semitrax_app_icon.png',
+              width: 48,
+              height: 48,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.high,
             ),
           ),
           const SizedBox(width: 8),
-          // ── Stop icon ────────────────────────────────────────────────
-          GestureDetector(
-            onTap: _stopNavigation,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFFD94A4A).withOpacity(0.85),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.stop_circle_outlined,
-                color: Colors.white,
-                size: 18,
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          milesStr,
+                          style: const TextStyle(
+                            color: Color(0xFF172049),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Container(
+                      width: 1,
+                      height: 21,
+                      margin: const EdgeInsets.symmetric(horizontal: 8),
+                      color: const Color(0xFFB6BAC5),
+                    ),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          timeStr,
+                          style: const TextStyle(
+                            color: Color(0xFF172049),
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$etaStr  •  $arrivalLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF747B91),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 7),
+          Semantics(
+            button: true,
+            label: 'More navigation controls',
+            child: Material(
+              color: const Color(0xFFE9EBF0),
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                onTap: _showMoreMapFeaturesSheet,
+                borderRadius: BorderRadius.circular(12),
+                child: const SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.keyboard_arrow_up_rounded,
+                        color: Color(0xFF59617B),
+                        size: 20,
+                      ),
+                      Text(
+                        'More',
+                        style: TextStyle(
+                          color: Color(0xFF59617B),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -14470,10 +19429,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         const SizedBox(height: 2),
         Text(
           label,
-          style: const TextStyle(
-            color: Colors.white54,
-            fontSize: 10,
-          ),
+          style: const TextStyle(color: Colors.white54, fontSize: 10),
         ),
       ],
     );
@@ -14498,95 +19454,88 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   Widget _buildCompactSpeedPanel() {
     final bool speedAvailable = _currentSpeedMps >= 0 && !_gpsStale;
     final double speedMph = speedAvailable ? _currentSpeedMps * _mpsToMph : 0.0;
-    final String speedLabel = speedAvailable ? speedMph.round().toString() : '--';
-    final double lat = _truckPosition?.latitude ?? 0.0;
-    final double lng = _truckPosition?.longitude ?? 0.0;
-    final double truckLimit = _getTruckSpeedLimit(_speedLimitMph, lat, lng);
-    final bool isOver = speedAvailable && speedMph > truckLimit;
+    final String speedLabel = speedAvailable
+        ? speedMph.round().toString()
+        : '--';
+    final double truckLimit = _getTruckSpeedLimit(_speedLimitMph);
+    final bool isOver =
+        speedAvailable && truckLimit > 0 && speedMph > truckLimit;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.84),
-        borderRadius: BorderRadius.circular(14),
-        // Orange border on GPS signal loss; no extra border otherwise.
-        border: _gpsStale
-            ? Border.all(color: Colors.orange, width: 2)
-            : null,
+        color: Colors.white.withOpacity(0.97),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(
+          color: _gpsStale ? Colors.orange : const Color(0xFF172049),
+          width: _gpsStale ? 2 : 1.5,
+        ),
         boxShadow: const [
-          BoxShadow(
-              color: Colors.black45, blurRadius: 8, offset: Offset(0, 3)),
+          BoxShadow(color: Colors.black45, blurRadius: 8, offset: Offset(0, 3)),
         ],
       ),
-      child: Column(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── GPS signal-loss indicator ─────────────────────────────────
-          if (_gpsStale)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.gps_off, color: Colors.orange, size: 12),
-                  SizedBox(width: 3),
-                  Text(
-                    'GPS',
-                    style: TextStyle(
-                      color: Colors.orange,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          // ── Current speed ─────────────────────────────────────────────
-          Text(
-            speedLabel,
-            style: TextStyle(
-              color: _gpsStale
-                  ? Colors.orange
-                  : isOver
-                      ? Colors.red
-                      : Colors.white,
-              fontSize: 32,
-              fontWeight: FontWeight.w800,
-              height: 1,
-            ),
-          ),
-          const Text(
-            'mph',
-            style: TextStyle(color: Colors.white54, fontSize: 11),
-          ),
-          const SizedBox(height: 6),
-          // ── Truck speed-limit badge ───────────────────────────────────
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+            width: 44,
+            height: 53,
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF172049), width: 2),
             ),
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Text(
+                  truckLimit > 0 ? truckLimit.round().toString() : '--',
+                  style: const TextStyle(
+                    color: Color(0xFF172049),
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
                 const Text(
                   'LIMIT',
                   style: TextStyle(
-                    color: Colors.black87,
+                    color: Color(0xFF172049),
                     fontSize: 8,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 7),
+          SizedBox(
+            width: 42,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_gpsStale)
+                  const Icon(Icons.gps_off, color: Colors.orange, size: 15),
                 Text(
-                  truckLimit.round().toString(),
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
+                  speedLabel,
+                  style: TextStyle(
+                    color: _gpsStale
+                        ? Colors.orange
+                        : isOver
+                        ? Colors.red
+                        : const Color(0xFF0864C9),
+                    fontSize: 25,
+                    fontWeight: FontWeight.w900,
                     height: 1,
+                  ),
+                ),
+                const Text(
+                  'MPH',
+                  style: TextStyle(
+                    color: Color(0xFF172049),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ],
@@ -14599,13 +19548,12 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
 
   // ── Top instruction card UI ───────────────────────────────────────────────
 
-  /// Right-edge panel: voice-mute button + speed panel, centered vertically.
+  /// Right-edge panel: zoom and voice controls, centered vertically.
   ///
   /// Only visible during active navigation.  The voice button toggles audio
   /// between Muted (0), Alert-Only (1), and Unmuted (2) in a cycle.
-  /// The speed panel is only rendered when [_navSettings.viewSpeedLimit] is on.
   Widget _buildRightCenterPanel() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    final showNavigationControls = _isNavigating || _routePreviewActive;
     final IconData voiceIcon = switch (_navSettings.audioMode) {
       0 => Icons.volume_off,
       1 => Icons.volume_down,
@@ -14621,35 +19569,30 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ── Voice toggle button ────────────────────────────────────
-              GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _navSettings.audioMode =
-                        (_navSettings.audioMode + 1) % 3;
-                  });
-                  _applyAudioSettings();
-                },
-                child: Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.72),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.28),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
+              _buildMapZoomControls(),
+              if (showNavigationControls) ...[
+                const SizedBox(height: 12),
+                // ── Voice toggle button ──────────────────────────────────
+                GestureDetector(
+                  onTap: _toggleVoiceMute,
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.72),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.28),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Icon(voiceIcon, color: Colors.white, size: 24),
                   ),
-                  child: Icon(voiceIcon, color: Colors.white, size: 24),
                 ),
-              ),
-              const SizedBox(height: 10),
-              // ── Speed panel ────────────────────────────────────────────
-              if (_navSettings.viewSpeedLimit) _buildCompactSpeedPanel(),
+              ],
             ],
           ),
         ),
@@ -14702,10 +19645,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 // Short action label, e.g. "Turn left onto"
                 Text(
                   data.primaryText,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
                 const SizedBox(height: 2),
                 // Upcoming road name — large and bold for at-a-glance reading
@@ -14743,20 +19683,16 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// next turn.  Only visible while [_isNavigating] is true and there are
   /// remaining steps.
   ///
-  /// Replace the hard-coded distance label with a call to
-  /// [_distanceToNextStep] and format it for the driver display.
-  /// TODO(live-data): replace '0.4 mi' with formatted _distanceToNextStep().
+  /// Uses [_distanceToNextStep] for the live maneuver distance.
   Widget _buildCompactNextStepCard() {
     // Only show during active navigation with available steps.
     if (!_isNavigating || _navSteps.isEmpty) return const SizedBox.shrink();
 
     // Clamp index to avoid out-of-bounds access on step list changes.
-    final int safeIndex =
-        _currentStepIndex.clamp(0, _navSteps.length - 1);
+    final int safeIndex = _currentStepIndex.clamp(0, _navSteps.length - 1);
     final _NavStep step = _navSteps[safeIndex];
 
-    // Format the distance-to-next-step in a human-readable string.
-    // TODO(live-data): replace this static label with real-time distance.
+    // Format the live distance-to-next-step in a human-readable string.
     final double distMeters = _distanceToNextStep();
     final String distLabel = distMeters < 160
         ? '${distMeters.round()} ft'
@@ -14789,11 +19725,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
           child: Row(
             children: [
               // ── Maneuver direction icon ────────────────────────────────
-              Icon(
-                _maneuverIcon(step.maneuver),
-                color: Colors.white,
-                size: 28,
-              ),
+              Icon(_maneuverIcon(step.maneuver), color: Colors.white, size: 28),
               const SizedBox(width: 10),
               // ── Road name + distance ───────────────────────────────────
               Expanded(
@@ -14844,15 +19776,14 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     // Current map bearing (degrees clockwise from north that is "up" on screen).
     final double bearing = _mapReady ? _mapController.camera.rotation : 0.0;
 
-    // When navigating, hug the top-right corner of the maneuver card
-    // (card: left:16, width:128 → right edge at 144; compass left = 144+8 = 152).
-    // When not navigating, stay in the standard top-right corner position.
-    final bool hugging = _isNavigating && _topInstructionData != null;
+    // During navigation the full-width street header owns the top edge, so the
+    // compass moves below it instead of obscuring the incoming-street text.
+    final bool guidanceVisible =
+        _isLiveRouteAssistanceActive && _topInstructionData != null;
 
     return Positioned(
-      top: hugging ? 16 : 18,
-      left: hugging ? 152 : null,
-      right: hugging ? null : 16,
+      top: guidanceVisible ? 120 : 18,
+      right: 16,
       child: SafeArea(
         bottom: false,
         child: GestureDetector(
@@ -14892,9 +19823,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Shows a map/satellite icon and switches the tile layer between
   /// street-map and satellite imagery when tapped.
   Widget _buildSatelliteToggle() {
+    final bool guidanceVisible =
+        _isLiveRouteAssistanceActive && _topInstructionData != null;
     return Positioned(
-      // top: 74 = compass top(18) + compass height(48) + gap(8).
-      top: 74,
+      top: guidanceVisible ? 176 : 74,
       right: 16,
       child: SafeArea(
         bottom: false,
@@ -14920,11 +19852,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               ],
             ),
             child: const Center(
-              child: Icon(
-                Icons.satellite_alt,
-                color: Colors.white,
-                size: 24,
-              ),
+              child: Icon(Icons.satellite_alt, color: Colors.white, size: 24),
             ),
           ),
         ),
@@ -14938,25 +19866,23 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Alerts are sourced from [_navAlerts].  Each chip is built by the private
   /// helper [_smallRightAlert].  Only visible during active navigation.
   ///
-  /// TODO(live-data): [_navAlerts] is seeded with sample data; replace with
-  /// a live alert feed (weather / traffic / restriction APIs).
+  /// [_navAlerts] is populated from route-matched safety providers.
   Widget _buildRightSideAlertStack() {
-    if (!_isNavigating || _navAlerts.isEmpty) return const SizedBox.shrink();
+    if (!_isLiveRouteAssistanceActive || _navAlerts.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     // Show at most 3 alerts to avoid cluttering the map viewport.
     final visibleAlerts = _navAlerts.take(3).toList();
 
     return Positioned(
-      // right: 16 matches standard horizontal screen margin.
-      right: 16,
-      // top: 118 aligns with lane guidance row so alerts start at the same
-      // vertical level, but won't overlap because the alert stack is right-anchored
-      // and lane guidance is center-anchored (no right-side content conflict).
-      top: 118,
+      left: 12,
+      // Keep safety cards below the current and "Then" maneuver headers.
+      top: _routeSafetyAlertTop,
       child: SafeArea(
         bottom: false,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (final alert in visibleAlerts) ...[
               _smallRightAlert(alert),
@@ -14974,8 +19900,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Displays the alert-type icon on the left and a short distance/label on
   /// the right, styled as a pill card with a coloured border.
   ///
-  /// TODO(live-data): replace the fallback '–' distance with a real value
-  /// derived from the alert's geographic position and the current truck location.
+  /// Displays an en dash only when a provider did not supply route distance.
   Widget _smallRightAlert(NavigationAlert alert) {
     // Map alert type to a recognisable Material icon.
     IconData alertIcon;
@@ -14984,6 +19909,10 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       case AlertType.weighStation:
         alertIcon = Icons.monitor_weight_outlined;
         alertColor = const Color(0xFFF57C00); // amber
+        break;
+      case AlertType.truckParking:
+        alertIcon = Icons.local_parking;
+        alertColor = const Color(0xFF1976D2);
         break;
       case AlertType.construction:
         alertIcon = Icons.construction_outlined;
@@ -15006,9 +19935,8 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
         alertColor = const Color(0xFF6C52A6); // brand purple
     }
 
-    // TODO(live-data): compute real distance to this alert from truck position.
     final String distText = alert.distanceMiles != null
-        ? '${alert.distanceMiles!.toStringAsFixed(1)} mi'
+        ? _formatRemainingDistance(alert.distanceMiles!)
         : '–';
 
     return Container(
@@ -15078,10 +20006,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Returns a whole number (e.g. `"12 mi"`) when [distance] is an integer,
   /// or one decimal place (e.g. `"13.5 mi"`) otherwise.
   String _formatChipDistance(double distance) {
-    if (distance % 1 == 0) {
-      return '${distance.toInt()} mi';
-    }
-    return '${distance.toStringAsFixed(1)} mi';
+    return _formatRemainingDistance(distance);
   }
 
   /// Returns the accent colour for an [UpcomingAlertType].
@@ -15130,73 +20055,118 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     final label = _upcomingAlertShortLabel(item.type);
     final distanceText = _formatChipDistance(item.distanceMiles);
 
-    return Container(
-      constraints: const BoxConstraints(
-        minWidth: 112,
-        maxWidth: 165,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
+    return Semantics(
+      button: true,
+      label: '${item.label}, $distanceText ahead. Tap for details.',
+      child: Material(
         color: Colors.black.withOpacity(0.84),
+        elevation: 4,
+        shadowColor: Colors.black45,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: accent.withOpacity(0.95),
-          width: 1.4,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withOpacity(0.18),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 22,
-            height: 22,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showUpcomingAlertDetails(item),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 112, maxWidth: 165),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.14),
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: accent.withOpacity(0.95), width: 1.4),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withOpacity(0.18),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-            child: Icon(
-              _upcomingAlertIcon(item.type),
-              color: accent,
-              size: 14,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _upcomingAlertIcon(item.type),
+                    color: accent,
+                    size: 14,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: RichText(
+                    overflow: TextOverflow.ellipsis,
+                    text: TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '$label ',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        TextSpan(
+                          text: distanceText,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: RichText(
-              overflow: TextOverflow.ellipsis,
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: '$label ',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  TextSpan(
-                    text: distanceText,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        ),
+      ),
+    );
+  }
+
+  void _showUpcomingAlertDetails(UpcomingAlertItem item) {
+    NavigationAlert? alert;
+    for (final candidate in _navAlerts) {
+      if (candidate.id == item.sourceAlertId) {
+        alert = candidate;
+        break;
+      }
+    }
+    final detail = alert;
+    final accent = _upcomingAlertAccent(item.type);
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(_upcomingAlertIcon(item.type), color: accent),
+            const SizedBox(width: 10),
+            Expanded(child: Text(detail?.title ?? item.label)),
+          ],
+        ),
+        content: Text(
+          [
+            '${_formatChipDistance(item.distanceMiles)} ahead',
+            if ((detail?.roadName ?? '').trim().isNotEmpty)
+              'Road: ${detail!.roadName!.trim()}',
+            if ((detail?.subtitle ?? '').trim().isNotEmpty)
+              detail!.subtitle!.trim(),
+            if ((detail?.message ?? '').trim().isNotEmpty)
+              detail!.message!.trim(),
+            if ((detail?.suggestedAction ?? '').trim().isNotEmpty)
+              'Driver action: ${detail!.suggestedAction!.trim()}',
+          ].join('\n\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
           ),
         ],
       ),
@@ -15218,20 +20188,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// [_onGpsPosition].
   Widget _buildRightSideUpcomingAlerts() {
     // Guard: only render during active navigation with alerts available.
-    if (!_isNavigating || _upcomingAlerts.isEmpty) {
+    if (!_isLiveRouteAssistanceActive || _upcomingAlerts.isEmpty) {
       return const SizedBox.shrink();
     }
 
     return Positioned(
-      // top: 120 aligns with the compass button bottom edge + gap, ensuring
-      // chips never overlap the instruction card at the top-left.
-      top: 120,
-      // right: 16 matches the standard horizontal screen margin.
-      right: 16,
+      // Keep the nearest route hazards in a stable left-side rail below the
+      // maneuver header, matching established commercial GPS scan patterns.
+      top: _routeSafetyAlertTop,
+      left: 12,
       child: SafeArea(
         bottom: false,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: _upcomingAlerts.take(3).map((item) {
             return Padding(
               padding: const EdgeInsets.only(bottom: 9),
@@ -15243,126 +20212,431 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 
-  /// Horizontally scrollable row of compact service / truckstop chips shown
-  /// at the bottom of the map during active navigation.
-  ///
-  /// Each chip is built by [_serviceChip].  Chips are sourced from
-  /// [_closestTruckStopsAhead] — the list is already sorted by distance ahead
-  /// and limited to the two closest stops.
+  /// Compact vertical rail of the next commercial truck stops shown directly
+  /// below the maneuver guidance during active navigation.
   ///
   /// Only visible when navigating and at least one ahead-stop is available.
   ///
-  /// TODO(live-data): [_closestTruckStopsAhead] is populated by
-  /// [_refreshClosestTruckStops].  Ensure that method is called on every GPS
-  /// update and that the POI dataset includes your desired service categories.
-  Widget _buildBottomServiceChips() {
-    if (!_isNavigating || _closestTruckStopsAhead.isEmpty) {
+  /// [_closestTruckStopsAhead] is refreshed from route-matched POIs on GPS
+  /// updates.
+  Widget _buildTruckStopAheadRail() {
+    if (!_drivingUiActive ||
+        !_navSettings.viewPoiAhead ||
+        _closestTruckStopsAhead.isEmpty) {
       return const SizedBox.shrink();
     }
 
     return Positioned(
-      left: 0,
-      right: 0,
-      // Float above the main alert/trip strip area.
-      bottom: 168,
+      left: 12,
+      // Keep commercial fuel/truck-stop cards close to the trip summary so
+      // weigh stations and rest areas retain the higher safety-priority lane.
+      bottom: 170 + _drivingBottomCardLift,
       child: SafeArea(
         top: false,
-        child: SizedBox(
-          height: 52,
-          child: ListView.builder(
-            // Horizontal scroll so a long list stays accessible.
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            itemCount: _closestTruckStopsAhead.length,
-            itemBuilder: (context, index) {
-              final AheadTruckStop ahead = _closestTruckStopsAhead[index];
-              return _serviceChip(ahead);
-            },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: _closestTruckStopsAhead.take(2).map((ahead) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _truckStopAheadChip(ahead),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  double get _weighStationAheadRailHeight =>
+      _navSettings.viewWeighStation &&
+          _isLiveRouteAssistanceActive &&
+          _closestWeighStationsAhead.isNotEmpty
+      ? 54
+      : 0;
+
+  double get _restAreaAheadRailHeight =>
+      _isLiveRouteAssistanceActive && _closestRestAreasAhead.isNotEmpty
+      ? math.min(_closestRestAreasAhead.length, 2) * 52.0
+      : 0;
+
+  double get _routeSafetyAlertTop =>
+      218 + _weighStationAheadRailHeight + _restAreaAheadRailHeight + 18;
+
+  /// Builds a single compact, tappable truck-stop-ahead chip.
+  ///
+  /// The collapsed state intentionally contains only the provider marker,
+  /// highway exit number, and distance. Full commercial-stop details are
+  /// available from [_showAheadTruckStopSheet] when the driver taps it.
+  Widget _truckStopAheadChip(AheadTruckStop ahead) {
+    final String milesText = ahead.routeMilesAhead < 10
+        ? '${ahead.routeMilesAhead.toStringAsFixed(1)} mi'
+        : '${ahead.routeMilesAhead.round()} mi';
+    final String exitText = (ahead.poi.exitNumber ?? '').trim();
+
+    // Resolve the brand logo bytes (may be null if not yet loaded).
+    final Uint8List? logoBytes =
+        _brandIconBytes['assets/logo_brand_markers/${ahead.poi.logoName}.png'] ??
+        _brandIconBytes['assets/logo_brand_markers/truck_parking.png'];
+    final normalizedLogoName = ahead.poi.logoName.toLowerCase();
+    // Source brand PNGs use differently sized transparent canvases. Scale
+    // their visible artwork into one consistent, legible compact marker.
+    final logoScale = normalizedLogoName.contains('ta_truck_stop')
+        ? 2.4
+        : normalizedLogoName.contains('petro')
+        ? 1.75
+        : 1.9;
+
+    return Semantics(
+      button: true,
+      label:
+          '${ahead.poi.name}, ${exitText.isEmpty ? 'exit not reported' : 'exit $exitText'}, $milesText ahead. Tap for details.',
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.86),
+        elevation: 5,
+        shadowColor: Colors.black45,
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(13),
+          onTap: () => _showAheadTruckStopSheet(ahead),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48, maxWidth: 154),
+            padding: const EdgeInsets.fromLTRB(8, 6, 10, 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: const Color(0xFF22C55E).withValues(alpha: 0.88),
+                width: 1.2,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF22C55E),
+                      width: 1.4,
+                    ),
+                  ),
+                  child: ClipOval(
+                    child: logoBytes != null
+                        ? Transform.scale(
+                            scale: logoScale,
+                            child: Image.memory(
+                              logoBytes,
+                              width: 32,
+                              height: 32,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.high,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.local_gas_station_rounded,
+                                size: 18,
+                                color: Color(0xFF159A55),
+                              ),
+                            ),
+                          )
+                        : const Icon(
+                            Icons.local_gas_station_rounded,
+                            size: 18,
+                            color: Color(0xFF159A55),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (exitText.isNotEmpty) ...[
+                  SizedBox(
+                    width: 36,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'EXIT',
+                          style: TextStyle(
+                            color: Color(0xFF7BE3A8),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                            letterSpacing: 0.7,
+                          ),
+                        ),
+                        Text(
+                          exitText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            height: 1.15,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  milesText,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// Builds a single service chip for [_buildBottomServiceChips].
-  ///
-  /// Displays the brand logo (or a fallback icon when the asset is not yet
-  /// loaded), the brand name, and the route distance ahead formatted as miles.
-  ///
-  /// TODO(live-data): logo bytes come from [_brandIconBytes] which is populated
-  /// in [_loadBrandIcons].  Ensure all desired logos are present in
-  /// `assets/logos/` and listed in `pubspec.yaml`.
-  Widget _serviceChip(AheadTruckStop ahead) {
-    // Distance ahead formatted for compact display.
-    final String milesText =
-        ahead.routeMilesAhead < 10
-            ? '${ahead.routeMilesAhead.toStringAsFixed(1)} mi'
-            : '${ahead.routeMilesAhead.round()} mi';
+  void _showAheadTruckStopSheet(AheadTruckStop ahead) {
+    final stop = ahead.poi;
+    final estimatedDuration = _estimatedDurationToAheadStop(ahead);
+    final canInsertIntoNativeRoute =
+        _nativeNavigationStatus?.truckSafeGuidanceAvailable == true &&
+        (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
+            _nativeNavigationPhase == NativeNavigationPhase.previewing ||
+            _nativeNavigationPhase == NativeNavigationPhase.rerouting);
 
-    // Resolve the brand logo bytes (may be null if not yet loaded).
-    final Uint8List? logoBytes =
-        _brandIconBytes['assets/logo_brand_markers/${ahead.poi.logoName}.png'] ??
-        _brandIconBytes['assets/logo_brand_markers/truck_parking.png'];
-
-    return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.14),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Brand logo ───────────────────────────────────────────────
-          if (logoBytes != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.memory(
-                logoBytes,
-                width: 24,
-                height: 24,
-                fit: BoxFit.contain,
-              ),
-            )
-          else
-            const Icon(Icons.local_gas_station_outlined,
-                size: 22, color: Color(0xFF6C52A6)),
-          const SizedBox(width: 6),
-          // ── Stop name + distance ─────────────────────────────────────
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                ahead.poi.name,
-                style: const TextStyle(
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE7F2FF),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.local_shipping_rounded,
+                      color: Color(0xFF0969E8),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.name,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF122131),
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _formatRemainingDistance(ahead.routeMilesAhead),
+                          style: const TextStyle(
+                            color: Color(0xFF0969E8),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if ((stop.locationName ?? '').trim().isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _truckStopDetailRow(
+                  Icons.location_on_outlined,
+                  stop.locationName!.trim(),
+                ),
+              ],
+              if ((stop.address ?? '').trim().isNotEmpty)
+                _truckStopDetailRow(
+                  Icons.signpost_outlined,
+                  stop.address!.trim(),
+                ),
+              if ((stop.exitNumber ?? '').trim().isNotEmpty)
+                _truckStopDetailRow(
+                  Icons.exit_to_app_rounded,
+                  'Exit ${stop.exitNumber}',
+                ),
+              if (estimatedDuration != null)
+                _truckStopDetailRow(
+                  Icons.schedule_rounded,
+                  'Estimated ${_fmtDuration(estimatedDuration)} ahead',
+                ),
+              _truckStopDetailRow(
+                Icons.access_time_rounded,
+                [
+                  switch (stop.openNow) {
+                    true => 'Open now',
+                    false => 'Closed now',
+                    null => 'Operating status unknown',
+                  },
+                  if ((stop.openingHours ?? '').trim().isNotEmpty)
+                    stop.openingHours!.trim(),
+                ].join(' • '),
+              ),
+              if (stop.dieselPrice != null)
+                _truckStopDetailRow(
+                  Icons.local_gas_station_rounded,
+                  'Diesel: \$${stop.dieselPrice!.toStringAsFixed(2)}/gal',
+                ),
+              if (stop.defPrice != null)
+                _truckStopDetailRow(
+                  Icons.opacity_rounded,
+                  'DEF: \$${stop.defPrice!.toStringAsFixed(2)}/gal',
+                ),
+              _truckStopDetailRow(
+                Icons.local_parking_rounded,
+                (stop.parkingStatus ?? '').trim().isNotEmpty ||
+                        stop.truckParkingSpaces != null
+                    ? [
+                        if ((stop.parkingStatus ?? '').trim().isNotEmpty)
+                          'Truck parking: ${stop.parkingStatus!.trim()}',
+                        if (stop.truckParkingSpaces != null)
+                          '${stop.truckParkingSpaces} spaces',
+                      ].join(' • ')
+                    : 'Truck parking availability not reported',
+              ),
+              if (stop.amenities.isNotEmpty)
+                _truckStopDetailRow(
+                  Icons.storefront_rounded,
+                  stop.amenities.join(' • '),
+                ),
+              _truckStopDetailRow(
+                stop.verified
+                    ? Icons.verified_rounded
+                    : Icons.info_outline_rounded,
+                stop.verified
+                    ? 'Verified commercial truck location'
+                    : 'Provider location; truck entrance not verified',
+              ),
+              if ((stop.dataSource ?? '').trim().isNotEmpty)
+                _truckStopDetailRow(
+                  Icons.storage_rounded,
+                  'Source: ${stop.dataSource}',
+                ),
+              const SizedBox(height: 14),
+              const Text(
+                'Fuel price, parking availability, hours, and amenities are shown only when supplied by an authenticated provider.',
+                style: TextStyle(
+                  color: Color(0xFF65717E),
                   fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
+                  height: 1.35,
                 ),
               ),
-              Text(
-                milesText,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.black.withOpacity(0.50),
-                ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      onPressed: canInsertIntoNativeRoute
+                          ? () async {
+                              Navigator.pop(sheetContext);
+                              await _addTruckStopToNativeRoute(ahead);
+                            }
+                          : null,
+                      icon: const Icon(Icons.add_location_alt_rounded),
+                      label: Text(
+                        canInsertIntoNativeRoute
+                            ? 'Add Stop'
+                            : 'Add Stop needs HERE Navigate',
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _truckStopDetailRow(IconData icon, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 19, color: const Color(0xFF526273)),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: Color(0xFF263646),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// Estimates time-to-stop from live route progress. This is a route-time
+  /// proportion, not provider operating data, and is omitted when progress is
+  /// unavailable rather than inventing an arrival estimate.
+  Duration? _estimatedDurationToAheadStop(AheadTruckStop ahead) {
+    final routeMilesLeft = _tripProgressInfo.milesRemaining;
+    final routeTimeLeft = _tripProgressInfo.durationRemaining;
+    if (!routeMilesLeft.isFinite ||
+        routeMilesLeft <= 0 ||
+        routeTimeLeft <= Duration.zero ||
+        !ahead.routeMilesAhead.isFinite ||
+        ahead.routeMilesAhead < 0) {
+      return null;
+    }
+    final ratio = (ahead.routeMilesAhead / routeMilesLeft).clamp(0.0, 1.0);
+    return Duration(seconds: (routeTimeLeft.inSeconds * ratio).round());
+  }
+
+  Future<void> _addTruckStopToNativeRoute(AheadTruckStop ahead) async {
+    try {
+      await NativeNavigationService.instance.addWaypoint(
+        ahead.poi.id,
+        ahead.poi.latitude,
+        ahead.poi.longitude,
+      );
+      await _requestReroute(
+        _truckPosition ?? LatLng(ahead.poi.latitude, ahead.poi.longitude),
+        reason: 'waypoint-added',
+      );
+      if (!mounted) return;
+      _showSnack('${ahead.poi.name} added to the active truck route.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'Unable to add truck stop: $error');
+    }
   }
 
   /// Compact trip-stats strip anchored to the bottom of the screen.
@@ -15378,29 +20652,19 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
   /// Values are read from [_tripProgressInfo], which is recalculated on every
   /// GPS tick by [_refreshTripProgress] while [_isNavigating] is true.
   Widget _buildCompactTripStrip() {
-    if (!_isNavigating) return const SizedBox.shrink();
+    if (!_drivingUiActive) return const SizedBox.shrink();
 
     // ── Derive display values from live trip progress ──────────────────────
     // _tripProgressInfo is updated on every GPS fix by _refreshTripProgress().
     final double milesLeft = _tripProgressInfo.milesRemaining;
     final Duration timeLeft = _tripProgressInfo.durationRemaining;
-    final DateTime eta = _tripProgressInfo.etaLocal;
 
-    // Format miles remaining.
-    final String milesStr = milesLeft < 10
-        ? milesLeft.toStringAsFixed(1)
-        : milesLeft.round().toString();
-
-    // Format drive time remaining: "1 h 24 m" or "38 m".
-    final int totalMinutes = timeLeft.inMinutes;
-    final String timeStr = totalMinutes >= 60
-        ? '${totalMinutes ~/ 60} h ${totalMinutes % 60} m'
-        : '$totalMinutes m';
-
-    // Format ETA as local hh:mm with AM/PM.
-    final String etaStr =
-        '${eta.hour % 12 == 0 ? 12 : eta.hour % 12}:${eta.minute.toString().padLeft(2, '0')} '
-        '${eta.hour < 12 ? 'AM' : 'PM'}';
+    final String milesStr = _formatRemainingDistance(milesLeft);
+    final String timeStr = _fmtDuration(timeLeft);
+    final String etaStr = _fmtArrival(_tripProgressInfo);
+    final String arrivalLabel = _tripProgressInfo.timezoneLabel.isEmpty
+        ? 'arrival'
+        : 'arrival ${_tripProgressInfo.timezoneLabel}';
 
     return Positioned(
       left: 0,
@@ -15409,8 +20673,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
       child: SafeArea(
         top: false,
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             color: Colors.white.withOpacity(0.96),
             boxShadow: [
@@ -15427,7 +20690,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
               Expanded(
                 child: _compactTripStat(
                   Icons.straighten_outlined,
-                  '$milesStr mi',
+                  milesStr,
                   'remaining',
                 ),
               ),
@@ -15446,7 +20709,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 child: _compactTripStat(
                   Icons.flag_outlined,
                   etaStr,
-                  'arrival',
+                  arrivalLabel,
                 ),
               ),
               // ── Expand / more button ─────────────────────────────────
@@ -15526,11 +20789,17 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     if (!_isNavigating) return const SizedBox.shrink();
     if (!_navSettings.viewSpeedLimit) return const SizedBox.shrink();
 
-    final double speedMph =
-        _currentSpeedMps >= 0 ? _currentSpeedMps * _mpsToMph : 0.0;
+    final double speedMph = _currentSpeedMps >= 0
+        ? _currentSpeedMps * _mpsToMph
+        : 0.0;
     final int speedInt = speedMph.round();
-    final int limitInt = _speedLimitMph.round();
-    final bool isOverSpeed = _currentSpeedMps >= 0 && speedMph > _speedLimitMph;
+    final String limitLabel = _speedLimitMph > 0
+        ? _speedLimitMph.round().toString()
+        : '--';
+    final bool isOverSpeed =
+        _currentSpeedMps >= 0 &&
+        _speedLimitMph > 0 &&
+        speedMph > _speedLimitMph;
 
     return Container(
       width: 82,
@@ -15589,7 +20858,7 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '$limitInt',
+                  limitLabel,
                   style: const TextStyle(
                     color: Colors.black,
                     fontSize: 34,
@@ -15605,7 +20874,6 @@ class _TruckMapScreenState extends State<TruckMapScreen> {
     );
   }
 }
-
 
 /// A single turn-by-turn navigation step, holding the driver instruction text,
 /// the geographic location of the maneuver, the maneuver modifier (e.g.
@@ -15626,6 +20894,8 @@ class _NavStep {
     this.distanceMeters = 0.0,
     this.name = '',
     this.exitNumber,
+    this.currentRoadName,
+    this.nextRoadName,
   });
 
   /// Human-readable turn instruction, e.g. "Turn left onto Main St".
@@ -15652,6 +20922,12 @@ class _NavStep {
   /// Highway exit number for this step, e.g. "13", from the Mapbox
   /// Directions API `exits` field.  Null when no exit number is available.
   final String? exitNumber;
+
+  /// Provider road before this maneuver, when supplied by HERE.
+  final String? currentRoadName;
+
+  /// Provider road after this maneuver, when supplied by HERE.
+  final String? nextRoadName;
 }
 
 // ── Closest-truck-stops-ahead models ──────────────────────────────────────────
@@ -15671,6 +20947,7 @@ class RoutePoint {
 /// the chip widget can load it as `assets/logo_brand_markers/{logoName}.png`.
 class TruckStopPoi {
   final String id;
+
   /// Full display name of the truck stop, e.g. "Pilot Travel Center - Portland".
   final String name;
   final String brand;
@@ -15678,6 +20955,17 @@ class TruckStopPoi {
   final double latitude;
   final double longitude;
   final String? locationName;
+  final String? address;
+  final String? dataSource;
+  final bool verified;
+  final bool? openNow;
+  final String? openingHours;
+  final double? dieselPrice;
+  final double? defPrice;
+  final String? parkingStatus;
+  final int? truckParkingSpaces;
+  final List<String> amenities;
+
   /// Highway exit number nearest to this stop, e.g. "309".
   final String? exitNumber;
 
@@ -15689,6 +20977,16 @@ class TruckStopPoi {
     required this.latitude,
     required this.longitude,
     this.locationName,
+    this.address,
+    this.dataSource,
+    this.verified = false,
+    this.openNow,
+    this.openingHours,
+    this.dieselPrice,
+    this.defPrice,
+    this.parkingStatus,
+    this.truckParkingSpaces,
+    this.amenities = const [],
     this.exitNumber,
   });
 }
@@ -15775,8 +21073,9 @@ class ClosestTruckStopChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String abbr = _truckStopBrandAbbr(logoName);
-    final String milesNum =
-        miles < 10 ? miles.toStringAsFixed(1) : miles.round().toString();
+    final String milesNum = miles < 10
+        ? miles.toStringAsFixed(1)
+        : miles.round().toString();
     final bool isApproaching = miles < 2.0;
 
     // ── White rounded card ─────────────────────────────────────────────────
@@ -15808,10 +21107,7 @@ class ClosestTruckStopChip extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: Colors.white,
-                  border: Border.all(
-                    color: const Color(0xFFCC0000),
-                    width: 2,
-                  ),
+                  border: Border.all(color: const Color(0xFFCC0000), width: 2),
                 ),
                 child: Center(
                   child: Text(
@@ -15878,10 +21174,7 @@ class ClosestTruckStopChip extends StatelessWidget {
     );
 
     if (exitNumber == null || exitNumber!.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 10.0),
-        child: card,
-      );
+      return Padding(padding: const EdgeInsets.only(bottom: 10.0), child: card);
     }
 
     // ── Green exit badge overlaid at the top edge of the white card ────────
@@ -15895,8 +21188,7 @@ class ClosestTruckStopChip extends StatelessWidget {
           Positioned(
             top: -12,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 color: const Color(0xFF2E7D32),
                 borderRadius: BorderRadius.circular(8),
@@ -15904,11 +21196,7 @@ class ClosestTruckStopChip extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
-                    Icons.arrow_upward,
-                    color: Colors.white,
-                    size: 11,
-                  ),
+                  const Icon(Icons.arrow_upward, color: Colors.white, size: 11),
                   const SizedBox(width: 3),
                   Text(
                     exitNumber!,
@@ -16048,7 +21336,7 @@ class TruckStop {
   final String? exitNumber;
 }
 
-// ── Map POI types, model, and sample data ─────────────────────────────────────
+// ── Live map POI types and model ─────────────────────────────────────────────
 
 /// Classifies the kind of truck-relevant point of interest shown on the map.
 enum PoiType {
@@ -16076,6 +21364,7 @@ class MapPoi {
     required this.type,
     required this.name,
     required this.status,
+    this.weighStation,
   });
 
   /// Unique identifier — also used as the alert-deduplication key.
@@ -16092,202 +21381,12 @@ class MapPoi {
 
   /// Operational status string, e.g. "Open", "Closed", "Bypass Required".
   final String status;
+
+  /// Complete sourced weigh-station metadata when this POI came from the
+  /// official/community-status service. Null for other POI types and older
+  /// bundled records.
+  final live_ws.WeighStation? weighStation;
 }
-
-/// DEMO data — approximate corridor positions only; not from verified sources.
-///
-/// Sample [MapPoi] data used when no live feed is available.
-///
-/// Covers key locations along the Portland OR → Winnemucca NV corridor so
-/// drivers see real-world-style alerts immediately after launch.  Replace or
-/// augment this list with live API data as the backend matures.
-///
-/// **Important:** [_buildPoiMarkers] suppresses these entries as soon as
-/// [_loadedPois] contains real weigh-station data from `assets/locations.json`,
-/// so these approximate coordinates are never shown alongside verified POIs.
-/// Do not use these coordinates for production routing or compliance decisions.
-const List<MapPoi> _sampleMapPois = [
-  // ── DEMO weigh stations ──────────────────────────────────────────────────
-  // Approximate positions on the Portland OR → Winnemucca NV demo corridor
-  // (I-84 → US-95).  These are sample/demo coordinates — not verified
-  // truck-entrance GPS fixes.  Suppressed at runtime when real data loads.
-  MapPoi(
-    id: 'ws_woodburn_or',
-    position: LatLng(45.155102, -122.855683),
-    type: PoiType.weighStation,
-    name: 'Woodburn Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_cascade_locks_or',
-    position: LatLng(45.670183, -121.895347),
-    type: PoiType.weighStation,
-    name: 'Cascade Locks Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_biggs_or',
-    position: LatLng(45.664825, -120.827934),
-    type: PoiType.weighStation,
-    name: 'Biggs Junction Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_pendleton_or',
-    position: LatLng(45.677963, -118.789784),
-    type: PoiType.weighStation,
-    name: 'Pendleton Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_ontario_or',
-    position: LatLng(44.027314, -116.975421),
-    type: PoiType.weighStation,
-    name: 'Ontario Port of Entry',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_winnemucca_nv',
-    position: LatLng(40.973642, -117.730118),
-    type: PoiType.weighStation,
-    name: 'Winnemucca Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_battle_mountain_nv',
-    position: LatLng(40.641293, -116.934475),
-    type: PoiType.weighStation,
-    name: 'Battle Mountain Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_elko_nv',
-    position: LatLng(40.831047, -115.762836),
-    type: PoiType.weighStation,
-    name: 'Elko Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_wells_nv',
-    position: LatLng(41.113274, -114.962853),
-    type: PoiType.weighStation,
-    name: 'Wells Port of Entry',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_siskiyou_or',
-    position: LatLng(42.065219, -122.546783),
-    type: PoiType.weighStation,
-    name: 'Siskiyou Summit Weigh Station',
-    status: 'Open',
-  ),
-  MapPoi(
-    id: 'ws_lovelock_nv',
-    position: LatLng(40.179038, -118.473162),
-    type: PoiType.weighStation,
-    name: 'Lovelock Weigh Station',
-    status: 'Open',
-  ),
-  // ── Police / enforcement ─────────────────────────────────────────────────
-  MapPoi(
-    id: 'police_grants_pass_or',
-    position: LatLng(42.441356, -123.328932),
-    type: PoiType.police,
-    name: 'Grants Pass Enforcement Zone',
-    status: 'Active',
-  ),
-  MapPoi(
-    id: 'police_winnemucca_nv',
-    position: LatLng(40.973127, -117.734861),
-    type: PoiType.police,
-    name: 'Winnemucca Truck Inspection',
-    status: 'Active',
-  ),
-  // ── Port of entry ────────────────────────────────────────────────────────
-  MapPoi(
-    id: 'poe_oregon_california',
-    position: LatLng(41.997934, -122.511742),
-    type: PoiType.portOfEntry,
-    name: 'Oregon / California Port of Entry',
-    status: 'Open',
-  ),
-];
-
-// ── Sample truck restriction data ─────────────────────────────────────────────
-
-/// Sample [TruckRestriction] objects covering key restrictions along the
-/// Portland OR → Winnemucca NV corridor.
-///
-/// Each entry is positioned at or near a real-world restriction type so that
-/// drivers see meaningful warnings immediately after launch.  Coordinates are
-/// placed at major highway points on the I-5 / I-80 corridor.  Replace or
-/// augment this list with a live API feed as the backend matures.
-const List<TruckRestriction> _sampleRestrictions = [
-  // ── Low bridges ───────────────────────────────────────────────────────────
-  TruckRestriction(
-    id: 'bridge_portland_burnside',
-    position: LatLng(45.523, -122.676),
-    type: RestrictionType.lowBridge,
-    name: 'Burnside Bridge – Portland',
-    description: 'Historic bridge with reduced vertical clearance on approach roads.',
-    limitValue: 12.8,
-    limitUnit: 'ft',
-  ),
-  TruckRestriction(
-    id: 'bridge_medford_or',
-    position: LatLng(42.327, -122.874),
-    type: RestrictionType.lowBridge,
-    name: 'Medford Underpass',
-    description: 'Railroad overpass on downtown connector route.',
-    limitValue: 13.2,
-    limitUnit: 'ft',
-  ),
-  // ── Weight limits ─────────────────────────────────────────────────────────
-  TruckRestriction(
-    id: 'weight_ashland_or',
-    position: LatLng(42.195, -122.699),
-    type: RestrictionType.weightLimit,
-    name: 'Ashland Weight-Restricted Road',
-    description: 'Local road with posted weight limit due to bridge condition.',
-    limitValue: 36.0,
-    limitUnit: 'tons',
-  ),
-  TruckRestriction(
-    id: 'weight_winnemucca_nv',
-    position: LatLng(40.973, -117.740),
-    type: RestrictionType.weightLimit,
-    name: 'Winnemucca Access Road',
-    description: 'Seasonal weight limit in effect — reduced load bearing.',
-    limitValue: 38.0,
-    limitUnit: 'tons',
-  ),
-  // ── Length limits ─────────────────────────────────────────────────────────
-  TruckRestriction(
-    id: 'length_yreka_ca',
-    position: LatLng(41.740, -122.636),
-    type: RestrictionType.lengthLimit,
-    name: 'Yreka Downtown Length Restriction',
-    description: 'No vehicles over 65 ft on city centre streets.',
-    limitValue: 65.0,
-    limitUnit: 'ft',
-  ),
-  // ── No-truck roads ────────────────────────────────────────────────────────
-  TruckRestriction(
-    id: 'notruck_redding_ca',
-    position: LatLng(40.587, -122.391),
-    type: RestrictionType.noTruckRoad,
-    name: 'Redding Residential No-Truck Zone',
-    description: 'Residential street — commercial trucks prohibited by ordinance.',
-  ),
-  // ── Hazmat restrictions ───────────────────────────────────────────────────
-  TruckRestriction(
-    id: 'hazmat_grants_pass_or',
-    position: LatLng(42.440, -123.330),
-    type: RestrictionType.hazmatRestriction,
-    name: 'Grants Pass Hazmat Corridor',
-    description: 'Transportation of hazardous materials restricted through this zone.',
-  ),
-];
 
 // ── Destination search model ──────────────────────────────────────────────────
 
@@ -16311,6 +21410,31 @@ class PlaceSuggestion {
 
   /// Geographic coordinate of the place.
   final LatLng position;
+}
+
+/// Result returned after the destination-search sheet has completely closed.
+/// Keeping the next navigation action outside the sheet prevents overlapping
+/// modal-route teardown, which can leave inherited widget dependents active.
+class _DestinationSearchSelection {
+  const _DestinationSearchSelection.place(this.suggestion)
+    : category = null,
+      title = null,
+      showMore = false;
+
+  const _DestinationSearchSelection.category(this.category, this.title)
+    : suggestion = null,
+      showMore = false;
+
+  const _DestinationSearchSelection.more()
+    : suggestion = null,
+      category = null,
+      title = null,
+      showMore = true;
+
+  final PlaceSuggestion? suggestion;
+  final String? category;
+  final String? title;
+  final bool showMore;
 }
 
 // ── Route alternatives model ──────────────────────────────────────────────────
@@ -16354,7 +21478,7 @@ class RouteOption {
   /// Number of truck restrictions along this route.
   final int restrictionCount;
 
-  /// Number of fuel stops (non-rest-area truck stops) within 5 km of route.
+  /// Number of verified commercial truck stops within 5 km of route.
   final int fuelStopCount;
 
   /// Number of weigh stations within 5 km of route.
@@ -16362,6 +21486,20 @@ class RouteOption {
 
   /// Legacy route data map used by the route info panel and preview panel.
   final Map<String, dynamic> routeData;
+  RouteOption copyWith({int? weighStationCount, int? fuelStopCount}) {
+    return RouteOption(
+      id: id,
+      label: label,
+      points: points,
+      steps: steps,
+      distanceMiles: distanceMiles,
+      durationSeconds: durationSeconds,
+      restrictionCount: restrictionCount,
+      fuelStopCount: fuelStopCount ?? this.fuelStopCount,
+      weighStationCount: weighStationCount ?? this.weighStationCount,
+      routeData: routeData,
+    );
+  }
 }
 
 // ── Multi-stop leg models ─────────────────────────────────────────────────────
@@ -16373,11 +21511,18 @@ class RouteOption {
 /// (per-segment breakdown during navigation).
 class RouteResult {
   const RouteResult({
+    required this.provider,
     required this.points,
     required this.steps,
     required this.distanceMiles,
     required this.durationSeconds,
+    required this.providerNotices,
+    this.alternatives = const [],
   });
+
+  /// Provider that calculated this route. Used for provenance and UI labels;
+  /// provider payloads themselves remain isolated in the backend adapters.
+  final String provider;
 
   /// Decoded, simplified polyline points.
   final List<LatLng> points;
@@ -16390,6 +21535,12 @@ class RouteResult {
 
   /// Route travel time in seconds.
   final int durationSeconds;
+
+  /// Safety notices returned by the authoritative truck-routing provider.
+  final List<String> providerNotices;
+
+  /// Additional truck-safe routes returned by the selected provider.
+  final List<RouteResult> alternatives;
 }
 
 /// A single leg of a multi-stop trip (e.g. origin → stop 1).
@@ -16460,6 +21611,7 @@ enum AlertType {
   /// Issued advisory warning about wind conditions along the route.
   windAdvisory,
   fuelDistance,
+  truckParking,
   restrictionDistance,
   weather,
   lowBridge,
@@ -16467,18 +21619,16 @@ enum AlertType {
   accident,
   roadClosure,
   hazmat,
+
   /// A designated high-wind geographic area (e.g. a canyon or pass).
   highWind,
   steepGrade,
+
   /// A weigh station along or near the route requiring compliance stop.
   weighStation,
 }
 
-enum AlertSeverity {
-  low,
-  medium,
-  high,
-}
+enum AlertSeverity { low, medium, high }
 
 class NavigationAlert {
   final String id;
@@ -16511,10 +21661,7 @@ class NavigationAlert {
     this.isDismissed = false,
   });
 
-  NavigationAlert copyWith({
-    bool? isExpanded,
-    bool? isDismissed,
-  }) {
+  NavigationAlert copyWith({bool? isExpanded, bool? isDismissed}) {
     return NavigationAlert(
       id: id,
       type: type,
@@ -16538,22 +21685,34 @@ class TripProgressInfo {
   final Duration durationRemaining;
   final DateTime etaLocal;
   final String timezoneLabel;
+  final int arrivalDayOffset;
 
   const TripProgressInfo({
     required this.milesRemaining,
     required this.durationRemaining,
     required this.etaLocal,
     required this.timezoneLabel,
+    required this.arrivalDayOffset,
   });
 }
 
 // ── Navigation alert utility functions ────────────────────────────────────────
 
-String _fmtMiles(double miles) => '${miles.toStringAsFixed(0)} mi';
+String _fmtMiles(double miles) => _fmtRemainingMiles(miles);
+
+String _fmtRemainingMiles(double miles) {
+  if (!miles.isFinite || miles <= 0) return '0 mi';
+  if (miles < 0.1) return '<0.1 mi';
+  if (miles < 10) return '${miles.toStringAsFixed(1)} mi';
+  return '${miles.round()} mi';
+}
 
 String _fmtDuration(Duration duration) {
-  final h = duration.inHours;
-  final m = duration.inMinutes % 60;
+  final seconds = math.max(0, duration.inSeconds);
+  if (seconds == 0) return '0m';
+  if (seconds < 60) return '<1m';
+  final h = seconds ~/ 3600;
+  final m = (seconds ~/ 60) % 60;
   if (h > 0) return '${h}h ${m}m';
   return '${m}m';
 }
@@ -16569,6 +21728,15 @@ String _fmtEta(DateTime dt) {
   final minute = dt.minute.toString().padLeft(2, '0');
   final period = dt.hour >= 12 ? 'PM' : 'AM';
   return '$hour:$minute $period';
+}
+
+String _fmtArrival(TripProgressInfo tripInfo) {
+  final daySuffix = tripInfo.arrivalDayOffset > 0
+      ? ' +${tripInfo.arrivalDayOffset}'
+      : tripInfo.arrivalDayOffset < 0
+      ? ' ${tripInfo.arrivalDayOffset}'
+      : '';
+  return '${_fmtEta(tripInfo.etaLocal)}$daySuffix';
 }
 
 Color _alertSeverityColor(AlertSeverity severity) {
@@ -16589,6 +21757,8 @@ IconData _alertTypeIcon(AlertType type) {
       return Icons.air;
     case AlertType.fuelDistance:
       return Icons.local_gas_station;
+    case AlertType.truckParking:
+      return Icons.local_parking;
     case AlertType.restrictionDistance:
     case AlertType.lowBridge:
     case AlertType.hazmat:
@@ -16667,11 +21837,7 @@ class MiniAlertRow extends StatelessWidget {
   final List<NavigationAlert> alerts;
   final VoidCallback? onNext;
 
-  const MiniAlertRow({
-    super.key,
-    required this.alerts,
-    this.onNext,
-  });
+  const MiniAlertRow({super.key, required this.alerts, this.onNext});
 
   @override
   Widget build(BuildContext context) {
@@ -16718,7 +21884,7 @@ class MainNavigationAlertCard extends StatelessWidget {
   // presentational widget remains stateless and testable without a GPS stream.
   //
   // currentSpeedMps: raw GPS speed in metres-per-second (-1 = no fix yet).
-  // speedLimitMph:   posted speed limit for the current road segment in mph.
+  // speedLimitMph:   provider-posted limit, or zero when unavailable.
   // mpsToMph:        conversion constant; defaults to the standard 2.23694.
   //                  Override only when writing unit tests with custom units.
   final double currentSpeedMps;
@@ -16807,7 +21973,9 @@ class MainNavigationAlertCard extends StatelessWidget {
                 if (alert.distanceMiles != null)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: color.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
@@ -16827,7 +21995,9 @@ class MainNavigationAlertCard extends StatelessWidget {
                   onTap: onToggleExpand,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.grey.shade100,
                       borderRadius: BorderRadius.circular(8),
@@ -16885,21 +22055,24 @@ class MainNavigationAlertCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: (currentSpeedMps * mpsToMph) > speedLimitMph
+                      color:
+                          speedLimitMph > 0 &&
+                              (currentSpeedMps * mpsToMph) > speedLimitMph
                           ? Colors.red
                           : Colors.black87,
                     ),
                   ),
                   const SizedBox(width: 12),
                   // Posted speed limit for the current road segment.
-                  Text(
-                    'Limit: ${speedLimitMph.round()} mph',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.black54,
-                      fontWeight: FontWeight.w700,
+                  if (speedLimitMph > 0)
+                    Text(
+                      'Limit: ${speedLimitMph.round()} mph',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -16957,7 +22130,6 @@ class MainNavigationAlertCard extends StatelessWidget {
   }
 }
 
-
 // ── TripSummaryStrip ───────────────────────────────────────────────────────────
 
 class TripSummaryStrip extends StatelessWidget {
@@ -16972,13 +22144,23 @@ class TripSummaryStrip extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _stat(Icons.straighten, _fmtMiles(tripInfo.milesRemaining), 'left'),
+          _stat(
+            Icons.straighten,
+            _fmtRemainingMiles(tripInfo.milesRemaining),
+            'left',
+          ),
           _divider(),
-          _stat(Icons.access_time, _fmtDuration(tripInfo.durationRemaining),
-              'drive time'),
+          _stat(
+            Icons.access_time,
+            _fmtDuration(tripInfo.durationRemaining),
+            'drive time',
+          ),
           _divider(),
-          _stat(Icons.flag_outlined, _fmtEta(tripInfo.etaLocal),
-              tripInfo.timezoneLabel),
+          _stat(
+            Icons.flag_outlined,
+            _fmtEta(tripInfo.etaLocal),
+            tripInfo.timezoneLabel,
+          ),
         ],
       ),
     );
@@ -17012,14 +22194,48 @@ class TripSummaryStrip extends StatelessWidget {
   }
 
   Widget _divider() {
-    return Container(
-      width: 1,
-      height: 28,
-      color: const Color(0xFFE0E0E0),
-    );
+    return Container(width: 1, height: 28, color: const Color(0xFFE0E0E0));
   }
 }
 
+class _SignalLamp extends StatelessWidget {
+  const _SignalLamp(this.color);
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 7,
+    height: 7,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white54, width: 0.5),
+    ),
+  );
+}
+
+class _OctagonClipper extends CustomClipper<Path> {
+  const _OctagonClipper();
+
+  @override
+  Path getClip(Size size) {
+    final cut = size.shortestSide * 0.28;
+    return Path()
+      ..moveTo(cut, 0)
+      ..lineTo(size.width - cut, 0)
+      ..lineTo(size.width, cut)
+      ..lineTo(size.width, size.height - cut)
+      ..lineTo(size.width - cut, size.height)
+      ..lineTo(cut, size.height)
+      ..lineTo(0, size.height - cut)
+      ..lineTo(0, cut)
+      ..close();
+  }
+
+  @override
+  bool shouldReclip(_OctagonClipper oldClipper) => false;
+}
 // ── Warning marker visual helpers ─────────────────────────────────────────────
 
 /// Distance-based visual emphasis for a warning sign marker.
@@ -17088,10 +22304,10 @@ enum _WarningEmphasis {
   }
 }
 
-/// Paints a yellow equilateral-style warning triangle with a black border,
+/// Paints a yellow diamond warning sign with a black border,
 /// matching the official USA / Canada MUTCD road-sign appearance.
 ///
-/// The triangle points upward.  Fill is the standard warning-sign yellow
+/// The diamond follows the North-American warning-sign shape. Fill is yellow
 /// (0xFFFFCC00).  The [opacity] parameter fades the entire marker for
 /// distance-based preload emphasis.
 class _WarningTrianglePainter extends CustomPainter {
@@ -17114,8 +22330,9 @@ class _WarningTrianglePainter extends CustomPainter {
     // Triangle path: tip at top-centre, base at bottom.
     final path = Path()
       ..moveTo(w * 0.5, 0)
-      ..lineTo(w, h)
-      ..lineTo(0, h)
+      ..lineTo(w, h * 0.5)
+      ..lineTo(w * 0.5, h)
+      ..lineTo(0, h * 0.5)
       ..close();
 
     // Shadow / glow when emphasis is elevated.
@@ -17176,235 +22393,6 @@ class _UrgentGlowPainter extends CustomPainter {
   bool shouldRepaint(_UrgentGlowPainter old) => old.size != size;
 }
 
-/// Sample [WarningSign] objects covering all 18 required truck safety warning
-/// types along the Portland OR → Winnemucca NV corridor.
-///
-/// Coordinates are placed at realistic points on the I-5 / US-97 / I-80
-/// corridor so drivers see real-world-style warnings immediately after launch.
-/// Replace or augment this list with live API or backend data as the app matures.
-const List<WarningSign> _sampleWarningSigns = [
-  // ── Low bridge ────────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_low_bridge_portland',
-    type: WarningTypes.lowBridge,
-    title: 'Low Bridge',
-    lat: 45.518,
-    lng: -122.680,
-    severity: 'high',
-    message: 'Clearance 12 ft 6 in — oversized loads prohibited.',
-    icon: WarningTypes.lowBridge,
-  ),
-  // ── Weight restriction ────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_weight_ashland',
-    type: WarningTypes.weightRestriction,
-    title: 'Weight Restriction',
-    lat: 42.198,
-    lng: -122.703,
-    severity: 'high',
-    message: 'Maximum 36 tons — seasonal restriction in effect.',
-    icon: WarningTypes.weightRestriction,
-  ),
-  // ── No trucks allowed ─────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_no_trucks_redding',
-    type: WarningTypes.noTrucksAllowed,
-    title: 'No Trucks Allowed',
-    lat: 40.590,
-    lng: -122.395,
-    severity: 'high',
-    message: 'Commercial vehicles prohibited. Use alternate route.',
-    icon: WarningTypes.noTrucksAllowed,
-  ),
-  // ── Hazmat restriction ────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_hazmat_grants_pass',
-    type: WarningTypes.hazmatRestriction,
-    title: 'Hazmat Restriction',
-    lat: 42.442,
-    lng: -123.332,
-    severity: 'high',
-    message: 'Hazardous materials prohibited through this corridor.',
-    icon: WarningTypes.hazmatRestriction,
-  ),
-  // ── Steep grade ───────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_steep_grade_siskiyou',
-    type: WarningTypes.steepGrade,
-    title: 'Steep Grade',
-    lat: 42.068,
-    lng: -122.550,
-    severity: 'medium',
-    message: '6% grade for 4 miles — use lower gear.',
-    icon: WarningTypes.steepGrade,
-  ),
-  // ── Sharp curve ───────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_sharp_curve_yreka',
-    type: WarningTypes.sharpCurve,
-    title: 'Sharp Curve',
-    lat: 41.743,
-    lng: -122.638,
-    severity: 'medium',
-    message: 'Recommended speed 35 mph for oversized loads.',
-    icon: WarningTypes.sharpCurve,
-  ),
-  // ── Runaway truck ramp ────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_runaway_ramp_i5',
-    type: WarningTypes.runawayTruckRamp,
-    title: 'Runaway Truck Ramp',
-    lat: 42.050,
-    lng: -122.540,
-    severity: 'medium',
-    message: 'Runaway ramp 1 mile ahead on right.',
-    icon: WarningTypes.runawayTruckRamp,
-  ),
-  // ── Chain requirement ─────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_chains_cascade',
-    type: WarningTypes.chainRequirement,
-    title: 'Chain Requirement',
-    lat: 44.980,
-    lng: -121.710,
-    severity: 'medium',
-    message: 'Chains required on all vehicles during winter conditions.',
-    icon: WarningTypes.chainRequirement,
-  ),
-  // ── High wind area ────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_high_wind_OR_desert',
-    type: WarningTypes.highWindArea,
-    title: 'High Wind Area',
-    lat: 43.045,
-    lng: -119.030,
-    severity: 'medium',
-    message: 'High winds possible — high-profile vehicles use caution.',
-    icon: WarningTypes.highWindArea,
-  ),
-  // ── Construction zone ─────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_construction_medford',
-    type: WarningTypes.constructionZone,
-    title: 'Construction Zone',
-    lat: 42.330,
-    lng: -122.876,
-    severity: 'medium',
-    message: 'Active construction — reduced lane width. Fines doubled.',
-    icon: WarningTypes.constructionZone,
-  ),
-  // ── Accident ahead ────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_accident_i5_or',
-    type: WarningTypes.accidentAhead,
-    title: 'Accident Ahead',
-    lat: 44.056,
-    lng: -123.096,
-    severity: 'high',
-    message: 'Multi-vehicle accident — expect delays. Right lane closed.',
-    icon: WarningTypes.accidentAhead,
-  ),
-  // ── Lane closure ─────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_lane_closure_woodburn',
-    type: WarningTypes.laneClosure,
-    title: 'Lane Closure',
-    lat: 45.157,
-    lng: -122.858,
-    severity: 'medium',
-    message: 'Right lane closed 2 miles ahead — merge left.',
-    icon: WarningTypes.laneClosure,
-  ),
-  // ── Road closed ───────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_road_closed_lovelock',
-    type: WarningTypes.roadClosed,
-    title: 'Road Closed',
-    lat: 40.182,
-    lng: -118.476,
-    severity: 'high',
-    message: 'Road closed due to flooding. Detour via US-95.',
-    icon: WarningTypes.roadClosed,
-  ),
-  // ── Detour ────────────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_detour_winnemucca',
-    type: WarningTypes.detour,
-    title: 'Detour',
-    lat: 40.975,
-    lng: -117.737,
-    severity: 'low',
-    message: 'Follow detour signs — bridge repair underway.',
-    icon: WarningTypes.detour,
-  ),
-  // ── Weigh station ─────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_weigh_station_woodburn',
-    type: WarningTypes.weighStation,
-    title: 'Weigh Station',
-    lat: 45.154,
-    lng: -122.854,
-    severity: 'low',
-    message: 'Weigh station ahead — all trucks must stop.',
-    icon: WarningTypes.weighStation,
-  ),
-  // ── Brake check area ──────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_brake_check_siskiyou',
-    type: WarningTypes.brakeCheckArea,
-    title: 'Brake Check Area',
-    lat: 42.060,
-    lng: -122.543,
-    severity: 'medium',
-    message: 'Mandatory brake check before steep descent.',
-    icon: WarningTypes.brakeCheckArea,
-  ),
-  // ── Rest area ─────────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_rest_area_i80_nv',
-    type: WarningTypes.restArea,
-    title: 'Rest Area',
-    lat: 40.460,
-    lng: -118.780,
-    severity: 'low',
-    message: 'Rest area 1 mile ahead — truck parking available.',
-    icon: WarningTypes.restArea,
-  ),
-  // ── Animal crossing ───────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_animal_crossing_or',
-    type: WarningTypes.animalCrossing,
-    title: 'Animal Crossing',
-    lat: 43.600,
-    lng: -121.190,
-    severity: 'low',
-    message: 'Deer and elk crossing zone — reduce speed at night.',
-    icon: WarningTypes.animalCrossing,
-  ),
-  // ── Narrow bridge ─────────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_narrow_bridge_i5_or',
-    type: WarningTypes.narrowBridge,
-    title: 'Narrow Bridge',
-    lat: 44.540,
-    lng: -123.260,
-    severity: 'high',
-    message: 'One-lane bridge — oversized loads must stop and proceed with care.',
-    icon: WarningTypes.narrowBridge,
-  ),
-  // ── Railroad crossing ─────────────────────────────────────────────────────
-  WarningSign(
-    id: 'warn_railroad_crossing_i5_ca',
-    type: WarningTypes.railroadCrossing,
-    title: 'Railroad Crossing',
-    lat: 40.220,
-    lng: -122.295,
-    severity: 'high',
-    message: 'Active grade crossing — stop if signal is active.',
-    icon: WarningTypes.railroadCrossing,
-  ),
-];
-
 // ── WeighStationPoi model ──────────────────────────────────────────────────────
 
 /// A weigh station point-of-interest enriched with logo asset information.
@@ -17418,6 +22406,7 @@ class WeighStationPoi {
     required this.name,
     required this.status,
     this.logoName = 'weight_station',
+    this.details,
   });
 
   /// Unique identifier — matches the source [MapPoi.id].
@@ -17437,6 +22426,10 @@ class WeighStationPoi {
   /// `assets/logo_brand_markers/weight_station.png`.
   final String logoName;
 
+  /// Official source, direction, highway, and live-status metadata when
+  /// available from the authenticated weigh-station service.
+  final live_ws.WeighStation? details;
+
   /// Constructs a [WeighStationPoi] from an existing [MapPoi] of type
   /// [PoiType.weighStation].  The [logoName] defaults to `'weight_station'`.
   factory WeighStationPoi.fromMapPoi(MapPoi poi) {
@@ -17445,6 +22438,7 @@ class WeighStationPoi {
       position: poi.position,
       name: poi.name,
       status: poi.status,
+      details: poi.weighStation,
     );
   }
 }
@@ -17494,56 +22488,61 @@ class AheadWeighStation {
 /// ```
 class ClosestWeighStationChip extends StatelessWidget {
   final AheadWeighStation station;
+  final VoidCallback? onTap;
 
-  const ClosestWeighStationChip({super.key, required this.station});
+  const ClosestWeighStationChip({super.key, required this.station, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final miles = station.milesAhead;
 
     // Format distance: one decimal below 10 mi, whole number above.
-    final String distLabel =
-        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+    final String distLabel = miles < 10
+        ? '${miles.toStringAsFixed(1)} mi'
+        : '${miles.round()} mi';
 
-    // ── White rounded card containing "W" and distance together ───────────
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Bold green "W" ────────────────────────────────────────────
-          const Text(
-            'W',
-            style: TextStyle(
-              color: Color(0xFF24B342),
-              fontWeight: FontWeight.w900,
-              fontSize: 28,
-              height: 1.0,
+    return Semantics(
+      button: true,
+      label:
+          '${station.poi.name}, $distLabel ahead. Open weigh station details',
+      child: Material(
+        color: const Color(0xED07120F),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 132),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF17A894), width: 1.5),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.monitor_weight_outlined,
+                  color: Color(0xFF35D7C0),
+                  size: 22,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Weigh  $distLabel',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 4),
-          // ── Distance label directly below "W", inside the card ────────
-          Text(
-            distLabel,
-            style: const TextStyle(
-              color: Colors.black,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-              height: 1.0,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -17567,15 +22566,23 @@ class ClosestWeighStationChip extends StatelessWidget {
 /// ```
 class ClosestWeighStationsRow extends StatelessWidget {
   final List<AheadWeighStation> stations;
+  final ValueChanged<AheadWeighStation>? onTap;
 
-  const ClosestWeighStationsRow({super.key, required this.stations});
+  const ClosestWeighStationsRow({
+    super.key,
+    required this.stations,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (stations.isEmpty) return const SizedBox.shrink();
 
     // Show only the first (closest) station — one at a time per spec.
-    return ClosestWeighStationChip(station: stations.first);
+    return ClosestWeighStationChip(
+      station: stations.first,
+      onTap: onTap == null ? null : () => onTap!(stations.first),
+    );
   }
 }
 
@@ -17587,6 +22594,7 @@ class RestAreaPoi {
     required this.id,
     required this.position,
     required this.name,
+    required this.source,
   });
 
   /// Unique identifier — matches the source [PoiItem.id].
@@ -17597,6 +22605,9 @@ class RestAreaPoi {
 
   /// Human-readable rest area name shown in chips.
   final String name;
+
+  /// Complete provider-backed POI record used by the details sheet.
+  final PoiItem source;
 }
 
 // ── AheadRestArea model ────────────────────────────────────────────────────────
@@ -17638,56 +22649,60 @@ class AheadRestArea {
 /// [_TruckMapScreenState._refreshClosestRestAreasAhead].
 class ClosestRestAreaChip extends StatelessWidget {
   final AheadRestArea area;
+  final VoidCallback? onTap;
 
-  const ClosestRestAreaChip({super.key, required this.area});
+  const ClosestRestAreaChip({super.key, required this.area, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final miles = area.milesAhead;
 
     // Format distance: one decimal below 10 mi, whole number above.
-    final String distLabel =
-        miles < 10 ? '${miles.toStringAsFixed(1)} mi' : '${miles.round()} mi';
+    final String distLabel = miles < 10
+        ? '${miles.toStringAsFixed(1)} mi'
+        : '${miles.round()} mi';
 
-    // ── White rounded card containing "R" and distance together ───────────
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Bold blue "R" ──────────────────────────────────────────────
-          const Text(
-            'R',
-            style: TextStyle(
-              color: Color(0xFF3B82F6),
-              fontWeight: FontWeight.w900,
-              fontSize: 28,
-              height: 1.0,
+    return Semantics(
+      button: true,
+      label: '${area.poi.name}, $distLabel ahead. Open rest area details',
+      child: Material(
+        color: const Color(0xED07131C),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 132),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF2D8FE3), width: 1.5),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.park_rounded,
+                  color: Color(0xFF69B8FF),
+                  size: 22,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Rest  $distLabel',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 4),
-          // ── Distance label directly below "R", inside the card ────────
-          Text(
-            distLabel,
-            style: const TextStyle(
-              color: Colors.black,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-              height: 1.0,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -17706,15 +22721,30 @@ class ClosestRestAreaChip extends StatelessWidget {
 /// Returns zero-size when [areas] is empty.
 class ClosestRestAreasRow extends StatelessWidget {
   final List<AheadRestArea> areas;
+  final ValueChanged<AheadRestArea>? onTap;
 
-  const ClosestRestAreasRow({super.key, required this.areas});
+  const ClosestRestAreasRow({super.key, required this.areas, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     if (areas.isEmpty) return const SizedBox.shrink();
 
-    // Show only the first (closest) rest area — one at a time per spec.
-    return ClosestRestAreaChip(area: areas.first);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: areas
+          .take(2)
+          .map((area) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 7),
+              child: ClosestRestAreaChip(
+                area: area,
+                onTap: onTap == null ? null : () => onTap!(area),
+              ),
+            );
+          })
+          .toList(growable: false),
+    );
   }
 }
 
@@ -17729,14 +22759,19 @@ class ClosestRestAreasRow extends StatelessWidget {
 enum UpcomingAlertType {
   /// Strong wind or weather advisory along the route.
   wind,
+
   /// Truck-stop / fuel + services ahead.
   truckStop,
+
   /// Weigh station ahead on the current route.
   weighStation,
+
   /// Height, weight, or hazmat restriction ahead.
   restriction,
+
   /// Fuel-only stop ahead (no full services).
   fuel,
+
   /// Rest area / travel plaza ahead.
   restArea,
 }
@@ -17757,10 +22792,14 @@ class UpcomingAlertItem {
   /// Alerts with [distanceMiles] ≤ 0 are excluded by [_refreshUpcomingAlerts].
   final double distanceMiles;
 
+  /// Identifier of the full navigation alert opened when this chip is tapped.
+  final String? sourceAlertId;
+
   const UpcomingAlertItem({
     required this.type,
     required this.label,
     required this.distanceMiles,
+    this.sourceAlertId,
   });
 }
 
@@ -17833,7 +22872,6 @@ class _CompassNeedlePainter extends CustomPainter {
   bool shouldRepaint(_CompassNeedlePainter oldDelegate) => false;
 }
 
-
 // ── Exit Preview lane painter ─────────────────────────────────────────────
 
 /// [CustomPainter] that draws a simplified top-down highway diagram with
@@ -17865,7 +22903,11 @@ class _ExitLanePainter extends CustomPainter {
       final double x = w * i / 3;
       double y = 0;
       while (y < h) {
-        canvas.drawLine(Offset(x, y), Offset(x, (y + 12).clamp(0, h)), dashPaint);
+        canvas.drawLine(
+          Offset(x, y),
+          Offset(x, (y + 12).clamp(0, h)),
+          dashPaint,
+        );
         y += 22;
       }
     }
@@ -18017,8 +23059,7 @@ class _InterstateShieldPainter extends CustomPainter {
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
     )..layout();
-    tp.paint(
-        canvas, center - Offset(tp.width / 2, tp.height / 2));
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
   }
 
   @override
@@ -18081,12 +23122,23 @@ class _UsHighwayShieldPainter extends CustomPainter {
     canvas.restore();
 
     // "US" label
-    _paintText(canvas, 'US', Offset(w / 2, h * 0.32), fontSize * 0.65,
-        Colors.white);
+    _paintText(
+      canvas,
+      'US',
+      Offset(w / 2, h * 0.32),
+      fontSize * 0.65,
+      Colors.white,
+    );
 
     // Route number
-    _paintText(canvas, number, Offset(w / 2, h * 0.72), fontSize * 1.05,
-        Colors.white, bold: true);
+    _paintText(
+      canvas,
+      number,
+      Offset(w / 2, h * 0.72),
+      fontSize * 1.05,
+      Colors.white,
+      bold: true,
+    );
   }
 
   void _paintText(
@@ -18125,6 +23177,8 @@ class _UsHighwayShieldPainter extends CustomPainter {
 // spinner / address swap is contained inside the dialog without touching the
 // parent TruckMapScreen state.
 
+enum _PoiReportKind { parking, diesel }
+
 /// Dialog shown when a [PoiItem] map marker is tapped.
 ///
 /// Displays the POI name immediately, then resolves [geocodeFuture] to show the
@@ -18134,10 +23188,12 @@ class _PoiAddressDialog extends StatefulWidget {
   const _PoiAddressDialog({
     required this.poiName,
     required this.geocodeFuture,
+    this.onReport,
   });
 
   final String poiName;
   final Future<String?> geocodeFuture;
+  final VoidCallback? onReport;
 
   @override
   State<_PoiAddressDialog> createState() => _PoiAddressDialogState();
@@ -18150,16 +23206,18 @@ class _PoiAddressDialogState extends State<_PoiAddressDialog> {
   @override
   void initState() {
     super.initState();
-    widget.geocodeFuture.then((addr) {
-      if (mounted) {
-        setState(() {
-          _resolvedAddress = addr;
-          _loading = false;
+    widget.geocodeFuture
+        .then((addr) {
+          if (mounted) {
+            setState(() {
+              _resolvedAddress = addr;
+              _loading = false;
+            });
+          }
+        })
+        .catchError((_) {
+          if (mounted) setState(() => _loading = false);
         });
-      }
-    }).catchError((_) {
-      if (mounted) setState(() => _loading = false);
-    });
   }
 
   @override
@@ -18167,7 +23225,6 @@ class _PoiAddressDialogState extends State<_PoiAddressDialog> {
     final String addressLabel = _loading
         ? ''
         : (_resolvedAddress ?? 'Address unavailable');
-
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(widget.poiName),
@@ -18190,6 +23247,11 @@ class _PoiAddressDialogState extends State<_PoiAddressDialog> {
               ],
             ),
       actions: [
+        if (widget.onReport != null)
+          TextButton(
+            onPressed: widget.onReport,
+            child: const Text('Report Live Data'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('OK'),
@@ -18211,6 +23273,8 @@ class _MapPoiAlertDialog extends StatefulWidget {
     required this.typeIcon,
     required this.typeColor,
     required this.geocodeFuture,
+    this.activityFuture,
+    this.onReportStatus,
   });
 
   final MapPoi poi;
@@ -18218,6 +23282,8 @@ class _MapPoiAlertDialog extends StatefulWidget {
   final IconData typeIcon;
   final Color typeColor;
   final Future<String?> geocodeFuture;
+  final Future<live_ws.WeighStationStatusSummary?>? activityFuture;
+  final VoidCallback? onReportStatus;
 
   @override
   State<_MapPoiAlertDialog> createState() => _MapPoiAlertDialogState();
@@ -18230,22 +23296,76 @@ class _MapPoiAlertDialogState extends State<_MapPoiAlertDialog> {
   @override
   void initState() {
     super.initState();
-    widget.geocodeFuture.then((addr) {
-      if (mounted) {
-        setState(() {
-          _resolvedAddress = addr;
-          _loading = false;
+    widget.geocodeFuture
+        .then((addr) {
+          if (mounted) {
+            setState(() {
+              _resolvedAddress = addr;
+              _loading = false;
+            });
+          }
+        })
+        .catchError((_) {
+          if (mounted) setState(() => _loading = false);
         });
-      }
-    }).catchError((_) {
-      if (mounted) setState(() => _loading = false);
-    });
+  }
+
+  String _statusLabel(live_ws.WeighStationStatus value) => switch (value) {
+    live_ws.WeighStationStatus.open => 'Open',
+    live_ws.WeighStationStatus.closed => 'Closed',
+    live_ws.WeighStationStatus.inspection => 'Inspection active',
+    live_ws.WeighStationStatus.unknown => 'Unknown',
+  };
+
+  Widget _detailRow(IconData icon, String text) => Padding(
+    padding: const EdgeInsets.only(top: 7),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: Colors.grey.shade600),
+        const SizedBox(width: 6),
+        Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
+      ],
+    ),
+  );
+
+  Widget _buildActivity() {
+    final future = widget.activityFuture;
+    if (future == null) return const SizedBox.shrink();
+    return FutureBuilder<live_ws.WeighStationStatusSummary?>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.only(top: 10),
+            child: LinearProgressIndicator(minHeight: 2),
+          );
+        }
+        final activity = snapshot.data;
+        if (activity == null) {
+          return _detailRow(
+            Icons.groups_outlined,
+            'No verified live station activity is available.',
+          );
+        }
+        final freshness = activity.stale ? 'stale' : 'current';
+        return _detailRow(
+          Icons.groups_outlined,
+          '${_statusLabel(activity.value)} • ${activity.source} • '
+          '${(activity.confidence * 100).round()}% confidence • $freshness'
+          '${activity.lastReportedAt == null ? '' : ' • ${activity.lastReportedAt!.toLocal()}'}'
+          '${activity.confirmations == 0 && activity.disagreements == 0 ? '' : ' • ${activity.confirmations} confirmations, ${activity.disagreements} disagreements'}',
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final String addressLabel =
-        _loading ? '' : (_resolvedAddress ?? 'Address unavailable');
+    final String addressLabel = _loading
+        ? ''
+        : (_resolvedAddress ?? 'Address unavailable');
+    final station = widget.poi.weighStation;
 
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -18265,60 +23385,92 @@ class _MapPoiAlertDialogState extends State<_MapPoiAlertDialog> {
           ),
         ],
       ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.poi.name,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Status: ${widget.poi.status}',
-            style: const TextStyle(fontSize: 14),
-          ),
-          const SizedBox(height: 6),
-          if (_loading)
-            const SizedBox(
-              height: 20,
-              child: Row(
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.poi.name,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Status: ${widget.poi.status}',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 6),
+            if (_loading)
+              const SizedBox(
+                height: 20,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Loading address…',
+                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text(
-                    'Loading address…',
-                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  const Icon(Icons.location_on, size: 16, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      addressLabel,
+                      style: const TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
                   ),
                 ],
               ),
-            )
-          else
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.location_on, size: 16, color: Colors.grey),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    addressLabel,
-                    style: const TextStyle(fontSize: 13, color: Colors.grey),
-                  ),
+            if (station != null) ...[
+              if ((station.highway ?? '').trim().isNotEmpty)
+                _detailRow(
+                  Icons.route_outlined,
+                  [
+                    station.highway!.trim(),
+                    if ((station.direction ?? '').trim().isNotEmpty)
+                      station.direction!.trim(),
+                    if (station.mileMarker != null)
+                      'mile ${station.mileMarker!.toStringAsFixed(1)}',
+                  ].join(' • '),
                 ),
-              ],
+              _detailRow(
+                station.isOfficial
+                    ? Icons.verified_outlined
+                    : Icons.info_outline,
+                'Source: ${station.officialSourceName}',
+              ),
+              if (station.lastStatusUpdate != null)
+                _detailRow(
+                  Icons.update_rounded,
+                  'Official status updated ${station.lastStatusUpdate!.toLocal()}',
+                ),
+            ],
+            _buildActivity(),
+            const SizedBox(height: 12),
+            const Text(
+              'Station status can change quickly. Follow posted signs and official instructions.',
+              style: TextStyle(fontSize: 13, color: Colors.grey),
             ),
-          const SizedBox(height: 12),
-          const Text(
-            'Approaching in less than 500 m.',
-            style: TextStyle(fontSize: 13, color: Colors.grey),
-          ),
-        ],
+          ],
+        ),
       ),
       actions: [
+        if (widget.onReportStatus != null)
+          TextButton(
+            onPressed: widget.onReportStatus,
+            child: const Text('Report Status'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Dismiss'),

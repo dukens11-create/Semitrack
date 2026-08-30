@@ -11,6 +11,7 @@ enum UserRole {
   DRIVER
   ADMIN
   FLEET_ADMIN
+  MODERATOR
 }
 
 enum SubscriptionPlan {
@@ -20,66 +21,529 @@ enum SubscriptionPlan {
   TEAM
 }
 
+enum SubscriptionStatus {
+  INACTIVE
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum ModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REMOVED
+  EXPIRED
+}
+
+enum ReportType {
+  SAFETY_REPORT
+  POI_CORRECTION
+  USER_REPORT
+  PARKING_REPORT
+}
+
+enum EldProvider {
+  SAMSARA
+  MOTIVE
+}
+
+enum EldConnectionStatus {
+  PENDING
+  CONNECTED
+  DISCONNECTED
+  ERROR
+  REAUTHORIZATION_REQUIRED
+}
+
+enum RestrictionType {
+  HEIGHT
+  GROSS_WEIGHT
+  AXLE_WEIGHT
+  WIDTH
+  LENGTH
+  TRUCK_PROHIBITED
+  HAZMAT
+  TUNNEL
+  SEASONAL
+  RESTRICTED_BRIDGE
+  RESTRICTED_LOCAL_ROAD
+  ROAD_CLOSURE
+  CONSTRUCTION
+  CRITICAL_NOTICE
+}
+
+enum WeighStationType {
+  FIXED_WEIGH_STATION
+  PORT_OF_ENTRY
+  COMMERCIAL_VEHICLE_ENFORCEMENT
+  INSPECTION_STATION
+  ENFORCEMENT_WIM
+  VIRTUAL_WEIGH_STATION
+  OTHER_ENFORCEMENT
+}
+
+enum WeighStationStatus {
+  OPEN
+  CLOSED
+  INSPECTION
+  UNKNOWN
+}
+
+enum CommunityDataType {
+  WEIGH_STATION_STATUS
+  PARKING_AVAILABILITY
+  DIESEL_PRICE
+  RESTRICTION_CORRECTION
+  ROAD_CONDITION
+}
+
+enum CommunityVoteValue {
+  CONFIRM
+  DISAGREE
+}
+
+enum ParkingAvailability {
+  PLENTY
+  SOME
+  ALMOST_FULL
+  FULL
+  UNKNOWN
+}
+
+enum FuelType {
+  DIESEL
+}
+
+enum RoadEventType {
+  ROAD_CLOSURE
+  CONSTRUCTION
+  INCIDENT
+  CRASH
+  WEATHER
+  SNOW
+  ICE
+  CHAIN_RESTRICTION
+  HIGH_WIND
+  FLOOD
+  TRUCK_RESTRICTION
+  CAMERA
+  MOUNTAIN_PASS
+  OTHER
+}
+
+enum EventSeverity {
+  INFO
+  MINOR
+  MODERATE
+  SEVERE
+  CRITICAL
+}
+
+enum ProviderSyncStatus {
+  NEVER_SYNCED
+  HEALTHY
+  DEGRADED
+  ERROR
+  DISABLED
+}
+
 model User {
-  id               String           @id @default(cuid())
-  email            String           @unique
-  passwordHash     String
-  fullName         String
-  phone            String?
-  role             UserRole         @default(DRIVER)
-  plan             SubscriptionPlan @default(FREE)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  trucks           Truck[]
-  trips            Trip[]
-  documents        Document[]
+  id                 String                @id @default(cuid())
+  email              String                @unique
+  passwordHash       String
+  fullName           String
+  phone              String?
+  role               UserRole              @default(DRIVER)
+  plan               SubscriptionPlan      @default(FREE)
+  emailVerified      Boolean               @default(false)
+  reportTrustScore   Float                 @default(0.5)
+  disabledAt         DateTime?
+  lastActivityAt     DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  trucks             Truck[]
+  trips              Trip[]
+  documents          Document[]
+  favorites          Favorite[]
+  navigationSettings NavigationSettings?
+  refreshTokens      RefreshToken[]
+  passwordResets     PasswordResetToken[]
+  subscriptions      Subscription[]
+  reports            CommunityReport[]     @relation("ReportAuthor")
+  moderatedReports   CommunityReport[]     @relation("ReportModerator")
+  eldConnections     EldConnection[]
+  eldOAuthStates     EldOAuthState[]
+  dataReports        CommunityDataReport[]
+  dataReportVotes    CommunityDataVote[]
+  adminAuditLogs     AdminAuditLog[]       @relation("AdminAuditActor")
+  analyticsEvents    AppAnalyticsEvent[]
+  navigationSessions NavigationSession[]
+  paymentTransactions PaymentTransaction[]
+  supportTickets     SupportTicket[]
+}
+
+model AdminAuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String
+  action       String
+  targetType   String
+  targetId     String?
+  metadataJson Json?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  actor        User     @relation("AdminAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 model Truck {
-  id            String   @id @default(cuid())
-  userId        String
-  name          String
-  unitNumber    String?
-  trailerNumber String?
-  heightFt      Float
-  weightLbs     Int
-  widthFt       Float
-  lengthFt      Float
-  hazmatEnabled Boolean  @default(false)
-  axleCount     Int      @default(5)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  userId           String
+  name             String
+  isDefault        Boolean  @default(false)
+  tractorType      String?
+  trailerType      String?
+  trailerCount     Int      @default(1)
+  unitNumber       String?
+  trailerNumber    String?
+  heightFt         Float
+  currentWeightLbs Int?
+  weightLbs        Int
+  weightPerAxleLbs Int?
+  widthFt          Float
+  lengthFt         Float
+  hazmatEnabled    Boolean  @default(false)
+  hazardousGoods   String[]
+  axleCount        Int      @default(5)
+  avoidTolls       Boolean  @default(false)
+  avoidFerries     Boolean  @default(false)
+  avoidHighways    Boolean  @default(false)
+  avoidResidential Boolean  @default(true)
+  avoidDirtRoads   Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips            Trip[]
+
+  @@index([userId])
+}
+
+model NavigationSettings {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  voiceEnabled   Boolean  @default(true)
+  voiceMuted     Boolean  @default(false)
+  voiceLocale    String   @default("en-US")
+  units          String   @default("imperial")
+  dayNightMode   String   @default("system")
+  trafficReroute Boolean  @default(true)
+  settingsJson   Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  category  String?
+  latitude  Float
+  longitude Float
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Trip {
   id               String   @id @default(cuid())
   userId           String
+  truckId          String?
   name             String
+  status           String   @default("PLANNED")
   originName       String
   destinationName  String
   originLat        Float
   originLng        Float
   destinationLat   Float
   destinationLng   Float
+  viaStopsJson     Json?
+  routeOptionsJson Json?
+  maneuversJson    Json?
   etaMinutes       Int?
   distanceMiles    Float?
   routeProvider    String?
   routePolyline    String?
+  truckSafe        Boolean  @default(false)
+  trafficAware     Boolean  @default(false)
   hosBreakPlanJson Json?
   fuelPlanJson     Json?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  actualDistanceMiles Float?
+  actualDurationSeconds Int?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  truck            Truck?   @relation(fields: [truckId], references: [id], onDelete: SetNull)
+  navigationSessions NavigationSession[]
+
+  @@index([userId, updatedAt])
 }
 
 model ParkingReport {
-  id           String   @id @default(cuid())
-  userId       String
-  lotName      String
-  status       String
-  notes        String?
-  createdAt    DateTime @default(now())
+  id        String           @id @default(cuid())
+  userId    String
+  lotName   String
+  status    ModerationStatus @default(PENDING)
+  notes     String?
+  createdAt DateTime         @default(now())
+}
+
+model CommunityReport {
+  id               String           @id @default(cuid())
+  userId           String
+  type             ReportType
+  subjectId        String?
+  latitude         Float?
+  longitude        Float?
+  category         String
+  description      String?
+  evidenceJson     Json?
+  status           ModerationStatus @default(PENDING)
+  duplicateOfId    String?
+  expiresAt        DateTime?
+  moderatorId      String?
+  moderationReason String?
+  moderatedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  author           User             @relation("ReportAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  moderator        User?            @relation("ReportModerator", fields: [moderatorId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([userId])
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  userId                 String
+  provider               String
+  providerCustomerId     String?
+  providerSubscriptionId String?            @unique
+  productId              String
+  plan                   SubscriptionPlan
+  status                 SubscriptionStatus
+  currentPeriodEnd       DateTime?
+  canceledAt             DateTime?
+  verifiedAt             DateTime?
+  priceAmountCents       Int?
+  priceCurrency          String?
+  billingInterval        String?
+  catalogPlanCode        String?
+  rawEventJson           Json?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  catalogPlan            SubscriptionPlanCatalog? @relation(fields: [catalogPlanCode], references: [code], onDelete: SetNull)
+  transactions           PaymentTransaction[]
+  statusEvents           SubscriptionStatusEvent[]
+
+  @@index([userId, status])
+  @@index([catalogPlanCode])
+}
+
+model SubscriptionPlanCatalog {
+  code             String         @id
+  displayName      String
+  purpose          String
+  description      String?
+  priceAmountCents Int?
+  currency         String         @default("USD")
+  billingInterval  String
+  trialDays        Int            @default(0)
+  isActive         Boolean        @default(true)
+  isPublic         Boolean        @default(true)
+  isFeatured       Boolean        @default(false)
+  badge            String?
+  sortOrder        Int            @default(0)
+  version          Int            @default(1)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  subscriptions    Subscription[]
+}
+
+model NavigationSession {
+  id                    String   @id @default(cuid())
+  clientSessionId       String   @unique
+  userId                String
+  tripId                String?
+  status                String   @default("ACTIVE")
+  estimatedDriveMinutes Int?
+  actualDistanceMiles   Float?
+  actualDurationSeconds Int?
+  stateRegion           String?
+  hosWarningShownAt     DateTime?
+  startedAt             DateTime @default(now())
+  lastHeartbeatAt       DateTime @default(now())
+  endedAt               DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip                  Trip?    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([status, lastHeartbeatAt])
+  @@index([userId, startedAt])
+  @@index([stateRegion, startedAt])
+}
+
+model AppAnalyticsEvent {
+  id             String   @id @default(cuid())
+  clientEventId  String?  @unique
+  userId         String
+  eventType      String
+  entityId       String?
+  stateRegion    String?
+  numericValue   Float?
+  durationSeconds Int?
+  metadataJson   Json?
+  occurredAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([eventType, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([stateRegion, occurredAt])
+}
+
+model PaymentTransaction {
+  id                    String   @id @default(cuid())
+  userId                String
+  subscriptionId        String?
+  provider              String
+  providerEventId       String   @unique
+  providerPaymentId     String?
+  type                  String
+  status                String
+  amountCents           Int
+  processingFeeCents    Int?
+  currency              String   @default("USD")
+  failureCode           String?
+  occurredAt            DateTime
+  createdAt             DateTime @default(now())
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription          Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([status, occurredAt])
+  @@index([type, occurredAt])
+  @@index([userId, occurredAt])
+}
+
+model SubscriptionStatusEvent {
+  id                    String   @id @default(cuid())
+  subscriptionId        String
+  providerEventId       String?  @unique
+  previousStatus        String?
+  status                String
+  occurredAt            DateTime
+  createdAt             DateTime @default(now())
+  subscription          Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, occurredAt])
+  @@index([subscriptionId, occurredAt])
+}
+
+model SupportTicket {
+  id          String   @id @default(cuid())
+  userId      String
+  subject     String
+  status      String   @default("OPEN")
+  priority    String   @default("NORMAL")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  closedAt    DateTime?
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+}
+
+model ApiErrorLog {
+  id          String   @id @default(cuid())
+  route       String
+  method      String
+  statusCode  Int
+  errorCode   String?
+  occurredAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([statusCode, occurredAt])
+}
+
+model EldConnection {
+  id                    String              @id @default(cuid())
+  userId                String
+  provider              EldProvider
+  providerAccountId     String?
+  encryptedAccessToken  String?
+  encryptedRefreshToken String?
+  accessTokenExpiresAt  DateTime?
+  scopes                String[]
+  status                EldConnectionStatus @default(PENDING)
+  lastSyncedAt          DateTime?
+  lastErrorCode         String?
+  lastErrorMessage      String?
+  metadataJson          Json?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+model EldOAuthState {
+  id        String      @id @default(cuid())
+  userId    String
+  provider  EldProvider
+  stateHash String      @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime    @default(now())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, provider, expiresAt])
 }
 
 model Load {
@@ -96,11 +560,240 @@ model Load {
 }
 
 model Document {
-  id         String   @id @default(cuid())
-  userId     String
-  type       String
-  fileName   String
-  fileUrl    String
-  createdAt  DateTime @default(now())
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  fileName  String
+  fileUrl   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TruckRestriction {
+  id                  String          @id @default(cuid())
+  restrictionType     RestrictionType
+  latitude            Float
+  longitude           Float
+  roadName            String?
+  direction           String?
+  heightLimitFt       Float?
+  grossWeightLimitLbs Int?
+  axleWeightLimitLbs  Int?
+  widthLimitFt        Float?
+  lengthLimitFt       Float?
+  hazmatTypes         String[]
+  startsAt            DateTime?
+  endsAt              DateTime?
+  source              String
+  sourceId            String?
+  sourceUrl           String?
+  authoritative       Boolean         @default(false)
+  verified            Boolean         @default(false)
+  confidence          Float           @default(0)
+  active              Boolean         @default(true)
+  lastUpdated         DateTime
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([source, sourceId])
+  @@index([active, restrictionType])
+  @@index([latitude, longitude])
+  @@index([endsAt])
+}
+
+model WeighStation {
+  id                       String             @id
+  name                     String
+  state                    String
+  latitude                 Float
+  longitude                Float
+  highway                  String?
+  direction                String?
+  mileMarker               Float?
+  type                     WeighStationType
+  officialStatus           WeighStationStatus @default(UNKNOWN)
+  officialStatusSource     String?
+  officialSourceName       String
+  officialSourceUrl        String
+  isOfficial               Boolean            @default(true)
+  isActive                 Boolean            @default(true)
+  lastOfficialVerification DateTime?
+  lastStatusUpdate         DateTime?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  @@index([state, isActive])
+  @@index([latitude, longitude])
+  @@index([highway, direction])
+}
+
+model ParkingLocation {
+  id                   String              @id
+  name                 String
+  latitude             Float
+  longitude            Float
+  state                String?
+  highway              String?
+  direction            String?
+  totalTruckSpaces     Int?
+  reservedSpaces       Int?
+  paid                 Boolean?
+  amenities            String[]
+  provider             String
+  providerId           String?
+  providerAvailability ParkingAvailability @default(UNKNOWN)
+  providerUpdatedAt    DateTime?
+  active               Boolean             @default(true)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@unique([provider, providerId])
+  @@index([latitude, longitude])
+  @@index([active, state])
+}
+
+model FuelStation {
+  id         String                 @id
+  name       String
+  latitude   Float
+  longitude  Float
+  state      String?
+  highway    String?
+  direction  String?
+  provider   String
+  providerId String?
+  active     Boolean                @default(true)
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+  prices     FuelPriceObservation[]
+
+  @@unique([provider, providerId])
+  @@index([latitude, longitude])
+}
+
+model FuelPriceObservation {
+  id            String      @id @default(cuid())
+  stationId     String
+  fuelType      FuelType    @default(DIESEL)
+  cashPrice     Decimal?    @db.Decimal(8, 3)
+  creditPrice   Decimal?    @db.Decimal(8, 3)
+  discountPrice Decimal?    @db.Decimal(8, 3)
+  currency      String      @default("USD")
+  source        String
+  sourceId      String?
+  confidence    Float       @default(0)
+  verified      Boolean     @default(false)
+  observedAt    DateTime
+  expiresAt     DateTime
+  createdAt     DateTime    @default(now())
+  station       FuelStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([stationId, fuelType, observedAt])
+  @@index([expiresAt])
+}
+
+model CommunityDataReport {
+  id                String              @id @default(cuid())
+  userId            String
+  type              CommunityDataType
+  entityId          String
+  value             String
+  numericValue      Decimal?            @db.Decimal(10, 3)
+  latitude          Float?
+  longitude         Float?
+  note              String?
+  sourceContextJson Json?
+  confidence        Float               @default(0)
+  moderationStatus  ModerationStatus    @default(PENDING)
+  moderationReason  String?
+  expiresAt         DateTime
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  votes             CommunityDataVote[]
+
+  @@index([type, entityId, expiresAt])
+  @@index([userId, createdAt])
+  @@index([moderationStatus, createdAt])
+}
+
+model CommunityDataVote {
+  id        String              @id @default(cuid())
+  reportId  String
+  userId    String
+  value     CommunityVoteValue
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  report    CommunityDataReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, userId])
+  @@index([userId, createdAt])
+}
+
+model DotRoadEvent {
+  id              String        @id @default(cuid())
+  provider        String
+  providerEventId String
+  title           String
+  description     String?
+  type            RoadEventType
+  severity        EventSeverity @default(INFO)
+  latitude        Float
+  longitude       Float
+  affectedRoad    String?
+  direction       String?
+  startsAt        DateTime?
+  endsAt          DateTime?
+  lastUpdated     DateTime
+  active          Boolean       @default(true)
+  geometryJson    Json?
+  sourceUrl       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([provider, providerEventId])
+  @@index([active, type, severity])
+  @@index([latitude, longitude])
+  @@index([endsAt])
+}
+
+model TrafficCamera {
+  id               String   @id @default(cuid())
+  provider         String
+  providerCameraId String
+  name             String
+  roadway          String?
+  direction        String?
+  latitude         Float
+  longitude        Float
+  imageUrl         String?
+  streamUrl        String?
+  lastUpdated      DateTime
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([provider, providerCameraId])
+  @@index([active, latitude, longitude])
+}
+
+model ProviderSyncState {
+  id                 String             @id @default(cuid())
+  provider           String
+  jurisdiction       String
+  dataType           String
+  status             ProviderSyncStatus @default(NEVER_SYNCED)
+  endpointUrl        String?
+  refreshIntervalSec Int                @default(300)
+  lastAttemptAt      DateTime?
+  lastSuccessAt      DateTime?
+  lastErrorCode      String?
+  lastErrorMessage   String?
+  itemCount          Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@unique([provider, jurisdiction, dataType])
+  @@index([status, lastSuccessAt])
 }

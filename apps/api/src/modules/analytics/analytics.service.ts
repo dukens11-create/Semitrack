@@ -16,6 +16,7 @@ export async function getFleetAnalytics() {
     avgDistanceMiles: Number(avgDistance.toFixed(1)),
     totalLoads: loads.length,
     totalRevenueUsd: Number(totalRevenue.toFixed(2)),
-    onTimeDeliveryRate: deliveredTrips.length ? 92.4 : 0,
+    onTimeDeliveryRate: null,
+    onTimeDeliveryRateAvailable: false,
   };
 }

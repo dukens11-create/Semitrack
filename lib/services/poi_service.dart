@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -8,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mbx;
 
 import 'package:semitrack_mobile/models/poi_item.dart';
+import 'package:semitrack_mobile/services/weigh_station_repository.dart';
 
 /// Normalises a PNG filename to a Mapbox image ID.
 ///
@@ -32,9 +34,24 @@ String poiIconId(String filename) {
 /// in the folder so it is registered by [registerPoiIcons].
 const String _kPoiFallbackIcon = 'truck_parking';
 
+/// POI categories allowed to appear automatically on the driving map.
+///
+/// Generic gas stations, restaurants, stores, and hotels are deliberately not
+/// included. They can be searched as destinations, but must never be presented
+/// as services suitable for a commercial truck.
+const Set<String> _kCommercialVehiclePoiCategories = {
+  'truck_stop',
+  'weigh_station',
+  'rest_area',
+  'brake_check_area',
+  'truck_parking',
+  'commercial_vehicle_wash',
+  'truck_wash',
+  'port_of_entry',
+};
+
 /// Loads every [PoiItem] from `assets/locations.json`,
-/// `assets/walmart-stores.json`, and `assets/restaurants.json`,
-/// returning the combined list.
+/// returning only verified commercial-vehicle POIs for the driving map.
 ///
 /// The JSON entries use the standardised schema with five required fields:
 /// `id`, `name`, `icon` (PNG filename, e.g. `"pilot.png"`), `lat`, `lng`,
@@ -60,11 +77,12 @@ const String _kPoiFallbackIcon = 'truck_parking';
 /// via [loadRestaurantPois] and appended to the result.  Every valid entry
 /// is rendered with the `restaurant.png` marker.
 ///
-/// No proximity or category filter is applied; every entry in all files is
-/// returned so that all USA and Canada POIs appear as markers on the map.
+/// Passenger-car gas stations and other generic businesses are excluded even
+/// when present in the source asset.
 Future<List<PoiItem>> loadAllPois() async {
-  final String jsonString =
-      await rootBundle.loadString('assets/locations.json');
+  final String jsonString = await rootBundle.loadString(
+    'assets/locations.json',
+  );
   final List<dynamic> data = jsonDecode(jsonString) as List<dynamic>;
 
   // Build the set of icon IDs that are actually bundled in assets/logo_brand_markers/
@@ -73,13 +91,15 @@ Future<List<PoiItem>> loadAllPois() async {
   // Note: AssetManifest.loadFromAssetBundle is called once here because
   // loadAllPois() is called at most once per map style load (guarded by the
   // styleSourceExists check in _setupPoiCluster).
-  final AssetManifest manifest =
-      await AssetManifest.loadFromAssetBundle(rootBundle);
+  final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
+    rootBundle,
+  );
   final Set<String> bundledIconIds = manifest
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') &&
+            key.endsWith('.png'),
       )
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
@@ -93,6 +113,9 @@ Future<List<PoiItem>> loadAllPois() async {
         // data error — log it and drop it so no legacy/hardcoded Walmart
         // locations ever appear on the map from this file.
         final category = (json['category'] as String?) ?? '';
+        if (!_kCommercialVehiclePoiCategories.contains(category)) {
+          return false;
+        }
         if (category == 'walmart_store') {
           debugPrint(
             '[POI Load] ✗ Rejected walmart_store entry in locations.json '
@@ -101,7 +124,15 @@ Future<List<PoiItem>> loadAllPois() async {
           );
           return false;
         }
-        return true;
+        // Legacy locations.json weigh-station records do not carry official
+        // source or verification metadata. They are intentionally excluded
+        // from the safety UI; only the versioned official dataset below may
+        // supply enforcement locations.
+        if (category == 'weigh_station') return false;
+        // Approximate bundled centroids are not driver-safe place data.
+        return json['verified'] == true &&
+            json['entrance_lat'] is num &&
+            json['entrance_lng'] is num;
       })
       .map((json) {
         final String rawIcon = json['icon'] as String;
@@ -111,8 +142,9 @@ Future<List<PoiItem>> loadAllPois() async {
         // are assigned 'truck_stop_default'. This covers both USA and Canada POI
         // data. Entries with a non-empty name are used as-is.
         final String rawName = (json['name'] as String?)?.trim() ?? '';
-        final String resolvedName =
-            rawName.isNotEmpty ? rawName : 'truck_stop_default';
+        final String resolvedName = rawName.isNotEmpty
+            ? rawName
+            : 'truck_stop_default';
 
         // Validate the normalised icon ID against the bundled PNG set.
         // If the PNG is absent, log a clear error and fall back to the default
@@ -166,13 +198,34 @@ Future<List<PoiItem>> loadAllPois() async {
   // store locations. Any previous source (e.g. walmart_locations.json, hardcoded
   // addresses, or locations.json entries) has been removed. Only these entries
   // appear as Walmart markers on the map.
-  final List<PoiItem> walmartPois = await loadWalmartPois();
+  // Legacy centroid-only Walmart assets are intentionally not loaded.
+  // Live results are supplied by HerePlacesService after the first GPS fix.
+  const List<PoiItem> walmartPois = [];
 
   // Append restaurant POIs from assets/restaurants.json.
   // Every valid entry is loaded with the restaurant.png marker.
-  final List<PoiItem> restaurantPois = await loadRestaurantPois();
+  // The bundled restaurant file is sample data, not a production POI source.
+  // Keep it off the driver map until a live provider replaces it.
+  const List<PoiItem> restaurantPois = [];
 
-  return [...basePois, ...walmartPois, ...restaurantPois];
+  final officialWeighStations = await WeighStationRepository().getAllStations();
+  final weighStationPois = officialWeighStations
+      .map(
+        (station) => PoiItem(
+          id: station.id,
+          name: station.name,
+          category: 'weigh_station',
+          icon: 'weight_station',
+          lat: station.position.latitude,
+          lng: station.position.longitude,
+          verified: station.isOfficial,
+          country: 'US',
+          stateOrProvince: station.state,
+        ),
+      )
+      .toList(growable: false);
+
+  return [...basePois, ...weighStationPois, ...walmartPois, ...restaurantPois];
 }
 
 /// Loads every Walmart store [PoiItem] from `assets/walmart-stores.json`.
@@ -184,7 +237,8 @@ Future<List<PoiItem>> loadAllPois() async {
 /// Entries may set `verified=true` with matched `entrance_lat`/`entrance_lng`
 /// coordinates for a coloured driver-visible marker, or omit them (verified
 /// remains `false`) for an approximate grey marker at the zip-code centroid.
-/// Either way, **every** valid entry appears on the map.
+/// Approximate centroid-only records are rejected. Live Walmart results come
+/// from HERE through the authenticated backend.
 ///
 /// Parsing is done entry-by-entry so a single malformed record is logged and
 /// skipped without preventing the rest from loading.
@@ -196,8 +250,7 @@ Future<List<PoiItem>> loadWalmartPois() async {
   // assets/walmart-stores.json is the single source of truth for Walmart POIs.
   final String jsonString;
   try {
-    jsonString =
-        await rootBundle.loadString('assets/walmart-stores.json');
+    jsonString = await rootBundle.loadString('assets/walmart-stores.json');
   } catch (e) {
     debugPrint('[POI Load] Could not load walmart-stores.json: $e');
     return [];
@@ -217,26 +270,36 @@ Future<List<PoiItem>> loadWalmartPois() async {
   final List<PoiItem> result = [];
   for (int i = 0; i < data.length; i++) {
     try {
-      final Map<String, dynamic> json =
-          data[i] as Map<String, dynamic>;
-      result.add(PoiItem(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        category: json['category'] as String? ?? 'walmart_store',
-        icon: poiIconId((json['icon'] as String?) ?? 'walmart_store.png'),
-        lat: (json['lat'] as num).toDouble(),
-        lng: (json['lng'] as num).toDouble(),
-        entranceLat: json['entrance_lat'] != null
-            ? (json['entrance_lat'] as num).toDouble()
-            : null,
-        entranceLng: json['entrance_lng'] != null
-            ? (json['entrance_lng'] as num).toDouble()
-            : null,
-        verified: (json['verified'] as bool?) ?? false,
-        country: (json['country'] as String?) ?? 'US',
-        stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
-        city: (json['city'] as String?) ?? '',
-      ));
+      final Map<String, dynamic> json = data[i] as Map<String, dynamic>;
+      final bool verified = (json['verified'] as bool?) ?? false;
+      final bool hasVerifiedEntrance =
+          verified &&
+          json['entrance_lat'] is num &&
+          json['entrance_lng'] is num;
+      // The legacy file contains city/ZIP centroids, not real store entrances.
+      // Never present those approximate points as Walmart locations. Live
+      // Walmart places are loaded from HERE through the authenticated backend.
+      if (!hasVerifiedEntrance) continue;
+      result.add(
+        PoiItem(
+          id: json['id'] as String,
+          name: json['name'] as String,
+          category: json['category'] as String? ?? 'walmart_store',
+          icon: poiIconId((json['icon'] as String?) ?? 'walmart_store.png'),
+          lat: (json['lat'] as num).toDouble(),
+          lng: (json['lng'] as num).toDouble(),
+          entranceLat: json['entrance_lat'] != null
+              ? (json['entrance_lat'] as num).toDouble()
+              : null,
+          entranceLng: json['entrance_lng'] != null
+              ? (json['entrance_lng'] as num).toDouble()
+              : null,
+          verified: (json['verified'] as bool?) ?? false,
+          country: (json['country'] as String?) ?? 'US',
+          stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
+          city: (json['city'] as String?) ?? '',
+        ),
+      );
     } catch (e) {
       // Log malformed entry but continue loading the rest.
       debugPrint(
@@ -293,12 +356,10 @@ Future<List<PoiItem>> loadRestaurantPois() async {
   final List<PoiItem> result = [];
   for (int i = 0; i < data.length; i++) {
     try {
-      final Map<String, dynamic> json =
-          data[i] as Map<String, dynamic>;
+      final Map<String, dynamic> json = data[i] as Map<String, dynamic>;
 
       // Extract the MongoDB OID as the unique POI id.
-      final Map<String, dynamic> idMap =
-          json['_id'] as Map<String, dynamic>;
+      final Map<String, dynamic> idMap = json['_id'] as Map<String, dynamic>;
       final String id = idMap['\$oid'] as String;
 
       final String name = (json['name'] as String?)?.trim() ?? '';
@@ -317,18 +378,20 @@ Future<List<PoiItem>> loadRestaurantPois() async {
       final double lng = (location[0] as num).toDouble();
       final double lat = (location[1] as num).toDouble();
 
-      result.add(PoiItem(
-        id: id,
-        name: name,
-        category: 'restaurant',
-        icon: 'restaurant',
-        lat: lat,
-        lng: lng,
-        verified: false,
-        country: 'US',
-        stateOrProvince: '',
-        city: '',
-      ));
+      result.add(
+        PoiItem(
+          id: id,
+          name: name,
+          category: 'restaurant',
+          icon: 'restaurant',
+          lat: lat,
+          lng: lng,
+          verified: false,
+          country: 'US',
+          stateOrProvince: '',
+          city: '',
+        ),
+      );
     } catch (e) {
       // Log malformed entry but continue loading the rest.
       debugPrint(
@@ -343,7 +406,6 @@ Future<List<PoiItem>> loadRestaurantPois() async {
   );
   return result;
 }
-
 
 /// Each feature carries the core [PoiItem] fields as GeoJSON properties.  The
 /// `icon` property matches a Mapbox image ID registered via [registerPoiIcons],
@@ -378,7 +440,8 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
               'icon': poi.icon,
               // true  → entrance coords used; show a "verified" marker.
               // false → property-centre coords used; show an "approximate" marker.
-              'verified': poi.verified &&
+              'verified':
+                  poi.verified &&
                   poi.entranceLat != null &&
                   poi.entranceLng != null,
             },
@@ -386,6 +449,86 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
         )
         .toList(),
   };
+}
+
+ui.Color _mapboxPoiPinColor(String imageId) {
+  if (imageId.contains('weight') || imageId.contains('weigh')) {
+    return const ui.Color(0xFF049A8F);
+  }
+  if (imageId.contains('restaurant') || imageId.contains('food')) {
+    return const ui.Color(0xFFE75B3B);
+  }
+  if (imageId.contains('repair') || imageId.contains('mechanic')) {
+    return const ui.Color(0xFF34495E);
+  }
+  return const ui.Color(0xFF1489C7);
+}
+
+/// Wraps a raw POI logo in the same outlined teardrop used by Flutter markers.
+Future<ui.Image> _renderMapboxPoiPin(ui.Image logo, String imageId) async {
+  const double width = 96;
+  const double height = 112;
+  const double centerX = width / 2;
+  final ui.PictureRecorder recorder = ui.PictureRecorder();
+  final ui.Canvas canvas = ui.Canvas(recorder);
+  final ui.Path pin = ui.Path()
+    ..moveTo(centerX, 106)
+    ..cubicTo(66, 87, 85, 68, 85, 40)
+    ..cubicTo(85, 19, 69, 8, centerX, 8)
+    ..cubicTo(27, 8, 11, 19, 11, 40)
+    ..cubicTo(11, 68, 30, 87, centerX, 106)
+    ..close();
+
+  canvas.drawShadow(pin, const ui.Color(0x99000000), 7, false);
+  canvas.drawPath(
+    pin,
+    ui.Paint()
+      ..color = const ui.Color(0xFF12324A)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeJoin = ui.StrokeJoin.round
+      ..strokeWidth = 12,
+  );
+  canvas.drawPath(
+    pin,
+    ui.Paint()
+      ..color = const ui.Color(0xFFFFFFFF)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeJoin = ui.StrokeJoin.round
+      ..strokeWidth = 8,
+  );
+  canvas.drawPath(pin, ui.Paint()..color = _mapboxPoiPinColor(imageId));
+
+  const ui.Offset headCenter = ui.Offset(centerX, 40);
+  const double headRadius = 27;
+  canvas.drawCircle(
+    headCenter,
+    headRadius,
+    ui.Paint()..color = const ui.Color(0xFFFFFFFF),
+  );
+  final ui.Path clip = ui.Path()
+    ..addOval(ui.Rect.fromCircle(center: headCenter, radius: headRadius - 3));
+  canvas.save();
+  canvas.clipPath(clip);
+  final double scale = math.min(
+    46 / logo.width.toDouble(),
+    46 / logo.height.toDouble(),
+  );
+  final double targetWidth = logo.width * scale;
+  final double targetHeight = logo.height * scale;
+  final ui.Rect destination = ui.Rect.fromCenter(
+    center: headCenter,
+    width: targetWidth,
+    height: targetHeight,
+  );
+  canvas.drawImageRect(
+    logo,
+    ui.Rect.fromLTWH(0, 0, logo.width.toDouble(), logo.height.toDouble()),
+    destination,
+    ui.Paint()..filterQuality = ui.FilterQuality.high,
+  );
+  canvas.restore();
+
+  return recorder.endRecording().toImage(width.toInt(), height.toInt());
 }
 
 /// Registers every unique PNG in `assets/logo_brand_markers/` as a named image
@@ -407,13 +550,15 @@ Map<String, dynamic> poisToGeoJson(List<PoiItem> pois) {
 ///
 /// Returns the set of successfully registered image IDs.
 Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
-  final AssetManifest manifest =
-      await AssetManifest.loadFromAssetBundle(rootBundle);
+  final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
+    rootBundle,
+  );
   final List<String> pngAssets = manifest
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') &&
+            key.endsWith('.png'),
       )
       .toList();
 
@@ -436,25 +581,30 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
       final ByteData byteData = await rootBundle.load(assetPath);
       final Uint8List pngBytes = byteData.buffer.asUint8List();
 
-      // Decode PNG to obtain accurate dimensions and raw RGBA pixel data.
+      // Decode the source logo, then wrap it in the shared POI pin silhouette
+      // before registering it. A 2× scale factor displays the 96×112 bitmap as
+      // a compact 48×56 logical-pixel marker on the map.
       final Completer<ui.Image> completer = Completer();
       ui.decodeImageFromList(pngBytes, completer.complete);
       final ui.Image decoded = await completer.future;
+      final ui.Image rendered = await _renderMapboxPoiPin(decoded, imageId);
+      decoded.dispose();
 
-      final ByteData? rgbaData =
-          await decoded.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final ByteData? rgbaData = await rendered.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
       if (rgbaData == null) {
-        // TODO(production): Remove this log line before releasing.
+        rendered.dispose();
         debugPrint('[POI Icons]   ✗ Could not decode RGBA data for "$imageId"');
         continue;
       }
 
       await style.addStyleImage(
         imageId,
-        1.0,
+        2.0,
         mbx.MbxImage(
-          width: decoded.width,
-          height: decoded.height,
+          width: rendered.width,
+          height: rendered.height,
           data: rgbaData.buffer.asUint8List(),
         ),
         false,
@@ -462,6 +612,7 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
         [],
         null,
       );
+      rendered.dispose();
       registered.add(imageId);
 
       // TODO(production): Remove this success log line before releasing.
@@ -509,8 +660,8 @@ Future<Set<String>> registerPoiIcons(mbx.StyleManager style) async {
 /// // TODO(production): Remove this function and its call site in
 /// // TruckMapScreen._setupPoiCluster before releasing to production.
 Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
-  final List<String> sortedIcons =
-      pois.map((p) => p.icon).toSet().toList()..sort();
+  final List<String> sortedIcons = pois.map((p) => p.icon).toSet().toList()
+    ..sort();
 
   debugPrint(
     '[POI Audit] ${sortedIcons.length} unique icon ID(s) referenced by POIs:',
@@ -523,13 +674,15 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
   // by scanning the asset manifest and normalising each PNG filename.
   // This works on all platforms (Android, iOS, web, desktop) without dart:io.
   // TODO(production): Remove this block before releasing.
-  final AssetManifest manifest =
-      await AssetManifest.loadFromAssetBundle(rootBundle);
+  final AssetManifest manifest = await AssetManifest.loadFromAssetBundle(
+    rootBundle,
+  );
   final Set<String> bundledIds = manifest
       .listAssets()
       .where(
         (key) =>
-            key.startsWith('assets/logo_brand_markers/') && key.endsWith('.png'),
+            key.startsWith('assets/logo_brand_markers/') &&
+            key.endsWith('.png'),
       )
       .map((key) => poiIconId(key.split('/').last))
       .toSet();
@@ -544,8 +697,8 @@ Future<void> auditPoiIconAssets(List<PoiItem> pois) async {
       found
           ? '[POI Audit]   [FOUND]   "$id" — PNG is bundled and will be registered.'
           : '[POI Audit]   [MISSING] "$id" — No PNG in assets/logo_brand_markers/ '
-              'normalises to this ID. '
-              'Check the filename in the folder matches the JSON icon value.',
+                'normalises to this ID. '
+                'Check the filename in the folder matches the JSON icon value.',
     );
   }
 }

@@ -1,16 +1,3 @@
-buildscript {
-    ext.kotlin_version = '2.2.20'
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.6.0'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'com.google.gms:google-services:4.4.2'
-    }
-}
-
 allprojects {
     repositories {
         google()
@@ -18,14 +5,14 @@ allprojects {
     }
 }
 
-rootProject.buildDir = '../build'
+// CI/Codex can opt into a fresh build directory to avoid Windows file-locking
+// conflicts from a previously interrupted Gradle process. Normal local builds
+// continue to use Flutter's standard ../build directory.
+def isolatedBuildDir = System.getenv('SEMITRAX_GRADLE_BUILD_DIR')
+rootProject.buildDir = isolatedBuildDir ? file(isolatedBuildDir) : file('../build')
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
-subprojects {
-    project.evaluationDependsOn(':app')
-}
-
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }

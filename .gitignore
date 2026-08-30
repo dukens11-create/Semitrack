@@ -1,6 +1,7 @@
 # Miscellaneous
 *.class
 *.log
+*.tsbuildinfo
 *.pyc
 *.swp
 .DS_Store
@@ -13,6 +14,8 @@ migrate_working_dir/
 # Node.js dependencies
 node_modules/
 **/node_modules/
+**/dist/
+.npm-cache-*/
 
 # IntelliJ related
 *.iml
@@ -30,6 +33,12 @@ node_modules/
 /pubspec.lock
 **/doc/api/
 .dart_tool/
+/build/
+
+# Local Android recovery/build caches
+/.android-codex/
+/.gradle-codex*/
+/build-codex*/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
@@ -50,6 +59,22 @@ app.*.map.json
 /android/captures
 .externalNativeBuild
 .cxx
+
+# Proprietary HERE SDK and local credentials (install per docs/HERE_EXPLORE_SETUP.md)
+/plugins/here_sdk/
+/heresdk-*.tar.gz
+/heresdk-*.zip
+/credentials.properties
+/here_credentials.env
+/config/here/credentials.properties
+/config/here/credentials.json
+/config/mapbox/credentials.properties
+
+# Local application/server environment files. Keep documented templates.
+.env
+.env.*
+!.env.example
+!**/.env.example
 
 # iOS related - generated build artifacts only (keep source files)
 **/ios/Flutter/Generated.xcconfig

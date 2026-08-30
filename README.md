@@ -44,7 +44,16 @@ For a local Windows build, save the secret token in
 MAPBOX_DOWNLOADS_TOKEN=YOUR_PRIVATE_SK_TOKEN
 ```
 
-Then build with the public token:
+For local HERE-enabled builds, copy the public-token template and fill only the
+`pk.` value. The real file is ignored by Git:
+
+```powershell
+Copy-Item config\mapbox\credentials.properties.example config\mapbox\credentials.properties
+notepad config\mapbox\credentials.properties
+```
+
+`tools\here_flutter.ps1 build-android` and `run` load that file automatically.
+You can alternatively build with the public token in the environment:
 
 ```powershell
 flutter build apk --debug --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN

@@ -57,11 +57,7 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
       shape: BoxShape.circle,
       color: backgroundColor,
       boxShadow: const [
-        BoxShadow(
-          color: Colors.black38,
-          blurRadius: 8,
-          spreadRadius: 1,
-        ),
+        BoxShadow(color: Colors.black38, blurRadius: 8, spreadRadius: 1),
       ],
     ),
     child: ClipOval(
@@ -81,75 +77,164 @@ Widget buildCleanMarker(String asset, {Color backgroundColor = Colors.white}) {
   );
 }
 
-/// Builds a GPS teardrop-pin [Widget] for a POI.
+/// Builds the shared outlined teardrop marker used by every map POI.
 ///
-/// All POI types (truck stop, hotel, restaurant, rest area, gym,
-/// commercial vehicle, weight station) are rendered at the same fixed
-/// [pinSize] × [pinSize] bounding box so every marker is visually uniform
-/// on the map.
-///
-/// The pin uses [Icons.location_on] as the outer teardrop shape, coloured
-/// with [pinColor].  The circular head of the pin contains a white circle
-/// that holds either:
-/// - [imageBytes] decoded as an in-memory PNG logo, or
-/// - [fallbackIcon] as a white Material icon when no image is available.
-///
-/// ### Parameters
-/// - [pinColor]     – Colour of the teardrop pin shape.
-/// - [imageBytes]   – Optional preloaded PNG bytes for the logo.  Takes
-///                    precedence over [fallbackIcon] when non-null.
-/// - [fallbackIcon] – Icon to display when [imageBytes] is null.
-///                    Defaults to [Icons.location_on].
-/// - [pinSize]      – Total bounding-box size in logical pixels.
-///                    Defaults to `72`.  Keep consistent across call sites.
-///
-/// ### Returns
-/// A [Widget] ready to embed in a [Marker] child.
+/// The custom-painted silhouette has a dark edge, thick white keyline,
+/// category-coloured centre, and an exact bottom-centre map anchor. Branded
+/// images sit on a white disc; category fallback icons remain white on colour.
 Widget buildGpsPinMarker({
   required Color pinColor,
   Uint8List? imageBytes,
   IconData fallbackIcon = Icons.location_on,
-  double pinSize = 72.0,
+  double pinSize = 66.0,
 }) {
-  // The head of the pin occupies roughly the top 65 % of the icon bounding box.
-  // A larger headDiameter ratio (0.65) maximises the visible logo/icon area.
-  // We leave a minimal inset so the white circle does not clip the pin outline.
-  final double headDiameter = pinSize * 0.65;
-  final double headInset = pinSize * 0.02;
+  // A larger head and tighter logo padding keep real brand marks readable at
+  // normal navigation zoom without making the map pin excessively tall.
+  final double headDiameter = pinSize * 0.62;
+  final double headInset = pinSize * 0.065;
 
   final Widget innerContent = imageBytes != null
-      ? Image.memory(
-          imageBytes,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
+      ? Padding(
+          padding: EdgeInsets.all(pinSize * 0.025),
+          child: Image.memory(
+            imageBytes,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.high,
+          ),
         )
-      : Icon(fallbackIcon, size: headDiameter * 0.85, color: Colors.white);
+      : Icon(fallbackIcon, size: headDiameter * 0.66, color: Colors.white);
 
   return SizedBox(
     width: pinSize,
     height: pinSize,
     child: Stack(
-      alignment: Alignment.topCenter,
       children: [
-        // Outer teardrop pin shape.
-        Icon(Icons.location_on, size: pinSize, color: pinColor),
-        // White circular background in the pin head.
+        Positioned.fill(
+          child: CustomPaint(
+            key: const ValueKey<String>('poi-pin-shape'),
+            painter: _PoiPinPainter(pinColor),
+          ),
+        ),
         Positioned(
           top: headInset,
+          left: (pinSize - headDiameter) / 2,
           child: Container(
             width: headDiameter,
             height: headDiameter,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white,
-              boxShadow: const [
-                BoxShadow(color: Colors.black26, blurRadius: 4),
-              ],
-            ),
+            decoration: imageBytes == null
+                ? null
+                : const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                  ),
             child: ClipOval(child: innerContent),
           ),
         ),
       ],
     ),
   );
+}
+
+/// Builds a count marker with the same pin silhouette as individual POIs.
+Widget buildGpsPinClusterMarker({
+  required int count,
+  Color pinColor = const Color(0xFF1489C7),
+  double pinSize = 66.0,
+}) {
+  final String label = count > 99 ? '99+' : '$count';
+  return SizedBox(
+    width: pinSize,
+    height: pinSize,
+    child: Stack(
+      children: [
+        Positioned.fill(
+          child: CustomPaint(
+            key: const ValueKey<String>('poi-cluster-pin-shape'),
+            painter: _PoiPinPainter(pinColor),
+          ),
+        ),
+        Positioned(
+          top: pinSize * 0.13,
+          left: pinSize * 0.23,
+          child: Container(
+            width: pinSize * 0.54,
+            height: pinSize * 0.54,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: const Color(0xFF12324A),
+                fontSize: label.length > 2 ? pinSize * 0.19 : pinSize * 0.23,
+                fontWeight: FontWeight.w900,
+                height: 1,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _PoiPinPainter extends CustomPainter {
+  const _PoiPinPainter(this.color);
+
+  final Color color;
+
+  Path _path(Size size) {
+    final double width = size.width;
+    final double height = size.height;
+    final double centerX = width / 2;
+    final double top = height * 0.075;
+    final double side = width * 0.115;
+    final double headBottom = height * 0.61;
+    final double tipY = height * 0.94;
+
+    return Path()
+      ..moveTo(centerX, tipY)
+      ..cubicTo(
+        width * 0.68,
+        height * 0.77,
+        width - side,
+        headBottom,
+        width - side,
+        height * 0.36,
+      )
+      ..cubicTo(width - side, height * 0.17, width * 0.72, top, centerX, top)
+      ..cubicTo(width * 0.28, top, side, height * 0.17, side, height * 0.36)
+      ..cubicTo(side, headBottom, width * 0.32, height * 0.77, centerX, tipY)
+      ..close();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Path path = _path(size);
+    canvas.drawShadow(path, Colors.black87, size.width * 0.07, false);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = const Color(0xFF12324A)
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = size.width * 0.13,
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = size.width * 0.09,
+    );
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PoiPinPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

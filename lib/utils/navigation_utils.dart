@@ -150,17 +150,36 @@ const double kBearingSmoothingThreshold = 30.0;
 /// ```
 ///
 /// ### Notes
-/// - Bearing values are compared as raw doubles; the function does **not**
-///   handle wrap-around (e.g. 350° → 10° would be seen as a 340° jump and
-///   ignored).  If you need wrap-aware smoothing, normalise the difference to
-///   the −180…180 range first.
+/// - Bearings are normalized and compared across the shortest angular path, so
+///   wrap-around such as 350° → 10° is handled as a 20° change.
 /// - The 30° threshold is intentionally conservative.  Adjust the constant to
 ///   suit your use-case (e.g. a tighter 15° for smooth highway driving or a
 ///   looser 45° for pedestrian use).
+double normalizeBearing(double bearing) {
+  if (!bearing.isFinite) return 0;
+  return ((bearing % 360) + 360) % 360;
+}
+
+double shortestBearingDelta(double from, double to) {
+  final normalizedFrom = normalizeBearing(from);
+  final normalizedTo = normalizeBearing(to);
+  return ((normalizedTo - normalizedFrom + 540) % 360) - 180;
+}
+
 double smoothBearing(double newBearing, double oldBearing) {
-  final diff = (newBearing - oldBearing).abs();
-  if (diff > kBearingSmoothingThreshold) return oldBearing; // ignore crazy jumps
-  return newBearing;
+  final normalizedOld = normalizeBearing(oldBearing);
+  final delta = shortestBearingDelta(normalizedOld, newBearing);
+  if (delta.abs() > kBearingSmoothingThreshold) return normalizedOld;
+  return normalizeBearing(normalizedOld + delta);
+}
+
+/// Interpolates across the shortest angular path, including 360° wrap-around.
+double interpolateBearing(double current, double target, double factor) {
+  final safeFactor = factor.clamp(0.0, 1.0);
+  return normalizeBearing(
+    normalizeBearing(current) +
+        shortestBearingDelta(current, target) * safeFactor,
+  );
 }
 
 /// Projects a new [LatLng] from [origin] at [bearingRad] radians (clockwise
@@ -202,7 +221,8 @@ LatLng getLookAheadPosition(
         cos(lat1) * sin(angularDist) * cos(bearingRad),
   );
 
-  final double lng2 = lng1 +
+  final double lng2 =
+      lng1 +
       atan2(
         sin(bearingRad) * sin(angularDist) * cos(lat1),
         cos(angularDist) - sin(lat1) * sin(lat2),

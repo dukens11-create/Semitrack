@@ -1,12 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'driver_dashboard_screen.dart';
 import 'truck_map_screen.dart';
 import 'trips_screen.dart';
 import 'documents_screen.dart';
 import 'profile_screen.dart';
+import '../services/auth_service.dart';
+import '../services/analytics_service.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({super.key, required this.auth});
+
+  final AuthService auth;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -14,22 +20,36 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 1; // Open on the Map tab by default
+  late final List<Widget> _screens;
 
-  final List<Widget> _screens = const [
-    DriverDashboardScreen(),
-    TruckMapScreen(),
-    TripsScreen(),
-    DocumentsScreen(),
-    ProfileScreen(),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    unawaited(AnalyticsService(widget.auth.api).recordEvent('APP_OPENED'));
+    _screens = <Widget>[
+      DriverDashboardScreen(
+        user: widget.auth.user,
+        onPlanTrip: () => _selectTab(1),
+        onTrips: () => _selectTab(2),
+        onDocuments: () => _selectTab(3),
+        onProfile: () => _selectTab(4),
+      ),
+      TruckMapScreen(api: widget.auth.api),
+      TripsScreen(onPlanTrip: () => _selectTab(1)),
+      const DocumentsScreen(),
+      ProfileScreen(auth: widget.auth),
+    ];
+  }
+
+  void _selectTab(int index) {
+    if (!mounted || _currentIndex == index) return;
+    setState(() => _currentIndex = index);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
+      body: IndexedStack(index: _currentIndex, children: _screens),
       // ── Bottom navigation bar ──────────────────────────────────────────────
       // Hidden during active turn-by-turn navigation so the driver sees only
       // the map and navigation components.  [TruckMapScreen.isNavigatingNotifier]
@@ -43,11 +63,7 @@ class _AppShellState extends State<AppShell> {
           if (isNavigating) return const SizedBox.shrink();
           return NavigationBar(
             selectedIndex: _currentIndex,
-            onDestinationSelected: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
+            onDestinationSelected: _selectTab,
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.home_outlined),
@@ -72,7 +88,7 @@ class _AppShellState extends State<AppShell> {
               NavigationDestination(
                 icon: Icon(Icons.person_outline),
                 selectedIcon: Icon(Icons.person),
-                label: 'Profile',
+                label: 'More',
               ),
             ],
           );

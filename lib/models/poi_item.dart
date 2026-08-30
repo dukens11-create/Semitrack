@@ -85,6 +85,17 @@ class PoiItem {
   final String country;
   final String stateOrProvince;
   final String city;
+
+  /// Human-readable address supplied by the place-data provider.
+  final String address;
+
+  /// Provider that supplied this place (for example HERE or OFFICIAL_DOT).
+  final String dataSource;
+
+  /// True when the coordinate came from a live named-place provider rather
+  /// than an approximate bundled centroid.
+  final bool providerBacked;
+
   /// Highway exit number nearest to this stop (e.g. "309", "13A").
   /// Sourced from the optional `exit_number` field in `locations.json`.
   final String? exitNumber;
@@ -102,6 +113,9 @@ class PoiItem {
     this.country = '',
     this.stateOrProvince = '',
     this.city = '',
+    this.address = '',
+    this.dataSource = 'BUNDLED',
+    this.providerBacked = false,
     this.exitNumber,
   });
 
@@ -112,8 +126,8 @@ class PoiItem {
   /// [lat] (property centre) otherwise.
   double get displayLat =>
       (verified && entranceLat != null && entranceLng != null)
-          ? entranceLat!
-          : lat;
+      ? entranceLat!
+      : lat;
 
   /// Best-available display longitude.
   ///
@@ -122,8 +136,8 @@ class PoiItem {
   /// [lng] (property centre) otherwise.
   double get displayLng =>
       (verified && entranceLat != null && entranceLng != null)
-          ? entranceLng!
-          : lng;
+      ? entranceLng!
+      : lng;
 
   factory PoiItem.fromJson(Map<String, dynamic> json) {
     return PoiItem(
@@ -143,6 +157,11 @@ class PoiItem {
       country: (json['country'] as String?) ?? '',
       stateOrProvince: (json['stateOrProvince'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
+      address: (json['address'] ?? json['formatted_address'] ?? '').toString(),
+      dataSource: (json['dataSource'] ?? json['data_source'] ?? 'BUNDLED')
+          .toString(),
+      providerBacked:
+          (json['providerBacked'] ?? json['provider_backed']) as bool? ?? false,
       exitNumber: json['exit_number'] as String?,
     );
   }

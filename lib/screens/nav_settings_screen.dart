@@ -11,11 +11,7 @@ import 'package:semitrack_mobile/models/nav_settings_model.dart';
 /// (typically [TruckMapScreen]) can call `setState` and rebuild the live map
 /// in real-time.
 class NavSettingsScreen extends StatefulWidget {
-  const NavSettingsScreen({
-    super.key,
-    required this.settings,
-    this.onChanged,
-  });
+  const NavSettingsScreen({super.key, required this.settings, this.onChanged});
 
   final NavSettingsModel settings;
 
@@ -67,8 +63,11 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
         backgroundColor: _cardBg,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new,
-              color: _textPrimary, size: 20),
+          icon: const Icon(
+            Icons.arrow_back_ios_new,
+            color: _textPrimary,
+            size: 20,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
@@ -91,6 +90,8 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           _buildAudioSettingsSection(),
           const SizedBox(height: 14),
           _buildMapTypeSection(),
+          const SizedBox(height: 14),
+          _buildDistanceUnitsSection(),
           const SizedBox(height: 14),
           _buildViewOnMapSection(),
           const SizedBox(height: 14),
@@ -130,7 +131,8 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               label: 'Search Places',
               active: _s.shortcutSearchPlaces,
               onTap: () => _update(
-                  () => _s.shortcutSearchPlaces = !_s.shortcutSearchPlaces),
+                () => _s.shortcutSearchPlaces = !_s.shortcutSearchPlaces,
+              ),
             ),
             _ShortcutItem(
               icon: Icons.flag_outlined,
@@ -144,7 +146,8 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               label: 'Places Filter',
               active: _s.shortcutPlacesFilter,
               onTap: () => _update(
-                  () => _s.shortcutPlacesFilter = !_s.shortcutPlacesFilter),
+                () => _s.shortcutPlacesFilter = !_s.shortcutPlacesFilter,
+              ),
             ),
             _ShortcutItem(
               icon: Icons.share,
@@ -227,6 +230,46 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
     );
   }
 
+  Widget _buildDistanceUnitsSection() {
+    return _SectionCard(
+      title: 'Distance Units',
+      icon: Icons.straighten_rounded,
+      iconColor: const Color(0xFF00A98F),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: SegmentedButton<DistanceUnit>(
+            segments: const [
+              ButtonSegment<DistanceUnit>(
+                value: DistanceUnit.miles,
+                icon: Icon(Icons.route_rounded),
+                label: Text('Miles'),
+              ),
+              ButtonSegment<DistanceUnit>(
+                value: DistanceUnit.kilometers,
+                icon: Icon(Icons.public_rounded),
+                label: Text('Kilometers'),
+              ),
+            ],
+            selected: {_s.distanceUnit},
+            showSelectedIcon: true,
+            onSelectionChanged: (selection) {
+              if (selection.isEmpty) return;
+              _update(() => _s.distanceUnit = selection.first);
+            },
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 4),
+          child: Text(
+            'Applies to route cards, maneuver distances, POIs, warnings, and trip summaries.',
+            style: TextStyle(color: Color(0xFF8A9BB0), fontSize: 12),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Shows a bottom sheet picker for the TTS voice package.
   void _showVoicePackagePicker() {
     showModalBottomSheet<void>(
@@ -261,7 +304,9 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
             ListTile(
               leading: Icon(
                 Icons.record_voice_over_outlined,
-                color: pkg == _s.voicePackage ? _accent : const Color(0xFF8A9BB0),
+                color: pkg == _s.voicePackage
+                    ? _accent
+                    : const Color(0xFF8A9BB0),
               ),
               title: Text(
                 pkg,
@@ -310,15 +355,24 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
               // ── Pitch ─────────────────────────────────────────────────
               Row(
                 children: [
-                  const Icon(Icons.music_note,
-                      color: Color(0xFF8A9BB0), size: 18),
+                  const Icon(
+                    Icons.music_note,
+                    color: Color(0xFF8A9BB0),
+                    size: 18,
+                  ),
                   const SizedBox(width: 8),
-                  const Text('Pitch',
-                      style: TextStyle(color: _textPrimary, fontSize: 14)),
+                  const Text(
+                    'Pitch',
+                    style: TextStyle(color: _textPrimary, fontSize: 14),
+                  ),
                   const Spacer(),
-                  Text(pitch.toStringAsFixed(1),
-                      style: const TextStyle(
-                          color: Color(0xFF8A9BB0), fontSize: 13)),
+                  Text(
+                    pitch.toStringAsFixed(1),
+                    style: const TextStyle(
+                      color: Color(0xFF8A9BB0),
+                      fontSize: 13,
+                    ),
+                  ),
                 ],
               ),
               Slider(
@@ -335,12 +389,18 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
                 children: [
                   const Icon(Icons.speed, color: Color(0xFF8A9BB0), size: 18),
                   const SizedBox(width: 8),
-                  const Text('Speech Rate',
-                      style: TextStyle(color: _textPrimary, fontSize: 14)),
+                  const Text(
+                    'Speech Rate',
+                    style: TextStyle(color: _textPrimary, fontSize: 14),
+                  ),
                   const Spacer(),
-                  Text(rate.toStringAsFixed(1),
-                      style: const TextStyle(
-                          color: Color(0xFF8A9BB0), fontSize: 13)),
+                  Text(
+                    rate.toStringAsFixed(1),
+                    style: const TextStyle(
+                      color: Color(0xFF8A9BB0),
+                      fontSize: 13,
+                    ),
+                  ),
                 ],
               ),
               Slider(
@@ -356,8 +416,10 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: Color(0xFF8A9BB0))),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF8A9BB0)),
+              ),
             ),
             TextButton(
               onPressed: () {
@@ -586,11 +648,8 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  Widget _dividerLine() => const Divider(
-        color: _divider,
-        height: 1,
-        thickness: 1,
-      );
+  Widget _dividerLine() =>
+      const Divider(color: _divider, height: 1, thickness: 1);
 }
 
 // ── Private helper widgets ────────────────────────────────────────────────────
@@ -621,8 +680,7 @@ class _SectionCard extends StatelessWidget {
         children: [
           // ── Section header ───────────────────────────────────────────────
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
                 Container(
@@ -669,11 +727,7 @@ class _ShortcutGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: items,
-    );
+    return Wrap(spacing: 10, runSpacing: 10, children: items);
   }
 }
 
@@ -698,8 +752,9 @@ class _ShortcutItem extends StatelessWidget {
     final Color bg = active ? activeColor.withOpacity(0.18) : inactiveColor;
     final Color iconColor = active ? activeColor : const Color(0xFF8A9BB0);
     final Color textColor = active ? Colors.white : const Color(0xFF8A9BB0);
-    final Color border =
-        active ? activeColor.withOpacity(0.5) : Colors.transparent;
+    final Color border = active
+        ? activeColor.withOpacity(0.5)
+        : Colors.transparent;
 
     return GestureDetector(
       onTap: onTap,
@@ -831,14 +886,10 @@ class _TappableRow extends StatelessWidget {
             if (value != null)
               Text(
                 value!,
-                style: const TextStyle(
-                  color: Color(0xFF8A9BB0),
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: Color(0xFF8A9BB0), fontSize: 13),
               ),
             const SizedBox(width: 4),
-            const Icon(Icons.chevron_right,
-                color: Color(0xFF8A9BB0), size: 18),
+            const Icon(Icons.chevron_right, color: Color(0xFF8A9BB0), size: 18),
           ],
         ),
       ),
@@ -870,7 +921,9 @@ class _AudioModeChip extends StatelessWidget {
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: selected ? accent.withOpacity(0.18) : const Color(0xFF253041),
+            color: selected
+                ? accent.withOpacity(0.18)
+                : const Color(0xFF253041),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: selected ? accent.withOpacity(0.6) : Colors.transparent,
@@ -880,8 +933,11 @@ class _AudioModeChip extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  color: selected ? accent : const Color(0xFF8A9BB0), size: 20),
+              Icon(
+                icon,
+                color: selected ? accent : const Color(0xFF8A9BB0),
+                size: 20,
+              ),
               const SizedBox(height: 4),
               Text(
                 label,
@@ -923,7 +979,9 @@ class _MapTypeCard extends StatelessWidget {
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.symmetric(vertical: 18),
           decoration: BoxDecoration(
-            color: selected ? accent.withOpacity(0.18) : const Color(0xFF253041),
+            color: selected
+                ? accent.withOpacity(0.18)
+                : const Color(0xFF253041),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: selected ? accent : Colors.transparent,
@@ -933,8 +991,11 @@ class _MapTypeCard extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  color: selected ? accent : const Color(0xFF8A9BB0), size: 28),
+              Icon(
+                icon,
+                color: selected ? accent : const Color(0xFF8A9BB0),
+                size: 28,
+              ),
               const SizedBox(height: 8),
               Text(
                 label,

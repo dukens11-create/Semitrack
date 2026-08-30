@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    "src/server.ts",
+    "src/types.ts",
+    "src/config/**/*.ts",
+    "src/lib/**/*.ts",
+    "src/middleware/**/*.ts",
+    "src/scripts/**/*.ts",
+    "src/utils/**/*.ts",
+    "src/services/routingService.ts",
+    "src/services/eldService.ts",
+    "src/services/providers/**/*.ts"
+  ]
+}

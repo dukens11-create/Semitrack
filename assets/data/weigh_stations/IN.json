@@ -1,0 +1,11 @@
+{
+  "state": "IN",
+  "datasetVersion": "0.1.0-pending",
+  "generatedAt": "2026-08-20T06:35:56.833Z",
+  "imported": false,
+  "source": {
+    "name": "PENDING — authoritative state dataset not imported",
+    "url": "https://www.fhwa.dot.gov/about/webstate.cfm"
+  },
+  "stations": []
+}

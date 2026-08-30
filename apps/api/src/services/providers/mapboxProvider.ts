@@ -1,90 +1,121 @@
-import type { RouteBuildInput, RouteBuildResult } from "../../types.js";
-import type { RouteProvider } from "./routeProvider.js";
 import { env } from "../../config/env.js";
+import type { RouteBuildInput, RouteBuildResult, RouteLeg, RouteOption } from "../../types.js";
+import type { RouteProvider } from "./routeProvider.js";
 
 function metersToMiles(meters: number) {
-  return Number((meters / 1609.344).toFixed(1));
+  return Number((meters / 1609.344).toFixed(2));
 }
-
-/**
- * Decodes a Mapbox polyline6-encoded geometry string into [lng, lat] pairs.
- * polyline6 uses a precision factor of 1e6 (vs 1e5 for standard polyline5).
- */
 function decodePolyline6(encoded: string): number[][] {
   const coordinates: number[][] = [];
   let index = 0;
   let lat = 0;
   let lng = 0;
-
   while (index < encoded.length) {
     let result = 0;
     let shift = 0;
-    let b: number;
-
+    let byte: number;
     do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
       shift += 5;
-    } while (b >= 0x20);
-    const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
-    lat += dlat;
-
+    } while (byte >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : result >> 1;
     result = 0;
     shift = 0;
     do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
       shift += 5;
-    } while (b >= 0x20);
-    const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
-    lng += dlng;
-
-    // Store as [lng, lat] to match GeoJSON / existing routeGeometry convention.
+    } while (byte >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : result >> 1;
     coordinates.push([lng / 1e6, lat / 1e6]);
   }
-
   return coordinates;
 }
 
+function parseRoute(route: any, index: number): RouteOption {
+  let maneuverIndex = 0;
+  const legs: RouteLeg[] = (Array.isArray(route.legs) ? route.legs : []).map((leg: any) => ({
+    distanceMiles: metersToMiles(Number(leg.distance ?? 0)),
+    durationSeconds: Number(leg.duration ?? 0),
+    geometry: [],
+    maneuvers: (Array.isArray(leg.steps) ? leg.steps : []).map((step: any) => ({
+      step: ++maneuverIndex,
+      instruction: String(step.maneuver?.instruction ?? "Continue"),
+      distanceMiles: metersToMiles(Number(step.distance ?? 0)),
+      durationSeconds: Number(step.duration ?? 0),
+      action: step.maneuver?.type ? String(step.maneuver.type) : undefined,
+      direction: step.maneuver?.modifier ? String(step.maneuver.modifier) : undefined,
+      roadName: step.name ? String(step.name) : undefined,
+      exitNumber: step.exits ? String(step.exits) : undefined,
+      lanes: Array.isArray(step.intersections)
+        ? step.intersections.flatMap((intersection: any) =>
+            Array.isArray(intersection.lanes)
+              ? intersection.lanes.map((lane: any) => ({
+                  directions: Array.isArray(lane.indications) ? lane.indications.map(String) : [],
+                  active: lane.active === true || lane.valid === true,
+                }))
+              : [],
+          )
+        : undefined,
+    })),
+  }));
+  const durationSeconds = Number(route.duration ?? legs.reduce((sum, leg) => sum + leg.durationSeconds, 0));
+  return {
+    id: String(route.routeIndex ?? `mapbox-route-${index}`),
+    distanceMiles: metersToMiles(Number(route.distance ?? 0)),
+    etaMinutes: Math.ceil(durationSeconds / 60),
+    durationSeconds,
+    routeGeometry: decodePolyline6(String(route.geometry ?? "")),
+    legs,
+    turnByTurn: legs.flatMap((leg) => leg.maneuvers),
+    notices: [],
+  };
+}
+
 export class MapboxRouteProvider implements RouteProvider {
+  readonly name = "Mapbox" as const;
+
   async buildRoute(input: RouteBuildInput): Promise<RouteBuildResult> {
-    const coords = [
+    if (!env.mapboxToken) throw new Error("MAPBOX_TOKEN is not configured");
+    const coordinates = [
       `${input.origin.lng},${input.origin.lat}`,
-      ...(input.viaStops ?? []).map((s) => `${s.lng},${s.lat}`),
+      ...(input.viaStops ?? []).map((stop) => `${stop.lng},${stop.lat}`),
       `${input.destination.lng},${input.destination.lat}`,
     ].join(";");
-
+    const exclude = input.truck.avoidFerries ? "&exclude=ferry" : "";
+    const alternatives = (input.alternatives ?? 0) > 0 ? "true" : "false";
     const url =
-      `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
+      `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordinates}` +
       `?access_token=${encodeURIComponent(env.mapboxToken)}` +
-      `&geometries=polyline6&steps=true&overview=full&annotations=duration,distance,speed` +
-      `&exclude=ferry`;
-
-    const res = await fetch(url);
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Mapbox route failed: ${res.status} ${text}`);
+      `&geometries=polyline6&steps=true&overview=full&annotations=duration,distance,speed,congestion_numeric` +
+      `&alternatives=${alternatives}${exclude}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`Mapbox traffic preview failed (${response.status}): ${detail}`);
     }
-
-    const data = await res.json();
-    const route = data.routes?.[0];
-    const leg = route?.legs?.[0];
-    if (!route || !leg) throw new Error("Mapbox route missing data");
-
+    const data: any = await response.json();
+    const routes = Array.isArray(data.routes) ? data.routes.map(parseRoute) : [];
+    if (!routes.length) throw new Error("Mapbox returned no route");
+    const selected = routes[0];
     return {
       provider: "Mapbox",
-      distanceMiles: metersToMiles(route.distance ?? 0),
-      etaMinutes: Math.round((route.duration ?? 0) / 60),
-      routeGeometry: decodePolyline6(route.geometry ?? ""),
-      turnByTurn: (leg.steps ?? []).slice(0, 10).map((s: any, index: number) => ({
-        step: index + 1,
-        instruction: s.maneuver?.instruction ?? "Continue",
-        distanceMiles: metersToMiles(s.distance ?? 0),
-      })),
+      truckSafe: false,
+      navigationAllowed: false,
+      trafficAware: true,
+      calculatedAt: new Date().toISOString(),
+      selectedRouteId: selected.id,
+      distanceMiles: selected.distanceMiles,
+      etaMinutes: selected.etaMinutes,
+      durationSeconds: selected.durationSeconds,
+      routeGeometry: selected.routeGeometry,
+      legs: selected.legs,
+      turnByTurn: selected.turnByTurn,
+      alternatives: routes.slice(1),
       alerts: [
-        "Mapbox live traffic route calculated",
-        "Mapbox driving-traffic profile used",
-        "Route may include interstates/highways and avoids ferries",
+        "NON-TRUCK-SAFE PREVIEW: Mapbox driving-traffic does not enforce the selected commercial-truck dimensions or restrictions.",
+        "Navigation is blocked for this route.",
       ],
     };
   }

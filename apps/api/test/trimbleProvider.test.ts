@@ -173,6 +173,65 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
   assert.ok(route.alerts.some((alert) => alert.includes("alternatives")));
 });
 
+test("Trimble prefers dense RoutePath geometry over sparse GeoTunnel samples", () => {
+  const routePathConfig = { ...config, routePathEnabled: true };
+  const payload = [
+    {
+      __type: "DirectionsReport:http://pcmiler.alk.com/APIs/v1.0",
+      RouteID: "trimble-route-path",
+      ReportLegs: [{ ReportLines: [{ Direction: "Destination", Dist: "1", Time: "0:02:00" }] }],
+    },
+    {
+      __type: "MileageReport:http://pcmiler.alk.com/APIs/v1.0",
+      RouteID: "trimble-route-path",
+      ReportLines: [{ LMiles: "1", TMiles: "1", LHours: "0:02:00", THours: "0:02:00" }],
+    },
+    {
+      __type: "GeoTunnelReport:http://pcmiler.alk.com/APIs/v1.0",
+      GeoTunnelPoints: [{ Lat: "39.52", Lon: "-119.81" }, { Lat: "39.53", Lon: "-119.82" }],
+    },
+    {
+      __type: "RoutePathReport:http://pcmiler.alk.com/APIs/v1.0",
+      geometry: {
+        type: "MultiLineString",
+        coordinates: [[
+          [-119.81, 39.52],
+          [-119.8105, 39.5204],
+          [-119.811, 39.521],
+          [-119.82, 39.53],
+        ]],
+      },
+    },
+  ];
+
+  const route = parseTrimbleRouteResponse(payload, input, routePathConfig);
+  assert.equal(route.routeGeometry.length, 4);
+  assert.deepEqual(route.routeGeometry[1], [-119.8105, 39.5204]);
+});
+
+test("Trimble refuses sparse GeoTunnel geometry when RoutePath is required", () => {
+  const routePathConfig = { ...config, routePathEnabled: true };
+  const payload = [
+    {
+      __type: "DirectionsReport:http://pcmiler.alk.com/APIs/v1.0",
+      ReportLegs: [{ ReportLines: [] }],
+    },
+    {
+      __type: "MileageReport:http://pcmiler.alk.com/APIs/v1.0",
+      ReportLines: [{ LMiles: "1", TMiles: "1", LHours: "0:02:00", THours: "0:02:00" }],
+    },
+    {
+      __type: "GeoTunnelReport:http://pcmiler.alk.com/APIs/v1.0",
+      GeoTunnelPoints: [{ Lat: "39.52", Lon: "-119.81" }, { Lat: "39.53", Lon: "-119.82" }],
+    },
+  ];
+
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload, input, routePathConfig),
+    (error: unknown) => error instanceof RoutingProviderError && error.code === "TRIMBLE_ROUTE_PATH_REQUIRED",
+  );
+});
+
 test("Trimble API key is sent only in the Authorization header", async () => {
   let capturedUrl = "";
   let capturedHeaders: HeadersInit | undefined;

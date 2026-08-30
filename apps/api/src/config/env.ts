@@ -48,7 +48,7 @@ export const env = {
   trimbleProfileName: process.env.TRIMBLE_PROFILE_NAME?.trim() ?? "",
   trimbleGeoTunnelIntervalMiles: Number(process.env.TRIMBLE_GEOTUNNEL_INTERVAL_MILES ?? 0.1),
   trimbleRequestTimeoutMs: Number(process.env.TRIMBLE_REQUEST_TIMEOUT_MS ?? 15_000),
-  trimbleRoutePathEnabled: parseBoolean(process.env.TRIMBLE_ROUTE_PATH_ENABLED),
+  trimbleRoutePathEnabled: parseBoolean(process.env.TRIMBLE_ROUTE_PATH_ENABLED ?? "true"),
   trimbleAlternateRoutesEnabled: parseBoolean(process.env.TRIMBLE_ALTERNATE_ROUTES_ENABLED),
   dotProviderConfigJson,
   dotProviderConfigured,

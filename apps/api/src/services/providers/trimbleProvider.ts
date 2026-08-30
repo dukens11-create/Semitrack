@@ -396,15 +396,22 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
   const finalMileage = mileageLines.at(-1) ?? {};
   const distanceMiles = finiteNumber(finalMileage.TMiles);
   const durationSeconds = clockToSeconds(finalMileage.THours);
-  const routeGeometry = config.routePathEnabled
-    ? flattenRoutePathGeometry(routePath)
-    : longestCoordinateSequence(geoTunnel);
-  const fallbackGeometry = routeGeometry.length ? routeGeometry : longestCoordinateSequence(geoTunnel ?? routePath);
-  if (!fallbackGeometry.length) {
+  const routePathGeometry = flattenRoutePathGeometry(routePath);
+  const geoTunnelGeometry = longestCoordinateSequence(geoTunnel);
+  if (config.routePathEnabled && routePathGeometry.length < 2) {
+    throw new RoutingProviderError(
+      "Trimble",
+      "TRIMBLE_ROUTE_PATH_REQUIRED",
+      "Trimble did not return navigation-quality RoutePath geometry. Enable the Trimble Maps/RoutePath entitlement; sparse GeoTunnel points are not safe to draw as a turn-by-turn road path.",
+      503,
+    );
+  }
+  const routeGeometry = config.routePathEnabled ? routePathGeometry : geoTunnelGeometry;
+  if (routeGeometry.length < 2) {
     throw new RoutingProviderError(
       "Trimble",
       "TRIMBLE_ROUTE_GEOMETRY_UNAVAILABLE",
-      "Trimble returned no route geometry. Verify Route Reports/GeoTunnel entitlement for this API key.",
+      "Trimble returned no usable route geometry. Verify RoutePath or GeoTunnel access for this API key.",
     );
   }
   if (distanceMiles == null || durationSeconds <= 0) {
@@ -415,7 +422,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     );
   }
 
-  const { legs, warnings } = parseDirectionLegs(directions, fallbackGeometry, mileage);
+  const { legs, warnings } = parseDirectionLegs(directions, routeGeometry, mileage);
   const alerts = [...new Set(warnings)];
   if (input.truck.avoidResidential) alerts.push("Trimble does not expose a direct avoid-residential Route Reports option; truck restrictions remain enforced.");
   if (input.truck.avoidHighways) alerts.push("Trimble does not expose a direct avoid-highways Route Reports option; Practical truck routing was used.");
@@ -435,7 +442,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     distanceMiles: Number(distanceMiles.toFixed(2)),
     etaMinutes: Math.ceil(durationSeconds / 60),
     durationSeconds,
-    routeGeometry: fallbackGeometry,
+    routeGeometry,
     legs,
     turnByTurn: legs.flatMap((leg) => leg.maneuvers),
     alternatives: parseAlternateRoutes(reports),

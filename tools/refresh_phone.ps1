@@ -65,18 +65,27 @@ try {
                     $parsedApiUrl.Scheme,
                     $parsedApiUrl.Host,
                     $parsedApiUrl.Port
+                $healthStatusCode = $null
                 try {
                     $healthResponse = Invoke-WebRequest `
                         -Uri $healthUrl `
                         -UseBasicParsing `
                         -TimeoutSec 5
-                    if ($healthResponse.StatusCode -ne 200) {
-                        throw "Health check returned HTTP $($healthResponse.StatusCode)."
-                    }
+                    $healthStatusCode = [int]$healthResponse.StatusCode
                 } catch {
-                    throw "The local SemiTraX API is not responding at $healthUrl. Start it in another PowerShell window with: cd $repoRoot\apps\api; npm run dev"
+                    $errorResponse = $_.Exception.Response
+                    if ($null -eq $errorResponse) {
+                        throw "The local SemiTraX API is not responding at $healthUrl. Start it in another PowerShell window with: cd $repoRoot\apps\api; npm run dev"
+                    }
+                    $healthStatusCode = [int]$errorResponse.StatusCode
                 }
-                Write-Host "Local SemiTraX API health check passed: $healthUrl"
+                if ($healthStatusCode -eq 200) {
+                    Write-Host "Local SemiTraX API health check passed: $healthUrl"
+                } elseif ($healthStatusCode -eq 503) {
+                    Write-Warning "The local SemiTraX API is reachable but degraded (HTTP 503). The APK can be built and opened, but database-backed features such as login may remain unavailable until the database connection is restored."
+                } else {
+                    throw "The local SemiTraX API health check returned HTTP $healthStatusCode at $healthUrl."
+                }
             }
         }
         $buildArguments = @{

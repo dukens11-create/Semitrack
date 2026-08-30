@@ -18232,33 +18232,6 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                       _hasActiveDestination &&
                       _tripStartTime != null)
                     _buildTripStatsPanel(),
-                  // ── POI toggle FAB ────────────────────────────────────────
-                  // Hidden during navigation so the Stop Navigation button can
-                  // occupy the same bottom-left slot without overlap.
-                  if (!_drivingUiActive &&
-                      (_selectedDestination != null || _routePoints.isNotEmpty))
-                    Positioned(
-                      bottom: 24,
-                      left: 16,
-                      child: FloatingActionButton.small(
-                        heroTag: 'poi_toggle',
-                        tooltip: _showTruckStops
-                            ? 'Hide all POIs'
-                            : 'Show all POIs',
-                        backgroundColor: _showTruckStops
-                            ? Colors.blue.shade700
-                            : Colors.grey.shade700,
-                        onPressed: () {
-                          setState(() => _showTruckStops = !_showTruckStops);
-                        },
-                        child: Icon(
-                          _showTruckStops
-                              ? Icons.local_gas_station
-                              : Icons.local_gas_station_outlined,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
                   // ── Zone 1: live current/incoming street guidance header ──
                   if (_isLiveRouteAssistanceActive &&
                       _topInstructionData != null)

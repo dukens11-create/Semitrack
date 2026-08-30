@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import '../theme/semitrack_theme.dart';
-import '../widgets/semitrack_ui.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, required this.auth});
@@ -38,9 +37,8 @@ class _AuthScreenState extends State<AuthScreen> {
         : await widget.auth.login(_email.text, _password.text);
     if (mounted) setState(() => _busy = false);
     if (!ok && mounted && widget.auth.errorMessage != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(widget.auth.errorMessage!)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(widget.auth.errorMessage!)));
     }
   }
 
@@ -145,11 +143,20 @@ class _AuthScreenState extends State<AuthScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const Align(
+                            Align(
                               alignment: Alignment.centerLeft,
-                              child: DefaultTextStyle(
-                                style: TextStyle(color: Colors.white),
-                                child: SemiTrackWordmark(),
+                              child: Semantics(
+                                image: true,
+                                label: 'Semi-TraX — Smarter routes. Safer deliveries.',
+                                child: Image.asset(
+                                  'assets/images/semitrax_brand_lockup.png',
+                                  width: 260,
+                                  height: 176,
+                                  fit: BoxFit.contain,
+                                  alignment: Alignment.centerLeft,
+                                  filterQuality: FilterQuality.high,
+                                  excludeFromSemantics: true,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 30),

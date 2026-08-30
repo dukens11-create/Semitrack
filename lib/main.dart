@@ -151,21 +151,10 @@ class _SemiTraxSplashFallback extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Image.asset(
-                  'assets/images/semitrax_logo.png',
-                  width: 320,
+                  'assets/images/semitrax_brand_lockup.png',
+                  width: 360,
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.high,
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'SMARTER ROUTES.  SAFER DELIVERIES.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Color(0xFFFF642A),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 2.1,
-                  ),
                 ),
               ],
             ),

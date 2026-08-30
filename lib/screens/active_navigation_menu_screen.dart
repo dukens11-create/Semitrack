@@ -36,9 +36,9 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
   final String audioLabel;
   final String truckName;
 
-  static const _blue = Color(0xFF0969E8);
-  static const _orange = Color(0xFFF45A13);
-  static const _background = Color(0xFFF2F4F8);
+  static const _orange = Color(0xFFFF652B);
+  static const _navy = Color(0xFF071521);
+  static const _background = Color(0xFF06111B);
 
   void _return(BuildContext context, ActiveNavigationMenuAction action) {
     Navigator.of(context).pop(action);
@@ -93,28 +93,34 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 18, 16, 120),
               children: [
-                const _SectionTitle('Navigation shortcuts'),
+                const _SectionTitle(
+                  'Quick actions',
+                  caption: 'Tools for the route you are driving now',
+                ),
                 const SizedBox(height: 10),
                 _ShortcutCard(
                   children: [
                     _MenuShortcut(
                       icon: Icons.refresh_rounded,
-                      color: const Color(0xFF747B97),
+                      color: _orange,
                       label: 'Reroute',
+                      description: 'Find a new truck-safe path',
                       onTap: () =>
                           _return(context, ActiveNavigationMenuAction.reroute),
                     ),
                     _MenuShortcut(
                       icon: Icons.add_location_alt_rounded,
-                      color: const Color(0xFF07965B),
+                      color: const Color(0xFF2AC58F),
                       label: 'POI Ahead',
+                      description: 'Stops along this route',
                       onTap: () =>
                           _return(context, ActiveNavigationMenuAction.poiAhead),
                     ),
                     _MenuShortcut(
                       icon: Icons.search_rounded,
-                      color: const Color(0xFF4A5274),
+                      color: const Color(0xFF56A8FF),
                       label: 'Search Places',
+                      description: 'Add a destination or stop',
                       onTap: () => _return(
                         context,
                         ActiveNavigationMenuAction.searchPlaces,
@@ -122,15 +128,17 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                     ),
                     _MenuShortcut(
                       icon: Icons.report_gmailerrorred_rounded,
-                      color: const Color(0xFF07998E),
+                      color: const Color(0xFFFFB64D),
                       label: 'Report',
+                      description: 'Share a road or safety issue',
                       onTap: () =>
                           _return(context, ActiveNavigationMenuAction.report),
                     ),
                     _MenuShortcut(
                       icon: Icons.filter_alt_rounded,
-                      color: const Color(0xFF4A5274),
+                      color: const Color(0xFF9D8CFF),
                       label: 'Places Filter',
+                      description: 'Choose visible stop types',
                       onTap: () => _return(
                         context,
                         ActiveNavigationMenuAction.placesFilter,
@@ -138,8 +146,9 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                     ),
                     _MenuShortcut(
                       icon: Icons.share_location_rounded,
-                      color: _blue,
+                      color: const Color(0xFF33B7D9),
                       label: 'Share Trip',
+                      description: 'Send ETA and trip progress',
                       onTap: () => _return(
                         context,
                         ActiveNavigationMenuAction.shareTrip,
@@ -149,6 +158,7 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                       icon: Icons.alt_route_rounded,
                       color: _orange,
                       label: 'Route Options',
+                      description: 'Review route preferences',
                       onTap: () => _return(
                         context,
                         ActiveNavigationMenuAction.routeOptions,
@@ -157,7 +167,7 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 22),
-                const _SectionTitle('Navigation truck'),
+                const _SectionTitle('Driving setup'),
                 const SizedBox(height: 10),
                 _NavigationSettingCard(
                   icon: Icons.local_shipping_rounded,
@@ -171,13 +181,11 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 22),
-                const _SectionTitle('Audio settings'),
-                const SizedBox(height: 10),
                 _NavigationSettingCard(
                   icon: audioLabel == 'Muted'
                       ? Icons.volume_off_rounded
                       : Icons.volume_up_rounded,
-                  iconColor: _blue,
+                  iconColor: const Color(0xFF56A8FF),
                   title: audioLabel,
                   subtitle: 'Voice guidance and safety alerts',
                   trailing: Icons.tune_rounded,
@@ -196,29 +204,26 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
           decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xFFE1E5EB))),
+            color: _navy,
+            border: Border(top: BorderSide(color: Color(0xFF213746))),
           ),
           child: Row(
             children: [
-              Expanded(
-                child: SizedBox(
-                  height: 54,
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _orange,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(13),
-                      ),
+              SizedBox(
+                height: 54,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFFF9B83),
+                    side: const BorderSide(color: Color(0xFF8C473B)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                    onPressed: () => _confirmQuit(context),
-                    child: const Text(
-                      'Quit Nav',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
+                  ),
+                  onPressed: () => _confirmQuit(context),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text(
+                    'Quit Nav',
+                    style: TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
               ),
@@ -229,9 +234,9 @@ class ActiveNavigationMenuScreen extends StatelessWidget {
                   height: 54,
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: _blue,
+                      backgroundColor: _orange,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(13),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                     ),
                     onPressed: () => Navigator.pop(context),
@@ -268,68 +273,108 @@ class _NavigationHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: const Color(0xFF08090B),
-      padding: EdgeInsets.fromLTRB(
-        18,
-        MediaQuery.paddingOf(context).top + 18,
-        18,
-        22,
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF07111B), Color(0xFF102A3A)],
+        ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.fromLTRB(
+          18,
+          MediaQuery.paddingOf(context).top + 14,
+          18,
+          18,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'NEXT MANEUVER',
+              style: TextStyle(
+                color: Color(0xFFFF8A62),
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.4,
+              ),
             ),
-            child: Icon(maneuverIcon, color: Colors.white, size: 36),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(height: 10),
+            Row(
               children: [
-                Text(
-                  instruction.isEmpty ? 'Continue on route' : instruction,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    height: 1.05,
+                Container(
+                  width: 62,
+                  height: 62,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF652B),
+                    borderRadius: BorderRadius.circular(19),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x4DFF652B),
+                        blurRadius: 18,
+                        offset: Offset(0, 7),
+                      ),
+                    ],
+                  ),
+                  child: Icon(maneuverIcon, color: Colors.white, size: 38),
+                ),
+                const SizedBox(width: 15),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        instruction.isEmpty ? 'Continue on route' : instruction,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 23,
+                          fontWeight: FontWeight.w900,
+                          height: 1.05,
+                        ),
+                      ),
+                      if (towardRoad != null && towardRoad!.isNotEmpty) ...[
+                        const SizedBox(height: 7),
+                        Text(
+                          'toward $towardRoad',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                if (towardRoad != null && towardRoad!.isNotEmpty) ...[
-                  const SizedBox(height: 7),
-                  Text(
-                    'toward $towardRoad',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.09),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    maneuverDistance,
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-                ],
+                ),
               ],
             ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            maneuverDistance,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -351,11 +396,11 @@ class _TripSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: const Color(0xFF0D2030),
       child: InkWell(
         onTap: onContinue,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 18, 16),
+          padding: const EdgeInsets.fromLTRB(18, 14, 16, 14),
           child: Row(
             children: [
               Expanded(
@@ -370,7 +415,7 @@ class _TripSummary extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: Color(0xFF172049),
+                              color: Colors.white,
                               fontSize: 27,
                               fontWeight: FontWeight.w900,
                             ),
@@ -390,7 +435,7 @@ class _TripSummary extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: Color(0xFF172049),
+                              color: Colors.white,
                               fontSize: 27,
                               fontWeight: FontWeight.w900,
                             ),
@@ -402,7 +447,7 @@ class _TripSummary extends StatelessWidget {
                     Text(
                       arrivalTime,
                       style: const TextStyle(
-                        color: Color(0xFF747B91),
+                        color: Color(0xFFA8BAC8),
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
                       ),
@@ -414,12 +459,12 @@ class _TripSummary extends StatelessWidget {
                 width: 46,
                 height: 46,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFE9EBF0),
+                  color: Color(0xFF19384B),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.keyboard_arrow_down_rounded,
-                  color: Color(0xFF747B91),
+                  color: Color(0xFFFF8A62),
                   size: 32,
                 ),
               ),
@@ -432,17 +477,34 @@ class _TripSummary extends StatelessWidget {
 }
 
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.label);
+  const _SectionTitle(this.label, {this.caption});
   final String label;
+  final String? caption;
 
   @override
-  Widget build(BuildContext context) => Text(
-    label,
-    style: const TextStyle(
-      color: Color(0xFF747B91),
-      fontSize: 15,
-      fontWeight: FontWeight.w800,
-    ),
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      if (caption != null) ...[
+        const SizedBox(height: 3),
+        Text(
+          caption!,
+          style: const TextStyle(
+            color: Color(0xFF8FA6B7),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ],
   );
 }
 
@@ -453,17 +515,19 @@ class _ShortcutCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 18),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
+        color: const Color(0xFF0D2030),
+        border: Border.all(color: const Color(0xFF1D3849)),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: GridView.count(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        crossAxisCount: 3,
-        childAspectRatio: 0.95,
-        mainAxisSpacing: 10,
+        crossAxisCount: 2,
+        childAspectRatio: 2.25,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
         children: children,
       ),
     );
@@ -475,12 +539,14 @@ class _MenuShortcut extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.label,
+    required this.description,
     required this.onTap,
   });
 
   final IconData icon;
   final Color color;
   final String label;
+  final String description;
   final VoidCallback onTap;
 
   @override
@@ -489,29 +555,58 @@ class _MenuShortcut extends StatelessWidget {
       button: true,
       label: label,
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(15),
         onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 58,
-              height: 58,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              child: Icon(icon, color: Colors.white, size: 30),
-            ),
-            const SizedBox(height: 9),
-            Text(
-              label,
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFF172049),
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: const Color(0xFF132A3A),
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.17),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: color, size: 24),
               ),
-            ),
-          ],
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF8FA6B7),
+                        fontSize: 9.5,
+                        height: 1.12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -538,13 +633,13 @@ class _NavigationSettingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: const Color(0xFF0D2030),
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.all(15),
           child: Row(
             children: [
               Container(
@@ -564,7 +659,7 @@ class _NavigationSettingCard extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        color: Color(0xFF172049),
+                        color: Colors.white,
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
                       ),
@@ -573,7 +668,7 @@ class _NavigationSettingCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: const TextStyle(
-                        color: Color(0xFF747B91),
+                        color: Color(0xFF8FA6B7),
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
@@ -581,7 +676,7 @@ class _NavigationSettingCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(trailing, color: const Color(0xFFB6BAC5)),
+              Icon(trailing, color: const Color(0xFF6F899A)),
             ],
           ),
         ),

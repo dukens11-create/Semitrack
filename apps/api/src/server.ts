@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { z } from "zod";
-import { prisma } from "./lib/prisma.js";
+import { disconnectDatabase, prisma } from "./lib/prisma.js";
+import { isDatabaseUnavailableError } from "./lib/databaseErrors.js";
 import { env } from "./config/env.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
 import { signAccessToken } from "./utils/jwt.js";
@@ -840,6 +841,17 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof z.ZodError) {
     return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid request", details: error.flatten() } });
   }
+  if (isDatabaseUnavailableError(error)) {
+    const errorName = error instanceof Error ? error.name : "UnknownDatabaseError";
+    console.error(`[database] unavailable method=${_req.method} path=${_req.path} error=${errorName}`);
+    return res.status(503).json({
+      error: {
+        code: "DATABASE_UNAVAILABLE",
+        message: "SemiTraX account services are temporarily unavailable. Please try again shortly.",
+        retryable: true,
+      },
+    });
+  }
   if (error instanceof RoutingProviderError) {
     console.warn(`[routing] provider=${error.provider} code=${error.code} retryable=${error.retryable}`);
     void prisma.$executeRawUnsafe(
@@ -880,7 +892,7 @@ dotSyncTimer.unref();
 const shutdown = async () => {
   clearInterval(dotSyncTimer);
   server.close();
-  await prisma.$disconnect();
+  await disconnectDatabase();
 };
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGINT", () => void shutdown());

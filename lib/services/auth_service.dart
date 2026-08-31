@@ -5,6 +5,13 @@ import '../core/api_client.dart';
 
 enum AuthStatus { loading, signedOut, signedIn }
 
+String authenticationErrorMessage(ApiException error) {
+  if (error.code == 'DATABASE_UNAVAILABLE' || error.statusCode >= 500) {
+    return 'SemiTraX account services are temporarily unavailable. Please try again shortly.';
+  }
+  return error.message;
+}
+
 class AuthUser {
   const AuthUser({
     required this.id,
@@ -147,7 +154,7 @@ class AuthService extends ChangeNotifier {
       _notify();
       return true;
     } on ApiException catch (error) {
-      errorMessage = error.message;
+      errorMessage = authenticationErrorMessage(error);
     } catch (_) {
       errorMessage =
           'Unable to connect to SemiTrax. Check your connection and try again.';

@@ -143,39 +143,46 @@ class _AuthScreenState extends State<AuthScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Center(
+                            Align(
+                              alignment: Alignment.centerLeft,
                               child: Semantics(
                                 image: true,
                                 label: 'Semi-TraX — Smarter routes. Safer deliveries.',
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 440,
-                                  ),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(7),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xE6000000),
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: const Color(0x26FFFFFF),
-                                      ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Color(0x55000000),
-                                          blurRadius: 18,
-                                          offset: Offset(0, 7),
-                                        ),
-                                      ],
+                                child: FractionallySizedBox(
+                                  widthFactor: 0.72,
+                                  alignment: Alignment.centerLeft,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 300,
                                     ),
-                                    child: AspectRatio(
-                                      aspectRatio: 1723 / 541,
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(11),
-                                        child: Image.asset(
-                                          'assets/images/semitrax_login_lockup.png',
-                                          fit: BoxFit.contain,
-                                          filterQuality: FilterQuality.high,
-                                          excludeFromSemantics: true,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(5),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xE6000000),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: const Color(0x26FFFFFF),
+                                        ),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Color(0x44000000),
+                                            blurRadius: 12,
+                                            offset: Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      child: AspectRatio(
+                                        aspectRatio: 1723 / 541,
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            9,
+                                          ),
+                                          child: Image.asset(
+                                            'assets/images/semitrax_login_lockup.png',
+                                            fit: BoxFit.contain,
+                                            filterQuality: FilterQuality.high,
+                                            excludeFromSemantics: true,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -183,7 +190,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 26),
+                            const SizedBox(height: 20),
                             AnimatedSwitcher(
                               duration: const Duration(milliseconds: 220),
                               child: Column(

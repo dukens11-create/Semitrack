@@ -1,73 +1,23 @@
-# SemiTraX subscription pricing
+# Semi-Trax subscription pricing
 
-SemiTraX subscription prices are stored in PostgreSQL in the
-`SubscriptionPlanCatalog` table. They are not hard-coded in Flutter and they
-are not derived from example dashboard numbers.
+The `SubscriptionPlanCatalog` table contains planning prices for administration and automated checks. Google Play and Apple localized store prices will be authoritative for mobile purchases; verified Stripe price IDs will be authoritative for website and fleet billing.
 
-The initial catalog is:
+| Code | Plan | Planning price | Trial | Activation |
+| --- | --- | ---: | ---: | --- |
+| `MONTHLY` | Individual monthly | $19.99/month | 7 days when eligible | Provider setup pending |
+| `ANNUAL` | Individual annual | $199.99/year | 7 days when eligible | Provider setup pending |
+| `PILOT_MONTHLY` | Founding 100 pilot | $9.99/month for 6 months | None | Admin invitation and provider setup pending |
+| `FLEET_1_4` | Fleet 1–4 drivers | $19.99/driver/month | None | Stripe setup pending |
+| `FLEET_5_24` | Fleet 5–24 drivers | $17.99/driver/month | None | Stripe setup pending |
+| `FLEET_25_99` | Fleet 25–99 drivers | $15.99/driver/month | None | Stripe setup pending |
+| `FLEET_100_PLUS` | Fleet 100+ | Contact Semi-Trax | None | Sales-assisted contract |
 
-| Code | Customer plan | Initial price | Purpose |
-| --- | --- | --- | --- |
-| `TRIAL` | 7-Day Trial | Free for 7 days | Let drivers evaluate Premium |
-| `MONTHLY` | SemiTraX Monthly | $9.99/month | Main individual plan |
-| `ANNUAL` | SemiTraX Annual | $99.99/year | Annual value plan |
-| `FLEET` | SemiTraX Fleet | Coming later | Custom price per driver or truck |
+Pilot pricing and the regular seven-day trial are mutually exclusive. A `WELCOME_OFFER` uniqueness constraint and backend policy prevent stacking them.
 
-## Admin controls
+Fleet sales email: `contact@semitrax.com`.
 
-Only an authenticated user with the `ADMIN` role can open **Plans & pricing**
-or call the plan-management API. An administrator can change the visible
-name, purpose, description, price, currency, billing interval, trial days,
-badge, display order, availability, public visibility, and featured state.
+Planned contact page: `https://www.semitrax.com/#contact`. Until that anchor is verified, use `mailto:contact@semitrax.com?subject=Semi-Trax%20Fleet%20Subscription` as a user-facing fallback. A `mailto:` address is never used as an API redirect.
 
-Every successful change:
+Changing a catalog planning price does not alter an existing provider subscription. Provider prices are created and selected separately, and subscription access changes only after verified provider processing.
 
-- requires the version currently shown in the editor, preventing one admin
-  from unknowingly overwriting another admin's newer change;
-- is written to `AdminAuditLog` with the before and after records;
-- becomes visible in the mobile Premium screen after it is refreshed.
-
-Changing a catalog price does **not** modify existing payment-provider
-subscriptions. Existing billing remains governed by each subscription's
-verified provider price. A future Stripe price/product integration should
-create or select a provider price and then update the catalog in a controlled,
-audited operation.
-
-## Apply the database migration
-
-Stop the running API first so Windows releases the Prisma query-engine DLL.
-Then run:
-
-```powershell
-cd C:\Users\duken\Documents\semitrack\apps\api
-.\node_modules\.bin\prisma.cmd generate
-.\node_modules\.bin\prisma.cmd migrate deploy
-npm run dev
-```
-
-The mobile app uses the public `GET /subscription-plans` endpoint. The admin
-portal uses the protected `GET /admin/subscription-plans` and
-`PATCH /admin/subscription-plans/:code` endpoints.
-
-## Run the admin portal
-
-```powershell
-cd C:\Users\duken\Documents\semitrack\apps\admin
-npm run dev
-```
-
-Sign in with an account whose backend role is `ADMIN`, then select
-**Plans & pricing** in the left navigation.
-
-## Build Android
-
-```powershell
-cd C:\Users\duken\Documents\semitrack
-$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
-.\tools\here_flutter.ps1 build-android `
-  -FlutterCommand "C:\Users\duken\Documents\Codex\tools\flutter\bin\flutter.bat" `
-  -AndroidTargetPlatform android-arm64
-```
-
-The Premium screen intentionally refuses to claim that a payment or
-subscription change occurred while secure checkout is not configured.
+Billing remains disabled. See `docs/STRIPE_PHASE3_TEST_SETUP.md` before creating products or enabling Stripe test mode.

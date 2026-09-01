@@ -70,6 +70,16 @@ app.*.map.json
 /config/here/credentials.json
 /config/mapbox/credentials.properties
 
+# Billing-provider credentials and app-store service configuration. These must
+# be supplied through encrypted deployment secrets, never source control.
+**/google-services.json
+**/GoogleService-Info.plist
+**/AuthKey_*.p8
+**/*service-account*.json
+**/*service_account*.json
+**/stripe-secrets*
+/config/billing/
+
 # Local application/server environment files. Keep documented templates.
 .env
 .env.*

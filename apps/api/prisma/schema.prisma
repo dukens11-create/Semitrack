@@ -26,9 +26,132 @@ enum SubscriptionStatus {
   INACTIVE
   ACTIVE
   TRIALING
+  GRACE_PERIOD
+  BILLING_RETRY
   PAST_DUE
+  PAUSED
+  CANCEL_AT_PERIOD_END
   CANCELED
   EXPIRED
+  REFUNDED
+  REVOKED
+}
+
+enum BillingProvider {
+  GOOGLE_PLAY
+  APPLE
+  STRIPE
+  PILOT
+  ADMIN_GRANT
+}
+
+enum BillingEnvironment {
+  TEST
+  SANDBOX
+  PRODUCTION
+}
+
+enum EntitlementCode {
+  PREMIUM_NAVIGATION
+}
+
+enum EntitlementSourceType {
+  SUBSCRIPTION
+  PILOT
+  ADMIN_GRANT
+  FLEET_SEAT
+}
+
+enum EntitlementSnapshotStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SubscriptionOfferKind {
+  REGULAR_TRIAL
+  PILOT_DISCOUNT
+  INTRODUCTORY_OFFER
+  PROMOTIONAL_OFFER
+}
+
+enum OfferRedemptionStatus {
+  RESERVED
+  REDEEMED
+  EXPIRED
+  REVOKED
+}
+
+enum ProviderEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum PilotCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+enum PilotInvitationStatus {
+  APPROVED
+  DELIVERED
+  REDEEMED
+  EXPIRED
+  REVOKED
+}
+
+enum PilotInvitationEventType {
+  APPROVED
+  DELIVERED
+  REDEEMED
+  EXPIRED
+  REVOKED
+}
+
+enum FleetBillingStatus {
+  DRAFT
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  CLOSED
+}
+
+enum FleetMembershipRole {
+  OWNER
+  BILLING_ADMIN
+  DRIVER
+}
+
+enum FleetSeatChangeType {
+  INCREASE
+  DECREASE
+}
+
+enum FleetSeatChangeStatus {
+  REQUESTED
+  AWAITING_PROVIDER
+  APPLIED
+  SCHEDULED
+  REJECTED
+  CANCELED
+  FAILED
+}
+
+enum BillingRefundStatus {
+  RECEIVED
+  VERIFIED
+  REVIEW_REQUIRED
+  RESOLVED
+}
+
+enum BillingRefundDisposition {
+  RETAIN_ACCESS
+  ADMIN_REVIEW_REQUIRED
+  REVOKE_AFTER_VERIFIED_CANCELLATION
 }
 
 enum ModerationStatus {
@@ -152,38 +275,52 @@ enum ProviderSyncStatus {
 }
 
 model User {
-  id                 String                @id @default(cuid())
-  email              String                @unique
-  passwordHash       String
-  fullName           String
-  phone              String?
-  role               UserRole              @default(DRIVER)
-  plan               SubscriptionPlan      @default(FREE)
-  emailVerified      Boolean               @default(false)
-  reportTrustScore   Float                 @default(0.5)
-  disabledAt         DateTime?
-  lastActivityAt     DateTime?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
-  trucks             Truck[]
-  trips              Trip[]
-  documents          Document[]
-  favorites          Favorite[]
-  navigationSettings NavigationSettings?
-  refreshTokens      RefreshToken[]
-  passwordResets     PasswordResetToken[]
-  subscriptions      Subscription[]
-  reports            CommunityReport[]     @relation("ReportAuthor")
-  moderatedReports   CommunityReport[]     @relation("ReportModerator")
-  eldConnections     EldConnection[]
-  eldOAuthStates     EldOAuthState[]
-  dataReports        CommunityDataReport[]
-  dataReportVotes    CommunityDataVote[]
-  adminAuditLogs     AdminAuditLog[]       @relation("AdminAuditActor")
-  analyticsEvents    AppAnalyticsEvent[]
-  navigationSessions NavigationSession[]
-  paymentTransactions PaymentTransaction[]
-  supportTickets     SupportTicket[]
+  id                        String                        @id @default(cuid())
+  email                     String                        @unique
+  passwordHash              String
+  fullName                  String
+  phone                     String?
+  role                      UserRole                      @default(DRIVER)
+  plan                      SubscriptionPlan              @default(FREE)
+  emailVerified             Boolean                       @default(false)
+  reportTrustScore          Float                         @default(0.5)
+  disabledAt                DateTime?
+  lastActivityAt            DateTime?
+  createdAt                 DateTime                      @default(now())
+  updatedAt                 DateTime                      @updatedAt
+  trucks                    Truck[]
+  trips                     Trip[]
+  documents                 Document[]
+  favorites                 Favorite[]
+  navigationSettings        NavigationSettings?
+  refreshTokens             RefreshToken[]
+  passwordResets            PasswordResetToken[]
+  subscriptions             Subscription[]
+  reports                   CommunityReport[]             @relation("ReportAuthor")
+  moderatedReports          CommunityReport[]             @relation("ReportModerator")
+  eldConnections            EldConnection[]
+  eldOAuthStates            EldOAuthState[]
+  dataReports               CommunityDataReport[]
+  dataReportVotes           CommunityDataVote[]
+  adminAuditLogs            AdminAuditLog[]               @relation("AdminAuditActor")
+  analyticsEvents           AppAnalyticsEvent[]
+  navigationSessions        NavigationSession[]
+  paymentTransactions       PaymentTransaction[]
+  supportTickets            SupportTicket[]
+  entitlementSources        EntitlementSource[]           @relation("EntitlementOwner")
+  entitlementSnapshots      EntitlementSnapshot[]
+  offerRedemptions          SubscriptionOfferRedemption[]
+  pilotInvitations          PilotInvitation[]             @relation("PilotInvitationUser")
+  approvedPilotInvitations  PilotInvitation[]             @relation("PilotInvitationApprover")
+  deliveredPilotInvitations PilotInvitation[]             @relation("PilotInvitationDeliverer")
+  redeemedPilotInvitations  PilotInvitation[]             @relation("PilotInvitationRedeemer")
+  revokedPilotInvitations   PilotInvitation[]             @relation("PilotInvitationRevoker")
+  pilotInvitationEvents     PilotInvitationEvent[]        @relation("PilotInvitationEventActor")
+  billingAuditLogs          BillingAuditLog[]             @relation("BillingAuditActor")
+  fleetMemberships          FleetMembership[]
+  requestedFleetSeatChanges FleetSeatChange[]             @relation("FleetSeatChangeRequester")
+  billingRefunds            BillingRefund[]               @relation("BillingRefundUser")
+  reviewedBillingRefunds    BillingRefund[]               @relation("BillingRefundReviewer")
 }
 
 model AdminAuditLog {
@@ -289,37 +426,37 @@ model Favorite {
 }
 
 model Trip {
-  id               String   @id @default(cuid())
-  userId           String
-  truckId          String?
-  name             String
-  status           String   @default("PLANNED")
-  originName       String
-  destinationName  String
-  originLat        Float
-  originLng        Float
-  destinationLat   Float
-  destinationLng   Float
-  viaStopsJson     Json?
-  routeOptionsJson Json?
-  maneuversJson    Json?
-  etaMinutes       Int?
-  distanceMiles    Float?
-  routeProvider    String?
-  routePolyline    String?
-  truckSafe        Boolean  @default(false)
-  trafficAware     Boolean  @default(false)
-  hosBreakPlanJson Json?
-  fuelPlanJson     Json?
-  startedAt        DateTime?
-  completedAt      DateTime?
-  actualDistanceMiles Float?
+  id                    String              @id @default(cuid())
+  userId                String
+  truckId               String?
+  name                  String
+  status                String              @default("PLANNED")
+  originName            String
+  destinationName       String
+  originLat             Float
+  originLng             Float
+  destinationLat        Float
+  destinationLng        Float
+  viaStopsJson          Json?
+  routeOptionsJson      Json?
+  maneuversJson         Json?
+  etaMinutes            Int?
+  distanceMiles         Float?
+  routeProvider         String?
+  routePolyline         String?
+  truckSafe             Boolean             @default(false)
+  trafficAware          Boolean             @default(false)
+  hosBreakPlanJson      Json?
+  fuelPlanJson          Json?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  actualDistanceMiles   Float?
   actualDurationSeconds Int?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  truck            Truck?   @relation(fields: [truckId], references: [id], onDelete: SetNull)
-  navigationSessions NavigationSession[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  truck                 Truck?              @relation(fields: [truckId], references: [id], onDelete: SetNull)
+  navigationSessions    NavigationSession[]
 
   @@index([userId, updatedAt])
 }
@@ -359,31 +496,349 @@ model CommunityReport {
 }
 
 model Subscription {
-  id                     String             @id @default(cuid())
-  userId                 String
-  provider               String
-  providerCustomerId     String?
-  providerSubscriptionId String?            @unique
-  productId              String
-  plan                   SubscriptionPlan
-  status                 SubscriptionStatus
-  currentPeriodEnd       DateTime?
-  canceledAt             DateTime?
-  verifiedAt             DateTime?
-  priceAmountCents       Int?
-  priceCurrency          String?
-  billingInterval        String?
-  catalogPlanCode        String?
-  rawEventJson           Json?
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
-  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  catalogPlan            SubscriptionPlanCatalog? @relation(fields: [catalogPlanCode], references: [code], onDelete: SetNull)
-  transactions           PaymentTransaction[]
-  statusEvents           SubscriptionStatusEvent[]
+  id                            String                        @id @default(cuid())
+  userId                        String
+  provider                      String
+  providerCustomerId            String?
+  providerSubscriptionId        String?
+  providerOriginalTransactionId String?
+  providerPriceId               String?
+  productId                     String
+  plan                          SubscriptionPlan
+  status                        SubscriptionStatus
+  environment                   BillingEnvironment            @default(TEST)
+  entitlementCode               EntitlementCode               @default(PREMIUM_NAVIGATION)
+  sourceType                    EntitlementSourceType         @default(SUBSCRIPTION)
+  trialStart                    DateTime?
+  trialEnd                      DateTime?
+  currentPeriodStart            DateTime?
+  currentPeriodEnd              DateTime?
+  gracePeriodEnd                DateTime?
+  billingRetryStartedAt         DateTime?
+  pilotStart                    DateTime?
+  pilotEnd                      DateTime?
+  cancelAtPeriodEnd             Boolean                       @default(false)
+  canceledAt                    DateTime?
+  verifiedAt                    DateTime?
+  lastProviderEventAt           DateTime?
+  priceAmountCents              Int?
+  priceCurrency                 String?
+  billingInterval               String?
+  catalogPlanCode               String?
+  fleetBillingAccountId         String?
+  seatQuantity                  Int?
+  pendingSeatQuantity           Int?
+  pendingSeatEffectiveAt        DateTime?
+  rawEventJson                  Json?
+  createdAt                     DateTime                      @default(now())
+  updatedAt                     DateTime                      @updatedAt
+  user                          User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  catalogPlan                   SubscriptionPlanCatalog?      @relation(fields: [catalogPlanCode], references: [code], onDelete: SetNull)
+  transactions                  PaymentTransaction[]
+  statusEvents                  SubscriptionStatusEvent[]
+  entitlementSources            EntitlementSource[]
+  offerRedemptions              SubscriptionOfferRedemption[]
+  fleetBillingAccount           FleetBillingAccount?          @relation(fields: [fleetBillingAccountId], references: [id], onDelete: SetNull)
+  billingRefunds                BillingRefund[]
 
+  @@unique([provider, providerSubscriptionId])
   @@index([userId, status])
   @@index([catalogPlanCode])
+  @@index([fleetBillingAccountId, status])
+  @@index([provider, providerOriginalTransactionId])
+}
+
+model EntitlementSource {
+  id                  String                @id @default(cuid())
+  userId              String
+  entitlementCode     EntitlementCode       @default(PREMIUM_NAVIGATION)
+  provider            BillingProvider
+  sourceType          EntitlementSourceType
+  sourceReference     String
+  subscriptionId      String?
+  status              SubscriptionStatus
+  startsAt            DateTime
+  accessEndsAt        DateTime?
+  gracePeriodEndsAt   DateTime?
+  lastProviderEventAt DateTime?
+  lastVerifiedAt      DateTime?
+  revokedAt           DateTime?
+  metadataJson        Json?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  user                User                  @relation("EntitlementOwner", fields: [userId], references: [id], onDelete: Cascade)
+  subscription        Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  effectiveSnapshots  EntitlementSnapshot[] @relation("EffectiveEntitlementSource")
+
+  @@unique([provider, sourceReference])
+  @@index([userId, entitlementCode, status])
+  @@index([subscriptionId])
+  @@index([accessEndsAt])
+}
+
+model EntitlementSnapshot {
+  id                String                    @id @default(cuid())
+  userId            String
+  entitlementCode   EntitlementCode
+  status            EntitlementSnapshotStatus @default(INACTIVE)
+  effectiveSourceId String?
+  effectiveFrom     DateTime?
+  effectiveUntil    DateTime?
+  cacheValidUntil   DateTime
+  computedAt        DateTime                  @default(now())
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  user              User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  effectiveSource   EntitlementSource?        @relation("EffectiveEntitlementSource", fields: [effectiveSourceId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, entitlementCode])
+  @@index([status, cacheValidUntil])
+  @@index([effectiveSourceId])
+}
+
+model SubscriptionOfferRedemption {
+  id               String                @id @default(cuid())
+  userId           String
+  eligibilityGroup String                @default("WELCOME_OFFER")
+  offerKind        SubscriptionOfferKind
+  provider         BillingProvider
+  status           OfferRedemptionStatus
+  invitationId     String?               @unique
+  subscriptionId   String?
+  externalOfferId  String?
+  reservedAt       DateTime?
+  redeemedAt       DateTime?
+  expiresAt        DateTime?
+  revokedAt        DateTime?
+  metadataJson     Json?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitation       PilotInvitation?      @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+  subscription     Subscription?         @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, eligibilityGroup])
+  @@index([status, expiresAt])
+  @@index([subscriptionId])
+}
+
+model ProviderEvent {
+  id                  String              @id @default(cuid())
+  provider            BillingProvider
+  providerEventId     String
+  eventType           String
+  status              ProviderEventStatus @default(RECEIVED)
+  payloadHash         String
+  externalObjectId    String?
+  eventCreatedAt      DateTime?
+  receivedAt          DateTime            @default(now())
+  processingStartedAt DateTime?
+  processedAt         DateTime?
+  attemptCount        Int                 @default(0)
+  lastErrorCode       String?
+  lastErrorMessage    String?
+  metadataJson        Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+  @@index([provider, externalObjectId, eventCreatedAt])
+}
+
+model PilotCampaign {
+  code                     String              @id
+  displayName              String
+  status                   PilotCampaignStatus @default(DRAFT)
+  redemptionLimit          Int                 @default(100)
+  reservedCount            Int                 @default(0)
+  redeemedCount            Int                 @default(0)
+  discountMonths           Int                 @default(6)
+  monthlyPriceCents        Int                 @default(999)
+  regularMonthlyPriceCents Int                 @default(1999)
+  startsAt                 DateTime?
+  endsAt                   DateTime?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  invitations              PilotInvitation[]
+}
+
+model PilotInvitation {
+  id                String                       @id @default(cuid())
+  campaignCode      String
+  tokenHash         String                       @unique
+  email             String
+  userId            String?
+  status            PilotInvitationStatus        @default(APPROVED)
+  expiresAt         DateTime
+  approvedByUserId  String
+  approvedAt        DateTime                     @default(now())
+  deliveredByUserId String?
+  deliveredAt       DateTime?
+  redeemedByUserId  String?
+  redeemedAt        DateTime?
+  revokedByUserId   String?
+  revokedAt         DateTime?
+  revocationReason  String?
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+  campaign          PilotCampaign                @relation(fields: [campaignCode], references: [code], onDelete: Restrict)
+  user              User?                        @relation("PilotInvitationUser", fields: [userId], references: [id], onDelete: SetNull)
+  approvedBy        User                         @relation("PilotInvitationApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  deliveredBy       User?                        @relation("PilotInvitationDeliverer", fields: [deliveredByUserId], references: [id], onDelete: SetNull)
+  redeemedBy        User?                        @relation("PilotInvitationRedeemer", fields: [redeemedByUserId], references: [id], onDelete: SetNull)
+  revokedBy         User?                        @relation("PilotInvitationRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+  events            PilotInvitationEvent[]
+  offerRedemption   SubscriptionOfferRedemption?
+
+  @@index([campaignCode, status, expiresAt])
+  @@index([email, status])
+  @@index([userId, status])
+}
+
+model PilotInvitationEvent {
+  id           String                   @id @default(cuid())
+  invitationId String
+  type         PilotInvitationEventType
+  actorUserId  String?
+  metadataJson Json?
+  createdAt    DateTime                 @default(now())
+  invitation   PilotInvitation          @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  actor        User?                    @relation("PilotInvitationEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([invitationId, createdAt])
+  @@index([type, createdAt])
+}
+
+model BillingAuditLog {
+  id              String           @id @default(cuid())
+  actorUserId     String?
+  action          String
+  targetType      String
+  targetId        String?
+  provider        BillingProvider?
+  providerEventId String?
+  metadataJson    Json?
+  ipAddress       String?
+  createdAt       DateTime         @default(now())
+  actor           User?            @relation("BillingAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([targetType, targetId])
+  @@index([provider, providerEventId])
+}
+
+model FleetBillingAccount {
+  id                     String             @id @default(cuid())
+  name                   String
+  provider               BillingProvider    @default(STRIPE)
+  status                 FleetBillingStatus @default(DRAFT)
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  providerPriceId        String?
+  currentSeatQuantity    Int                @default(0)
+  pendingSeatQuantity    Int?
+  pendingSeatEffectiveAt DateTime?
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  lastProviderEventAt    DateTime?
+  lastVerifiedAt         DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  memberships            FleetMembership[]
+  seatChanges            FleetSeatChange[]
+  subscriptions          Subscription[]
+
+  @@unique([provider, providerCustomerId])
+  @@unique([provider, providerSubscriptionId])
+  @@index([status, currentPeriodEnd])
+}
+
+model FleetMembership {
+  id                    String              @id @default(cuid())
+  fleetBillingAccountId String
+  userId                String
+  role                  FleetMembershipRole @default(DRIVER)
+  requiresSeat          Boolean             @default(true)
+  seatAssignedAt        DateTime?
+  unassignedAt          DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  fleetBillingAccount   FleetBillingAccount @relation(fields: [fleetBillingAccountId], references: [id], onDelete: Cascade)
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([fleetBillingAccountId, userId])
+  @@index([userId, unassignedAt])
+  @@index([fleetBillingAccountId, requiresSeat, unassignedAt])
+}
+
+model FleetSeatChange {
+  id                         String                @id @default(cuid())
+  fleetBillingAccountId      String
+  requestedByUserId          String
+  type                       FleetSeatChangeType
+  status                     FleetSeatChangeStatus @default(REQUESTED)
+  previousQuantity           Int
+  requestedQuantity          Int
+  requiredAssignedSeats      Int
+  providerRequestId          String?
+  providerEventId            String?
+  expectedInvoiceAmountCents Int?
+  currency                   String                @default("USD")
+  prorationBehavior          String
+  effectiveAt                DateTime?
+  providerAcceptedAt         DateTime?
+  failedAt                   DateTime?
+  failureCode                String?
+  failureMessage             String?
+  metadataJson               Json?
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
+  fleetBillingAccount        FleetBillingAccount   @relation(fields: [fleetBillingAccountId], references: [id], onDelete: Cascade)
+  requestedBy                User                  @relation("FleetSeatChangeRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([providerRequestId])
+  @@unique([providerEventId])
+  @@index([fleetBillingAccountId, status, createdAt])
+  @@index([requestedByUserId, createdAt])
+}
+
+model BillingRefund {
+  id                            String                   @id @default(cuid())
+  userId                        String
+  subscriptionId                String?
+  paymentTransactionId          String?
+  provider                      BillingProvider
+  providerRefundId              String
+  providerEventId               String
+  status                        BillingRefundStatus      @default(RECEIVED)
+  disposition                   BillingRefundDisposition
+  originalAmountCents           Int
+  refundAmountCents             Int
+  currency                      String                   @default("USD")
+  reason                        String?
+  isFullRefund                  Boolean
+  subscriptionCanceledOrRevoked Boolean                  @default(false)
+  administratorReviewRequired   Boolean                  @default(false)
+  reviewedByUserId              String?
+  reviewedAt                    DateTime?
+  administratorAction           String?
+  occurredAt                    DateTime
+  verifiedAt                    DateTime?
+  metadataJson                  Json?
+  createdAt                     DateTime                 @default(now())
+  updatedAt                     DateTime                 @updatedAt
+  user                          User                     @relation("BillingRefundUser", fields: [userId], references: [id], onDelete: Cascade)
+  subscription                  Subscription?            @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  paymentTransaction            PaymentTransaction?      @relation(fields: [paymentTransactionId], references: [id], onDelete: SetNull)
+  reviewedBy                    User?                    @relation("BillingRefundReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerRefundId])
+  @@unique([provider, providerEventId])
+  @@index([userId, occurredAt])
+  @@index([subscriptionId, occurredAt])
+  @@index([status, administratorReviewRequired, occurredAt])
 }
 
 model SubscriptionPlanCatalog {
@@ -407,23 +862,23 @@ model SubscriptionPlanCatalog {
 }
 
 model NavigationSession {
-  id                    String   @id @default(cuid())
-  clientSessionId       String   @unique
+  id                    String    @id @default(cuid())
+  clientSessionId       String    @unique
   userId                String
   tripId                String?
-  status                String   @default("ACTIVE")
+  status                String    @default("ACTIVE")
   estimatedDriveMinutes Int?
   actualDistanceMiles   Float?
   actualDurationSeconds Int?
   stateRegion           String?
   hosWarningShownAt     DateTime?
-  startedAt             DateTime @default(now())
-  lastHeartbeatAt       DateTime @default(now())
+  startedAt             DateTime  @default(now())
+  lastHeartbeatAt       DateTime  @default(now())
   endedAt               DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trip                  Trip?    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip                  Trip?     @relation(fields: [tripId], references: [id], onDelete: SetNull)
 
   @@index([status, lastHeartbeatAt])
   @@index([userId, startedAt])
@@ -431,18 +886,18 @@ model NavigationSession {
 }
 
 model AppAnalyticsEvent {
-  id             String   @id @default(cuid())
-  clientEventId  String?  @unique
-  userId         String
-  eventType      String
-  entityId       String?
-  stateRegion    String?
-  numericValue   Float?
+  id              String   @id @default(cuid())
+  clientEventId   String?  @unique
+  userId          String
+  eventType       String
+  entityId        String?
+  stateRegion     String?
+  numericValue    Float?
   durationSeconds Int?
-  metadataJson   Json?
-  occurredAt     DateTime @default(now())
-  createdAt      DateTime @default(now())
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metadataJson    Json?
+  occurredAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([eventType, occurredAt])
   @@index([userId, occurredAt])
@@ -450,22 +905,23 @@ model AppAnalyticsEvent {
 }
 
 model PaymentTransaction {
-  id                    String   @id @default(cuid())
-  userId                String
-  subscriptionId        String?
-  provider              String
-  providerEventId       String   @unique
-  providerPaymentId     String?
-  type                  String
-  status                String
-  amountCents           Int
-  processingFeeCents    Int?
-  currency              String   @default("USD")
-  failureCode           String?
-  occurredAt            DateTime
-  createdAt             DateTime @default(now())
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscription          Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  id                 String          @id @default(cuid())
+  userId             String
+  subscriptionId     String?
+  provider           String
+  providerEventId    String          @unique
+  providerPaymentId  String?
+  type               String
+  status             String
+  amountCents        Int
+  processingFeeCents Int?
+  currency           String          @default("USD")
+  failureCode        String?
+  occurredAt         DateTime
+  createdAt          DateTime        @default(now())
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription       Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  refunds            BillingRefund[]
 
   @@index([status, occurredAt])
   @@index([type, occurredAt])
@@ -473,41 +929,41 @@ model PaymentTransaction {
 }
 
 model SubscriptionStatusEvent {
-  id                    String   @id @default(cuid())
-  subscriptionId        String
-  providerEventId       String?  @unique
-  previousStatus        String?
-  status                String
-  occurredAt            DateTime
-  createdAt             DateTime @default(now())
-  subscription          Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  id              String       @id @default(cuid())
+  subscriptionId  String
+  providerEventId String?      @unique
+  previousStatus  String?
+  status          String
+  occurredAt      DateTime
+  createdAt       DateTime     @default(now())
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([status, occurredAt])
   @@index([subscriptionId, occurredAt])
 }
 
 model SupportTicket {
-  id          String   @id @default(cuid())
-  userId      String
-  subject     String
-  status      String   @default("OPEN")
-  priority    String   @default("NORMAL")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  closedAt    DateTime?
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String    @id @default(cuid())
+  userId    String
+  subject   String
+  status    String    @default("OPEN")
+  priority  String    @default("NORMAL")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  closedAt  DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([status, updatedAt])
 }
 
 model ApiErrorLog {
-  id          String   @id @default(cuid())
-  route       String
-  method      String
-  statusCode  Int
-  errorCode   String?
-  occurredAt  DateTime @default(now())
+  id         String   @id @default(cuid())
+  route      String
+  method     String
+  statusCode Int
+  errorCode  String?
+  occurredAt DateTime @default(now())
 
   @@index([occurredAt])
   @@index([statusCode, occurredAt])

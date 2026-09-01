@@ -39,11 +39,22 @@ import {
   publicSubscriptionPlansRouter,
 } from "./modules/subscriptions/subscriptionPlans.routes.js";
 import { adminAccountRouter } from "./modules/admin/adminAccount.routes.js";
+import { adminEntitlementRouter, entitlementRouter } from "./modules/billing/entitlement.routes.js";
+import { adminPilotRouter, pilotRouter } from "./modules/billing/pilot.routes.js";
+import { BillingFoundationError } from "./modules/billing/billingErrors.js";
+import {
+  requireAllowedStripeWebOrigin,
+  requireBillingEnabled,
+} from "./modules/billing/billingMode.middleware.js";
 
 const app = express();
 app.disable("x-powered-by");
+const allowedCorsOrigins = new Set([...env.corsOrigins, ...env.stripeAllowedWebOrigins]);
 app.use(cors({
-  origin: env.corsOrigins.length ? env.corsOrigins : env.nodeEnv === "production" ? false : true,
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    return callback(null, allowedCorsOrigins.has(origin));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: "1mb" }));
@@ -134,6 +145,10 @@ app.get("/health", asyncRoute(async (_req, res) => {
       trimbleRoutingConfigured: Boolean(env.trimbleApiKey),
       mapboxTrafficConfigured: Boolean(env.mapboxToken),
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
+      billingMode: env.billingMode,
+      googlePlayBillingConfigured: false,
+      appleBillingConfigured: false,
+      stripeBillingConfigured: env.billingMode === "test" && Boolean(env.stripeSecretKey && env.stripeWebhookSecret),
     },
   });
 }));
@@ -424,25 +439,6 @@ app.delete("/favorites/:id", requireAuth, asyncRoute(async (req, res) => {
   const result = await prisma.favorite.deleteMany({ where: { id: String(req.params.id), userId: req.user!.userId } });
   if (!result.count) return res.status(404).json({ error: { code: "FAVORITE_NOT_FOUND", message: "Favorite not found" } });
   res.status(204).end();
-}));
-
-app.get("/entitlements", requireAuth, asyncRoute(async (req, res) => {
-  const subscription = await prisma.subscription.findFirst({
-    where: { userId: req.user!.userId, status: { in: ["ACTIVE", "TRIALING"] }, OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { gt: new Date() } }] },
-    orderBy: { verifiedAt: "desc" },
-  });
-  const plan = subscription?.plan ?? "FREE";
-  res.json({
-    plan,
-    active: Boolean(subscription),
-    expiresAt: subscription?.currentPeriodEnd ?? null,
-    features: {
-      truckRouting: plan !== "FREE",
-      offlineMaps: ["DIAMOND", "TEAM"].includes(plan),
-      fleet: plan === "TEAM",
-    },
-    source: subscription ? "verified_server_record" : "free_default",
-  });
 }));
 
 const reportSchema = z.object({
@@ -754,10 +750,13 @@ app.patch("/admin/users/:id", requireAuth, requireRole(["ADMIN"]), asyncRoute(as
   res.json(updated);
 }));
 
-app.get("/admin/subscriptions", requireAuth, requireRole(userManagementRoles), asyncRoute(async (req, res) => {
+app.get("/admin/subscriptions", requireBillingEnabled, requireAuth, requireRole(userManagementRoles), asyncRoute(async (req, res) => {
   const { page, pageSize, skip } = adminPagination(req.query);
   const status = req.query.status
-    ? z.enum(["INACTIVE", "ACTIVE", "TRIALING", "PAST_DUE", "CANCELED", "EXPIRED"]).parse(String(req.query.status))
+    ? z.enum([
+      "INACTIVE", "ACTIVE", "TRIALING", "GRACE_PERIOD", "BILLING_RETRY", "PAST_DUE",
+      "PAUSED", "CANCEL_AT_PERIOD_END", "CANCELED", "EXPIRED", "REFUNDED", "REVOKED",
+    ]).parse(String(req.query.status))
     : undefined;
   const where = status ? { status } : {};
   const [items, total] = await Promise.all([
@@ -833,13 +832,30 @@ app.use("/safety", safetyRouter);
 app.use("/analytics", telemetryRouter);
 app.use("/admin/analytics", adminAnalyticsRouter);
 app.use("/admin/account", adminAccountRouter);
-app.use("/subscription-plans", publicSubscriptionPlansRouter);
-app.use("/admin/subscription-plans", adminSubscriptionPlansRouter);
+app.use("/subscription-plans", requireBillingEnabled, publicSubscriptionPlansRouter);
+app.use("/admin/subscription-plans", requireBillingEnabled, adminSubscriptionPlansRouter);
+app.use("/entitlements", requireBillingEnabled, entitlementRouter);
+app.use("/admin/entitlements", requireBillingEnabled, adminEntitlementRouter);
+app.use("/pilot", requireBillingEnabled, pilotRouter);
+app.use("/admin/pilot", requireBillingEnabled, adminPilotRouter);
+app.use("/billing", requireBillingEnabled, requireAllowedStripeWebOrigin, (_req, res) => {
+  res.status(501).json({
+    error: {
+      code: "BILLING_PROVIDER_NOT_IMPLEMENTED",
+      message: "Stripe billing endpoints are not implemented in Phase 2.",
+    },
+  });
+});
 
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof z.ZodError) {
     return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid request", details: error.flatten() } });
+  }
+  if (error instanceof BillingFoundationError) {
+    return res.status(error.httpStatus).json({
+      error: { code: error.code, message: error.message },
+    });
   }
   if (isDatabaseUnavailableError(error)) {
     const errorName = error instanceof Error ? error.name : "UnknownDatabaseError";

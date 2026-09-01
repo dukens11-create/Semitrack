@@ -16,6 +16,7 @@
     "src/config/**/*.ts",
     "src/lib/**/*.ts",
     "src/middleware/**/*.ts",
+    "src/modules/billing/**/*.ts",
     "src/scripts/**/*.ts",
     "src/utils/**/*.ts",
     "src/services/routingService.ts",

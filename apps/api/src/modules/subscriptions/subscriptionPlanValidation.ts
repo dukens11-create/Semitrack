@@ -18,8 +18,8 @@ export const subscriptionPlanUpdateSchema = z.object({
   if (value.billingInterval === "TRIAL") {
     if (value.priceAmountCents !== 0) context.addIssue({ code: "custom", path: ["priceAmountCents"], message: "Trial price must be zero" });
     if (value.trialDays < 1) context.addIssue({ code: "custom", path: ["trialDays"], message: "Trial plans require at least one trial day" });
-  } else if (value.trialDays !== 0) {
-    context.addIssue({ code: "custom", path: ["trialDays"], message: "Only trial plans may set trial days" });
+  } else if (value.billingInterval === "CUSTOM" && value.trialDays !== 0) {
+    context.addIssue({ code: "custom", path: ["trialDays"], message: "Custom plans cannot define an app-store trial" });
   }
   if (value.isActive && ["MONTH", "YEAR"].includes(value.billingInterval) && (!value.priceAmountCents || value.priceAmountCents < 1)) {
     context.addIssue({ code: "custom", path: ["priceAmountCents"], message: "Active paid plans require a positive price" });

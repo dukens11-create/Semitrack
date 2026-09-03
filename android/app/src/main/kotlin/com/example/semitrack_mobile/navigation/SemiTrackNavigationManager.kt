@@ -65,28 +65,43 @@ class SemiTrackNavigationManager(
         emitState()
     }
 
-    fun previewRoute(): NavigationFailure? = routeOperation("previewing", guidanceEngine::preview)
-    fun startNavigation(): NavigationFailure? = routeOperation("navigating", guidanceEngine::start)
-    fun recalculateRoute(): NavigationFailure? = routeOperation("rerouting", guidanceEngine::recalculate)
+    fun previewRoute(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("previewing", guidanceEngine::preview, completion)
+
+    fun startNavigation(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("navigating", guidanceEngine::start, completion)
+
+    fun recalculateRoute(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("rerouting", guidanceEngine::recalculate, completion)
 
     private fun routeOperation(
         successPhase: String,
-        operation: (CommercialTruckProfile, Coordinate, List<NavigationWaypoint>) -> NavigationFailure?,
-    ): NavigationFailure? {
+        operation: (
+            CommercialTruckProfile,
+            Coordinate,
+            List<NavigationWaypoint>,
+            (NavigationFailure?) -> Unit,
+        ) -> Unit,
+        completion: (NavigationFailure?) -> Unit,
+    ) {
         val profile = truckProfile
         if (profile == null) {
-            return NavigationFailure("TRUCK_PROFILE_REQUIRED", "Set the active commercial truck profile before routing")
+            completion(NavigationFailure("TRUCK_PROFILE_REQUIRED", "Set the active commercial truck profile before routing"))
+            return
         }
         val routeDestination = destination
         if (routeDestination == null) {
-            return NavigationFailure("DESTINATION_REQUIRED", "Set a destination before routing")
+            completion(NavigationFailure("DESTINATION_REQUIRED", "Set a destination before routing"))
+            return
         }
-        val failure = operation(profile, routeDestination, waypoints.values.toList())
-        if (failure == null) {
-            phase = successPhase
-            emitState()
+
+        operation(profile, routeDestination, waypoints.values.toList()) { failure ->
+            if (failure == null) {
+                phase = successPhase
+                emitState()
+            }
+            completion(failure)
         }
-        return failure
     }
 
     private fun emitState() = NavigationEventEmitter.state(
@@ -105,4 +120,3 @@ class SemiTrackNavigationManager(
         "running" to NavigationForegroundService.running,
     )
 }
-

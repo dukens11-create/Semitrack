@@ -78,5 +78,6 @@ dependencies {
     implementation "androidx.core:core-ktx:1.13.1"
     implementation "com.google.android.gms:play-services-location:21.3.0"
     implementation "com.tomtom.sdk:init:${tomtomSdkVersion}"
+    implementation "com.tomtom.sdk.telemetry:telemetry:${tomtomSdkVersion}"
     testImplementation "junit:junit:4.13.2"
 }

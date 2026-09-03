@@ -11,6 +11,8 @@ class SemiTrackNavigationManager(
     private var truckProfile: CommercialTruckProfile? = null
     private var destination: Coordinate? = null
     private val waypoints = linkedMapOf<String, NavigationWaypoint>()
+    private var externalRouteProvider: String? = null
+    private var externalRoutePointCount = 0
     private var voiceMuted = false
     private var phase = "idle"
 
@@ -27,6 +29,20 @@ class SemiTrackNavigationManager(
 
     fun updateDestination(coordinate: Coordinate) {
         destination = coordinate
+    }
+
+    fun setExternalRoute(provider: String, geometry: List<Coordinate>) {
+        require(provider.isNotBlank()) { "External route provider is required" }
+        require(geometry.size >= 2) { "External route geometry must contain at least two coordinates" }
+        externalRouteProvider = provider.trim()
+        externalRoutePointCount = geometry.size
+        guidanceEngine.setExternalRoute(externalRouteProvider!!, geometry)
+    }
+
+    fun clearExternalRoute() {
+        externalRouteProvider = null
+        externalRoutePointCount = 0
+        guidanceEngine.clearExternalRoute()
     }
 
     fun addWaypoint(waypoint: NavigationWaypoint) {
@@ -50,6 +66,7 @@ class SemiTrackNavigationManager(
 
     fun cancelRoute() {
         guidanceEngine.stop()
+        clearExternalRoute()
         destination = null
         waypoints.clear()
         phase = "idle"
@@ -59,6 +76,7 @@ class SemiTrackNavigationManager(
     fun stopNavigation() {
         context.stopService(Intent(context, NavigationForegroundService::class.java))
         guidanceEngine.stop()
+        clearExternalRoute()
         destination = null
         waypoints.clear()
         phase = "idle"
@@ -113,6 +131,8 @@ class SemiTrackNavigationManager(
         "hasTruckProfile" to (truckProfile != null),
         "hasDestination" to (destination != null),
         "waypointCount" to waypoints.size,
+        "externalRouteProvider" to externalRouteProvider,
+        "externalRoutePointCount" to externalRoutePointCount,
         "voiceMuted" to voiceMuted,
         "phase" to phase,
         "guidanceProvider" to guidanceEngine.providerName,

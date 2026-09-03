@@ -1,10 +1,12 @@
 package com.example.semitrack_mobile
 
+import android.view.WindowManager
+import com.example.semitrack_mobile.navigation.NavigationChannelHandler
+import com.example.semitrack_mobile.navigation.NavigationEventEmitter
+import com.example.semitrack_mobile.navigation.TomTomSdkManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import android.view.WindowManager
-import com.example.semitrack_mobile.navigation.NavigationChannelHandler
 
 class MainActivity : FlutterActivity() {
     private companion object {
@@ -13,7 +15,15 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Register the bridge first so initialization errors can reach Flutter.
         NavigationChannelHandler(this).register(flutterEngine.dartExecutor.binaryMessenger)
+        TomTomSdkManager.initializeAsync(applicationContext) { failure ->
+            if (failure != null) {
+                runOnUiThread { NavigationEventEmitter.error(failure) }
+            }
+        }
+
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             SCREEN_AWAKE_CHANNEL,

@@ -9,8 +9,10 @@ def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withReader('UTF-8') { reader -> localProperties.load(reader) }
 }
+
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode') ?: '1'
 def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '1.0'
+def tomtomApiKey = localProperties.getProperty('tomtomApiKey') ?: System.getenv('TOMTOM_API_KEY') ?: ''
 def productionApplicationId = project.findProperty('SEMITRACK_APPLICATION_ID')
 def releaseStoreFile = project.findProperty('SEMITRACK_RELEASE_STORE_FILE')
 def releaseStorePassword = project.findProperty('SEMITRACK_RELEASE_STORE_PASSWORD')
@@ -34,10 +36,19 @@ android {
 
     defaultConfig {
         applicationId productionApplicationId ?: "com.example.semitrack_mobile"
-        minSdkVersion 24
+        minSdkVersion 26
         targetSdkVersion 36
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        // External Trimble/PC*Miler RoutePath reconstruction uses TomTom's
+        // Extended SDK flavor (supporting points / ReconstructionMode.Track).
+        missingDimensionStrategy "tomtom-sdk-version", "extended"
+        buildConfigField "String", "TOMTOM_API_KEY", "\"${tomtomApiKey}\""
     }
 
     signingConfigs {
@@ -64,7 +75,13 @@ android {
 flutter { source '../..' }
 
 dependencies {
+    def tomtomSdkVersion = "2.5.3"
+
     implementation "androidx.core:core-ktx:1.13.1"
     implementation "com.google.android.gms:play-services-location:21.3.0"
+    implementation "com.tomtom.sdk:init:${tomtomSdkVersion}"
+    implementation "com.tomtom.sdk.telemetry:telemetry:${tomtomSdkVersion}"
+    implementation "com.tomtom.sdk.routing:route-planner:${tomtomSdkVersion}"
+    implementation "com.tomtom.sdk.navigation:navigation:${tomtomSdkVersion}"
     testImplementation "junit:junit:4.13.2"
 }

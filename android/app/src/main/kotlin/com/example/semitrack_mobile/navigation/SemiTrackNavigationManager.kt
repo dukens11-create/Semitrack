@@ -11,6 +11,8 @@ class SemiTrackNavigationManager(
     private var truckProfile: CommercialTruckProfile? = null
     private var destination: Coordinate? = null
     private val waypoints = linkedMapOf<String, NavigationWaypoint>()
+    private var externalRouteProvider: String? = null
+    private var externalRoutePointCount = 0
     private var voiceMuted = false
     private var phase = "idle"
 
@@ -27,6 +29,20 @@ class SemiTrackNavigationManager(
 
     fun updateDestination(coordinate: Coordinate) {
         destination = coordinate
+    }
+
+    fun setExternalRoute(provider: String, geometry: List<Coordinate>) {
+        require(provider.isNotBlank()) { "External route provider is required" }
+        require(geometry.size >= 2) { "External route geometry must contain at least two coordinates" }
+        externalRouteProvider = provider.trim()
+        externalRoutePointCount = geometry.size
+        guidanceEngine.setExternalRoute(externalRouteProvider!!, geometry)
+    }
+
+    fun clearExternalRoute() {
+        externalRouteProvider = null
+        externalRoutePointCount = 0
+        guidanceEngine.clearExternalRoute()
     }
 
     fun addWaypoint(waypoint: NavigationWaypoint) {
@@ -50,6 +66,7 @@ class SemiTrackNavigationManager(
 
     fun cancelRoute() {
         guidanceEngine.stop()
+        clearExternalRoute()
         destination = null
         waypoints.clear()
         phase = "idle"
@@ -59,34 +76,50 @@ class SemiTrackNavigationManager(
     fun stopNavigation() {
         context.stopService(Intent(context, NavigationForegroundService::class.java))
         guidanceEngine.stop()
+        clearExternalRoute()
         destination = null
         waypoints.clear()
         phase = "idle"
         emitState()
     }
 
-    fun previewRoute(): NavigationFailure? = routeOperation("previewing", guidanceEngine::preview)
-    fun startNavigation(): NavigationFailure? = routeOperation("navigating", guidanceEngine::start)
-    fun recalculateRoute(): NavigationFailure? = routeOperation("rerouting", guidanceEngine::recalculate)
+    fun previewRoute(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("previewing", guidanceEngine::preview, completion)
+
+    fun startNavigation(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("navigating", guidanceEngine::start, completion)
+
+    fun recalculateRoute(completion: (NavigationFailure?) -> Unit) =
+        routeOperation("rerouting", guidanceEngine::recalculate, completion)
 
     private fun routeOperation(
         successPhase: String,
-        operation: (CommercialTruckProfile, Coordinate, List<NavigationWaypoint>) -> NavigationFailure?,
-    ): NavigationFailure? {
+        operation: (
+            CommercialTruckProfile,
+            Coordinate,
+            List<NavigationWaypoint>,
+            (NavigationFailure?) -> Unit,
+        ) -> Unit,
+        completion: (NavigationFailure?) -> Unit,
+    ) {
         val profile = truckProfile
         if (profile == null) {
-            return NavigationFailure("TRUCK_PROFILE_REQUIRED", "Set the active commercial truck profile before routing")
+            completion(NavigationFailure("TRUCK_PROFILE_REQUIRED", "Set the active commercial truck profile before routing"))
+            return
         }
         val routeDestination = destination
         if (routeDestination == null) {
-            return NavigationFailure("DESTINATION_REQUIRED", "Set a destination before routing")
+            completion(NavigationFailure("DESTINATION_REQUIRED", "Set a destination before routing"))
+            return
         }
-        val failure = operation(profile, routeDestination, waypoints.values.toList())
-        if (failure == null) {
-            phase = successPhase
-            emitState()
+
+        operation(profile, routeDestination, waypoints.values.toList()) { failure ->
+            if (failure == null) {
+                phase = successPhase
+                emitState()
+            }
+            completion(failure)
         }
-        return failure
     }
 
     private fun emitState() = NavigationEventEmitter.state(
@@ -98,11 +131,14 @@ class SemiTrackNavigationManager(
         "hasTruckProfile" to (truckProfile != null),
         "hasDestination" to (destination != null),
         "waypointCount" to waypoints.size,
+        "externalRouteProvider" to externalRouteProvider,
+        "externalRoutePointCount" to externalRoutePointCount,
         "voiceMuted" to voiceMuted,
         "phase" to phase,
         "guidanceProvider" to guidanceEngine.providerName,
         "truckSafeGuidanceAvailable" to guidanceEngine.isAvailable,
+        "tomtomSdkReady" to TomTomSdkManager.isReady,
+        "tomtomSdkError" to TomTomSdkManager.error,
         "running" to NavigationForegroundService.running,
     )
 }
-

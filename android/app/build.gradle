@@ -45,7 +45,9 @@ android {
             abiFilters "arm64-v8a", "x86_64"
         }
 
-        missingDimensionStrategy "tomtom-sdk-version", "complete"
+        // External Trimble/PC*Miler RoutePath reconstruction uses TomTom's
+        // Extended SDK flavor (supporting points / ReconstructionMode.Track).
+        missingDimensionStrategy "tomtom-sdk-version", "extended"
         buildConfigField "String", "TOMTOM_API_KEY", "\"${tomtomApiKey}\""
     }
 

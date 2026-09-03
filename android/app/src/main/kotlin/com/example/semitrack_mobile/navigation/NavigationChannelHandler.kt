@@ -57,6 +57,24 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
                     manager.updateDestination(coordinate(arguments(call)))
                     result.success(null)
                 }
+                "setExternalRoute" -> {
+                    val values = arguments(call)
+                    val provider = values["provider"] as? String
+                        ?: throw IllegalArgumentException("External route provider is required")
+                    val rawGeometry = values["geometry"] as? List<*>
+                        ?: throw IllegalArgumentException("External route geometry is required")
+                    val geometry = rawGeometry.mapIndexed { index, raw ->
+                        val point = raw as? Map<*, *>
+                            ?: throw IllegalArgumentException("Route point $index is invalid")
+                        coordinate(point)
+                    }
+                    manager.setExternalRoute(provider, geometry)
+                    result.success(null)
+                }
+                "clearExternalRoute" -> {
+                    manager.clearExternalRoute()
+                    result.success(null)
+                }
                 "addWaypoint" -> {
                     val values = arguments(call)
                     val id = values["id"] as? String ?: throw IllegalArgumentException("Waypoint id is required")

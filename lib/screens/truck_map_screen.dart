@@ -6690,7 +6690,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     }
   }
 
-  /// Seeds live progress from the selected HERE route totals.
+  /// Seeds live progress from the selected authoritative truck-route totals.
   void _updateTripProgressFromRoute(double distanceMiles, int durationSeconds) {
     _routeTotalDistanceMiles = math.max(0, distanceMiles);
     _routeTotalDurationSeconds = math.max(0, durationSeconds);
@@ -7006,7 +7006,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       if (!status.truckSafeGuidanceAvailable) {
         throw const NativeNavigationException(
           'TRUCK_SAFE_NATIVE_ROUTING_UNAVAILABLE',
-          'Turn-by-turn navigation requires HERE SDK Navigate access. The truck-safe route preview is still available.',
+          'Turn-by-turn navigation requires TomTom guidance initialized with the selected Trimble truck route. The truck-safe route preview is still available.',
         );
       }
       final destination = _selectedDestination ?? _destination;
@@ -12646,7 +12646,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                 Expanded(
                   child: Text(
                     _routeOptions.length > 1
-                        ? 'Tap any route line to select it. Foreground voice uses the selected HERE truck route.'
+                        ? 'Tap any route line to select it. TomTom guidance follows the selected Trimble truck route.'
                         : 'Foreground GPS, maneuvers, voice, alerts, and truck-safe rerouting are available.',
                     style: const TextStyle(
                       color: Color(0xFF5F6E7C),
@@ -12739,7 +12739,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
         false;
   }
 
-  /// Starts GPS-following assistance for the authenticated HERE truck route.
+  /// Starts GPS-following assistance for the authenticated truck route.
   ///
   /// This fallback uses only provider route steps and fresh truck-safe route
   /// calculations. It does not claim lane-level, offline, or licensed native
@@ -12764,8 +12764,8 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       _isUserInteractingWithMap = false;
       _lastManualMapInteractionAt = null;
     });
-    // HERE Explore assistance is still a live driving session even though it
-    // is not licensed native Navigate guidance. Hide AppShell's planning tabs
+    // Provider-route assistance is still a live driving session even though it
+    // is not licensed native guidance. Hide AppShell's planning tabs
     // and use the same distraction-reduced map layout for both modes.
     TruckMapScreen.isNavigatingNotifier.value = true;
     unawaited(

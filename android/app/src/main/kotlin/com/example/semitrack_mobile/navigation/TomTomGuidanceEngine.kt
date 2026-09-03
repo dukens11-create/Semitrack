@@ -124,15 +124,8 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
             return
         }
 
-        if (profile.hazmatEnabled || profile.hazmatClasses.isNotEmpty()) {
-            completion(
-                null,
-                null,
-                NavigationFailure(
-                    "TOMTOM_HAZMAT_MAPPING_REQUIRED",
-                    "Hazardous-material guidance is blocked until SemiTrack hazmat values are explicitly mapped to TomTom HazmatClass values.",
-                ),
-            )
+        GuidanceSafetyPolicy.validateMappedRestrictions(profile)?.let {
+            completion(null, null, it)
             return
         }
 
@@ -143,18 +136,13 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
             return
         }
 
-        val truck = tomTomTruck(profile)
-        val externalGeometry = externalRouteGeometry
-        val options = if (externalGeometry.size >= 2) {
-            buildExternalRouteOptions(externalGeometry, truck)
-        } else {
-            val origin = NavigationEventEmitter.currentCoordinate()
-            if (origin == null) {
-                completion(null, null, NavigationFailure("CURRENT_LOCATION_REQUIRED", "Wait for a current GPS fix before planning a TomTom truck route"))
-                return
-            }
-            buildTomTomRouteOptions(origin, destination, waypoints, truck)
+        GuidanceSafetyPolicy.validateExternalRoute(externalRouteProvider, externalRouteGeometry)?.let {
+            completion(null, null, it)
+            return
         }
+
+        val truck = tomTomTruck(profile)
+        val options = buildExternalRouteOptions(externalRouteGeometry, truck)
 
         try {
             planner.planRoute(options, object : RoutePlanningCallback {
@@ -188,20 +176,6 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
             ),
         )
         return copyOptions(baseOptions, truck, routeLegOptions)
-    }
-
-    private fun buildTomTomRouteOptions(
-        origin: Coordinate,
-        destination: Coordinate,
-        waypoints: List<NavigationWaypoint>,
-        truck: Vehicle.Truck,
-    ): RoutePlanningOptions {
-        val itinerary = Itinerary(
-            origin = itineraryPoint(origin),
-            destination = itineraryPoint(destination),
-            waypoints = waypoints.map { itineraryPoint(it.coordinate) },
-        )
-        return copyOptions(buildRoutePlanningOptions(itinerary), truck, null)
     }
 
     private fun copyOptions(

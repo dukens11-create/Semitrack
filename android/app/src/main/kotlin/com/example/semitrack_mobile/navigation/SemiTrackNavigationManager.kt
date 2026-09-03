@@ -32,9 +32,9 @@ class SemiTrackNavigationManager(
     }
 
     fun setExternalRoute(provider: String, geometry: List<Coordinate>) {
-        require(provider.isNotBlank()) { "External route provider is required" }
-        require(geometry.size >= 2) { "External route geometry must contain at least two coordinates" }
-        externalRouteProvider = provider.trim()
+        val failure = GuidanceSafetyPolicy.validateExternalRoute(provider, geometry)
+        require(failure == null) { failure?.message ?: "Invalid external route" }
+        externalRouteProvider = "Trimble"
         externalRoutePointCount = geometry.size
         guidanceEngine.setExternalRoute(externalRouteProvider!!, geometry)
     }

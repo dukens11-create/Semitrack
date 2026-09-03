@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.semitrack_mobile.BuildConfig
 import com.tomtom.sdk.common.configuration.buildSdkConfiguration
 import com.tomtom.sdk.init.TomTomSdk
+import com.tomtom.sdk.telemetry.UserConsent
 
 /**
  * Owns process-wide TomTom SDK initialization for SemiTrack.
@@ -23,12 +24,9 @@ object TomTomSdkManager {
         get() = initializationError
 
     /**
-     * Initialize TomTom once. The deprecated no-consent overload is used only
-     * as a bootstrap until SemiTrack's driver-facing telemetry consent setting
-     * is connected; telemetry must not be treated as user-approved by this
-     * wrapper. Replace this call with the consent-aware overload before release.
+     * Initialize TomTom once. SemiTrack defaults to TelemetryOff until a
+     * driver-facing consent flow explicitly records another choice.
      */
-    @Suppress("DEPRECATION")
     fun initialize(context: Context): NavigationFailure? {
         if (TomTomSdk.isInitialized) {
             initializationError = null
@@ -47,6 +45,7 @@ object TomTomSdkManager {
             val sdkConfiguration = buildSdkConfiguration(
                 context = applicationContext,
                 apiKey = apiKey,
+                telemetryUserConsent = suspend { UserConsent.TelemetryOff },
             )
             TomTomSdk.initialize(
                 context = applicationContext,

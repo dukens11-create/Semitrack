@@ -227,23 +227,6 @@ class NativeNavigationService {
     {'latitude': latitude, 'longitude': longitude},
   );
 
-  Future<void> setExternalRoute({
-    required String provider,
-    required Iterable<({double latitude, double longitude})> geometry,
-  }) => _invoke('setExternalRoute', {
-    'provider': provider,
-    'geometry': geometry
-        .map(
-          (point) => {
-            'latitude': point.latitude,
-            'longitude': point.longitude,
-          },
-        )
-        .toList(growable: false),
-  });
-
-  Future<void> clearExternalRoute() => _invoke('clearExternalRoute');
-
   Future<void> addWaypoint(String id, double latitude, double longitude) =>
       _invoke('addWaypoint', {
         'id': id,

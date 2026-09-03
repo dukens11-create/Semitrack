@@ -11,7 +11,6 @@ object NavigationEventEmitter {
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var sink: EventChannel.EventSink? = null
     @Volatile private var lastLocation: Map<String, Any>? = null
-    @Volatile private var lastCoordinate: Coordinate? = null
     @Volatile private var lastState: Map<String, Any?> = mapOf("phase" to "idle")
 
     fun attach(eventSink: EventChannel.EventSink?) {
@@ -38,12 +37,9 @@ object NavigationEventEmitter {
             "speedAccuracy" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond.toDouble() else -1.0,
             "isMocked" to LocationCompat.isMock(location),
         )
-        lastCoordinate = Coordinate(location.latitude, location.longitude)
         lastLocation = data
         emit("location", data)
     }
-
-    fun currentCoordinate(): Coordinate? = lastCoordinate
 
     fun state(phase: String, extra: Map<String, Any?> = emptyMap()) {
         val data = mapOf("phase" to phase) + extra
@@ -69,3 +65,4 @@ object NavigationEventEmitter {
         }
     }
 }
+

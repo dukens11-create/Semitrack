@@ -12,9 +12,6 @@ jobs:
     env:
       MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
-      TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
-      TOMTOM_REPOSITORY_USERNAME: ${{ secrets.TOMTOM_REPOSITORY_USERNAME }}
-      TOMTOM_REPOSITORY_PASSWORD: ${{ secrets.TOMTOM_REPOSITORY_PASSWORD }}
 
     steps:
       - name: Checkout repository
@@ -28,14 +25,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Check build credentials
+      - name: Check Mapbox credentials
         shell: bash
         run: |
           test -n "$MAPBOX_DOWNLOADS_TOKEN" || { echo "MAPBOX_DOWNLOADS_TOKEN is not configured"; exit 1; }
           test -n "$MAPBOX_ACCESS_TOKEN" || { echo "MAPBOX_ACCESS_TOKEN is not configured"; exit 1; }
-          test -n "$TOMTOM_API_KEY" || { echo "TOMTOM_API_KEY is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_USERNAME" || { echo "TOMTOM_REPOSITORY_USERNAME is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_PASSWORD" || { echo "TOMTOM_REPOSITORY_PASSWORD is not configured"; exit 1; }
 
       - name: Build release APK
         run: flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN"

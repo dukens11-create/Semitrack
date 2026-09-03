@@ -16,10 +16,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 class NavigationChannelHandler(private val activity: Activity) : EventChannel.StreamHandler {
-    private val manager = SemiTrackNavigationManager(
-        activity.applicationContext,
-        if (TomTomSdkManager.isReady) TomTomGuidanceEngine() else TruckSafeGuidanceUnavailableEngine(),
-    )
+    private val manager = SemiTrackNavigationManager(activity.applicationContext)
 
     fun register(messenger: BinaryMessenger) {
         MethodChannel(messenger, METHODS).setMethodCallHandler(::handle)
@@ -30,9 +27,18 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
         try {
             when (call.method) {
                 "start" -> startLocation(call, result)
-                "startNavigation" -> manager.startNavigation { completeRouteOperation(result, it) }
-                "previewRoute" -> manager.previewRoute { completeRouteOperation(result, it) }
-                "recalculateRoute" -> manager.recalculateRoute { completeRouteOperation(result, it) }
+                "startNavigation" -> {
+                    val failure = manager.startNavigation()
+                    if (failure != null) fail(result, failure) else result.success(null)
+                }
+                "previewRoute" -> {
+                    val failure = manager.previewRoute()
+                    if (failure != null) fail(result, failure) else result.success(null)
+                }
+                "recalculateRoute" -> {
+                    val failure = manager.recalculateRoute()
+                    if (failure != null) fail(result, failure) else result.success(null)
+                }
                 "stop", "stopNavigation" -> {
                     manager.stopNavigation()
                     result.success(null)
@@ -55,24 +61,6 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
                 }
                 "updateDestination" -> {
                     manager.updateDestination(coordinate(arguments(call)))
-                    result.success(null)
-                }
-                "setExternalRoute" -> {
-                    val values = arguments(call)
-                    val provider = values["provider"] as? String
-                        ?: throw IllegalArgumentException("External route provider is required")
-                    val rawGeometry = values["geometry"] as? List<*>
-                        ?: throw IllegalArgumentException("External route geometry is required")
-                    val geometry = rawGeometry.mapIndexed { index, raw ->
-                        val point = raw as? Map<*, *>
-                            ?: throw IllegalArgumentException("Route point $index is invalid")
-                        coordinate(point)
-                    }
-                    manager.setExternalRoute(provider, geometry)
-                    result.success(null)
-                }
-                "clearExternalRoute" -> {
-                    manager.clearExternalRoute()
                     result.success(null)
                 }
                 "addWaypoint" -> {
@@ -99,12 +87,6 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
             fail(result, NavigationFailure("INVALID_ARGUMENT", error.message ?: "Invalid navigation argument"))
         } catch (error: Exception) {
             fail(result, NavigationFailure("NATIVE_NAVIGATION_ERROR", error.message ?: "Native navigation failed"))
-        }
-    }
-
-    private fun completeRouteOperation(result: MethodChannel.Result, failure: NavigationFailure?) {
-        activity.runOnUiThread {
-            if (failure != null) fail(result, failure) else result.success(null)
         }
     }
 
@@ -152,3 +134,5 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
         private const val EVENTS = "com.semitrack/navigation/locations"
     }
 }
+
+

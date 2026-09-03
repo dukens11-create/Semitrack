@@ -27,18 +27,9 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
         try {
             when (call.method) {
                 "start" -> startLocation(call, result)
-                "startNavigation" -> {
-                    val failure = manager.startNavigation()
-                    if (failure != null) fail(result, failure) else result.success(null)
-                }
-                "previewRoute" -> {
-                    val failure = manager.previewRoute()
-                    if (failure != null) fail(result, failure) else result.success(null)
-                }
-                "recalculateRoute" -> {
-                    val failure = manager.recalculateRoute()
-                    if (failure != null) fail(result, failure) else result.success(null)
-                }
+                "startNavigation" -> manager.startNavigation { completeRouteOperation(result, it) }
+                "previewRoute" -> manager.previewRoute { completeRouteOperation(result, it) }
+                "recalculateRoute" -> manager.recalculateRoute { completeRouteOperation(result, it) }
                 "stop", "stopNavigation" -> {
                     manager.stopNavigation()
                     result.success(null)
@@ -90,6 +81,12 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
         }
     }
 
+    private fun completeRouteOperation(result: MethodChannel.Result, failure: NavigationFailure?) {
+        activity.runOnUiThread {
+            if (failure != null) fail(result, failure) else result.success(null)
+        }
+    }
+
     private fun startLocation(call: MethodCall, result: MethodChannel.Result) {
         if (!hasLocationPermission()) {
             fail(result, NavigationFailure("LOCATION_PERMISSION_REQUIRED", "Grant precise location permission before starting navigation"))
@@ -134,5 +131,3 @@ class NavigationChannelHandler(private val activity: Activity) : EventChannel.St
         private const val EVENTS = "com.semitrack/navigation/locations"
     }
 }
-
-

@@ -4,6 +4,9 @@ interface NativeGuidanceEngine {
     val providerName: String
     val isAvailable: Boolean
 
+    fun setExternalRoute(provider: String, geometry: List<Coordinate>)
+    fun clearExternalRoute()
+
     fun preview(
         profile: CommercialTruckProfile,
         destination: Coordinate,
@@ -41,8 +44,11 @@ class TruckSafeGuidanceUnavailableEngine : NativeGuidanceEngine {
     override val isAvailable = false
     private val failure = NavigationFailure(
         "TRUCK_SAFE_NATIVE_ROUTING_UNAVAILABLE",
-        "Truck-safe native guidance is unavailable. Mapbox passenger-car routing is disabled; use the authenticated HERE truck-routing workflow.",
+        "Truck-safe native guidance is unavailable in this build.",
     )
+
+    override fun setExternalRoute(provider: String, geometry: List<Coordinate>) = Unit
+    override fun clearExternalRoute() = Unit
 
     override fun preview(
         profile: CommercialTruckProfile,

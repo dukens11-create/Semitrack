@@ -3,6 +3,9 @@ analyzer:
   # App imports from them remain type-checked during normal analysis.
   exclude:
     - plugins/**
+    # Preserved dormant HERE adapter; excluded while the licensed plugin is
+    # intentionally not part of the Trimble + TomTom build.
+    - lib/services/here_sdk_service.dart
     - build/**
     - android/**
     - ios/**

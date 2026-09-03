@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mbx;
@@ -9,7 +8,6 @@ import 'core/app_error_guard.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth_screen.dart';
 import 'services/auth_service.dart';
-import 'services/here_sdk_service.dart';
 import 'theme/semitrack_theme.dart';
 
 void main() {
@@ -33,26 +31,6 @@ void _startSemiTrack() {
 }
 
 Future<void> _initializeOptionalServices(AuthService auth) async {
-  final hereInitialization = () async {
-    try {
-      await HereSdkService.instance.initialize();
-      if (kDebugMode) {
-        final status = await HereSdkService.instance.verifyCredentials();
-        debugPrint('HERE SDK credential check: ${status.name}.');
-        if (status != HereSdkCredentialStatus.verified) {
-          debugPrint(
-            'HERE SDK-only features remain disabled until credentials are authorized.',
-          );
-        }
-      }
-    } catch (error, stack) {
-      // SemiTrack route previews use the authenticated backend truck-routing API.
-      // Do not crash the entire app when the optional Explore SDK is unavailable;
-      // native turn-by-turn remains independently fail-closed.
-      debugPrint('HERE SDK startup unavailable (${error.runtimeType}).');
-      if (kDebugMode) AppErrorGuard.reportUncaught(error, stack);
-    }
-  }();
   try {
     await auth.restoreSession();
   } catch (error, stack) {
@@ -61,8 +39,6 @@ Future<void> _initializeOptionalServices(AuthService auth) async {
     AppErrorGuard.reportUncaught(error, stack);
     auth.status = AuthStatus.signedOut;
   }
-  // Initialization can continue after the login screen becomes usable.
-  await hereInitialization;
 }
 
 class SemiTrackApp extends StatefulWidget {
@@ -77,7 +53,6 @@ class _SemiTrackAppState extends State<SemiTrackApp> {
   @override
   void dispose() {
     widget.auth.dispose();
-    unawaited(HereSdkService.instance.dispose());
     super.dispose();
   }
 

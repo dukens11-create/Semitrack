@@ -30,12 +30,6 @@
 @import geolocator_apple;
 #endif
 
-#if __has_include(<here_sdk/HereSdkPlugin.h>)
-#import <here_sdk/HereSdkPlugin.h>
-#else
-@import here_sdk;
-#endif
-
 #if __has_include(<mapbox_maps_flutter/MapboxMapsPlugin.h>)
 #import <mapbox_maps_flutter/MapboxMapsPlugin.h>
 #else
@@ -67,7 +61,6 @@
   [FlutterSecureStoragePlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterSecureStoragePlugin"]];
   [FlutterTtsPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterTtsPlugin"]];
   [GeolocatorPlugin registerWithRegistrar:[registry registrarForPlugin:@"GeolocatorPlugin"]];
-  [HereSdkPlugin registerWithRegistrar:[registry registrarForPlugin:@"HereSdkPlugin"]];
   [MapboxMapsPlugin registerWithRegistrar:[registry registrarForPlugin:@"MapboxMapsPlugin"]];
   [SharedPreferencesPlugin registerWithRegistrar:[registry registrarForPlugin:@"SharedPreferencesPlugin"]];
   [SpeechToTextPlugin registerWithRegistrar:[registry registrarForPlugin:@"SpeechToTextPlugin"]];

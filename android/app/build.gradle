@@ -22,8 +22,7 @@ def releaseKeyPassword = project.findProperty('SEMITRACK_RELEASE_KEY_PASSWORD')
 android {
     namespace "com.example.semitrack_mobile"
     compileSdkVersion 36
-    // Use the highest NDK required by the resolved native dependencies. NDKs
-    // are backward compatible, and HERE 4.27.2 supports 16 KB page sizes.
+    // Use the highest NDK required by the resolved native dependencies.
     ndkVersion "28.2.13676358"
 
     compileOptions {

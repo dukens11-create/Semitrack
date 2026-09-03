@@ -16,15 +16,14 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // TomTom is process-wide and must be initialized once before native
-        // navigation components are used. Initialization failures remain
-        // fail-closed and are surfaced through the existing navigation stream.
-        val tomtomFailure = TomTomSdkManager.initialize(applicationContext)
-        if (tomtomFailure != null) {
-            NavigationEventEmitter.error(tomtomFailure)
+        // Register the bridge first so initialization errors can reach Flutter.
+        NavigationChannelHandler(this).register(flutterEngine.dartExecutor.binaryMessenger)
+        TomTomSdkManager.initializeAsync(applicationContext) { failure ->
+            if (failure != null) {
+                runOnUiThread { NavigationEventEmitter.error(failure) }
+            }
         }
 
-        NavigationChannelHandler(this).register(flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             SCREEN_AWAKE_CHANNEL,

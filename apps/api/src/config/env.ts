@@ -8,7 +8,7 @@ if (nodeEnv === "production" && jwtSecret.length < 32) {
   throw new Error("JWT_SECRET must contain at least 32 characters in production");
 }
 
-const routingProvider = (process.env.ROUTING_PROVIDER ?? "here").trim().toLowerCase();
+const routingProvider = (process.env.ROUTING_PROVIDER ?? "trimble").trim().toLowerCase();
 if (!new Set(["here", "trimble"]).has(routingProvider)) {
   throw new Error("ROUTING_PROVIDER must be either 'here' or 'trimble'");
 }

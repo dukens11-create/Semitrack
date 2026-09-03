@@ -15,15 +15,18 @@ import com.tomtom.sdk.routing.createRoutePlanner
 import com.tomtom.sdk.routing.options.Itinerary
 import com.tomtom.sdk.routing.options.ItineraryPoint
 import com.tomtom.sdk.routing.options.RoutePlanningOptions
+import com.tomtom.sdk.routing.options.calculation.RouteLegOptions
+import com.tomtom.sdk.routing.options.calculation.RouteStopOptions
 import com.tomtom.sdk.vehicle.Vehicle
 import com.tomtom.sdk.vehicle.VehicleDimensions
 
 /**
  * TomTom-backed commercial-truck guidance adapter.
  *
- * SemiTrack deliberately fails closed when the SDK is unavailable, no current
- * location has been received, or a truck restriction cannot be represented
- * safely. Passenger-car routing is never used as a fallback.
+ * Trimble/PC*Miler remains SemiTrack's authoritative commercial-truck route
+ * planner. When Flutter supplies the selected Trimble RoutePath geometry,
+ * TomTom reconstructs that external path and provides native on-device
+ * guidance for it instead of independently choosing a different road route.
  */
 class TomTomGuidanceEngine : NativeGuidanceEngine {
     override val providerName: String = "tomtom"
@@ -31,6 +34,18 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
         get() = TomTomSdkManager.isReady
 
     private var routePlanner = if (TomTomSdkManager.isReady) TomTomSdk.createRoutePlanner() else null
+    private var externalRouteProvider: String? = null
+    private var externalRouteGeometry: List<Coordinate> = emptyList()
+
+    override fun setExternalRoute(provider: String, geometry: List<Coordinate>) {
+        externalRouteProvider = provider.trim()
+        externalRouteGeometry = geometry.toList()
+    }
+
+    override fun clearExternalRoute() {
+        externalRouteProvider = null
+        externalRouteGeometry = emptyList()
+    }
 
     override fun preview(
         profile: CommercialTruckProfile,
@@ -115,15 +130,9 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
                 null,
                 NavigationFailure(
                     "TOMTOM_HAZMAT_MAPPING_REQUIRED",
-                    "Hazardous-material routing is blocked until SemiTrack hazmat class values are explicitly mapped to TomTom HazmatClass values.",
+                    "Hazardous-material guidance is blocked until SemiTrack hazmat values are explicitly mapped to TomTom HazmatClass values.",
                 ),
             )
-            return
-        }
-
-        val origin = NavigationEventEmitter.currentCoordinate()
-        if (origin == null) {
-            completion(null, null, NavigationFailure("CURRENT_LOCATION_REQUIRED", "Wait for a current GPS fix before planning a TomTom truck route"))
             return
         }
 
@@ -135,27 +144,17 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
         }
 
         val truck = tomTomTruck(profile)
-        val itinerary = Itinerary(
-            origin = itineraryPoint(origin),
-            destination = itineraryPoint(destination),
-            waypoints = waypoints.map { itineraryPoint(it.coordinate) },
-        )
-        val baseOptions = buildRoutePlanningOptions(itinerary)
-        val options = RoutePlanningOptions(
-            itinerary = baseOptions.itinerary,
-            costModel = baseOptions.costModel,
-            departAt = baseOptions.departAt,
-            arriveAt = baseOptions.arriveAt,
-            alternativeRoutesOptions = baseOptions.alternativeRoutesOptions,
-            guidanceOptions = baseOptions.guidanceOptions,
-            routeLegOptions = baseOptions.routeLegOptions,
-            vehicle = truck,
-            chargingOptions = baseOptions.chargingOptions,
-            queryOptions = baseOptions.queryOptions,
-            waypointOptimization = baseOptions.waypointOptimization,
-            mode = baseOptions.mode,
-            arrivalSidePreference = baseOptions.arrivalSidePreference,
-        )
+        val externalGeometry = externalRouteGeometry
+        val options = if (externalGeometry.size >= 2) {
+            buildExternalRouteOptions(externalGeometry, truck)
+        } else {
+            val origin = NavigationEventEmitter.currentCoordinate()
+            if (origin == null) {
+                completion(null, null, NavigationFailure("CURRENT_LOCATION_REQUIRED", "Wait for a current GPS fix before planning a TomTom truck route"))
+                return
+            }
+            buildTomTomRouteOptions(origin, destination, waypoints, truck)
+        }
 
         try {
             planner.planRoute(options, object : RoutePlanningCallback {
@@ -164,7 +163,8 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
                 }
 
                 override fun onFailure(failure: RoutingFailure) {
-                    completion(null, options, NavigationFailure("TOMTOM_ROUTE_FAILED", failure.toString()))
+                    val source = externalRouteProvider?.let { "$it route reconstruction" } ?: "TomTom route planning"
+                    completion(null, options, NavigationFailure("TOMTOM_ROUTE_FAILED", "$source failed: $failure"))
                 }
             })
         } catch (error: Exception) {
@@ -172,9 +172,63 @@ class TomTomGuidanceEngine : NativeGuidanceEngine {
         }
     }
 
-    private fun itineraryPoint(coordinate: Coordinate) = ItineraryPoint(
-        Place(GeoPoint(coordinate.latitude, coordinate.longitude)),
+    private fun buildExternalRouteOptions(
+        geometry: List<Coordinate>,
+        truck: Vehicle.Truck,
+    ): RoutePlanningOptions {
+        val itinerary = Itinerary(
+            origin = itineraryPoint(geometry.first()),
+            destination = itineraryPoint(geometry.last()),
+        )
+        val baseOptions = buildRoutePlanningOptions(itinerary)
+        val routeLegOptions = listOf(
+            RouteLegOptions(
+                supportingPoints = geometry.map(::geoPoint),
+                routeStopOptions = RouteStopOptions(),
+            ),
+        )
+        return copyOptions(baseOptions, truck, routeLegOptions)
+    }
+
+    private fun buildTomTomRouteOptions(
+        origin: Coordinate,
+        destination: Coordinate,
+        waypoints: List<NavigationWaypoint>,
+        truck: Vehicle.Truck,
+    ): RoutePlanningOptions {
+        val itinerary = Itinerary(
+            origin = itineraryPoint(origin),
+            destination = itineraryPoint(destination),
+            waypoints = waypoints.map { itineraryPoint(it.coordinate) },
+        )
+        return copyOptions(buildRoutePlanningOptions(itinerary), truck, null)
+    }
+
+    private fun copyOptions(
+        baseOptions: RoutePlanningOptions,
+        truck: Vehicle.Truck,
+        routeLegOptions: List<RouteLegOptions>?,
+    ) = RoutePlanningOptions(
+        itinerary = baseOptions.itinerary,
+        costModel = baseOptions.costModel,
+        departAt = baseOptions.departAt,
+        arriveAt = baseOptions.arriveAt,
+        alternativeRoutesOptions = baseOptions.alternativeRoutesOptions,
+        guidanceOptions = baseOptions.guidanceOptions,
+        routeLegOptions = routeLegOptions ?: baseOptions.routeLegOptions,
+        vehicle = truck,
+        chargingOptions = baseOptions.chargingOptions,
+        queryOptions = baseOptions.queryOptions,
+        waypointOptimization = baseOptions.waypointOptimization,
+        mode = baseOptions.mode,
+        arrivalSidePreference = baseOptions.arrivalSidePreference,
     )
+
+    private fun itineraryPoint(coordinate: Coordinate) = ItineraryPoint(
+        Place(geoPoint(coordinate)),
+    )
+
+    private fun geoPoint(coordinate: Coordinate) = GeoPoint(coordinate.latitude, coordinate.longitude)
 
     private fun tomTomTruck(profile: CommercialTruckProfile): Vehicle.Truck {
         val axleWeightKg = profile.axleWeightsKg.maxOrNull()

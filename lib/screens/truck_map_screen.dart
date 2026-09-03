@@ -59,7 +59,7 @@ enum LaneDirection { left, slightLeft, straight, slightRight, right, uTurn }
 
 enum _LocationRecoveryAction { retry, enableServices, appSettings }
 
-enum _RouteCalculationKind { backend, native, restriction }
+enum _RouteCalculationKind { backend, restriction }
 
 class _RouteCalculationRequest {
   const _RouteCalculationRequest({
@@ -6329,15 +6329,9 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     LatLng origin, {
     required String reason,
   }) {
-    final nativeGuidanceActive =
-        _nativeNavigationStatus?.truckSafeGuidanceAvailable == true &&
-        (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
-            _nativeNavigationPhase == NativeNavigationPhase.rerouting);
     return _submitRouteCalculation(
       _RouteCalculationRequest(
-        kind: nativeGuidanceActive
-            ? _RouteCalculationKind.native
-            : _RouteCalculationKind.backend,
+        kind: _RouteCalculationKind.backend,
         reason: reason,
         destination: _selectedDestination ?? _destination,
         origin: origin,
@@ -7019,6 +7013,10 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       await NativeNavigationService.instance.updateDestination(
         destination.latitude,
         destination.longitude,
+      );
+      await _setNativeAuthoritativeRoute(
+        _routeData?['provider']?.toString() ?? '',
+        _routePoints,
       );
       await NativeNavigationService.instance.previewRoute();
       await NativeNavigationService.instance.startNavigation();
@@ -10366,8 +10364,6 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       switch (request.kind) {
         case _RouteCalculationKind.backend:
           await _executeBackendRouteCalculation(request, requestId, isCurrent);
-        case _RouteCalculationKind.native:
-          await _executeNativeRouteCalculation(requestId, isCurrent);
         case _RouteCalculationKind.restriction:
           await _executeRestrictionRouteCalculation(
             request,
@@ -10405,6 +10401,12 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     final replacingActiveRoute = _routePoints.length > 1;
     final preserveLiveSession =
         replacingActiveRoute && _isLiveRouteAssistanceActive;
+    final nativeGuidanceActive =
+        _nativeNavigationStatus?.truckSafeGuidanceAvailable == true &&
+        (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
+            _nativeNavigationPhase == NativeNavigationPhase.rerouting);
+    final previousProvider = _routeData?['provider']?.toString() ?? '';
+    final previousPoints = List<LatLng>.of(_routePoints);
 
     unawaited(_resolveDestinationTimeZone(request.destination));
     if (origin == null) {
@@ -10447,6 +10449,20 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     final selected = routeResults[selectedIndex];
     final options = _buildProviderRouteOptions(routeResults);
 
+    if (nativeGuidanceActive) {
+      try {
+        await _setNativeAuthoritativeRoute(selected.provider, selected.points);
+        await NativeNavigationService.instance.recalculateRoute();
+      } catch (_) {
+        if (previousPoints.length >= 2 &&
+            previousProvider.toLowerCase() == 'trimble') {
+          await _setNativeAuthoritativeRoute(previousProvider, previousPoints);
+        }
+        rethrow;
+      }
+      if (!mounted || !isCurrent()) return;
+    }
+
     _applyAuthoritativeRouteResult(
       selected,
       options: options,
@@ -10481,17 +10497,31 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     }
   }
 
-  Future<void> _executeNativeRouteCalculation(
-    int requestId,
-    bool Function() isCurrent,
+  Future<void> _setNativeAuthoritativeRoute(
+    String provider,
+    List<LatLng> points,
   ) async {
-    if (mounted && isCurrent()) {
-      setState(() => _navStatus = 'Recalculating truck route…');
+    if (provider.toLowerCase() != 'trimble') {
+      throw const NativeNavigationException(
+        'TRIMBLE_ROUTE_REQUIRED',
+        'TomTom guidance requires an authoritative Trimble truck route.',
+      );
     }
-    await NativeNavigationService.instance.recalculateRoute();
-    if (!mounted || !isCurrent()) return;
-    setState(() => _navStatus = null);
-    debugPrint('[Reroute][$requestId] Native provider accepted recalculation.');
+    if (points.length < 2) {
+      throw const NativeNavigationException(
+        'TRIMBLE_ROUTE_GEOMETRY_REQUIRED',
+        'Trimble did not return enough route geometry for safe guidance.',
+      );
+    }
+    await NativeNavigationService.instance.setExternalRoute(
+      provider: 'Trimble',
+      geometry: points.map(
+        (point) => (
+          latitude: point.latitude,
+          longitude: point.longitude,
+        ),
+      ),
+    );
   }
 
   List<RouteOption> _buildProviderRouteOptions(List<RouteResult> results) {

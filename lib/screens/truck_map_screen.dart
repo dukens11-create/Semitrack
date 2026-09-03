@@ -482,6 +482,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
 
   // ── Map route points (from GeoJSON coordinates) ────────────────────────────
   List<LatLng> _routePoints = const [];
+  List<LatLng> _guidanceRoutePoints = const [];
 
   /// Changes whenever the authoritative route geometry changes. Async POI,
   /// weigh-station, and road-data responses must match this revision before
@@ -6451,6 +6452,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
           NavigationCameraMode.free; // no active destination to follow
       _overviewPinnedByUser = false;
       _routePoints = const [];
+      _guidanceRoutePoints = const [];
       _navSteps = const [];
       _currentStepIndex = 0;
       _halfMileAnnouncedStepIndex = null;
@@ -7016,7 +7018,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       );
       await _setNativeAuthoritativeRoute(
         _routeData?['provider']?.toString() ?? '',
-        _routePoints,
+        _guidanceRoutePoints,
       );
       await NativeNavigationService.instance.previewRoute();
       await NativeNavigationService.instance.startNavigation();
@@ -8030,6 +8032,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     return RouteResult(
       provider: resolvedProvider,
       points: _simplifyRoute(decoded),
+      guidancePoints: decoded,
       steps: steps,
       distanceMiles: (route['distanceMiles'] as num).toDouble(),
       durationSeconds: (route['durationSeconds'] as num).toInt(),
@@ -10406,7 +10409,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
         (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
             _nativeNavigationPhase == NativeNavigationPhase.rerouting);
     final previousProvider = _routeData?['provider']?.toString() ?? '';
-    final previousPoints = List<LatLng>.of(_routePoints);
+    final previousPoints = List<LatLng>.of(_guidanceRoutePoints);
 
     unawaited(_resolveDestinationTimeZone(request.destination));
     if (origin == null) {
@@ -10451,7 +10454,10 @@ class _TruckMapScreenState extends State<TruckMapScreen>
 
     if (nativeGuidanceActive) {
       try {
-        await _setNativeAuthoritativeRoute(selected.provider, selected.points);
+        await _setNativeAuthoritativeRoute(
+          selected.provider,
+          selected.guidancePoints,
+        );
         await NativeNavigationService.instance.recalculateRoute();
       } catch (_) {
         if (previousPoints.length >= 2 &&
@@ -10542,6 +10548,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
             id: '${candidate.provider.toLowerCase()}_truck_$index',
             label: index == 0 ? 'Recommended' : 'Alternative $index',
             points: points,
+            guidancePoints: candidate.guidancePoints,
             steps: candidate.steps,
             distanceMiles: candidate.distanceMiles,
             durationSeconds: candidate.durationSeconds,
@@ -10568,6 +10575,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       _activeRouteRevision++;
       _routePoiRequestGeneration++;
       _routePoints = cleanPoints;
+      _guidanceRoutePoints = List<LatLng>.unmodifiable(result.guidancePoints);
       _navSteps = result.steps;
       _routeData = options[selectedIndex].routeData;
       _routeOptions = options;
@@ -10704,6 +10712,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
               id: 'route_$ri',
               label: label,
               points: pts,
+              guidancePoints: pts,
               steps: steps,
               distanceMiles: distMi,
               durationSeconds: durSec,
@@ -10821,6 +10830,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
             id: 'route_$i',
             label: i < routeLabels.length ? routeLabels[i] : 'Route ${i + 1}',
             points: rPoints,
+            guidancePoints: rDecoded,
             steps: rSteps,
             distanceMiles: rMiles,
             durationSeconds: rSeconds,
@@ -10947,6 +10957,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       _routePoiRequestGeneration++;
       _selectedRouteOptionIndex = index;
       _routePoints = newPoints;
+      _guidanceRoutePoints = List<LatLng>.unmodifiable(opt.guidancePoints);
       _navSteps = opt.steps;
       _currentStepIndex = 0;
       _halfMileAnnouncedStepIndex = null;
@@ -21451,6 +21462,7 @@ class RouteOption {
     required this.id,
     required this.label,
     required this.points,
+    required this.guidancePoints,
     required this.steps,
     required this.distanceMiles,
     required this.durationSeconds,
@@ -21468,6 +21480,9 @@ class RouteOption {
 
   /// Decoded and simplified polyline points for map rendering.
   final List<LatLng> points;
+
+  /// Full provider geometry retained for native route reconstruction.
+  final List<LatLng> guidancePoints;
 
   /// Turn-by-turn navigation steps for this route.
   final List<_NavStep> steps;
@@ -21494,6 +21509,7 @@ class RouteOption {
       id: id,
       label: label,
       points: points,
+      guidancePoints: guidancePoints,
       steps: steps,
       distanceMiles: distanceMiles,
       durationSeconds: durationSeconds,
@@ -21516,6 +21532,7 @@ class RouteResult {
   const RouteResult({
     required this.provider,
     required this.points,
+    required this.guidancePoints,
     required this.steps,
     required this.distanceMiles,
     required this.durationSeconds,
@@ -21529,6 +21546,9 @@ class RouteResult {
 
   /// Decoded, simplified polyline points.
   final List<LatLng> points;
+
+  /// Full provider geometry passed to native guidance without UI simplification.
+  final List<LatLng> guidancePoints;
 
   /// Turn-by-turn navigation steps.
   final List<_NavStep> steps;

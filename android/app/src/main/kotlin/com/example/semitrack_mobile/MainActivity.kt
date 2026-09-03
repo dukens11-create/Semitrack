@@ -1,10 +1,12 @@
 package com.example.semitrack_mobile
 
+import android.view.WindowManager
+import com.example.semitrack_mobile.navigation.NavigationChannelHandler
+import com.example.semitrack_mobile.navigation.NavigationEventEmitter
+import com.example.semitrack_mobile.navigation.TomTomSdkManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import android.view.WindowManager
-import com.example.semitrack_mobile.navigation.NavigationChannelHandler
 
 class MainActivity : FlutterActivity() {
     private companion object {
@@ -13,6 +15,15 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // TomTom is process-wide and must be initialized once before native
+        // navigation components are used. Initialization failures remain
+        // fail-closed and are surfaced through the existing navigation stream.
+        val tomtomFailure = TomTomSdkManager.initialize(applicationContext)
+        if (tomtomFailure != null) {
+            NavigationEventEmitter.error(tomtomFailure)
+        }
+
         NavigationChannelHandler(this).register(flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

@@ -1,12 +1,12 @@
 import dotenv from "dotenv";
 import { parseBillingConfiguration } from "./billingConfig.js";
+import { validateProductionConfiguration } from "./productionConfig.js";
 dotenv.config();
+
+validateProductionConfiguration(process.env);
 
 const nodeEnv = process.env.NODE_ENV ?? "development";
 const jwtSecret = process.env.JWT_SECRET ?? "";
-if (nodeEnv === "production" && jwtSecret.length < 32) {
-  throw new Error("JWT_SECRET must contain at least 32 characters in production");
-}
 
 const routingProvider = (process.env.ROUTING_PROVIDER ?? "trimble").trim().toLowerCase();
 if (!new Set(["here", "trimble"]).has(routingProvider)) {

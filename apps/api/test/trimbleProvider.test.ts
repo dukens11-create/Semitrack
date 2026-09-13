@@ -5,10 +5,49 @@ import type { RouteBuildInput } from "../src/types.ts";
 import { RoutingProviderError } from "../dist/services/providers/routeProvider.js";
 import {
   buildTrimbleRouteRequest,
+  matchTrimbleManeuversToGeometry,
   parseTrimbleRouteResponse,
   TrimbleRouteProvider,
   type TrimbleProviderConfig,
 } from "../dist/services/providers/trimbleProvider.js";
+
+test("maneuvers map monotonically to short RoutePath geometry", () => {
+  const geometry = [[-120, 40], [-119.999, 40], [-119.998, 40]];
+  const result = matchTrimbleManeuversToGeometry([
+    { step: 1, instruction: "Start", distanceMiles: 0, coordinate: { lat: 40, lng: -120 } },
+    { step: 2, instruction: "Turn", distanceMiles: 0.1, coordinate: { lat: 40, lng: -119.999 } },
+    { step: 3, instruction: "Arrive", distanceMiles: 0.1, action: "arrive", coordinate: { lat: 40, lng: -119.998 } },
+  ], geometry);
+  assert.deepEqual(result.map((item) => item.offset), [0, 1, 2]);
+});
+
+test("maneuvers map correctly on a dense 300 point route and long highway segment", () => {
+  const geometry = Array.from({ length: 401 }, (_, index) => [-120 + index * 0.001, 40]);
+  const result = matchTrimbleManeuversToGeometry([
+    { step: 1, instruction: "Enter highway", distanceMiles: 0, coordinate: { lat: 40, lng: -119.99 } },
+    { step: 2, instruction: "Exit highway", distanceMiles: 20, coordinate: { lat: 40, lng: -119.7 } },
+  ], geometry);
+  assert.deepEqual(result.map((item) => item.offset), [10, 300]);
+});
+
+test("closely spaced maneuvers and duplicate geometry never move backward", () => {
+  const geometry = [[-120, 40], [-119.999, 40], [-119.999, 40], [-119.9989, 40], [-119.998, 40]];
+  const result = matchTrimbleManeuversToGeometry([
+    { step: 1, instruction: "First", distanceMiles: 0, coordinate: { lat: 40, lng: -119.999 } },
+    { step: 2, instruction: "Second", distanceMiles: 0, coordinate: { lat: 40, lng: -119.9989 } },
+  ], geometry);
+  assert.ok(result[1].offset! >= result[0].offset!);
+  assert.equal(result[1].offset, 3);
+});
+
+test("low-confidence maneuver matching fails instead of inventing an offset", () => {
+  assert.throws(
+    () => matchTrimbleManeuversToGeometry([
+      { step: 1, instruction: "Turn", distanceMiles: 0, coordinate: { lat: 41, lng: -121 } },
+    ], [[-120, 40], [-119.9, 40]]),
+    (error: unknown) => error instanceof RoutingProviderError && error.code === "TRIMBLE_MANEUVER_GEOMETRY_MISMATCH",
+  );
+});
 
 const config: TrimbleProviderConfig = {
   apiKey: "test-secret-that-must-not-leak",
@@ -38,6 +77,9 @@ const input: RouteBuildInput = {
     hazardousGoods: ["explosive", "corrosive"],
     avoidTolls: true,
     avoidFerries: true,
+    avoidHighways: false,
+    avoidResidential: false,
+    avoidDirtRoads: false,
   },
   routeMode: "fastest",
   alternatives: 2,
@@ -69,6 +111,21 @@ test("Trimble request sends the commercial truck profile without weakening restr
   assert.ok(route.ReportTypes.some((value: any) => value.__type.startsWith("MileageReportType:")));
   assert.ok(route.ReportTypes.some((value: any) => value.__type.startsWith("GeoTunnelReportType:")));
   assert.equal(route.AlternateRouteOptions, undefined, "premium alternates remain entitlement-gated");
+});
+
+test("Trimble request preserves one and multiple intermediate stops in order", () => {
+  for (const viaStops of [
+    [{ lat: 40, lng: -120 }],
+    [{ lat: 40, lng: -120 }, { lat: 41, lng: -121 }],
+  ]) {
+    const request: any = buildTrimbleRouteRequest({ ...input, viaStops }, config);
+    const stops = request.ReportRoutes[0].Stops;
+    assert.deepEqual(
+      stops.map((stop: any) => [Number(stop.Coords.Lat), Number(stop.Coords.Lon)]),
+      [[input.origin.lat, input.origin.lng], ...viaStops.map((stop) => [stop.lat, stop.lng]), [input.destination.lat, input.destination.lng]],
+    );
+    assert.equal(request.ReportRoutes[0].Options.OverrideRestrict, false);
+  }
 });
 
 test("Trimble premium alternatives include the required base-waypoint configuration", () => {
@@ -130,7 +187,7 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
             Dist: "583.500",
             Time: "10:30:00",
             TurnInstruction: null,
-            Warn: "Warning - Truck Restricted cleanup point",
+            Warn: null,
             Begin: { Lat: "45.52", Lon: "-122.68" },
             End: { Lat: "45.52", Lon: "-122.68" },
           },
@@ -161,7 +218,7 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
   const route = parseTrimbleRouteResponse(payload, input, config);
   assert.equal(route.provider, "Trimble");
   assert.equal(route.truckSafe, true);
-  assert.equal(route.navigationAllowed, true);
+  assert.equal(route.navigationAllowed, false, "GeoTunnel can never authorize navigation");
   assert.equal(route.trafficAware, true);
   assert.equal(route.distanceMiles, 583.5);
   assert.equal(route.durationSeconds, 37_800);
@@ -169,7 +226,7 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
   assert.equal(route.turnByTurn[0]?.direction, "right");
   assert.equal(route.turnByTurn[0]?.roadName, "I-80 West");
   assert.equal(route.turnByTurn.at(-1)?.action, "arrive");
-  assert.ok(route.alerts.some((alert) => alert.includes("Truck Restricted")));
+  assert.equal(route.alerts.some((alert) => alert.includes("Truck Restricted")), false);
   assert.ok(route.alerts.some((alert) => alert.includes("alternatives")));
 });
 
@@ -179,7 +236,7 @@ test("Trimble prefers dense RoutePath geometry over sparse GeoTunnel samples", (
     {
       __type: "DirectionsReport:http://pcmiler.alk.com/APIs/v1.0",
       RouteID: "trimble-route-path",
-      ReportLegs: [{ ReportLines: [{ Direction: "Destination", Dist: "1", Time: "0:02:00" }] }],
+      ReportLegs: [{ ReportLines: [{ Direction: "Destination", Dist: "1", Time: "0:02:00", End: { Lat: "39.53", Lon: "-119.82" } }] }],
     },
     {
       __type: "MileageReport:http://pcmiler.alk.com/APIs/v1.0",
@@ -244,7 +301,7 @@ test("Trimble API key is sent only in the Authorization header", async () => {
       {
         __type: "DirectionsReport:http://pcmiler.alk.com/APIs/v1.0",
         RouteID: "secure-route",
-        ReportLegs: [{ ReportLines: [{ Direction: "Destination", Dist: "1", Time: "0:02:00" }] }],
+        ReportLegs: [{ ReportLines: [{ Direction: "Destination", Dist: "1", Time: "0:02:00", End: { Lat: "39.53", Lon: "-119.82" } }] }],
       },
       {
         __type: "MileageReport:http://pcmiler.alk.com/APIs/v1.0",
@@ -275,4 +332,15 @@ test("Trimble quota failures expose a stable retryable error", async () => {
     (error: unknown) => error instanceof RoutingProviderError &&
       error.code === "TRIMBLE_QUOTA_EXCEEDED" && error.retryable,
   );
+});
+
+test("all maneuver positions including arrival require measured coordinates", () => {
+  for (const action of ["continue", "turn", "arrive"]) {
+    assert.throws(() => matchTrimbleManeuversToGeometry([{step:1,instruction:"Fixture maneuver",distanceMiles:0,action}], [[-120,40],[-119.999,40]]), (error:unknown)=>error instanceof RoutingProviderError && error.code === "TRIMBLE_MANEUVER_COORDINATE_REQUIRED");
+  }
+});
+test("invalid maneuver coordinates cannot acquire a fabricated geometry offset", () => {
+  for (const coordinate of [{lat:NaN,lng:-120},{lat:91,lng:-120},{lat:40,lng:181}]) {
+    assert.throws(()=>matchTrimbleManeuversToGeometry([{step:1,instruction:"Fixture",distanceMiles:0,coordinate}], [[-120,40],[-119.999,40]]));
+  }
 });

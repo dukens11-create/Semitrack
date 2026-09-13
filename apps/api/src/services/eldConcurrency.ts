@@ -1,0 +1,6 @@
+import type { PrismaClient } from '@prisma/client';
+import { deny } from '../modules/admin/operationalPolicy.js';
+export async function claimEldOAuth(db:PrismaClient,stateHash:string,provider:'SAMSARA'|'MOTIVE') {
+ return db.$transaction(async tx=>{const s=await tx.eldOAuthState.findUnique({where:{stateHash}});if(!s||s.provider!==provider||s.usedAt||s.expiresAt<=new Date())deny('INVALID_OAUTH_STATE',400);const connection=await tx.eldConnection.findFirst({where:{userId:s.userId,provider,revision:s.connectionRevision,status:'PENDING',user:{disabledAt:null}}});if(!connection)deny('INVALID_OAUTH_STATE',400);const claimed=await tx.eldOAuthState.updateMany({where:{id:s.id,usedAt:null,expiresAt:{gt:new Date()}},data:{usedAt:new Date()}});if(claimed.count!==1)deny('INVALID_OAUTH_STATE',400);return {state:s,connection};},{isolationLevel:'Serializable'});
+}
+export async function updateEldRevision(db:Pick<PrismaClient,'eldConnection'>,connection:{id:string;userId:string;revision:number;status:any},data:any){const updated=await db.eldConnection.updateMany({where:{id:connection.id,userId:connection.userId,revision:connection.revision,status:connection.status,user:{disabledAt:null}},data:{...data,revision:{increment:1}}});if(updated.count!==1)deny('ELD_CONNECTION_CHANGED',409);return connection.revision+1;}

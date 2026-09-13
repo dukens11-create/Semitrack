@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { parseRecoveryConfiguration } from './recoveryConfig.js';
 
 export type ProductionEnvironment = Record<string, string | undefined>;
 
@@ -60,4 +61,5 @@ export function validateProductionConfiguration(source: ProductionEnvironment) {
   const origins = required(source, "CORS_ORIGINS").split(",").map((value) => value.trim());
   if (origins.some((origin) => !origin)) throw new Error("CORS_ORIGINS must list explicit HTTPS origins without empty entries");
   for (const origin of origins) httpsOrigin(origin, "CORS_ORIGINS");
+  parseRecoveryConfiguration(source);
 }

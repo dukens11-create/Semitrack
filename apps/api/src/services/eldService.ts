@@ -79,13 +79,15 @@ async function tokenRequest(provider: EldProviderName, values: Record<string, st
   const response = await fetch(config.tokenUrl, {
     method: "POST",
     headers,
+    signal: AbortSignal.timeout(20_000),
+    redirect: "error",
     body: new URLSearchParams({
       ...credentials,
       ...values,
     }),
   });
   const json: any = await response.json();
-  if (!response.ok || !json.access_token) {
+  if (!response.ok || !json || typeof json.access_token !== "string" || !json.access_token || (json.refresh_token != null && typeof json.refresh_token !== "string") || !Number.isFinite(Number(json.expires_in ?? 3600)) || Number(json.expires_in ?? 3600) <= 0) {
     throw new Error(`${provider} token exchange failed (${response.status})`);
   }
   return {
@@ -124,6 +126,8 @@ export async function eldGet(provider: EldProviderName, accessToken: string, pat
   const config = eldConfig(provider);
   const response = await fetch(`${config.apiBase}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`${provider} API request failed (${response.status})`);
   return response.json();

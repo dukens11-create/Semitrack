@@ -11,6 +11,9 @@ const valid = {
   REFRESH_TOKEN_DAYS: "30",
   PUBLIC_API_URL: "https://api.semitrax.com",
   CORS_ORIGINS: "https://www.semitrax.com,https://admin.semitrax.com",
+  RESEND_API_KEY: 're_unit_test_not_a_credential',
+  PASSWORD_RESET_FROM_EMAIL: 'reset@example.test',
+  PASSWORD_RESET_BASE_URL: 'https://www.semitrax.com/reset-password.html',
 };
 
 test("development configuration retains local defaults", () => {

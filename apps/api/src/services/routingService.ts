@@ -63,7 +63,7 @@ function reason(result: PromiseSettledResult<RouteBuildResult>) {
       retryable: result.reason.retryable,
     };
   }
-  return { code: "ROUTING_PROVIDER_ERROR", message: String(result.reason), retryable: false };
+  return { code: "ROUTING_PROVIDER_ERROR", message: "Routing provider unavailable", retryable: false };
 }
 
 export function configuredRoutingProviderName() {

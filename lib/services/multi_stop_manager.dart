@@ -22,7 +22,12 @@ class MultiStopManager<T> {
     if (_stops.any((s) => s.id == stop.id)) throw ArgumentError('Duplicate stop id');
     _stops.add(stop);
   }
-  bool remove(String id) => _stops.removeWhere((s) => s.id == id) > 0;
+  bool remove(String id) {
+    final index = _stops.indexWhere((s) => s.id == id);
+    if (index < 0) return false;
+    _stops.removeAt(index);
+    return true;
+  }
   void reorder(int oldIndex, int newIndex) {
     if (oldIndex < 0 || oldIndex >= _stops.length || newIndex < 0 || newIndex >= _stops.length) throw RangeError('Invalid stop index');
     final item = _stops.removeAt(oldIndex);

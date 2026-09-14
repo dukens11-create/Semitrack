@@ -1,26 +1,33 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError, session, type AdminUser } from "./api";
+import { Operations } from './Operations';
+import { truckDetails } from "./truckDetails";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, session, signOut, type AdminUser } from "./api";
 import type { DashboardData, DriverListItem, DriverProfile, LabelValue, Metric, SeriesPoint, SubscriptionPlanCatalog } from "./types";
 
-type View = "dashboard" | "drivers" | "pricing" | "account" | "audit";
+type View = "operations" | "dashboard" | "drivers" | "pricing" | "account" | "audit";
 type RangePreset = "today" | "7d" | "30d" | "3m" | "1y" | "custom";
 const adminRoles = new Set(["ADMIN", "FLEET_ADMIN", "MODERATOR"]);
 
+async function authorizePortal(user:AdminUser):Promise<AdminUser>{
+ try{const access=await api.get<{role:string;permissions:string[]}>('/admin/operations/capabilities');if(!access||!Array.isArray(access.permissions)||access.permissions.some(p=>typeof p!=='string'))throw new ApiError(502,'Invalid permissions response');return {...user,staffRole:access.role,operationalPermissions:access.permissions};}catch(error){if(adminRoles.has(user.role)&&error instanceof ApiError&&[403,404].includes(error.status))return user;throw error;}
+}
 export function App() {
   const [user, setUser] = useState<AdminUser | null>(null);
   const [booting, setBooting] = useState(true);
+  const [bootError,setBootError]=useState(false);
 
   useEffect(() => {
     if (!session.access()) { setBooting(false); return; }
-    api.get<AdminUser>("/me").then((current) => {
-      if (!adminRoles.has(current.role)) throw new ApiError(403, "This account is not authorized for the admin portal");
+    api.get<AdminUser>("/me").then(authorizePortal).then((current) => {
+      if (!adminRoles.has(current.role) && !current.operationalPermissions) throw new ApiError(403, "This account is not authorized for the admin portal");
       setUser(current);
-    }).catch(() => session.clear()).finally(() => setBooting(false));
+    }).catch((error) => {if(error instanceof ApiError&&[401,403].includes(error.status))session.clear();else setBootError(true);}).finally(() => setBooting(false));
   }, []);
 
+  if(bootError)return <div role="alert" className="center-state"><p>Unable to verify your session while disconnected. Your saved session has been preserved.</p><button onClick={()=>window.location.reload()}>Retry connection</button></div>;
   if (booting) return <div className="center-state"><Spinner /><p>Securing admin session…</p></div>;
   if (!user) return <Login onAuthenticated={setUser} />;
-  return <AdminShell user={user} onUserUpdated={setUser} onSignOut={() => { session.clear(); setUser(null); }} />;
+  return <AdminShell user={user} onUserUpdated={setUser} onSignOut={() => { const logout=signOut();setUser(null);void logout.catch(()=>window.alert('Signed out on this browser. Server session revocation could not be confirmed; reconnect and sign out again.')); }} />;
 }
 
 function Login({ onAuthenticated }: { onAuthenticated: (user: AdminUser) => void }) {
@@ -57,14 +64,15 @@ function Login({ onAuthenticated }: { onAuthenticated: (user: AdminUser) => void
 }
 
 function AdminShell({ user, onUserUpdated, onSignOut }: { user: AdminUser; onUserUpdated: (user: AdminUser) => void; onSignOut: () => void }) {
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setView] = useState<View>(user.operationalPermissions ? "operations" : user.role === "FLEET_ADMIN" ? "drivers" : "dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
   return <div className="shell">
     <aside className={menuOpen ? "sidebar open" : "sidebar"}>
       <Brand compact />
       <nav>
-        <NavItem active={view === "dashboard"} icon="⌁" label="Analytics" onClick={() => { setView("dashboard"); setMenuOpen(false); }} />
-        <NavItem active={view === "drivers"} icon="♙" label="Drivers" onClick={() => { setView("drivers"); setMenuOpen(false); }} />
+        {user.operationalPermissions && <NavItem active={view === "operations"} icon="▤" label="Operations" onClick={()=>{setView("operations");setMenuOpen(false);}}/>}
+        {["ADMIN","MODERATOR"].includes(user.role) && <NavItem active={view === "dashboard"} icon="⌁" label="Analytics" onClick={() => { setView("dashboard"); setMenuOpen(false); }} />}
+        {adminRoles.has(user.role)&&<NavItem active={view === "drivers"} icon="♙" label="Drivers" onClick={() => { setView("drivers"); setMenuOpen(false); }} />}
         {user.role === "ADMIN" && <NavItem active={view === "pricing"} icon="$" label="Plans & pricing" onClick={() => { setView("pricing"); setMenuOpen(false); }} />}
         {user.role === "ADMIN" && <NavItem active={view === "account"} icon="⚿" label="Account security" onClick={() => { setView("account"); setMenuOpen(false); }} />}
         {user.role === "ADMIN" && <NavItem active={view === "audit"} icon="▤" label="Audit logs" onClick={() => { setView("audit"); setMenuOpen(false); }} />}
@@ -73,8 +81,9 @@ function AdminShell({ user, onUserUpdated, onSignOut }: { user: AdminUser; onUse
       <footer><span>{user.fullName}</span><small>{roleLabel(user.role)}</small><button onClick={onSignOut}>Sign out</button></footer>
     </aside>
     <main className="content">
-      <header className="topbar"><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)}>☰</button><div><span className="eyebrow">SEMITRAX ADMIN</span><h1>{view === "dashboard" ? "Statistics & analytics" : view === "drivers" ? "Driver analytics" : view === "pricing" ? "Plans & pricing" : view === "account" ? "Account security" : "Security audit"}</h1></div><div className="role-pill">{roleLabel(user.role)}</div></header>
-      {view === "dashboard" && <Dashboard user={user} />}
+      <header className="topbar"><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)}>☰</button><div><span className="eyebrow">SEMITRAX ADMIN</span><h1>{view === "operations" ? "Driver and equipment operations" : view === "dashboard" ? "Statistics & analytics" : view === "drivers" ? "Driver analytics" : view === "pricing" ? "Plans & pricing" : view === "account" ? "Account security" : "Security audit"}</h1></div><div className="role-pill">{roleLabel(user.role)}</div></header>
+      {view === "operations" && user.operationalPermissions && <Operations permissions={user.operationalPermissions}/> }
+      {view === "dashboard" && user.role !== "FLEET_ADMIN" && <Dashboard user={user} />}
       {view === "drivers" && <Drivers user={user} />}
       {view === "pricing" && user.role === "ADMIN" && <PricingSettings />}
       {view === "account" && user.role === "ADMIN" && <AccountSecurity user={user} onUserUpdated={onUserUpdated} onPasswordChanged={onSignOut} />}
@@ -186,32 +195,53 @@ function FinancialSection({ data }: { data: DashboardData }) {
 
 function Drivers({ user }: { user: AdminUser }) {
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [items, setItems] = useState<DriverListItem[]>([]);
   const [profile, setProfile] = useState<DriverProfile | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestVersion = useRef(0);
+  const detailVersion = useRef(0);
+  const allowed = user.role === "ADMIN" || user.role === "FLEET_ADMIN";
   const load = useCallback(async () => {
-    setError("");
+    if (!allowed) return;
+    const version = ++requestVersion.current;
+    setLoading(true); setError(""); setItems([]); setProfile(null); ++detailVersion.current;
     try {
-      const response = await api.get<{ items: DriverListItem[] }>(`/admin/users?pageSize=100&search=${encodeURIComponent(search)}`);
-      setItems(response.items.filter((item) => item.role === "DRIVER"));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load drivers"); }
-  }, [search]);
-  useEffect(() => { void load(); }, [load]);
+      const response = await api.get<{ items: DriverListItem[]; total: number }>(
+        "/admin/users?pageSize=50&role=DRIVER&page=" + page + "&search=" + encodeURIComponent(query));
+      if (version !== requestVersion.current) return;
+      setItems(response.items); setTotal(response.total);
+    } catch (reason) { if (version === requestVersion.current) setError(reason instanceof Error ? reason.message : "Unable to load drivers"); }
+    finally { if (version === requestVersion.current) setLoading(false); }
+  }, [allowed, page, query]);
+  useEffect(() => { void load(); return () => { ++requestVersion.current; ++detailVersion.current; }; }, [load]);
   async function openDriver(driverId: string) {
-    setError("");
-    try { setProfile(await api.get<DriverProfile>(`/admin/analytics/drivers/${encodeURIComponent(driverId)}`)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load driver profile"); }
+    const version = ++detailVersion.current;
+    setError(""); setProfile(null);
+    try { const result = await api.get<DriverProfile>("/admin/analytics/drivers/" + encodeURIComponent(driverId)); if (version === detailVersion.current) setProfile(result); }
+    catch (reason) { if (version === detailVersion.current) setError(reason instanceof Error ? reason.message : "Unable to load driver profile"); }
   }
-  if (user.role === "MODERATOR") return <LockedPanel title="Driver analytics" text="Driver-level records require an operational ADMIN or FLEET_ADMIN role." />;
-  return <section><div className="toolbar"><input className="search-input" placeholder="Search drivers by name or email" value={search} onChange={(e) => setSearch(e.target.value)} /><button className="primary-small" onClick={() => void load()}>Search</button></div>{error && <div className="error-banner">{error}</div>}
-    <div className="table-panel"><table><thead><tr><th>Driver</th><th>Plan</th><th>Joined</th><th>Status</th><th /></tr></thead><tbody>{items.map((driver) => <tr key={driver.id}><td><strong>{driver.fullName}</strong><small>{driver.email}</small></td><td>{driver.plan}</td><td>{formatDate(driver.createdAt)}</td><td><Status value={driver.disabledAt ? "DISABLED" : "ACTIVE"} /></td><td><button className="text-button" onClick={() => void openDriver(driver.id)}>View profile →</button></td></tr>)}</tbody></table>{!items.length && <Empty text="No matching driver records" />}</div>
-    {profile && <DriverDrawer profile={profile} onClose={() => setProfile(null)} />}
+  if (!allowed) return <LockedPanel title="Driver records" text="Driver records require authorized operational access." />;
+  return <section>
+    {user.role === "FLEET_ADMIN" && <div className="restricted-note">Only drivers in fleets where you have an active owner membership are visible. Global analytics and billing are not available to this role.</div>}
+    <form className="toolbar" onSubmit={event => { event.preventDefault(); setPage(1); setQuery(search.trim()); }}>
+      <input className="search-input" aria-label="Search drivers by name or email" placeholder="Search drivers by name or email" maxLength={120} value={search} onChange={e => setSearch(e.target.value)} />
+      <button className="primary-small" disabled={loading}>Search</button>
+      <button type="button" className="refresh" disabled={loading} onClick={() => void load()}>Refresh</button>
+    </form>
+    {error && <div className="error-banner" role="alert">{error}</div>}
+    {loading ? <div className="center-state"><Spinner /><p>Loading driver records…</p></div> : <div className="table-panel"><table><thead><tr><th>Driver</th><th>Plan</th><th>Joined</th><th>Status</th><th /></tr></thead><tbody>{items.map(driver => <tr key={driver.id}><td><strong>{driver.fullName}</strong><small>{driver.email}</small></td><td>{driver.plan}</td><td>{formatDate(driver.createdAt)}</td><td><Status value={driver.disabledAt ? "DISABLED" : "ACTIVE"} /></td><td><button className="text-button" onClick={() => void openDriver(driver.id)}>View profile →</button></td></tr>)}</tbody></table>{!items.length && !error && <Empty text="No matching authorized driver records" />}</div>}
+    <div className="toolbar"><button className="refresh" disabled={loading || page <= 1} onClick={() => setPage(v => v - 1)}>Previous</button><span>Page {page} · {total} drivers</span><button className="refresh" disabled={loading || page * 50 >= total} onClick={() => setPage(v => v + 1)}>Next</button></div>
+    {profile && <DriverDrawer profile={profile} onClose={() => { ++detailVersion.current; setProfile(null); }} />}
   </section>;
 }
 
 function DriverDrawer({ profile, onClose }: { profile: DriverProfile; onClose: () => void }) {
   const user = profile.user;
-  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button><span className="eyebrow">AUDIT-LOGGED VIEW</span><h2>{user.fullName}</h2><p>{user.email}</p><div className="profile-meta"><span>Plan<strong>{user.plan}</strong></span><span>Joined<strong>{formatDate(String(user.createdAt))}</strong></span><span>Last activity<strong>{user.lastActivityAt ? formatDate(user.lastActivityAt) : "Not recorded"}</strong></span></div><h3>Driving activity</h3><div className="profile-stats">{Object.entries(profile.statistics).map(([key, value]) => <div key={key}><strong>{formatNumber(value)}</strong><span>{humanize(key)}</span></div>)}</div><h3>Truck profiles</h3>{user.trucks.length ? user.trucks.map((truck, index) => <div className="record-card" key={String(truck.id)}><strong>{String(truck.name ?? `Truck ${index + 1}`)}</strong><span>{truck.heightFt ? `${truck.heightFt} ft high` : "Height unavailable"} · {truck.weightLbs ? `${formatNumber(Number(truck.weightLbs))} lb` : "Weight unavailable"}</span></div>) : <Empty text="No truck profile records" />}<h3>Subscription history</h3>{profile.financialAccess ? user.subscriptions.map((subscription) => <div className="record-card" key={String(subscription.id)}><strong>{String(subscription.plan)} · {String(subscription.status)}</strong><span>{String(subscription.provider)} · {formatDate(String(subscription.createdAt))}</span></div>) : <div className="restricted-note">Financial history requires ADMIN access.</div>}<h3>Support history</h3>{profile.supportHistory.length ? profile.supportHistory.map((ticket) => <div className="record-card" key={String(ticket.id)}><strong>{String(ticket.subject || "Subject restricted")}</strong><span>{String(ticket.status)} · {formatDate(String(ticket.createdAt))}</span></div>) : <Empty text="No support ticket records" />}</aside></div>;
+  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button><span className="eyebrow">AUDIT-LOGGED VIEW</span><h2>{user.fullName}</h2><p>{user.email}</p><div className="profile-meta"><span>Plan<strong>{user.plan}</strong></span><span>Joined<strong>{formatDate(String(user.createdAt))}</strong></span><span>Last activity<strong>{user.lastActivityAt ? formatDate(user.lastActivityAt) : "Not recorded"}</strong></span></div><h3>Driving activity</h3><div className="profile-stats">{Object.entries(profile.statistics).map(([key, value]) => <div key={key}><strong>{formatNumber(value)}</strong><span>{humanize(key)}</span></div>)}</div><h3>Truck profiles</h3>{user.trucks.length ? user.trucks.map(truck => <div className="record-card" key={String(truck.id)}><dl className="truck-details">{truckDetails(truck).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}<div><dt>Last modified</dt><dd>{typeof truck.updatedAt === "string" ? formatDate(truck.updatedAt) : "Not recorded"}</dd></div></dl></div>) : <Empty text="No truck profile records" />}<h3>Subscription history</h3>{profile.financialAccess ? user.subscriptions.map((subscription) => <div className="record-card" key={String(subscription.id)}><strong>{String(subscription.plan)} · {String(subscription.status)}</strong><span>{String(subscription.provider)} · {formatDate(String(subscription.createdAt))}</span></div>) : <div className="restricted-note">Financial history requires ADMIN access.</div>}<h3>Support history</h3>{profile.supportHistory.length ? profile.supportHistory.map((ticket) => <div className="record-card" key={String(ticket.id)}><strong>{String(ticket.subject || "Subject restricted")}</strong><span>{String(ticket.status)} · {formatDate(String(ticket.createdAt))}</span></div>) : <Empty text="No support ticket records" />}</aside></div>;
 }
 
 function PricingSettings() {
@@ -405,5 +435,5 @@ function formatDuration(seconds: number) { const hours = Math.floor(seconds / 36
 function formatDate(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "Unavailable" : new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date); }
 function shortDate(value: string) { const date = new Date(value); return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date); }
 function rangeLabel(range: RangePreset) { return ({ today: "Today", "7d": "7 Days", "30d": "30 Days", "3m": "3 Months", "1y": "1 Year", custom: "Custom" })[range]; }
-function roleLabel(role: AdminUser["role"]) { return ({ ADMIN: "Super administrator", FLEET_ADMIN: "Operations administrator", MODERATOR: "Moderator", DRIVER: "Driver" })[role]; }
+function roleLabel(role: AdminUser["role"]) { return ({ ADMIN: "Super administrator", FLEET_ADMIN: "Fleet administrator", MODERATOR: "Moderator", DRIVER: "Driver" })[role]; }
 function humanize(value: string) { return value.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().replace(/^./, (letter) => letter.toUpperCase()); }

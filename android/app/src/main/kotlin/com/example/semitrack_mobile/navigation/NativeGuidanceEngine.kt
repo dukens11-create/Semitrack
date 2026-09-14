@@ -32,12 +32,10 @@ interface NativeGuidanceEngine {
 }
 
 /**
- * Production fail-safe used until a native SDK capable of honoring SemiTrack's
- * full commercial-truck route contract is licensed and validated.
- *
- * Route operations are callback-based because TomTom's RoutePlanner is
- * asynchronous. Keeping the provider contract async avoids blocking Flutter's
- * platform thread once the TomTom implementation is enabled.
+ * Production fail-safe used until a licensed native SDK capable of honoring
+ * SemiTraX's full commercial-truck route contract is integrated and validated.
+ * Route operations remain asynchronous so a future provider can be added
+ * without blocking Flutter's platform thread.
  */
 class TruckSafeGuidanceUnavailableEngine : NativeGuidanceEngine {
     override val providerName = "unavailable"

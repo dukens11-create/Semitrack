@@ -137,8 +137,6 @@ class SemiTrackNavigationManager(
         "phase" to phase,
         "guidanceProvider" to guidanceEngine.providerName,
         "truckSafeGuidanceAvailable" to guidanceEngine.isAvailable,
-        "tomtomSdkReady" to TomTomSdkManager.isReady,
-        "tomtomSdkError" to TomTomSdkManager.error,
         "running" to NavigationForegroundService.running,
     )
 }

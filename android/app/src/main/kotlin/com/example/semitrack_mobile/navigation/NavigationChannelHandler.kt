@@ -18,7 +18,7 @@ import io.flutter.plugin.common.MethodChannel
 class NavigationChannelHandler(private val activity: Activity) : EventChannel.StreamHandler {
     private val manager = SemiTrackNavigationManager(
         activity.applicationContext,
-        if (TomTomSdkManager.isReady) TomTomGuidanceEngine() else TruckSafeGuidanceUnavailableEngine(),
+        TruckSafeGuidanceUnavailableEngine(),
     )
 
     fun register(messenger: BinaryMessenger) {

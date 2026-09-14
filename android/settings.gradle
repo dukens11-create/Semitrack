@@ -27,31 +27,12 @@ def mapboxDownloadsToken = providers
     .orElse(providers.environmentVariable("MAPBOX_DOWNLOADS_TOKEN"))
     .orNull
 
-def tomtomRepositoryUsername = providers
-    .gradleProperty("repositoriesTomtomComUsername")
-    .orElse(providers.environmentVariable("TOMTOM_REPOSITORY_USERNAME"))
-    .orNull
-
-def tomtomRepositoryPassword = providers
-    .gradleProperty("repositoriesTomtomComPassword")
-    .orElse(providers.environmentVariable("TOMTOM_REPOSITORY_PASSWORD"))
-    .orNull
-
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         google()
         mavenCentral()
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
-        maven {
-            url = uri("https://repositories.tomtom.com/artifactory/maven")
-            if (tomtomRepositoryUsername && tomtomRepositoryPassword) {
-                credentials {
-                    username = tomtomRepositoryUsername
-                    password = tomtomRepositoryPassword
-                }
-            }
-        }
         // HERE's licensed Flutter plugin contains a local Android AAR. The
         // plugin folder is ignored and must be installed from the HERE bundle.
         flatDir { dirs = [file("../plugins/here_sdk/android/libs")] }

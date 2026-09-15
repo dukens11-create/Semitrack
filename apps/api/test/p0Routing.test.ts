@@ -127,3 +127,114 @@ test('startup rejects non-Trimble routing configuration without exposing values'
     assert.match(result.stderr, /ROUTING_PROVIDER must be 'trimble'/);
   }
 });
+
+
+import { routingHealth, routingCapabilities, recordRoutingOutcome } from '../dist/services/routingCapabilities.js';
+
+// Exercise the real provider request/parser through the production service,
+// replacing only transport so no vendor credentials or network are required.
+function healthHarness(t) {
+  let body = payload();
+  const transport = t.mock.fn(async () => new Response(JSON.stringify(body), {status: 200}));
+  const provider = new TrimbleRouteProvider(config, transport);
+  const original = TrimbleRouteProvider.prototype.buildRoute;
+  t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', value => original.call(provider, value));
+  const previousProvider = env.routingProvider;
+  env.routingProvider = 'trimble';
+  recordRoutingOutcome(null, 0);
+  t.after(() => { env.routingProvider = previousProvider; recordRoutingOutcome(null, 0); });
+  return {
+    transport,
+    response(value) { body = value; },
+    health: () => routingHealth(true, []),
+    capabilities: () => routingCapabilities(true, []),
+  };
+}
+
+test('validated Trimble transport response establishes operational routing health', async t => {
+  const h = healthHarness(t);
+  const route = await buildTruckRoute(input);
+  assert.equal(h.transport.mock.callCount(), 1);
+  assert.equal(route.truckSafe, true);
+  assert.equal(route.navigationAllowed, true);
+  assert.equal(h.health().status, 'OPERATIONAL');
+  assert.equal(h.capabilities().truckRouting.state, 'PLANNING_AVAILABLE');
+});
+
+test('provider stop-coverage rejection supersedes previous operational health', async t => {
+  const h = healthHarness(t);
+  await buildTruckRoute(input);
+  const invalid = payload();
+  delete invalid[0].Destination;
+  h.response(invalid);
+  await assert.rejects(() => buildTruckRoute(input), e =>
+    e.code === 'TRIMBLE_STOP_COVERAGE_UNPROVEN' && e.httpStatus === 422 &&
+    e.providerAttempted && !e.truckSafe && !e.navigationAllowed);
+  assert.equal(h.transport.mock.callCount(), 2);
+  assert.equal(h.health().status, 'UNAVAILABLE');
+  assert.equal(h.capabilities().truckRouting.state, 'PROVIDER_UNAVAILABLE');
+});
+
+test('pre-transport client validation preserves the previous meaningful health evidence', async t => {
+  const h = healthHarness(t);
+  await buildTruckRoute(input);
+  for (const invalid of [
+    {...input, origin: {lat: 91, lng: -120}},
+    {...input, truck: {...input.truck, heightFt: 100}},
+    {...input, truck: {...input.truck, trailerType: 'RV'}},
+    {...input, avoidSegments: ['legacy-segment']},
+  ]) {
+    await assert.rejects(() => buildTruckRoute(invalid), e => e.httpStatus === 422 && !e.providerAttempted);
+    assert.equal(h.transport.mock.callCount(), 1);
+    assert.equal(h.health().status, 'OPERATIONAL');
+  }
+  recordRoutingOutcome('TRIMBLE_STOP_COVERAGE_UNPROVEN');
+  await assert.rejects(() => buildTruckRoute({...input, origin: {lat: 91, lng: -120}}));
+  assert.equal(h.transport.mock.callCount(), 1);
+  assert.equal(h.health().status, 'UNAVAILABLE');
+});
+
+test('later validated Trimble response recovers health after provider integrity rejection', async t => {
+  const h = healthHarness(t);
+  await buildTruckRoute(input);
+  const invalid = payload();
+  delete invalid[0].Destination;
+  h.response(invalid);
+  await assert.rejects(() => buildTruckRoute(input));
+  assert.equal(h.health().status, 'UNAVAILABLE');
+  h.response(payload());
+  await buildTruckRoute(input);
+  assert.equal(h.transport.mock.callCount(), 3);
+  assert.equal(h.health().status, 'OPERATIONAL');
+  assert.equal(h.capabilities().truckRouting.state, 'PLANNING_AVAILABLE');
+  assert.equal(h.capabilities().turnByTurn.available, false);
+  const expires = h.health().validUntil;
+  assert.equal(routingHealth(true, [], new Date(expires)).status, 'DEGRADED');
+});
+
+test('other rejected provider evidence invalidates success without permitting an unsafe route', async t => {
+  const h = healthHarness(t);
+  for (const corrupt of [
+    d => { d[0].ReportLegs[0].ReportLines[0].Warn = 'Truck restriction'; },
+    d => { d[2].geometry.coordinates[1] = [-119, 91]; },
+    d => { d[0].RouteID = 'one'; d[1].RouteID = 'another'; },
+  ]) {
+    h.response(payload());
+    await buildTruckRoute(input);
+    const invalid = payload();
+    corrupt(invalid);
+    h.response(invalid);
+    await assert.rejects(() => buildTruckRoute(input), e => e.providerAttempted && !e.navigationAllowed);
+    assert.equal(h.health().status, 'UNAVAILABLE');
+  }
+});
+
+test('service safety rejection records failure rather than retaining earlier success', async t => {
+  const h = healthHarness(t);
+  await buildTruckRoute(input);
+  t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', async () => ({
+    ...parseTrimbleRouteResponse(payload(), input, config), navigationAllowed: false,
+  }));
+  await assert.rejects(() => buildTruckRoute(input), e => e.code === 'TRUCK_SAFE_ROUTE_UNAVAILABLE' && e.httpStatus === 422);
+  assert.equal(h.health().status, 'UNAVAILABLE');
+});

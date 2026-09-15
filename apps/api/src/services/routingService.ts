@@ -26,10 +26,11 @@ export async function buildTruckRoute(input: RouteBuildInput) {
   let route: RouteBuildResult;
   try { route = await provider.buildRoute(input); }
   catch (error) {
-    if (error instanceof RoutingProviderError && error.httpStatus >= 500) recordRoutingOutcome(error.code);
+    if (error instanceof RoutingProviderError && (error.providerAttempted || error.httpStatus >= 500)) recordRoutingOutcome(error.code);
     throw error;
   }
   if (!route.truckSafe || !route.navigationAllowed) {
+    recordRoutingOutcome("TRUCK_SAFE_ROUTE_UNAVAILABLE");
     throw new RoutingProviderError(
       provider.name,
       "TRUCK_SAFE_ROUTE_UNAVAILABLE",

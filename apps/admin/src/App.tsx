@@ -176,7 +176,7 @@ function LiveOperations({ data, healthUnavailable = false }: { data: DashboardDa
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  const routing = routingHealthDisplay(live.trimbleRouting, healthUnavailable, now);
+  const routing = routingHealthDisplay(live, healthUnavailable, now);
   return <section className="section-block"><div className="section-heading"><div><span className="eyebrow">LIVE OPERATIONS</span><h2>Current operational pulse</h2></div><span className="live-badge"><i /> Live</span></div>
     <div className="operations-grid">
       <Operation label="Drivers online" value={live.driversOnline} status="ok" />

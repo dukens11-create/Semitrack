@@ -666,56 +666,65 @@ export class TrimbleRouteProvider implements RouteProvider {
     let timeoutReject!: (error: Error) => void;
     const deadline=new Promise<never>((_resolve,reject)=>{timeoutReject=reject;});
     const requestTimeout=setTimeout(()=>{requestController.abort();timeoutReject(new Error('Provider deadline exceeded'));},this.config.requestTimeoutMs);
-    let response: Response;
-    let responseBody: string;
+    // Local configuration and request validation above are not provider attempts.
     try {
-      response = await Promise.race([this.fetchImpl(url, {
-        method: "POST",
-        headers: {
-          Authorization: this.config.apiKey,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(request),
-        signal: requestController.signal,
-        redirect: "error",
-      }),deadline]);
-      responseBody = await Promise.race([response.text(),deadline]);
-      if (responseBody.length > 20_000_000) throw new RoutingProviderError("Trimble", "TRIMBLE_RESPONSE_TOO_LARGE", "Route response exceeds the supported size.");
-    } catch (error) {
-      if (error instanceof RoutingProviderError) throw error;
-      const timedOut = requestController.signal.aborted;
-      throw new RoutingProviderError(
-        "Trimble",
-        timedOut ? "TRIMBLE_REQUEST_TIMEOUT" : "TRIMBLE_NETWORK_ERROR",
-        timedOut
-          ? "Trimble truck routing took too long to respond"
-          : "Trimble truck routing is temporarily unreachable",
-        503,
-        true,
-      );
-    } finally {
-      clearTimeout(requestTimeout);
-    }
-    if (!response.ok) {
-      const body = responseBody.slice(0, 2_000);
-      throw trimbleFailure(response.status, body);
-    }
+      let response: Response;
+      let responseBody: string;
+      try {
+        response = await Promise.race([this.fetchImpl(url, {
+          method: "POST",
+          headers: {
+            Authorization: this.config.apiKey,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(request),
+          signal: requestController.signal,
+          redirect: "error",
+        }),deadline]);
+        responseBody = await Promise.race([response.text(),deadline]);
+        if (responseBody.length > 20_000_000) throw new RoutingProviderError("Trimble", "TRIMBLE_RESPONSE_TOO_LARGE", "Route response exceeds the supported size.");
+      } catch (error) {
+        if (error instanceof RoutingProviderError) throw error;
+        const timedOut = requestController.signal.aborted;
+        throw new RoutingProviderError(
+          "Trimble",
+          timedOut ? "TRIMBLE_REQUEST_TIMEOUT" : "TRIMBLE_NETWORK_ERROR",
+          timedOut
+            ? "Trimble truck routing took too long to respond"
+            : "Trimble truck routing is temporarily unreachable",
+          503,
+          true,
+        );
+      } finally {
+        clearTimeout(requestTimeout);
+      }
+      if (!response.ok) {
+        const body = responseBody.slice(0, 2_000);
+        throw trimbleFailure(response.status, body);
+      }
 
-    let payload: unknown;
-    try {
-      payload = JSON.parse(responseBody);
-    } catch {
-      throw new RoutingProviderError(
-        "Trimble",
-        "TRIMBLE_INVALID_RESPONSE",
-        "Trimble returned a non-JSON route response",
+      let payload: unknown;
+      try {
+        payload = JSON.parse(responseBody);
+      } catch {
+        throw new RoutingProviderError(
+          "Trimble",
+          "TRIMBLE_INVALID_RESPONSE",
+          "Trimble returned a non-JSON route response",
+        );
+      }
+      const serialized = JSON.stringify(payload);
+      if (/INVLD_LOGIN|LOGIN_DISABLED|TRIP_LIMIT_EXCEEDED/i.test(serialized)) {
+        throw trimbleFailure(/TRIP_LIMIT_EXCEEDED/i.test(serialized) ? 429 : 401, serialized.slice(0, 2_000));
+      }
+      return parseTrimbleRouteResponse(payload, input, this.config);
+    } catch (error) {
+      const failure = error instanceof RoutingProviderError ? error : new RoutingProviderError(
+        "Trimble", "TRIMBLE_INVALID_RESPONSE", "Trimble returned unusable route evidence.",
       );
+      failure.providerAttempted = true;
+      throw failure;
     }
-    const serialized = JSON.stringify(payload);
-    if (/INVLD_LOGIN|LOGIN_DISABLED|TRIP_LIMIT_EXCEEDED/i.test(serialized)) {
-      throw trimbleFailure(/TRIP_LIMIT_EXCEEDED/i.test(serialized) ? 429 : 401, serialized.slice(0, 2_000));
-    }
-    return parseTrimbleRouteResponse(payload, input, this.config);
   }
 }

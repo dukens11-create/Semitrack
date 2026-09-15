@@ -1,6 +1,11 @@
 import type { DashboardData } from './types';
 
-export function routingHealthDisplay(health: DashboardData['liveOperations']['trimbleRouting'] | undefined, unavailable = false, now = Date.now()) {
+type RoutingHealthResponse = Pick<DashboardData['liveOperations'], 'trimbleRouting' | 'hereService'>;
+
+export function routingHealthDisplay(live: RoutingHealthResponse | undefined, unavailable = false, now = Date.now()) {
+  // Prefer current Trimble evidence. Legacy hereService is accepted only as an
+  // old response shape: its status/configuration cannot establish Trimble health.
+  const health = live?.trimbleRouting;
   let status = health?.status;
   if (unavailable || !['OPERATIONAL', 'DEGRADED', 'UNAVAILABLE', 'NOT_CONFIGURED'].includes(status ?? '')) status = 'UNAVAILABLE';
   if (status === 'OPERATIONAL') {

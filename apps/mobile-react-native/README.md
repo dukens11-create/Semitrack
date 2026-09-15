@@ -1,6 +1,6 @@
-# SemiTraX React Native foundation
+# SemiTraX production mobile client
 
-This native React Native CLI app sits alongside Flutter. It is a migration foundation, **not a production launch or a completed Flutter replacement**. See ../../REACT_NATIVE_MIGRATION.md and FEATURE_BOUNDARIES.md.
+This is the single production mobile implementation. Root Flutter code is LEGACY / REFERENCE ONLY — NOT PRODUCTION CLIENT. This designation does not certify migration completion or store readiness. See ../../docs/REACT_NATIVE_PRODUCTION_STATUS.md for current evidence and FEATURE_BOUNDARIES.md for capability limits.
 
 ## Architecture
 
@@ -33,7 +33,7 @@ The empty default refuses to create an API client and shows configuration requir
 
 Install JDK 17+ compatible with the pinned Gradle/AGP toolchain, Android SDK platform 36, Build Tools 36.0.0 and NDK 27.1.12297006. Set ANDROID_HOME or ignored android/local.properties. SDK packages/licenses must be installed by the build operator. Run npm run android or android/gradlew assembleDebug.
 
-Production applicationId remains com.semitrax.app. Debug is com.semitrax.app.migration.debug so it can coexist with Flutter. VersionCode 1 is a foundation placeholder; choose a Play-compatible increment only after verifying the existing listing. The release build is unsigned; no debug signing fallback or keystore is included. Play/Firebase ownership, signing key/certificate continuity and foreground-service declarations must be verified externally before release. Nothing is registered or published.
+Production applicationId remains com.semitrax.app. Debug is com.semitrax.app.migration.debug to keep development identity separate from the production package. VersionCode 1 is a foundation placeholder; choose a Play-compatible increment only after verifying the existing listing. The release build is unsigned; no debug signing fallback or keystore is included. Play/Firebase ownership, signing key/certificate continuity and foreground-service declarations must be verified externally before release. Nothing is registered or published.
 
 LocationManager supplies real precise fixes. Preview tracking stops when the app backgrounds. The explicit background path uses a user-started location foreground service with required service-type permissions and notification. No boot/background auto-start is configured. Test denial, approximate permission, GPS disabled, screen-off, foreground/background transitions, task dismissal and process recreation on real devices before enabling background workflows.
 
@@ -55,9 +55,9 @@ The project includes CoreLocation permission descriptions/background capability 
 
 All truck route requests use /routing/truck-route with the full ordered remaining stop list and the current precise origin. Trimble failure is explicit; there is no passenger routing request. A failed recalculation preserves the prior preview and plan. Maneuver offsets are actual backend geometry positions, not maneuver indices; monotonicity, bounds and the backend 250-meter confidence ceiling are validated.
 
-Start navigation returns NATIVE_TRUCK_GUIDANCE_NOT_CONFIGURED. No simulated route progress, speed limit, turn announcement or arrival is produced. Implement CoPilot only in a separate pass after the official SDK contracts, licensing, map packages and truck-profile APIs are available.
+Start navigation returns NATIVE_TRUCK_GUIDANCE_NOT_CONFIGURED. No simulated route progress, speed limit, turn announcement or arrival is produced. Preserve the existing official CPIK preparation and gating. Native startup, licensing, map packages, truck-profile parity and device acceptance are not yet verified.
 
-Run npm run check:native for bridge generation and static wiring checks. These checks do not compile native source. The initial Android build was blocked by a Windows Gradle JAR AccessDeniedException before app compilation; platform/build-tools 37 are also absent on that host. iOS build requires macOS. See the migration report for exact tests, npm advisory findings and remaining parity work.
+Run npm run check:native for bridge generation and static wiring checks. These checks do not compile native source. The initial Android build was blocked by a Windows Gradle JAR AccessDeniedException before app compilation; this checkout specifies Android platform/build-tools 36. iOS build requires macOS. See the migration report for exact tests, npm advisory findings and remaining parity work.
 
 
 ## CoPilot preparation

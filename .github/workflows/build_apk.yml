@@ -65,6 +65,7 @@ jobs:
       - run: npm run lint -- --max-warnings=0
       - run: npm test -- --runInBand
       - run: npm run test:tooling
+      - run: npm run check:native
   admin:
     runs-on: ubuntu-latest
     defaults:

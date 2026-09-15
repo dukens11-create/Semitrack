@@ -1,150 +1,42 @@
-# Semitrack Phase 5 Backend Pack
+# SemiTraX
 
-## Firebase Setup
+**React Native is the single production mobile client:** [apps/mobile-react-native](apps/mobile-react-native/README.md).
+Designation as the production client is not a claim of completed migration, licensed navigation, or store readiness.
 
-This project uses [FlutterFire](https://firebase.flutter.dev/) for Firebase integration.
+| Component | Authoritative location |
+| --- | --- |
+| Mobile entry point | apps/mobile-react-native/index.js → App.tsx → src/app/AppRoot.tsx |
+| Android project | apps/mobile-react-native/android |
+| iOS project | apps/mobile-react-native/ios |
+| Production API | apps/api |
+| Staff Admin | apps/admin |
+| Legacy/reference mobile | Root lib/, android/, ios/, pubspec.yaml and tools/here_flutter.ps1 / tools/refresh_phone.ps1 |
 
-The files `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` are currently populated with **placeholder values**. Before running the app you must replace them with real credentials from your Firebase project.
+React Native calls the SemiTraX API for authenticated commercial-truck routing. Trimble is the authoritative route provider. Mapbox displays accepted Trimble geometry and supplies geocoding; it must never calculate a passenger-car fallback. Official CoPilot/CPIK preparation remains gated until native startup, entitlement, maps, truck restrictions and device behavior are verified.
 
-### Regenerate configs with the FlutterFire CLI
+## Mobile development and validation
 
-```bash
-# Install the CLI (one-time)
-dart pub global activate flutterfire_cli
+Run from apps/mobile-react-native, using the existing locked dependencies:
 
-# From the project root, configure all platforms
-flutterfire configure --project=semitrack
-```
+~~~powershell
+npm ci
+# Supply approved SEMITRAX_API_URL and MAPBOX_PUBLIC_TOKEN in this process.
+npm run configure
+npm run check
+~~~
 
-This will overwrite `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` with real values tied to your `semitrack` Firebase project.
+The approved API is https://semitrax-api.onrender.com. Public Mapbox configuration must come from the approved local configuration; do not copy backend environment files or secret tokens into mobile source. The configuration-required guard stays enabled. Gradle release builds regenerate and validate public HTTPS configuration.
 
-After regenerating, run:
+Build Android from apps/mobile-react-native/android with ./gradlew.bat assembleRelease on Windows (./gradlew on other hosts). Release output is unsigned unless separately approved signing is supplied. Inspect the resulting APK, every packaged native library and official zipalign before claiming 16 KB compatibility. Build iOS on macOS using the RN Podfile and SemiTrax Xcode workspace. Neither native project uses the root Flutter startup or channels.
 
-```bash
-flutter clean
-flutter pub get
-flutter run
-```
+## Backend and Admin
 
-## Mapbox setup
+Use each application's package.json and lockfile. Root package.json/src are historical backend scaffolding, not the deployed API. Render configuration targets apps/api. Do not run migrations against production as part of local validation. Database tests require a disposable loopback PostgreSQL database and the existing isolated-database guard.
 
-Map rendering uses two different Mapbox credentials. Never commit either
-credential to this repository.
+The existing GitHub workflow validates RN/API/Admin; it does not publish a Flutter APK or deploy production.
 
-- `MAPBOX_ACCESS_TOKEN` is the public `pk.` token supplied to Flutter with
-  `--dart-define`.
-- `MAPBOX_DOWNLOADS_TOKEN` is a secret `sk.` token with `Downloads:Read`, kept
-  in the user's Gradle properties or CI secrets so Gradle can download the
-  native Mapbox Maps SDK.
+## Legacy material and completion limits
 
-For a local Windows build, save the secret token in
-`C:\Users\<username>\.gradle\gradle.properties`:
+The preserved [Flutter setup reference](docs/legacy/FLUTTER_SETUP_REFERENCE.md) is **LEGACY / REFERENCE ONLY — NOT PRODUCTION CLIENT**. Keep original product assets/reference behavior available; do not copy obsolete architecture, synthetic defaults or unverified navigation into RN. RN assets needed at runtime are already under its own src/assets.
 
-```properties
-MAPBOX_DOWNLOADS_TOKEN=YOUR_PRIVATE_SK_TOKEN
-```
-
-For local Mapbox-enabled builds, copy the public-token template and fill only the
-`pk.` value. The real file is ignored by Git:
-
-```powershell
-Copy-Item config\mapbox\credentials.properties.example config\mapbox\credentials.properties
-notepad config\mapbox\credentials.properties
-```
-
-`tools\here_flutter.ps1 build-android` and `run` load that file automatically.
-You can alternatively build with the public token in the environment:
-
-```powershell
-flutter build apk --debug --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
-```
-
-GitHub Actions requires repository secrets named `MAPBOX_ACCESS_TOKEN` and
-`MAPBOX_DOWNLOADS_TOKEN`.
-
-## Production and Android release configuration
-
-The API must run with `NODE_ENV=production` and explicit values for
-`DATABASE_URL`, `JWT_SECRET` (at least 32 characters), `ACCESS_TOKEN_MINUTES`,
-`REFRESH_TOKEN_DAYS`, `PUBLIC_API_URL`, and `CORS_ORIGINS`. Production public
-URLs and CORS origins must use HTTPS and cannot point at localhost. See
-`apps/api/.env.example`; startup fails immediately when this configuration is
-missing or unsafe.
-
-Release Flutter builds must supply an HTTPS backend endpoint:
-
-```powershell
-flutter build apk --release --dart-define=SEMITRACK_API_URL=https://api.example.com --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
-```
-
-Android release builds use `com.semitrax.app` by default. Override it only with
-the Gradle property or environment variable `SEMITRACK_APPLICATION_ID`. Release
-signing requires `SEMITRACK_RELEASE_STORE_FILE`,
-`SEMITRACK_RELEASE_STORE_PASSWORD`, `SEMITRACK_RELEASE_KEY_ALIAS`, and
-`SEMITRACK_RELEASE_KEY_PASSWORD`; a release task fails instead of falling back
-to debug signing.
-
-The APK workflow additionally requires the base64-encoded keystore secret
-`SEMITRACK_RELEASE_KEYSTORE_BASE64` plus the three signing secrets above.
-
-Trimble remains the authoritative commercial-truck routing provider. Mapbox is
-used for map display only; it is not a passenger-navigation fallback. Native
-turn-by-turn guidance remains fail-closed until a separately licensed and
-validated commercial-truck guidance SDK is integrated.
-
-## Downloading the Android APK
-
-Every push and pull request automatically triggers a GitHub Actions workflow that builds a release APK.
-
-**To download the APK after a successful run:**
-
-1. Go to the **Actions** tab in this repository on GitHub.
-2. Click on the latest **Build Release APK** workflow run.
-3. Scroll down to the **Artifacts** section at the bottom of the run summary.
-4. Click **app-release** to download the `app-release.apk` file.
-
-The APK is built from `build/app/outputs/flutter-apk/app-release.apk` and is available for download for 90 days after the workflow run.
-
-## Kotlin / AGP / flutter_tts Compatibility Note
-
-The Android build is currently configured with:
-
-| Component | Version | File |
-|---|---|---|
-| Kotlin Gradle Plugin | **2.2.20** | `android/build.gradle` (`ext.kotlin_version`) and `android/settings.gradle` (plugins DSL) |
-| Android Gradle Plugin (AGP) | **8.6.0** | `android/build.gradle` (classpath) and `android/settings.gradle` (plugins DSL) |
-| Gradle wrapper | **8.11.1** | `android/gradle/wrapper/gradle-wrapper.properties` |
-| flutter_tts | **^4.0.2** | `pubspec.yaml` |
-
-### Compatibility constraints
-
-- AGP 8.6.0 requires **Gradle 8.7 or higher** (the wrapper is set to 8.11.1 — no change needed).
-- **AGP 8.6.0 requires JDK 17.** Codemagic is configured with `java: 17`. If building locally, make sure your `JAVA_HOME` points to a JDK 17 installation.
-- Kotlin 2.2.20 resolves the `compilerOptions {}` DSL incompatibility that affected `flutter_tts` and `shared_preferences_android` 2.4.1+ with older KGP versions.
-- Flutter 3.x will emit a build warning and eventually drop support for AGP < 8.6.0; this upgrade resolves that warning.
-
-### After merging
-
-Run the following commands locally to clean build artifacts and verify the app builds successfully:
-
-```bash
-flutter clean
-flutter pub get
-flutter build apk --release
-```
-
-> **Reminder:** After merging any change to `android/build.gradle`, `android/settings.gradle`, or `pubspec.yaml`, always run
-> `flutter clean && flutter pub get && flutter build apk --release` locally (or let CI confirm a green build) before releasing.
-
-Includes:
-- Prisma schema
-- ELD integrations
-- Samsara adapter
-- Motive scaffold
-- Fuel-card scoring
-- Messaging routes
-- Maintenance routes
-- Compliance routes
-- S3 upload service
-- Stripe webhook route
-- Background job scaffold
+See [migration stabilization status](docs/REACT_NATIVE_PRODUCTION_STATUS.md) for source evidence and incomplete capabilities. Trips history, document storage, native device acceptance and licensed guidance must not be inferred from the five-tab UI. Do not begin the 44-feature expansion until migration blockers are cleared.

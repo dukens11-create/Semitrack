@@ -1,4 +1,5 @@
 import { Operations } from './Operations';
+import { routingHealthDisplay } from './providerHealth';
 import { truckDetails } from "./truckDetails";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, session, signOut, type AdminUser } from "./api";
@@ -160,15 +161,22 @@ function Dashboard({ user }: { user: AdminUser }) {
         <ActivityMetric label="Parking searches" value={data.activity.parkingSearches} />
       </section>
 
-      <LiveOperations data={data} />
+      <LiveOperations data={data} healthUnavailable={loading || Boolean(error)} />
       {user.role === "ADMIN" ? <FinancialSection data={data} /> : <LockedPanel title="Financial analytics" text="Restricted to the ADMIN role. Aggregated operational staff do not receive payment or revenue details." />}
       <CoverageNotice data={data} />
     </>}
   </>;
 }
 
-function LiveOperations({ data }: { data: DashboardData }) {
+function LiveOperations({ data, healthUnavailable = false }: { data: DashboardData; healthUnavailable?: boolean }) {
   const live = data.liveOperations;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    // Expire the backend evidence even if the operator leaves this page open.
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const routing = routingHealthDisplay(live.trimbleRouting, healthUnavailable, now);
   return <section className="section-block"><div className="section-heading"><div><span className="eyebrow">LIVE OPERATIONS</span><h2>Current operational pulse</h2></div><span className="live-badge"><i /> Live</span></div>
     <div className="operations-grid">
       <Operation label="Drivers online" value={live.driversOnline} status="ok" />
@@ -177,7 +185,7 @@ function LiveOperations({ data }: { data: DashboardData }) {
       <Operation label="Over drive threshold" value={live.routesOverDrivingThreshold} status="warn" />
       <Operation label="API errors · 24h" value={live.apiErrors24Hours} status={live.apiErrors24Hours ? "danger" : "ok"} />
       <Operation label="Payment problems" value={live.paymentProblems} status={live.paymentProblems ? "danger" : "muted"} />
-      <Operation label="HERE service" value={live.hereService.status.replaceAll("_", " ")} status={live.hereService.status === "DEGRADED" ? "warn" : live.hereService.configured ? "ok" : "muted"} />
+      <Operation label="Trimble Routing" value={routing.value} status={routing.tone} />
     </div>
   </section>;
 }

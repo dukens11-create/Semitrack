@@ -1,4 +1,5 @@
 import { currentHosStatus } from './services/eldNormalization.js';
+import { isCurrentAdminProvider } from './modules/analytics/providerHealth.js';
 import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
 import { documentRouter } from './modules/documents/document.routes.js';
 import { dispatchRouter } from './modules/dispatch/dispatch.routes.js';
@@ -130,8 +131,7 @@ app.get("/health", asyncRoute(async (_req, res) => {
     contracts: { truckProfileVerification: 'revision-v1', revocableAccessSessions: true },
     providers: {
       selectedTruckRoutingProvider: configuredRoutingProviderName(),
-      hereRoutingConfigured: Boolean(env.hereApiKey),
-      trimbleRoutingConfigured: Boolean(env.trimbleApiKey),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
       mapboxTrafficConfigured: Boolean(env.mapboxToken),
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
       billingMode: env.billingMode,
@@ -524,7 +524,8 @@ app.get("/admin/overview", requireAuth, requireRole(globalAnalyticsRoles), async
     prisma.subscription.count({ where: { status: { in: ["ACTIVE", "TRIALING"] } } }),
     prisma.communityReport.count({ where: { status: "PENDING" } }),
     prisma.user.count({ where: { disabledAt: { not: null } } }),
-    prisma.providerSyncState.count({ where: { status: { in: ["DEGRADED", "ERROR"] } } }),
+    prisma.providerSyncState.findMany({ where: { status: { in: ["DEGRADED", "ERROR"] } }, select: { provider: true } })
+      .then(states => states.filter(isCurrentAdminProvider).length),
   ]);
   res.json({
     users,
@@ -544,7 +545,7 @@ app.get("/admin/application", requireAuth, requireRole(adminRoles), asyncRoute(a
     environment: env.nodeEnv,
     supportedRoles: ["DRIVER", "MODERATOR", "FLEET_ADMIN", "ADMIN"],
     providers: {
-      hereRoutingConfigured: Boolean(env.hereApiKey),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
       mapboxTrafficConfigured: Boolean(env.mapboxToken),
       dot511Configured: env.dotProviderConfigured,
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
@@ -700,7 +701,7 @@ app.get("/admin/provider-health", requireAuth, requireRole(adminRoles), asyncRou
       updatedAt: true,
     },
   });
-  res.json({ items });
+  res.json({ items: items.filter(isCurrentAdminProvider) });
 }));
 
 app.get("/admin/audit-logs", requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res) => {

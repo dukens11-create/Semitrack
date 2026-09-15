@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
 import type { AnalyticsRange } from "./analyticsRange.js";
+import { isCurrentAdminProvider, trimbleRoutingHealth } from './providerHealth.js';
 export { parseAnalyticsRange } from "./analyticsRange.js";
 
 const asNumber = (value: unknown) => typeof value === "bigint" ? Number(value) : Number(value ?? 0);
@@ -119,7 +120,7 @@ export async function getAdminDashboard(range: AnalyticsRange, includeFinancial:
     queryRows<{ value: bigint }>(`SELECT COUNT(*)::bigint AS value FROM "ApiErrorLog" WHERE "occurredAt" >= $1`, new Date(now.getTime() - 86_400_000)),
     prisma.providerSyncState.findMany({
       orderBy: { updatedAt: "desc" },
-      select: { provider: true, jurisdiction: true, dataType: true, status: true, lastSuccessAt: true, lastErrorCode: true },
+      select: { provider: true, jurisdiction: true, dataType: true, status: true, lastSuccessAt: true, lastAttemptAt: true, lastErrorCode: true },
     }),
     paymentCoverage(),
   ]);
@@ -180,11 +181,8 @@ export async function getAdminDashboard(range: AnalyticsRange, includeFinancial:
       routesOverDrivingThreshold: navigationCoverage ? asNumber(live.exceeding) : null,
       apiErrors24Hours: asNumber(apiErrors[0]?.value),
       paymentProblems: financial?.livePaymentProblems ?? null,
-      hereService: {
-        configured: Boolean(env.hereApiKey),
-        status: providerStates.some((item) => item.provider.toUpperCase().includes("HERE") && ["DEGRADED", "ERROR"].includes(item.status)) ? "DEGRADED" : env.hereApiKey ? "CONFIGURED" : "NOT_CONFIGURED",
-      },
-      providerStates,
+      trimbleRouting: trimbleRoutingHealth(Boolean(env.trimbleApiKey.trim()), providerStates, now),
+      providerStates: providerStates.filter(isCurrentAdminProvider),
     },
     coverage: {
       payments: hasPayments,

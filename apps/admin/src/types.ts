@@ -38,7 +38,7 @@ export type DashboardData = {
     routesOverDrivingThreshold: number | null;
     apiErrors24Hours: number;
     paymentProblems: number | null;
-    hereService: { configured: boolean; status: string };
+    trimbleRouting: { configured: boolean; status: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE' | 'NOT_CONFIGURED'; reason: string; validUntil: string | null };
     providerStates: Array<{ provider: string; jurisdiction: string; dataType: string; status: string; lastSuccessAt: string | null; lastErrorCode: string | null }>;
   };
   coverage: { payments: boolean; appEvents: boolean; navigationSessions: boolean; note: string };

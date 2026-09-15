@@ -1,3 +1,5 @@
+import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
+import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
 import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
 import { operationalRouter } from './modules/admin/operational.routes.js';
 import { auditTruck, isVerifiedTruck, publicTruck, saveTruck, verifyTruck } from "./modules/trucks/profileRevision.js";
@@ -301,6 +303,10 @@ app.get("/location/timezone", requireAuth, asyncRoute(async (req, res) => {
   res.json(await resolveHereTimeZone(input.lat, input.lng));
 }));
 
+app.post("/weather/route", requireAuth, asyncRoute(async (req, res) => {
+  res.json({ items: await getCorrelatedRouteWeather(routeWeatherSchema.parse(req.body)) });
+}));
+
 const placeCategory = z.enum([
   "walmart_store",
   "weigh_station",
@@ -309,6 +315,8 @@ const placeCategory = z.enum([
   "fuel_stop",
   "truck_parking",
   "truck_wash",
+  "cat_scale",
+  "truck_repair",
 ]);
 app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
@@ -334,11 +342,13 @@ app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
 app.post("/places/corridor", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
     category: placeCategory,
-    route: z.array(coordinate).min(2).max(2_000),
+    route: z.array(coordinate).min(2).max(20_000),
+    currentLocation: coordinate.extend({accuracy: z.number().min(0).max(100), timestamp: z.number().finite()}).optional(),
     radiusMeters: z.number().int().min(100).max(100_000).optional(),
     maxResults: z.number().int().min(1).max(250).optional(),
   }).parse(req.body);
-  const items = await searchHerePlacesAlongRoute(input);
+  const offset = corridorRouteOffset(input.route, input.currentLocation);
+  const items = await searchHerePlacesAlongRoute({...input, currentRouteOffsetMeters: offset});
   res.json({
     items,
     provider: "HERE",
@@ -740,6 +750,7 @@ app.use("/billing", requireBillingEnabled, requireAllowedStripeWebOrigin, (_req,
 
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (error instanceof CorridorCorrelationError) return res.status(error.httpStatus).json({error: {code: error.code, message: error.message}});
   const safe = error as { safeCode?: string; safeStatus?: number; code?: string } | null;
   if (safe?.safeCode && ['ACCESS_CHANGED','USER_NOT_FOUND','LAST_ADMIN_BLOCKED','TRUCK_NOT_FOUND','LAST_TRUCK','FORBIDDEN','DRIVER_NOT_FOUND','RECORD_NOT_FOUND','RECORD_CHANGED','TRUCK_PROFILE_CHANGED','INVALID_OAUTH_STATE','ELD_CONNECTION_CHANGED'].includes(safe.safeCode)) return res.status(safe.safeStatus ?? 409).json({ error: { code: safe.safeCode, message: 'This action could not be completed. Refresh and review the account.' } });
   if (safe?.code === 'P2034') return res.status(409).json({ error: { code: 'CONCURRENT_CHANGE', message: 'Information changed. Refresh and review before trying again.' } });

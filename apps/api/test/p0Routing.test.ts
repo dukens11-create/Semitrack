@@ -91,3 +91,37 @@ test('stop metadata precision is bounded independently from RoutePath road match
  const data=payload();data[0].Origin.Coords.Lat+=0.000001;assert.doesNotThrow(()=>parseTrimbleRouteResponse(data,input,config));
  data[0].Origin.Coords.Lat+=0.0001;assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>e.code==='TRIMBLE_STOP_COVERAGE_UNPROVEN');
 });
+
+
+test('legacy HERE provider is a rejection boundary with no network access', async t => {
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw Error('unexpected network'); });
+  await assert.rejects(() => new HereRouteProvider().buildRoute(input), e => e.code === 'HERE_ROUTING_DISABLED' && e.httpStatus === 410);
+  assert.equal(network.mock.callCount(), 0);
+});
+
+test('comparison cannot calculate or select a fallback in any environment or flag state', async t => {
+  const old = [env.nodeEnv, env.routingCompareEnabled];
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw Error('unexpected network'); });
+  const trimble = t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected comparison'); });
+  const here = t.mock.method(HereRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected fallback'); });
+  try {
+    for (const mode of ['production', 'development', 'test']) for (const flag of [true, false]) {
+      env.nodeEnv = mode; env.routingCompareEnabled = flag;
+      await assert.rejects(() => compareRoutes(input), e => e.code === 'ROUTING_COMPARISON_DISABLED' && e.httpStatus === 410);
+    }
+  } finally { [env.nodeEnv, env.routingCompareEnabled] = old; }
+  assert.equal(network.mock.callCount(), 0);
+  assert.equal(trimble.mock.callCount(), 0);
+  assert.equal(here.mock.callCount(), 0);
+});
+
+import { spawnSync } from 'node:child_process';
+test('startup rejects non-Trimble routing configuration without exposing values', () => {
+  for (const provider of ['here', 'mapbox', 'tomtom']) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', 'import "./dist/config/env.js"'], {
+      env: {...process.env, NODE_ENV: 'test', ROUTING_PROVIDER: provider}, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /ROUTING_PROVIDER must be 'trimble'/);
+  }
+});

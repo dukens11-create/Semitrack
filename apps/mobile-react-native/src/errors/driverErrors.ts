@@ -1,5 +1,12 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  CORRIDOR_ROUTE_REQUIRED: 'Plan a truck route before requesting corridor information.',
+  CORRIDOR_LOCATION_REQUIRED: 'Enable precise location before requesting corridor information.',
+  CORRIDOR_LOCATION_INVALID: 'A valid precise location is required. Check location access and retry.',
+  CORRIDOR_LOCATION_STALE: 'Location is stale. Acquire a fresh precise GPS fix and retry.',
+  CORRIDOR_LOCATION_OFF_ROUTE: 'Your location is off the planned route. Review the route and retry.',
+  CORRIDOR_LOCATION_AMBIGUOUS: 'Your progress on this route is ambiguous. Review the route and acquire a fresh location.',
+  CORRIDOR_CORRELATION_FAILED: 'Location could not be matched to the route. Review the route and retry.',
   TRIMBLE_RESTRICTION_WARNING: 'The provider reported a restriction or warning on this route. Review your truck profile and choose another destination or stop; do not follow an unverified route.',
   TRUCK_PROFILE_CHANGED: 'Your saved truck profile changed. Refresh and verify it before routing.',
   TRIMBLE_REQUEST_INVALID: 'Review the truck profile and stops before requesting a route.',

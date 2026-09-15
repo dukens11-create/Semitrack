@@ -1,8 +1,12 @@
+import { DriverCard } from '../src/components/DriverUI';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { AppState, Text, TextInput } from 'react-native';
 import { DriverError } from '../src/errors/driverErrors';
-import { LocationService, type LocationProvider } from '../src/services/location/LocationService';
+import {
+  LocationService,
+  type LocationProvider,
+} from '../src/services/location/LocationService';
 import Mapbox from '@rnmapbox/maps';
 import { DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
@@ -57,7 +61,10 @@ function setup(selected: typeof truck | null = truck, fix: unknown = null) {
   );
   const location = Object.assign(new Store({ fix, tracking: !!fix }), {
     getFreshFix: jest.fn(() => fix),
-    requestFreshFix: jest.fn(async () => { if (!fix) throw new DriverError('GPS_ACQUISITION_TIMEOUT'); return fix; }),
+    requestFreshFix: jest.fn(async () => {
+      if (!fix) throw new DriverError('GPS_ACQUISITION_TIMEOUT');
+      return fix;
+    }),
     startIfPermitted: jest.fn().mockResolvedValue(undefined),
     start: jest.fn().mockResolvedValue(undefined),
     stop: jest.fn().mockResolvedValue(undefined),
@@ -447,30 +454,58 @@ test('address browsing without GPS cannot produce a route after destination conf
   expect(content()).toContain('fresh precise GPS fix');
 });
 
-
 test('retained map dismisses its modal when the map loses focus', async () => {
- const { services } = setup();
- await act(async () => { screen = create(<PlanningScreen services={services} active />); });
- await press('Set destination for truck routes');
- await act(async () => screen.root.findByType(TextInput).props.onChangeText('retained destination'));
- await act(async () => screen.update(<PlanningScreen services={services} active={false} />));
- expect(button('Close Set destination')).toBeUndefined();
- await act(async () => screen.update(<PlanningScreen services={services} active />));
- expect(button('Close Set destination')).toBeUndefined();
- await press('Set destination for truck routes');
- expect(screen.root.findByType(TextInput).props.value).toBe('retained destination');
+  const { services } = setup();
+  await act(async () => {
+    screen = create(<PlanningScreen services={services} active />);
+  });
+  await press('Set destination for truck routes');
+  await act(async () =>
+    screen.root
+      .findByType(TextInput)
+      .props.onChangeText('retained destination'),
+  );
+  await act(async () =>
+    screen.update(<PlanningScreen services={services} active={false} />),
+  );
+  expect(button('Close Set destination')).toBeUndefined();
+  await act(async () =>
+    screen.update(<PlanningScreen services={services} active />),
+  );
+  expect(button('Close Set destination')).toBeUndefined();
+  await press('Set destination for truck routes');
+  expect(screen.root.findByType(TextInput).props.value).toBe(
+    'retained destination',
+  );
 });
 
 test('opening truck profiles from destination details closes the modal before navigation', async () => {
- const { services, calculate } = setup(null);
- const openTrucks = jest.fn();
- await act(async () => { screen = create(<PlanningScreen services={services} onTrucks={openTrucks} />); });
- await search();
- await act(async () => screen.root.findAll(n => n.props.accessibilityRole === 'button' && typeof n.props.onPress === 'function').find(n => n.findAllByType(Text).some(t => t.props.children === 'Real provider destination'))!.props.onPress());
- await press('Add truck profile to plan route');
- expect(openTrucks).toHaveBeenCalledTimes(1);
- expect(button('Close Set destination')).toBeUndefined();
- expect(calculate).not.toHaveBeenCalled();
+  const { services, calculate } = setup(null);
+  const openTrucks = jest.fn();
+  await act(async () => {
+    screen = create(
+      <PlanningScreen services={services} onTrucks={openTrucks} />,
+    );
+  });
+  await search();
+  await act(async () =>
+    screen.root
+      .findAll(
+        n =>
+          n.props.accessibilityRole === 'button' &&
+          typeof n.props.onPress === 'function',
+      )
+      .find(n =>
+        n
+          .findAllByType(Text)
+          .some(t => t.props.children === 'Real provider destination'),
+      )!
+      .props.onPress(),
+  );
+  await press('Add truck profile to plan route');
+  expect(openTrucks).toHaveBeenCalledTimes(1);
+  expect(button('Close Set destination')).toBeUndefined();
+  expect(calculate).not.toHaveBeenCalled();
 });
 
 function routingGps() {
@@ -478,56 +513,227 @@ function routingGps() {
   const provider: LocationProvider = {
     permissionStatus: jest.fn(async () => 'denied'),
     permission: jest.fn(async () => 'granted'),
-    start: jest.fn(async () => {}), stop: jest.fn(async () => {}),
-    subscribe: (callback) => { emit = callback; return () => {}; },
+    start: jest.fn(async () => {}),
+    stop: jest.fn(async () => {}),
+    subscribe: callback => {
+      emit = callback;
+      return () => {};
+    },
   };
-  return { service: new LocationService(provider), provider, emit: () => emit({ latitude: 40.25, longitude: -100.5, timestamp: Date.now(), accuracy: 4, heading: null, speed: 0 }) };
+  return {
+    service: new LocationService(provider),
+    provider,
+    emit: () =>
+      emit({
+        latitude: 40.25,
+        longitude: -100.5,
+        timestamp: Date.now(),
+        accuracy: 4,
+        heading: null,
+        speed: 0,
+      }),
+  };
 }
 async function selectRouteDestination() {
   await search();
   await act(async () => {
-    screen.root.findAll(n => typeof n.props.onPress === 'function' && n.props.accessibilityRole === 'button')
-      .find(n => n.findAllByType(Text).some(t => t.props.children === 'Real provider destination'))!.props.onPress();
+    screen.root
+      .findAll(
+        n =>
+          typeof n.props.onPress === 'function' &&
+          n.props.accessibilityRole === 'button',
+      )
+      .find(n =>
+        n
+          .findAllByType(Text)
+          .some(t => t.props.children === 'Real provider destination'),
+      )!
+      .props.onPress();
   });
 }
 test('route selection requests GPS and sends the exact fresh origin only after acquisition', async () => {
-  const { services, calculate } = setup(); const gps = routingGps(); services.location = gps.service;
-  const previousAppState = AppState.currentState; AppState.currentState = 'active';
+  const { services, calculate } = setup();
+  const gps = routingGps();
+  services.location = gps.service;
+  const previousAppState = AppState.currentState;
+  AppState.currentState = 'active';
   try {
-    await act(async () => { screen = create(<PlanningScreen services={services} />); });
-    await selectRouteDestination(); await press('Set final destination');
-    expect(content()).toContain('Acquiring a fresh precise GPS fix'); expect(calculate).not.toHaveBeenCalled(); expect(gps.provider.permission).toHaveBeenCalledWith(false);
-    await act(async () => { gps.emit(); });
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(content()).toContain('Acquiring a fresh precise GPS fix');
+    expect(calculate).not.toHaveBeenCalled();
+    expect(gps.provider.permission).toHaveBeenCalledWith(false);
+    await act(async () => {
+      gps.emit();
+    });
     expect(calculate).toHaveBeenCalledTimes(1);
-    expect(calculate).toHaveBeenCalledWith({ lat: 40.25, lng: -100.5 }, expect.objectContaining({ destination: expect.objectContaining({ id: 'dest' }) }), truck, 0);
-  } finally { await act(async () => { await gps.service.stop(); }); AppState.currentState = previousAppState; }
+    expect(calculate).toHaveBeenCalledWith(
+      { lat: 40.25, lng: -100.5 },
+      expect.objectContaining({
+        destination: expect.objectContaining({ id: 'dest' }),
+      }),
+      truck,
+      0,
+    );
+  } finally {
+    await act(async () => {
+      await gps.service.stop();
+    });
+    AppState.currentState = previousAppState;
+  }
 });
 test('closing destination sheet while acquiring GPS never dispatches a late route', async () => {
-  const { services, calculate } = setup(); const gps = routingGps(); services.location = gps.service;
+  const { services, calculate } = setup();
+  const gps = routingGps();
+  services.location = gps.service;
   try {
-    await act(async () => { screen = create(<PlanningScreen services={services} />); });
-    await selectRouteDestination(); await press('Set final destination'); await press('Close Set destination');
-    await act(async () => { gps.emit(); }); expect(calculate).not.toHaveBeenCalled();
-  } finally { await act(async () => { await gps.service.stop(); }); }
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await selectRouteDestination();
+    await press('Set final destination');
+    await press('Close Set destination');
+    await act(async () => {
+      gps.emit();
+    });
+    expect(calculate).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => {
+      await gps.service.stop();
+    });
+  }
 });
 test('changed truck during GPS acquisition is rejected before routing', async () => {
-  const { services, calculate } = setup(); const gps = routingGps(); services.location = gps.service;
-  const previousAppState = AppState.currentState; AppState.currentState = 'active';
+  const { services, calculate } = setup();
+  const gps = routingGps();
+  services.location = gps.service;
+  const previousAppState = AppState.currentState;
+  AppState.currentState = 'active';
   try {
-    await act(async () => { screen = create(<PlanningScreen services={services} />); });
-    await selectRouteDestination(); await press('Set final destination');
-    const next = { ...services.trucks.getSnapshot(), selected: { ...truck } }; jest.spyOn(services.trucks, 'getSnapshot').mockReturnValue(next);
-    await act(async () => { gps.emit(); }); expect(calculate).not.toHaveBeenCalled(); expect(content()).toContain('verified truck profile first');
-  } finally { await act(async () => { await gps.service.stop(); }); AppState.currentState = previousAppState; }
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await selectRouteDestination();
+    await press('Set final destination');
+    const next = { ...services.trucks.getSnapshot(), selected: { ...truck } };
+    jest.spyOn(services.trucks, 'getSnapshot').mockReturnValue(next);
+    await act(async () => {
+      gps.emit();
+    });
+    expect(calculate).not.toHaveBeenCalled();
+    expect(content()).toContain('verified truck profile first');
+  } finally {
+    await act(async () => {
+      await gps.service.stop();
+    });
+    AppState.currentState = previousAppState;
+  }
 });
 
 test('alternative geometry renders as comparison only without replacing the primary route', async () => {
-  const primary=route(); const geometry:[number,number][]=[[-100,40],[-100.01,40.001],[-100.02,40]];
-  primary.alternatives=[{id:'alternate-fixture',routeGeometry:geometry,distanceMiles:13,durationSeconds:1260,etaMinutes:21,
-    legs:[],turnByTurn:[],notices:[{code:'TRIMBLE_ALTERNATE_PREVIEW'}]}];
-  await act(async()=>{screen=create(<TruckMap token="pk.fixture" route={primary} plan={null} fix={null} night={false} pois={[]}/>);});
-  const sources=screen.root.findAllByType(Mapbox.ShapeSource);
-  expect(sources.find(n=>n.props.id==='truck-route')?.props.shape.geometry.coordinates).toEqual(primary.routeGeometry);
-  expect(sources.find(n=>n.props.id==='truck-alternative-0')?.props.shape).toMatchObject({properties:{previewOnly:true},geometry:{coordinates:geometry}});
-  expect(primary.selectedRouteId).toBe('test-route'); expect(primary.turnByTurn).toHaveLength(2);
+  const primary = route();
+  const geometry: [number, number][] = [
+    [-100, 40],
+    [-100.01, 40.001],
+    [-100.02, 40],
+  ];
+  primary.alternatives = [
+    {
+      id: 'alternate-fixture',
+      routeGeometry: geometry,
+      distanceMiles: 13,
+      durationSeconds: 1260,
+      etaMinutes: 21,
+      legs: [],
+      turnByTurn: [],
+      notices: [{ code: 'TRIMBLE_ALTERNATE_PREVIEW' }],
+    },
+  ];
+  await act(async () => {
+    screen = create(
+      <TruckMap
+        token="pk.fixture"
+        route={primary}
+        plan={null}
+        fix={null}
+        night={false}
+        pois={[]}
+      />,
+    );
+  });
+  const sources = screen.root.findAllByType(Mapbox.ShapeSource);
+  expect(
+    sources.find(n => n.props.id === 'truck-route')?.props.shape.geometry
+      .coordinates,
+  ).toEqual(primary.routeGeometry);
+  expect(
+    sources.find(n => n.props.id === 'truck-alternative-0')?.props.shape,
+  ).toMatchObject({
+    properties: { previewOnly: true },
+    geometry: { coordinates: geometry },
+  });
+  expect(primary.selectedRouteId).toBe('test-route');
+  expect(primary.turnByTurn).toHaveLength(2);
+});
+
+test('Phase2 assistant POI remains only a candidate until driver confirms canonical StopPlan routing', async () => {
+  const previousAppState = AppState.currentState;
+  AppState.currentState = 'active';
+  try {
+    const fix = {
+      latitude: 40,
+      longitude: -120,
+      accuracy: 4,
+      timestamp: Date.now(),
+      speed: 0,
+      heading: null,
+    };
+    const { services, calculate } = setup(truck, fix);
+    (services.poi.nearby as jest.Mock).mockResolvedValue([
+      {
+        id: 'cat-fixture',
+        name: 'CAT Scale fixture',
+        category: 'cat_scale',
+        latitude: 40.1,
+        longitude: -120,
+        provider: 'HERE',
+      },
+    ]);
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await press('Set destination for truck routes');
+    await act(async () =>
+      screen.root.findByType(TextInput).props.onChangeText('Find a CAT Scale'),
+    );
+    await press('Ask driver assistant');
+    expect(content()).toContain('CAT Scale fixture');
+    expect(calculate).not.toHaveBeenCalled();
+    const candidate = screen.root
+      .findAllByType(DriverCard)
+      .find(card =>
+        card
+          .findAllByType(Text)
+          .some(text => text.props.children === 'CAT Scale fixture'),
+      )!;
+    await act(async () => candidate.props.onPress!());
+    expect(calculate).not.toHaveBeenCalled();
+    await press('Set final destination');
+    expect(calculate).toHaveBeenCalledTimes(1);
+    expect(calculate.mock.calls[0][1]).toEqual({
+      destination: {
+        id: 'cat-fixture',
+        name: 'CAT Scale fixture',
+        lat: 40.1,
+        lng: -120,
+      },
+      stops: [],
+    });
+    expect(services.guidance.startNavigation).not.toHaveBeenCalled();
+  } finally {
+    AppState.currentState = previousAppState;
+  }
 });

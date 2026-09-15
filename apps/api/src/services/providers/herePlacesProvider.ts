@@ -1,3 +1,4 @@
+import { matchItemsToRoute } from "../safetyDataService.js";
 import { env } from "../../config/env.js";
 import {
   parseHerePlaces,
@@ -17,6 +18,8 @@ const queryByCategory: Record<HerePlaceCategory, string> = {
   fuel_stop: "truck diesel fuel",
   truck_parking: "truck parking",
   truck_wash: "truck wash",
+  cat_scale: "CAT Scale",
+  truck_repair: "heavy duty truck repair",
 };
 export async function searchHerePlaces(input: {
   category: HerePlaceCategory;
@@ -58,6 +61,7 @@ export async function searchHerePlacesAlongRoute(input: {
   route: Coordinate[];
   radiusMeters?: number;
   maxResults?: number;
+  currentRouteOffsetMeters?: number;
 }): Promise<HerePlace[]> {
   const samples = sampleRoute(input.route);
   const batches = await Promise.all(
@@ -70,5 +74,13 @@ export async function searchHerePlacesAlongRoute(input: {
   );
   const unique = new Map<string, HerePlace>();
   for (const place of batches.flat()) unique.set(place.id, place);
-  return [...unique.values()].slice(0, Math.min(Math.max(input.maxResults ?? 100, 1), 250));
+  // Filter and rank all bounded provider candidates before applying the requested limit.
+  return matchItemsToRoute(input.route, [...unique.values()], place => ({lat: place.latitude, lng: place.longitude}),
+    2500, input.currentRouteOffsetMeters ?? 0)
+    .slice(0, Math.min(Math.max(input.maxResults ?? 100, 1), 250))
+    .map(match => {
+      const {distanceMeters: _distance, ...place} = match.item;
+      return {...place, routeDistanceAheadMeters: match.routeOffsetMeters - (input.currentRouteOffsetMeters ?? 0),
+        detourOffsetMeters: match.distanceFromRouteMeters};
+    });
 }

@@ -1,3 +1,4 @@
+import { CorridorRecords } from '../features/dot511/CorridorRecords';
 import { DriverError } from '../errors/driverErrors';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -35,7 +36,11 @@ import {
   type StopPlan,
 } from '../features/stops/StopPlan';
 import { type PlaceCategory } from '../features/poi/PoiService';
-import { PoiArtwork, placeShortcuts } from '../features/poi/PoiPresentation';
+import {
+  PoiArtwork,
+  placeShortcuts,
+  poiDetails,
+} from '../features/poi/PoiPresentation';
 import { TruckMap } from '../features/map/TruckMap';
 import { RoutePreview, routeEstimate } from '../features/routing/RoutePreview';
 export function PlanningScreen({
@@ -101,6 +106,11 @@ export function PlanningScreen({
       searchStore.cancel();
     };
   }, [active, searchStore]);
+  useEffect(() => {
+    // Route/profile/session changes invalidate in-flight route-relative search results.
+    searchStore.cancel();
+    setDetail(null);
+  }, [routes.route, searchStore]);
   function closeSheet() {
     gpsRequest.current?.abort();
     searchStore.cancel();
@@ -148,10 +158,12 @@ export function PlanningScreen({
     setAcquiringGps(true);
     try {
       await services.location.requestFreshFix(controller.signal);
-      if (controller.signal.aborted || AppState.currentState !== 'active') return;
+      if (controller.signal.aborted || AppState.currentState !== 'active')
+        return;
       // A driver may edit/sign out while GPS is being acquired. Never send the old profile.
       const selected = services.trucks.getSnapshot().selected;
-      if (!selected || selected !== truck) throw new DriverError('VERIFIED_TRUCK_REQUIRED');
+      if (!selected || selected !== truck)
+        throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     } catch (e) {
       if (controller.signal.aborted) return;
       throw e;
@@ -262,7 +274,11 @@ export function PlanningScreen({
       {pending && (
         <View style={ds.row}>
           <ActivityIndicator color="#FF6B2C" />
-          <DriverCopy>{acquiringGps ? 'Acquiring a fresh precise GPS fix…' : 'Requesting authoritative truck data…'}</DriverCopy>
+          <DriverCopy>
+            {acquiringGps
+              ? 'Acquiring a fresh precise GPS fix…'
+              : 'Requesting authoritative truck data…'}
+          </DriverCopy>
         </View>
       )}
     </>
@@ -507,7 +523,26 @@ export function PlanningScreen({
             disabled={pending || query.trim().length < 3}
             onPress={search}
           />
+          <DriverButton
+            title="Ask driver assistant"
+            disabled={pending || !query.trim()}
+            secondary
+            onPress={() => {
+              setDetail(null);
+              void searchStore.command(query, {
+                fix: services.location.getFreshFix(),
+                route: services.routes.getSnapshot().route,
+              });
+            }}
+          />
+          <DriverCopy>
+            Ask for a truck stop, CAT Scale, repair shop, cheapest diesel on
+            your route, or weather 50/100 miles ahead. Speech capture is
+            unavailable; keyboard dictation is not verified hands-free
+            operation.
+          </DriverCopy>
           {categories(true)}
+          <CorridorRecords items={searchState.advisories ?? []} />
           <DriverCopy>
             Addresses: Mapbox. Truck places: SemiTraX place provider. Neither
             result verifies a truck entrance.
@@ -562,10 +597,7 @@ export function PlanningScreen({
                   <PoiArtwork poi={poi} />
                   <View style={ds.grow}>
                     <DriverTitle small>{poi.name}</DriverTitle>
-                    <DriverCopy>
-                      {poi.address || 'Address not supplied'}
-                    </DriverCopy>
-                    <DriverCopy>Truck entrance unverified</DriverCopy>
+                    <DriverCopy>{poiDetails(poi)}</DriverCopy>
                   </View>
                 </View>
               </DriverCard>
@@ -659,7 +691,9 @@ export function PlanningScreen({
               <DriverButton
                 title="Compare alternatives"
                 disabled={pending}
-                onPress={() => { void run(() => calculate(routes.plan!, 2)); }}
+                onPress={() => {
+                  void run(() => calculate(routes.plan!, 2));
+                }}
               />
               <DriverButton
                 title="Recalculate from current location"

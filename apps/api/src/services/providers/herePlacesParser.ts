@@ -5,7 +5,9 @@ export type HerePlaceCategory =
   | "rest_area"
   | "fuel_stop"
   | "truck_parking"
-  | "truck_wash";
+  | "truck_wash"
+  | "cat_scale"
+  | "truck_repair";
 
 export type HerePlace = {
   id: string;
@@ -49,7 +51,9 @@ export function parseHerePlaces(payload: unknown, category: HerePlaceCategory): 
     const longitude = asFiniteNumber(position?.lng);
     const id = asString(item.id);
     const name = asString(item.title);
-    if (latitude === undefined || longitude === undefined || !id || !name) continue;
+    if (latitude === undefined || longitude === undefined || Math.abs(latitude) > 90 || Math.abs(longitude) > 180 || !id || !name) continue;
+    if (category === "cat_scale" && !/\bcat\s+scale\b/i.test(name)) continue;
+    if (category === "truck_repair" && !/\b(truck|diesel|heavy[- ]duty)\b.*\b(repair|service|mechanic)\b/i.test(name)) continue;
     if (category === "walmart_store" && !/walmart/i.test(name)) continue;
     if (
       (category === "truck_stop" || category === "fuel_stop") &&
@@ -69,9 +73,9 @@ export function parseHerePlaces(payload: unknown, category: HerePlaceCategory): 
       city: asString(address?.city),
       state: asString(address?.state) ?? asString(address?.stateCode),
       country: asString(address?.countryCode),
-      distanceMeters: asFiniteNumber(item.distance),
+      distanceMeters: typeof item.distance === "number" && item.distance >= 0 ? asFiniteNumber(item.distance) : undefined,
       provider: "HERE",
     });
   }
-  return results;
+  return [...new Map(results.map(place => [place.id, place])).values()];
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Services } from '../app/services';
 import {
   Page,
@@ -16,6 +16,21 @@ export function ServicesScreen({ services }: { services: Services }) {
   const [error, setError] = useState<string>();
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const generation = useRef(0);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const revision = generation;
+    const requests = controller;
+    ++revision.current;
+    requests.current?.abort();
+    setItems([]);
+    setStatus('');
+    setBusy(false);
+    return () => {
+      ++revision.current;
+      requests.current?.abort();
+    };
+  }, [route]);
   async function load(
     kind:
       | 'restrictions'
@@ -23,16 +38,36 @@ export function ServicesScreen({ services }: { services: Services }) {
       | 'cameras'
       | 'parking'
       | 'fuel'
-      | 'weigh-stations',
+      | 'weigh-stations'
+      | 'weather',
   ) {
     if (!route) {
       return;
     }
+    if (controller.current) controller.current.abort();
+    const request = new AbortController();
+    controller.current = request;
+    const current = ++generation.current;
     setBusy(true);
     setError(undefined);
     setItems([]);
     try {
-      const data = await services.poi.corridor(kind, route);
+      const fix = services.location.getFreshFix();
+      if (!fix) {
+        setStatus(
+          'A fresh precise GPS location is required for route-relative information.',
+        );
+        return;
+      }
+      const data =
+        kind === 'weather'
+          ? await services.poi.routeWeather(route, fix, request.signal)
+          : await services.poi.corridor(kind, route, 0, fix, request.signal);
+      if (
+        current !== generation.current ||
+        services.routes.getSnapshot().route !== route
+      )
+        return;
       setItems(data);
       setStatus(
         data.length
@@ -40,9 +75,12 @@ export function ServicesScreen({ services }: { services: Services }) {
           : 'No provider records returned for this route. Availability is unknown.',
       );
     } catch (e) {
-      setError(errorMessage(e));
+      if (current === generation.current) setError(errorMessage(e));
     } finally {
-      setBusy(false);
+      if (current === generation.current) {
+        setBusy(false);
+        controller.current = null;
+      }
     }
   }
   return (
@@ -61,6 +99,7 @@ export function ServicesScreen({ services }: { services: Services }) {
           'parking',
           'fuel',
           'weigh-stations',
+          'weather',
         ] as const
       ).map(kind => (
         <Button
@@ -77,9 +116,10 @@ export function ServicesScreen({ services }: { services: Services }) {
       <CorridorRecords items={items} />
       <Heading>Coming in a later version</Heading>
       <Copy>
-        CAT scales, repair shops, restaurants, hotels and camera viewing are not
-        yet available. Live parking availability, weigh-station status and fuel
-        prices depend on local data coverage. Missing information means unknown.
+        CAT Scales and truck repair are available through Map place search when
+        the provider has coverage. Live parking availability, weigh-station
+        status and fuel prices depend on local data coverage. Missing
+        information means unknown.
       </Copy>
       <Copy>
         Trip history, document storage, fleet and dispatch, ELD connections and

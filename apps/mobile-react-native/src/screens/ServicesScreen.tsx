@@ -122,8 +122,9 @@ export function ServicesScreen({ services }: { services: Services }) {
         information means unknown.
       </Copy>
       <Copy>
-        Trip history, document storage, fleet and dispatch, ELD connections and
-        subscriptions are not yet available in this version.
+        Trips and dispatch review are available in Trips. Documents supports
+        metadata only. Private file storage and live ELD/HOS require provider
+        setup; billing remains disabled.
       </Copy>
       <Copy>
         Offline map downloads and offline commercial truck navigation are

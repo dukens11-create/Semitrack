@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import type { Services } from '../app/services';
+import { z } from 'zod';
+import { errorMessage } from '../components/ui';
 import { useStore } from '../hooks/useStore';
 import {
   DriverButton,
@@ -27,6 +29,63 @@ export function MoreScreen({
     trucks = useStore(services.trucks);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [providerStatus, setProviderStatus] = useState('');
+  async function inspectAccountServices() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    const account = services.auth.getSnapshot().user?.id;
+    try {
+      const connections = z
+        .object({
+          items: z.array(
+            z.object({ provider: z.string(), status: z.string() }),
+          ),
+        })
+        .parse(await services.api.request('GET', '/eld/connections'));
+      const hos = z
+        .object({ status: z.literal('UNKNOWN'), reason: z.string() })
+        .parse(await services.api.request('GET', '/eld/hos/current'));
+      let billing = 'Billing unavailable';
+      try {
+        const e = await services.api.request<{ accessState: string }>(
+          'GET',
+          '/entitlements',
+        );
+        billing =
+          'Entitlement: ' +
+          (typeof e.accessState === 'string'
+            ? e.accessState
+            : 'See account support');
+      } catch (e) {
+        if ((e as { code?: string }).code === 'BILLING_DISABLED')
+          billing = 'Billing disabled';
+        else throw e;
+      }
+      if (services.auth.getSnapshot().user?.id === account)
+        setProviderStatus(
+          (connections.items.length
+            ? connections.items
+                .map(c => c.provider + ': ' + c.status)
+                .join('; ')
+            : 'No ELD connection') +
+            '. HOS unknown (' +
+            (hos.reason === 'ELD_DATA_STALE'
+              ? 'provider data is stale'
+              : hos.reason === 'DRIVER_MAPPING_REQUIRED'
+              ? 'verified driver mapping required'
+              : 'no connected provider') +
+            '). ' +
+            billing +
+            '.',
+        );
+    } catch (e) {
+      if (services.auth.getSnapshot().user?.id === account)
+        setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <DriverPage>
       <View style={ds.row}>
@@ -70,9 +129,13 @@ export function MoreScreen({
       <DriverTile
         icon="cable_rounded"
         title="ELD connections"
-        caption="Samsara, Motive and HOS sync — not available in this version"
-        disabled
+        caption="Read provider connection and HOS availability; no guessed driving hours"
+        disabled={busy}
+        onPress={() => {
+          void inspectAccountServices();
+        }}
       />
+      {!!providerStatus && <DriverCopy>{providerStatus}</DriverCopy>}
       <DriverTile
         icon="map"
         title="Offline maps"

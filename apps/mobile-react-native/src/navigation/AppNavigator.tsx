@@ -85,7 +85,7 @@ export function DriverShell({
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />
             ) : index === 3 ? (
-              <DocumentsScreen />
+              <DocumentsScreen services={services} />
             ) : (
               <MoreScreen
                 services={services}

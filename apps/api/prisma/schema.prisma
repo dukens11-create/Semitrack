@@ -389,6 +389,8 @@ model PasswordResetToken {
 }
 
 model Truck {
+  documents Document[]
+
   revision         Int      @default(1)
   verifiedRevision Int?
   verifiedAt       DateTime?
@@ -456,6 +458,13 @@ model Favorite {
 }
 
 model Trip {
+  revision Int @default(1)
+  truckSnapshotJson Json?
+  dispatchFleetId String?
+  dispatchActorId String?
+  cancelledAt DateTime?
+  dispatchFleet OperationalFleet? @relation(fields: [dispatchFleetId], references: [id], onDelete: SetNull)
+
   id                    String              @id @default(cuid())
   userId                String
   truckId               String?
@@ -1050,6 +1059,15 @@ model Load {
 }
 
 model Document {
+  revision Int @default(1)
+  truckId String?
+  issuedOn DateTime? @db.Date
+  expiresOn DateTime? @db.Date
+  verificationState String @default("UNVERIFIED")
+  truck Truck? @relation(fields: [truckId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+
   id        String   @id @default(cuid())
   userId    String
   type      String
@@ -1299,6 +1317,8 @@ model StaffAccess {
   fleets      StaffFleetAccess[]
 }
 model OperationalFleet {
+  trips Trip[]
+
   id        String @id @default(cuid())
   name      String
   active    Boolean @default(true)

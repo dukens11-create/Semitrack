@@ -74,6 +74,9 @@ export function SettingsScreen({ services }: { services: Services }) {
   const [phone, setPhone] = useState(auth.user?.phone ?? '');
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState('');
+  const [currentPassword, setCurrentPassword] = useState(''),
+    [newPassword, setNewPassword] = useState(''),
+    [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<
     'Privacy and location' | 'About SemiTraX' | null
@@ -134,6 +137,61 @@ export function SettingsScreen({ services }: { services: Services }) {
                 services.auth.updateProfile(name.trim(), phone.trim() || null),
               'Profile saved.',
             );
+          }}
+        />
+      </DriverCard>
+      <DriverCard>
+        <DriverTitle small>Change password</DriverTitle>
+        <DriverCopy>
+          All sessions and outstanding reset links will be invalidated. Sign in
+          again after saving. Use at least 10 characters and at most 72 UTF-8
+          bytes.
+        </DriverCopy>
+        <DriverField
+          label="Current password"
+          value={currentPassword}
+          onChangeText={setCurrentPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          maxLength={128}
+        />
+        <DriverField
+          label="New password"
+          value={newPassword}
+          onChangeText={setNewPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          maxLength={128}
+        />
+        <DriverField
+          label="Confirm new password"
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          maxLength={128}
+        />
+        <DriverButton
+          title="Change password and sign out"
+          disabled={
+            pending ||
+            !currentPassword ||
+            newPassword.length < 10 ||
+            newPassword !== confirmPassword
+          }
+          onPress={() => {
+            void run(async () => {
+              try {
+                await services.auth.changePassword(
+                  currentPassword,
+                  newPassword,
+                );
+              } finally {
+                setCurrentPassword('');
+                setNewPassword('');
+                setConfirmPassword('');
+              }
+            }, 'Password changed. Sign in again.');
           }}
         />
       </DriverCard>

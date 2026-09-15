@@ -1,0 +1,7 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript'),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+function render(permissions){const source=fs.readFileSync(path.join(__dirname,'../src/Operations.tsx'),'utf8');const exports={};vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,crypto:require('node:crypto').webcrypto,require:name=>name==='./api'?{api:new Proxy({},{get:()=>()=>{throw Error('No API calls during render');}})}:require(name)});return renderToStaticMarkup(React.createElement(exports.Operations,{permissions}));}
+test('Admin dispatch controls respect read versus manage permissions before explicit confirmation',()=>{
+ const noDispatch=render(['drivers.read']);assert(!noDispatch.includes('Fleet dispatch'));
+ const read=render(['drivers.read','equipment.read','dispatch.read']);assert(read.includes('Refresh assignments'));assert(!read.includes('Assign for driver review'));
+ const write=render(['drivers.read','equipment.read','dispatch.read','dispatch.manage']);assert(write.includes('Assign for driver review'));assert(write.includes('complete ordered stop list'));assert(write.includes('Add intermediate stop before destination'));assert(write.includes('Trimble calculates the route'));assert(!write.includes('routeGeometry'));assert(!write.includes('Start navigation'));
+});

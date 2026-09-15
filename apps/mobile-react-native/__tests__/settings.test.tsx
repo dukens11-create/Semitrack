@@ -141,7 +141,16 @@ test('settings preserve draft on failed save, never announce success, and discar
   expect(action('Use device setting').props.accessibilityState.checked).toBe(
     true,
   );
-  expect(screen!.root.findAllByType(TextInput)).toHaveLength(3);
+  expect(
+    screen!.root
+      .findAllByType(TextInput)
+      .filter(input => !input.props.secureTextEntry),
+  ).toHaveLength(3);
+  expect(
+    screen!.root
+      .findAllByType(TextInput)
+      .filter(input => input.props.secureTextEntry),
+  ).toHaveLength(3);
 });
 test('server-accepted settings update appearance and retain unrelated settingsJson', async () => {
   const { request, settings } = setup();

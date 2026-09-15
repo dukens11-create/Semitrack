@@ -15,7 +15,7 @@ adminAccountRouter.patch("/", requireAuth, requireRole(["ADMIN"]), async (req, r
       return res.status(403).json({ error: { code: "ADMIN_REQUIRED", message: "Administrator access is required" } });
     }
     if (!(await comparePassword(input.currentPassword, current.passwordHash))) {
-      return res.status(401).json({ error: { code: "CURRENT_PASSWORD_INVALID", message: "Current password is incorrect" } });
+      return res.status(400).json({ error: { code: "CURRENT_PASSWORD_INVALID", message: "Current password is incorrect" } });
     }
 
     if (input.email && input.email !== current.email) {
@@ -31,13 +31,10 @@ adminAccountRouter.patch("/", requireAuth, requireRole(["ADMIN"]), async (req, r
     const passwordChanged = Boolean(input.newPassword);
     const passwordHash = input.newPassword ? await hashPassword(input.newPassword) : undefined;
     const updated = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.update({
+      const changed=await tx.user.updateMany({where:{id:userId,passwordHash:current.passwordHash,disabledAt:null,role:'ADMIN'},data:{fullName:input.fullName,email:input.email,passwordHash}});
+      if(changed.count!==1)throw Object.assign(new Error('Account changed; sign in and review again.'),{safeCode:'ACCOUNT_CHANGED',safeStatus:409});
+      const user = await tx.user.findUniqueOrThrow({
         where: { id: userId },
-        data: {
-          fullName: input.fullName,
-          email: input.email,
-          passwordHash,
-        },
         select: {
           id: true,
           email: true,
@@ -48,6 +45,7 @@ adminAccountRouter.patch("/", requireAuth, requireRole(["ADMIN"]), async (req, r
         },
       });
       if (passwordChanged) {
+        await tx.passwordResetToken.updateMany({where:{userId,usedAt:null},data:{usedAt:new Date()}});
         await tx.refreshToken.updateMany({
           where: { userId, revokedAt: null },
           data: { revokedAt: new Date() },
@@ -64,8 +62,6 @@ adminAccountRouter.patch("/", requireAuth, requireRole(["ADMIN"]), async (req, r
             emailChanged: input.email !== undefined && input.email !== current.email,
             nameChanged: input.fullName !== undefined && input.fullName !== current.fullName,
             passwordChanged,
-            previousEmail: current.email,
-            newEmail: user.email,
           },
         },
       });

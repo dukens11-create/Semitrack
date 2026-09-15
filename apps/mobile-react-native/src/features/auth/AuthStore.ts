@@ -86,6 +86,14 @@ export class AuthStore extends Store<AuthState> {
       this.publish({ status: 'signedIn', user });
     }
   }
+  async changePassword(currentPassword: string, password: string) {
+    const generation = this.generation;
+    await this.api.request('POST', '/auth/password/change', {
+      currentPassword,
+      password,
+    });
+    if (generation === this.generation) await this.logout();
+  }
   async logout() {
     const generation = ++this.generation;
     this.api.invalidateSession();

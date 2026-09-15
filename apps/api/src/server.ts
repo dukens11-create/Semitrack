@@ -1,3 +1,11 @@
+import { dispatchRouter } from './modules/dispatch/dispatch.routes.js';
+import { routingCapabilities } from './services/routingCapabilities.js';
+import { currentHosStatus } from './services/eldNormalization.js';
+import { isCurrentAdminProvider } from './modules/analytics/providerHealth.js';
+import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
+import { documentRouter } from './modules/documents/document.routes.js';
+import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
+import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
 import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
 import { operationalRouter } from './modules/admin/operational.routes.js';
 import { auditTruck, isVerifiedTruck, publicTruck, saveTruck, verifyTruck } from "./modules/trucks/profileRevision.js";
@@ -17,7 +25,7 @@ import { requireAuth, requireRole } from "./middleware/auth.js";
 import { signAccessToken } from "./utils/jwt.js";
 import { hashPassword } from "./utils/password.js";
 import { authenticatePassword } from './services/loginAuthentication.js';
-import { requestPasswordRecovery } from './services/passwordRecovery.js';
+import { requestPasswordRecovery, confirmPasswordRecovery, changeUserPassword } from './services/passwordRecovery.js';
 import { createRecoveryQueue } from './services/recoveryQueue.js';
 import {
   buildTrafficPreview,
@@ -39,11 +47,6 @@ import {
 } from "./services/eldService.js";
 import { safetyRouter } from "./modules/safety/safety.routes.js";
 import { refreshDotProviders } from "./services/dotFeedService.js";
-import {
-  searchHerePlaces,
-  searchHerePlacesAlongRoute,
-} from "./services/providers/herePlacesProvider.js";
-import { resolveHereTimeZone } from "./services/providers/hereTimeZoneProvider.js";
 import { adminAnalyticsRouter, telemetryRouter } from "./modules/analytics/adminAnalytics.routes.js";
 import {
   adminSubscriptionPlansRouter,
@@ -110,6 +113,11 @@ async function issueSession(user: any, db: Pick<typeof prisma, "refreshToken"> =
   return { accessToken, refreshToken, user: publicUser(user) };
 }
 
+app.get('/capabilities', requireAuth, asyncRoute(async (_req,res)=>{
+ const states=await prisma.providerSyncState.findMany({where:{provider:'Trimble',dataType:'ROUTING'},select:{provider:true,dataType:true,status:true,lastSuccessAt:true,lastAttemptAt:true,lastErrorCode:true}});
+ res.json(routingCapabilities(Boolean(env.trimbleApiKey.trim()),states));
+}));
+
 app.get("/health", asyncRoute(async (_req, res) => {
   let database = "ok";
   try {
@@ -124,9 +132,8 @@ app.get("/health", asyncRoute(async (_req, res) => {
     contracts: { truckProfileVerification: 'revision-v1', revocableAccessSessions: true },
     providers: {
       selectedTruckRoutingProvider: configuredRoutingProviderName(),
-      hereRoutingConfigured: Boolean(env.hereApiKey),
-      trimbleRoutingConfigured: Boolean(env.trimbleApiKey),
-      mapboxTrafficConfigured: Boolean(env.mapboxToken),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
+      mapboxTrafficConfigured: false,
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
       billingMode: env.billingMode,
       googlePlayBillingConfigured: false,
@@ -153,11 +160,16 @@ app.post("/auth/register", asyncRoute(async (req, res) => {
 
 app.post("/auth/login", asyncRoute(async (req, res) => {
   const input = z.object({ email: z.string().trim().email(), password: z.string().min(1).max(128) }).parse(req.body);
-  const user = await authenticatePassword(prisma, input.email, input.password);
-  if (!user) {
+  const session = await prisma.$transaction(async tx => {
+    const email=input.email.trim().toLowerCase();
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "email" = ${email} FOR UPDATE`;
+    const user=await authenticatePassword(tx,input.email,input.password);
+    return user?issueSession(user,tx):null;
+  });
+  if (!session) {
     return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Invalid credentials" } });
   }
-  res.json(await issueSession(user));
+  res.json(session);
 }));
 
 app.post("/auth/refresh", asyncRoute(async (req, res) => {
@@ -189,22 +201,16 @@ app.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
 }));
 
 app.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
-  const { token, password } = z.object({ token: z.string().min(40), password: z.string().min(10).max(128) }).parse(req.body);
-  const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(token) } });
-  if (!record || record.usedAt || record.expiresAt <= new Date()) {
-    return res.status(400).json({ error: { code: "INVALID_RESET_TOKEN", message: "Reset token is invalid or expired" } });
-  }
-  const passwordHash = await hashPassword(password);
-  const consumed = await prisma.$transaction(async tx => {
-    const claimed = await tx.passwordResetToken.updateMany({ where: { id: record.id, usedAt: null, expiresAt: { gt: new Date() } }, data: { usedAt: new Date() } });
-    if (claimed.count !== 1) return false;
-    await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
-    await tx.passwordResetToken.updateMany({ where: { userId: record.userId, usedAt: null }, data: { usedAt: new Date() } });
-    await tx.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } });
-    return true;
-  });
+  const { token, password } = z.object({ token: z.string().min(40).max(256), password: z.string().min(10).max(128) }).parse(req.body);
+  const consumed = await confirmPasswordRecovery(prisma, token, password);
   if (!consumed) return res.status(400).json({ error: { code: 'INVALID_RESET_TOKEN', message: 'Reset token is invalid or expired' } });
   res.status(204).end();
+}));
+
+app.post('/auth/password/change',requireAuth,asyncRoute(async(req,res)=>{
+ const input=z.object({currentPassword:z.string().min(1).max(128),password:z.string().min(10).max(128)}).strict().parse(req.body);
+ await changeUserPassword(prisma,req.user!.userId,input.currentPassword,input.password);
+ res.status(204).end();
 }));
 
 app.get("/me", requireAuth, asyncRoute(async (req, res) => {
@@ -298,7 +304,11 @@ app.get("/location/timezone", requireAuth, asyncRoute(async (req, res) => {
     lat: z.coerce.number().min(-90).max(90),
     lng: z.coerce.number().min(-180).max(180),
   }).parse(req.query);
-  res.json(await resolveHereTimeZone(input.lat, input.lng));
+  res.status(503).json({error:{code:'TIMEZONE_PROVIDER_NOT_CONFIGURED',message:'An approved timezone provider is not configured.',retryable:false}});
+}));
+
+app.post("/weather/route", requireAuth, asyncRoute(async (req, res) => {
+  res.json({ items: await getCorrelatedRouteWeather(routeWeatherSchema.parse(req.body)) });
 }));
 
 const placeCategory = z.enum([
@@ -309,6 +319,8 @@ const placeCategory = z.enum([
   "fuel_stop",
   "truck_parking",
   "truck_wash",
+  "cat_scale",
+  "truck_repair",
 ]);
 app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
@@ -318,33 +330,18 @@ app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
     radiusMeters: z.coerce.number().int().min(100).max(100_000).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
   }).parse(req.query);
-  const items = await searchHerePlaces({
-    category: input.category,
-    center: { lat: input.lat, lng: input.lng },
-    radiusMeters: input.radiusMeters,
-    limit: input.limit,
-  });
-  res.json({
-    items,
-    provider: "HERE",
-    regulatoryAuthority: false,
-    generatedAt: new Date().toISOString(),
-  });
+  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
 }));
 app.post("/places/corridor", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
     category: placeCategory,
-    route: z.array(coordinate).min(2).max(2_000),
+    route: z.array(coordinate).min(2).max(20_000),
+    currentLocation: coordinate.extend({accuracy: z.number().min(0).max(100), timestamp: z.number().finite()}).optional(),
     radiusMeters: z.number().int().min(100).max(100_000).optional(),
     maxResults: z.number().int().min(1).max(250).optional(),
   }).parse(req.body);
-  const items = await searchHerePlacesAlongRoute(input);
-  res.json({
-    items,
-    provider: "HERE",
-    regulatoryAuthority: false,
-    generatedAt: new Date().toISOString(),
-  });
+  const offset = corridorRouteOffset(input.route, input.currentLocation);
+  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
 }));
 
 app.get("/favorites", requireAuth, asyncRoute(async (req, res) => {
@@ -405,7 +402,7 @@ app.post("/eld/:provider/connect", requireAuth, asyncRoute(async (req, res) => {
   const configured = provider === "SAMSARA"
     ? Boolean(env.samsaraClientId && env.samsaraClientSecret && env.samsaraRedirectUri)
     : Boolean(env.motiveClientId && env.motiveClientSecret && env.motiveRedirectUri);
-  if (!configured) {
+  if (!configured || env.eldEncryptionKey.length < 32) {
     return res.status(503).json({ error: { code: "ELD_PROVIDER_NOT_CONFIGURED", message: `${provider} OAuth credentials are required` } });
   }
   const state = crypto.randomBytes(32).toString("base64url");
@@ -490,12 +487,7 @@ app.get("/eld/hos/current", requireAuth, asyncRoute(async (req, res) => {
     select: { provider: true, lastSyncedAt: true, metadataJson: true },
     orderBy: { lastSyncedAt: "desc" },
   });
-  res.json({
-    items: connections.flatMap((connection) => {
-      const metadata = connection.metadataJson as { hos?: unknown[] } | null;
-      return (metadata?.hos ?? []).map((hos) => ({ provider: connection.provider, lastSyncedAt: connection.lastSyncedAt, ...(hos as object) }));
-    }),
-  });
+  res.json(currentHosStatus(connections));
 }));
 app.delete("/eld/:provider", requireAuth, asyncRoute(async (req, res) => {
   const provider = z.enum(["SAMSARA", "MOTIVE"]).parse(String(req.params.provider).toUpperCase());
@@ -516,7 +508,8 @@ app.get("/admin/overview", requireAuth, requireRole(globalAnalyticsRoles), async
     prisma.subscription.count({ where: { status: { in: ["ACTIVE", "TRIALING"] } } }),
     prisma.communityReport.count({ where: { status: "PENDING" } }),
     prisma.user.count({ where: { disabledAt: { not: null } } }),
-    prisma.providerSyncState.count({ where: { status: { in: ["DEGRADED", "ERROR"] } } }),
+    prisma.providerSyncState.findMany({ where: { status: { in: ["DEGRADED", "ERROR"] } }, select: { provider: true } })
+      .then(states => states.filter(isCurrentAdminProvider).length),
   ]);
   res.json({
     users,
@@ -536,8 +529,8 @@ app.get("/admin/application", requireAuth, requireRole(adminRoles), asyncRoute(a
     environment: env.nodeEnv,
     supportedRoles: ["DRIVER", "MODERATOR", "FLEET_ADMIN", "ADMIN"],
     providers: {
-      hereRoutingConfigured: Boolean(env.hereApiKey),
-      mapboxTrafficConfigured: Boolean(env.mapboxToken),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
+      mapboxTrafficConfigured: false,
       dot511Configured: env.dotProviderConfigured,
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
       samsaraConfigured: Boolean(env.samsaraClientId && env.samsaraClientSecret),
@@ -692,7 +685,7 @@ app.get("/admin/provider-health", requireAuth, requireRole(adminRoles), asyncRou
       updatedAt: true,
     },
   });
-  res.json({ items });
+  res.json({ items: items.filter(isCurrentAdminProvider) });
 }));
 
 app.get("/admin/audit-logs", requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res) => {
@@ -718,6 +711,9 @@ app.get("/admin/audit-logs", requireAuth, requireRole(["ADMIN"]), asyncRoute(asy
   res.json({ items, page, pageSize, total });
 }));
 
+app.use("/dispatch", dispatchRouter);
+app.use("/trips", tripStatusRouter);
+app.use("/documents", documentRouter);
 app.use("/safety", safetyRouter);
 app.use("/analytics", telemetryRouter);
 app.use("/admin/operations", operationalRouter);
@@ -740,8 +736,22 @@ app.use("/billing", requireBillingEnabled, requireAllowedStripeWebOrigin, (_req,
 
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (error instanceof CorridorCorrelationError) return res.status(error.httpStatus).json({error: {code: error.code, message: error.message}});
   const safe = error as { safeCode?: string; safeStatus?: number; code?: string } | null;
-  if (safe?.safeCode && ['ACCESS_CHANGED','USER_NOT_FOUND','LAST_ADMIN_BLOCKED','TRUCK_NOT_FOUND','LAST_TRUCK','FORBIDDEN','DRIVER_NOT_FOUND','RECORD_NOT_FOUND','RECORD_CHANGED','TRUCK_PROFILE_CHANGED','INVALID_OAUTH_STATE','ELD_CONNECTION_CHANGED'].includes(safe.safeCode)) return res.status(safe.safeStatus ?? 409).json({ error: { code: safe.safeCode, message: 'This action could not be completed. Refresh and review the account.' } });
+  const workflowErrors: Record<string, [number,string]> = {
+    TRIP_NOT_FOUND:[404,'Trip not found.'], DOCUMENT_NOT_FOUND:[404,'Document not found.'], FLEET_NOT_FOUND:[404,'Fleet not found.'],
+    TRIP_CHANGED:[409,'This trip changed. Refresh and review it again.'], DOCUMENT_CHANGED:[409,'This document changed. Refresh and review it again.'],
+    TRIP_STOP_PLAN_INVALID:[409,'Stop completion must match the next required stop. Refresh and review the trip.'],
+    TRIP_TRANSITION_INVALID:[409,'This trip status change is not allowed. Refresh the trip.'],
+    DISPATCH_MEMBERSHIP_REQUIRED:[403,'An active assignment in your fleet is required.'],
+    VERIFIED_TRUCK_REQUIRED:[409,'Review and verify the current truck profile before recording trip progress.'],
+    CREATE_OPERATION_REQUIRED:[400,'A create operation identifier is required.'], CREATE_OPERATION_CONFLICT:[409,'This save operation already has different values. Review the saved record.'],
+    CURRENT_PASSWORD_INVALID:[400,'Your current password was not accepted.'], PASSWORD_TOO_LONG:[400,'Use a password of at most 72 UTF-8 bytes.'],
+    ACCOUNT_CHANGED:[409,'Your account changed. Sign in and review it again.'],
+  };
+  const workflowError=safe?.safeCode?workflowErrors[safe.safeCode]:undefined;
+  if (workflowError) return res.status(workflowError[0]).json({error:{code:safe!.safeCode,message:workflowError[1]}});
+  if (safe?.safeCode && ['TRUCK_CREATE_OPERATION_CONFLICT','TRUCK_CREATE_RESULT_REMOVED','ACCESS_CHANGED','USER_NOT_FOUND','LAST_ADMIN_BLOCKED','TRUCK_NOT_FOUND','LAST_TRUCK','FORBIDDEN','DRIVER_NOT_FOUND','RECORD_NOT_FOUND','RECORD_CHANGED','TRUCK_PROFILE_CHANGED','INVALID_OAUTH_STATE','ELD_CONNECTION_CHANGED'].includes(safe.safeCode)) return res.status(safe.safeStatus ?? 409).json({ error: { code: safe.safeCode, message: 'This action could not be completed. Refresh and review the account.' } });
   if (safe?.code === 'P2034') return res.status(409).json({ error: { code: 'CONCURRENT_CHANGE', message: 'Information changed. Refresh and review before trying again.' } });
   if (safe?.code === 'P2002') return res.status(409).json({ error: { code: 'ALREADY_EXISTS', message: 'This record already exists.' } });
   const transportError = error as { type?: string } | null;
@@ -772,6 +782,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
       crypto.randomUUID(), _req.path.slice(0, 300), _req.method.slice(0, 12), error.httpStatus, error.code.slice(0, 120),
     ).catch(() => undefined);
     return res.status(error.httpStatus).json({
+      truckSafe: error.truckSafe,
+      navigationAllowed: error.navigationAllowed,
       error: {
         code: error.code,
         message: error.message,

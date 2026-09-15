@@ -3,7 +3,8 @@ import test from 'node:test';
 import { buildTrimbleRouteRequest, parseTrimbleRouteResponse, TrimbleRouteProvider } from '../dist/services/providers/trimbleProvider.js';
 const config={apiKey:'test-only',baseUrl:'https://provider.example.test',dataVersion:'Current',profileName:'',geoTunnelIntervalMiles:0.1,requestTimeoutMs:1000,routePathEnabled:true,alternateRoutesEnabled:false};
 const input={origin:{lat:40,lng:-120},destination:{lat:40,lng:-119.999},truck:{heightFt:13.5,widthFt:8.5,lengthFt:53,weightLbs:80000,currentWeightLbs:72000,weightPerAxleLbs:20000,axleCount:5,trailerCount:1,trailerType:'Dry Van',hazmatEnabled:false,hazardousGoods:[],avoidTolls:false,avoidFerries:false,avoidHighways:false,avoidResidential:false,avoidDirtRoads:false}};
-function payload(){return [{__type:'DirectionsReport',ReportLegs:[{ReportLines:[{Direction:'Destination',Dist:'1',Time:'0:02:00',End:{Lat:40,Lon:-119.999}}]}]},{__type:'MileageReport',ReportLines:[{TMiles:'1',LMiles:'1',THours:'0:02:00',LHours:'0:02:00'}]},{__type:'RoutePathReport',geometry:{type:'LineString',coordinates:[[-120,40],[-119.999,40]]}}];}
+const location=p=>({Coords:{Lat:p.lat,Lon:p.lng},Errors:[]});
+function payload(){return [{__type:'DirectionsReport',Origin:location(input.origin),Destination:location(input.destination),ReportLegs:[{Origin:location(input.origin),Dest:location(input.destination),ReportLines:[{Direction:'Destination',Dist:'1',Time:'0:02:00',End:{Lat:40,Lon:-119.999}}]}]},{__type:'MileageReport',ReportLines:[{Stops:location(input.origin),TMiles:'0',LMiles:'0',THours:'0:00:00',LHours:'0:00:00'},{Stops:location(input.destination),TMiles:'1',LMiles:'1',THours:'0:02:00',LHours:'0:02:00'}]},{__type:'RoutePathReport',geometry:{type:'LineString',coordinates:[[-120,40],[-119.999,40]]}}];}
 test('all required restrictions must be explicit, not guessed from defaults',()=>{
   for(const key of ['heightFt','widthFt','lengthFt','weightLbs','axleCount','trailerCount','hazmatEnabled','hazardousGoods','avoidTolls','avoidFerries','avoidHighways','avoidResidential','avoidDirtRoads']){
     const bad=structuredClone(input);delete bad.truck[key];assert.throws(()=>buildTrimbleRouteRequest(bad,config));
@@ -14,15 +15,22 @@ test('invalid dimensions, weights, counts and coordinates fail before provider r
   for(const lat of [NaN,Infinity,91,-91,'40',null])assert.throws(()=>buildTrimbleRouteRequest({...input,origin:{lat,lng:-120}},config));
 });
 test('13 feet 6 inches remains decimal feet until the imperial vendor boundary',()=>{const route=buildTrimbleRouteRequest(input,config).ReportRoutes[0];assert.equal(route.Options.TruckCfg.Height,'162');assert.equal(route.Options.TruckCfg.Width,'102');assert.equal(route.Options.TruckCfg.Length,'636');assert.equal(route.Options.TruckCfg.Weight,'80000');});
-test('unsupported avoidance and contradictory hazmat cannot be silently dropped',()=>{
- for(const key of ['avoidHighways','avoidResidential','avoidDirtRoads'])assert.throws(()=>buildTrimbleRouteRequest({...input,truck:{...input.truck,[key]:true}},config),/cannot be guaranteed/);
+test('unsupported optional preferences are disclosed without weakening mandatory restrictions',()=>{
+ const base=buildTrimbleRouteRequest(input,config).ReportRoutes[0].Options;
+ for(let mask=0;mask<8;mask++){
+  const truck={...input.truck,avoidHighways:!!(mask&1),avoidResidential:!!(mask&2),avoidDirtRoads:!!(mask&4)};
+  assert.deepEqual(buildTrimbleRouteRequest({...input,truck},config).ReportRoutes[0].Options,base);
+  const route=parseTrimbleRouteResponse(payload(),{...input,truck},config);
+  assert.equal(route.preferenceWarnings.length,[1,2,4].filter(bit=>mask&bit).length);
+  assert(route.preferenceWarnings.every(w=>w.requested && !w.supported && !w.guaranteed && route.alerts.includes(w.message)));
+ }
  assert.throws(()=>buildTrimbleRouteRequest({...input,truck:{...input.truck,hazardousGoods:['explosive']}},config));
 });
 test('invalid vertices cannot be discarded to fabricate a connecting road',()=>{for(const point of [[NaN,40],[-120,91],['-120',40],[-120]]){const data=payload();data[2].geometry.coordinates.splice(1,0,point);assert.throws(()=>parseTrimbleRouteResponse(data,input,config));}});
 test('missing or malformed maneuver distance/time/instruction never becomes zero',()=>{
  for(const patch of [{Dist:null},{Dist:'-1'},{Time:null},{Time:'1:99'},{Time:'NaN'},{Direction:'',TurnInstruction:'TC_Left'}]){const data=payload();Object.assign(data[0].ReportLegs[0].ReportLines[0],patch);assert.throws(()=>parseTrimbleRouteResponse(data,input,config));}
 });
-test('empty directions and invalid summaries fail closed',()=>{for(const change of [(d)=>d[0].ReportLegs=[],(d)=>d[1].ReportLines[0].TMiles='-1',(d)=>d[1].ReportLines[0].THours=null]){const data=payload();change(data);assert.throws(()=>parseTrimbleRouteResponse(data,input,config));}});
+test('empty directions and invalid summaries fail closed',()=>{for(const change of [(d)=>d[0].ReportLegs=[],(d)=>d[1].ReportLines[1].TMiles='-1',(d)=>d[1].ReportLines[1].THours=null]){const data=payload();change(data);assert.throws(()=>parseTrimbleRouteResponse(data,input,config));}});
 test('validated RoutePath derives actual maneuver offset and matching distance',()=>{const route=parseTrimbleRouteResponse(payload(),input,config);assert.equal(route.turnByTurn[0].offset,1);assert.equal(route.turnByTurn[0].geometryMatchDistanceMeters,0);assert.equal(route.navigationAllowed,true);});
 test('provider timeout includes stalled response body',async()=>{
  const provider=new TrimbleRouteProvider(config,async(_url,init)=>({ok:true,status:200,text:()=>new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('secret'))))}));
@@ -33,3 +41,89 @@ test('restriction warnings cannot return truck-safe routing',()=>{const data=pay
 test('different provider route IDs cannot be spliced into one route',()=>{const data=payload();data[0].RouteID='first';data[1].RouteID='other';assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>e.code==='TRIMBLE_ROUTE_ID_MISMATCH');});
 
 test('provider deadline also bounds an unresponsive response body',async()=>{const provider=new TrimbleRouteProvider(config,async()=>({ok:true,status:200,text:()=>new Promise(()=>{})}));await assert.rejects(()=>provider.buildRoute(input),e=>e.code==='TRIMBLE_REQUEST_TIMEOUT');});
+
+
+import { env } from '../dist/config/env.js';
+import { buildTruckRoute, buildTrafficPreview, compareRoutes } from '../dist/services/routingService.js';
+import { HereRouteProvider } from '../dist/services/providers/hereProvider.js';
+
+test('legacy traffic preview cannot contact Mapbox or manufacture a passenger route', async t => {
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw Error('unexpected network'); });
+  await assert.rejects(() => buildTrafficPreview(input), e => e.code === 'PASSENGER_ROUTING_DISABLED' && e.httpStatus === 410);
+  assert.equal(network.mock.callCount(), 0);
+});
+test('commercial route refuses a configured non-Trimble provider', async t => {
+  const old = env.routingProvider;
+  const here = t.mock.method(HereRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected HERE route'); });
+  try { env.routingProvider = 'here'; await assert.rejects(() => buildTruckRoute(input), e => e.code === 'TRIMBLE_PROVIDER_REQUIRED'); }
+  finally { env.routingProvider = old; }
+  assert.equal(here.mock.callCount(), 0);
+});
+test('Trimble failure propagates without trying another provider', async t => {
+  const old = env.routingProvider;
+  const failure = new Error('fixture provider unavailable');
+  const calls = t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', async value => { assert.equal(value, input); throw failure; });
+  const here = t.mock.method(HereRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected fallback'); });
+  try { env.routingProvider = 'trimble'; await assert.rejects(() => buildTruckRoute(input), error => error === failure); }
+  finally { env.routingProvider = old; }
+  assert.equal(calls.mock.callCount(), 1); assert.equal(here.mock.callCount(), 0);
+});
+test('production cannot enable the legacy comparison route through a flag', async () => {
+  const old = [env.nodeEnv, env.routingCompareEnabled];
+  try { env.nodeEnv = 'production'; env.routingCompareEnabled = true;
+    await assert.rejects(() => compareRoutes(input), e => e.code === 'ROUTING_COMPARISON_DISABLED');
+  } finally { [env.nodeEnv, env.routingCompareEnabled] = old; }
+});
+
+function multistop(points){
+ return [{__type:'DirectionsReport',Origin:location(points[0]),Destination:location(points.at(-1)),ReportLegs:points.slice(1).map((p,i)=>({Origin:location(points[i]),Dest:location(p),ReportLines:[{Direction:'Destination',Dist:String(i+1),Time:'0:0'+(i+1)+':00',End:{Lat:p.lat,Lon:p.lng}}]}))},
+ {__type:'MileageReport',ReportLines:points.map((p,i)=>({Stops:location(p),TMiles:String(i),LMiles:i?'1':'0',THours:'0:0'+i+':00',LHours:i?'0:01:00':'0:00:00'}))},
+ {__type:'RoutePathReport',geometry:{type:'LineString',coordinates:points.map(p=>[p.lng,p.lat])}}];
+}
+test('complete two-point and ordered multi-stop reports prove every requested point',()=>{
+ for(const points of [[input.origin,input.destination],[input.origin,{lat:40.01,lng:-120},{lat:40.02,lng:-120},input.destination]]){
+ const route=parseTrimbleRouteResponse(multistop(points),{...input,viaStops:points.slice(1,-1)},config);
+ assert.equal(route.legs.length,points.length-1);assert.deepEqual(route.validatedStops,points);assert.equal(route.truckSafe,true);
+ assert.deepEqual(route.legs.map(l=>l.durationSeconds),Array(points.length-1).fill(60));}
+});
+test('omitted stops, wrong destination/order, missing metadata and incomplete legs fail closed',()=>{
+ const points=[input.origin,{lat:40.01,lng:-120},{lat:40.02,lng:-120},input.destination],request={...input,viaStops:points.slice(1,-1)};
+ for(const data of [multistop([points[0],points[3]]),multistop([points[0],points[2],points[1],points[3]]),multistop([...points.slice(0,-1),{lat:41,lng:-121}])])
+ assert.throws(()=>parseTrimbleRouteResponse(data,request,config),e=>e.code==='TRIMBLE_STOP_COVERAGE_UNPROVEN' && e.truckSafe===false && e.navigationAllowed===false);
+ for(const change of [d=>d[0].ReportLegs=[],d=>d[0].ReportLegs[1].ReportLines=[],d=>delete d[0].ReportLegs[1].Dest,
+ d=>d[1].ReportLines[1].Stops.Errors=['unmatched'],d=>d[2].geometry.coordinates.splice(1,2)]){
+ const data=multistop(points);change(data);assert.throws(()=>parseTrimbleRouteResponse(data,request,config),e=>e.code==='TRIMBLE_STOP_COVERAGE_UNPROVEN');}
+});
+test('stop metadata precision is bounded independently from RoutePath road matching',()=>{
+ const data=payload();data[0].Origin.Coords.Lat+=0.000001;assert.doesNotThrow(()=>parseTrimbleRouteResponse(data,input,config));
+ data[0].Origin.Coords.Lat+=0.0001;assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>e.code==='TRIMBLE_STOP_COVERAGE_UNPROVEN');
+});
+
+
+
+test('comparison cannot calculate or select a fallback in any environment or flag state', async t => {
+  const old = [env.nodeEnv, env.routingCompareEnabled];
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw Error('unexpected network'); });
+  const trimble = t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected comparison'); });
+  const here = t.mock.method(HereRouteProvider.prototype, 'buildRoute', async () => { throw Error('unexpected fallback'); });
+  try {
+    for (const mode of ['production', 'development', 'test']) for (const flag of [true, false]) {
+      env.nodeEnv = mode; env.routingCompareEnabled = flag;
+      await assert.rejects(() => compareRoutes(input), e => e.code === 'ROUTING_COMPARISON_DISABLED' && e.httpStatus === 410);
+    }
+  } finally { [env.nodeEnv, env.routingCompareEnabled] = old; }
+  assert.equal(network.mock.callCount(), 0);
+  assert.equal(trimble.mock.callCount(), 0);
+  assert.equal(here.mock.callCount(), 0);
+});
+
+import { spawnSync } from 'node:child_process';
+test('startup rejects non-Trimble routing configuration without exposing values', () => {
+  for (const provider of ['here', 'mapbox', 'tomtom']) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', 'import "./dist/config/env.js"'], {
+      env: {...process.env, NODE_ENV: 'test', ROUTING_PROVIDER: provider}, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /ROUTING_PROVIDER must be 'trimble'/);
+  }
+});

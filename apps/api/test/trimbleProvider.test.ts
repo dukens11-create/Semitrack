@@ -85,6 +85,18 @@ const input: RouteBuildInput = {
   alternatives: 2,
 };
 
+
+// Complete documented stop metadata for these two-point provider fixtures.
+function withStops(payload:any[], origin=input.origin, destination=input.destination){
+ const loc=(p:{lat:number;lng:number})=>({Coords:{Lat:p.lat,Lon:p.lng},Errors:[]});
+ const directions=payload.find(p=>p.__type.startsWith('DirectionsReport'));
+ directions.Origin=loc(origin);directions.Destination=loc(destination);
+ for(const leg of directions.ReportLegs){leg.Origin=loc(origin);leg.Dest=loc(destination);}
+ const mileage=payload.find(p=>p.__type.startsWith('MileageReport'));
+ mileage.ReportLines[0].Stops=loc(destination);mileage.ReportLines.unshift({Stops:loc(origin),LMiles:'0',TMiles:'0',LHours:'0:00:00',THours:'0:00:00'});
+ return payload;
+}
+
 test("Trimble request sends the commercial truck profile without weakening restrictions", () => {
   const request: any = buildTrimbleRouteRequest(input, config);
   const route = request.ReportRoutes[0];
@@ -215,7 +227,7 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
     },
   ];
 
-  const route = parseTrimbleRouteResponse(payload, input, config);
+  const route = parseTrimbleRouteResponse(withStops(payload), input, config);
   assert.equal(route.provider, "Trimble");
   assert.equal(route.truckSafe, true);
   assert.equal(route.navigationAllowed, false, "GeoTunnel can never authorize navigation");
@@ -261,7 +273,8 @@ test("Trimble prefers dense RoutePath geometry over sparse GeoTunnel samples", (
     },
   ];
 
-  const route = parseTrimbleRouteResponse(payload, input, routePathConfig);
+  const destination={lat:39.53,lng:-119.82};
+  const route = parseTrimbleRouteResponse(withStops(payload,input.origin,destination), {...input,destination}, routePathConfig);
   assert.equal(route.routeGeometry.length, 4);
   assert.deepEqual(route.routeGeometry[1], [-119.8105, 39.5204]);
 });
@@ -297,7 +310,7 @@ test("Trimble API key is sent only in the Authorization header", async () => {
     capturedUrl = String(url);
     capturedHeaders = init?.headers;
     capturedBody = String(init?.body ?? "");
-    return new Response(JSON.stringify([
+    return new Response(JSON.stringify(withStops([
       {
         __type: "DirectionsReport:http://pcmiler.alk.com/APIs/v1.0",
         RouteID: "secure-route",
@@ -312,10 +325,10 @@ test("Trimble API key is sent only in the Authorization header", async () => {
         __type: "GeoTunnelReport:http://pcmiler.alk.com/APIs/v1.0",
         GeoTunnelPoints: [{ Lat: "39.52", Lon: "-119.81" }, { Lat: "39.53", Lon: "-119.82" }],
       },
-    ]), { status: 200, headers: { "content-type": "application/json" } });
+    ],input.origin,{lat:39.53,lng:-119.82})), { status: 200, headers: { "content-type": "application/json" } });
   };
   const provider = new TrimbleRouteProvider(config, fetchMock);
-  await provider.buildRoute(input);
+  await provider.buildRoute({...input,destination:{lat:39.53,lng:-119.82}});
   const headers = new Headers(capturedHeaders);
   assert.equal(headers.get("authorization"), config.apiKey);
   assert.equal(capturedUrl.includes(config.apiKey), false);

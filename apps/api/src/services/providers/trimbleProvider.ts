@@ -1,3 +1,4 @@
+import { optionalPreferenceWarnings } from '../routingCapabilities.js';
 import { z } from "zod";
 import { routingTruckSchema } from "../../modules/trucks/truck.schemas.js";
 import { env } from "../../config/env.js";
@@ -114,7 +115,7 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
   const truck = checked.data.truck;
   const bodyType=truck.trailerType?.trim().toLowerCase();
   if (!bodyType || /caravan|rv/i.test(bodyType) || (bodyType==='no trailer') !== (truck.trailerCount===0)) throw new RoutingProviderError('Trimble','TRIMBLE_REQUEST_INVALID','Trailer type and count must describe the actual commercial vehicle.',422);
-  if (truck.avoidHighways || truck.avoidResidential || truck.avoidDirtRoads) throw new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_UNSUPPORTED','A selected road-avoidance restriction cannot be guaranteed by this provider.',422);
+  // Optional preferences are disclosed as unsupported; mandatory truck restrictions below remain enforced.
   const heightInches = truck.heightFt * 12;
   const widthInches = truck.widthFt * 12;
   const lengthInches = truck.lengthFt * 12;
@@ -298,6 +299,52 @@ function exitNumberFrom(instruction: string, interchange: unknown): string | und
   return instruction.match(/\bexit\s+([A-Z0-9-]+)/i)?.[1];
 }
 
+// Directions Report: each ReportLeg has Origin/Dest; Mileage Report has one Stops row per requested point.
+// https://developer.trimblemaps.com/restful-apis/routing/route-reports/directions/
+// https://developer.trimblemaps.com/restful-apis/routing/route-reports/mileage/
+// SemiTraX policy: 1 m for echoed stop-coordinate precision, never a road-snapping allowance.
+// RoutePath uses the existing 250 m measured geometry ceiling separately, with fixed endpoints and ordered visits.
+const STOP_METADATA_TOLERANCE_METERS = 1;
+function coverageFailure(): never {
+  throw new RoutingProviderError('Trimble','TRIMBLE_STOP_COVERAGE_UNPROVEN','The provider did not prove the complete requested stop plan.',422);
+}
+function checkedStop(value:any, expected:{lat:number;lng:number}) {
+  if (!value || (Array.isArray(value.Errors) && value.Errors.length)) coverageFailure();
+  const p=coordinate(value?.Coords);
+  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || Math.abs(p[0]!)>180 || Math.abs(p[1]!)>90) coverageFailure();
+  const actual={lat:p[1]!,lng:p[0]!};
+  if(distanceMeters(actual,expected)>STOP_METADATA_TOLERANCE_METERS)coverageFailure();
+  return actual;
+}
+function validatePathStops(geometry:number[][],points:{lat:number;lng:number}[]) {
+  if(geometry.length<2)coverageFailure();
+  let offset=0;
+  for(let i=0;i<points.length;i++){
+    let best=Infinity,next=offset;
+    const from=i===0?0:i===points.length-1?geometry.length-1:offset;
+    const end=i===0?1:geometry.length;
+    for(let j=from;j<end;j++){
+      const distance=distanceMeters(points[i]!,{lng:geometry[j]![0]!,lat:geometry[j]![1]!});
+      if(distance<best){best=distance;next=j;}
+    }
+    if(!Number.isFinite(best)||best>MANEUVER_MATCH_MAX_METERS)coverageFailure();
+    offset=next;
+  }
+}
+function validateStopCoverage(directions:any,mileage:any,geometry:number[][],input:RouteBuildInput){
+  const points=[input.origin,...(input.viaStops??[]),input.destination];
+  const legs=directions?.ReportLegs,rows=mileage?.ReportLines;
+  if(!Array.isArray(legs)||legs.length!==points.length-1||!Array.isArray(rows)||rows.length!==points.length)coverageFailure();
+  checkedStop(directions.Origin,points[0]!);checkedStop(directions.Destination,points.at(-1)!);
+  const validatedStops=points.map((point,index)=>checkedStop(rows[index]?.Stops,point));
+  legs.forEach((leg:any,index:number)=>{
+    checkedStop(leg.Origin,points[index]!);checkedStop(leg.Dest,points[index+1]!);
+    if(!Array.isArray(leg.ReportLines)||!leg.ReportLines.length)coverageFailure();
+  });
+  validatePathStops(geometry,points);
+  return validatedStops;
+}
+
 function parseDirectionLegs(report: any, geometry: number[][], mileageReport: any) {
   const mileageLines = Array.isArray(mileageReport?.ReportLines) ? mileageReport.ReportLines : [];
   const reportLegs = Array.isArray(report?.ReportLegs) ? report.ReportLegs : [];
@@ -307,8 +354,8 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
   const legs: RouteLeg[] = reportLegs.map((leg: any, legIndex: number) => {
     const lines = Array.isArray(leg?.ReportLines) ? leg.ReportLines : [];
     const maneuvers: RouteManeuver[] = [];
-    let lastDistance = legIndex === 0 ? 0 : finiteNumber(mileageLines[legIndex - 1]?.TMiles) ?? 0;
-    let lastDuration = legIndex === 0 ? 0 : clockToSeconds(mileageLines[legIndex - 1]?.THours);
+    let lastDistance = legIndex === 0 ? 0 : finiteNumber(mileageLines[legIndex]?.TMiles) ?? 0;
+    let lastDuration = legIndex === 0 ? 0 : clockToSeconds(mileageLines[legIndex]?.THours);
 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
@@ -349,7 +396,7 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       if (cumulativeDuration > 0) lastDuration = cumulativeDuration;
     }
 
-    const mileage = mileageLines[legIndex] ?? {};
+    const mileage = mileageLines[legIndex + 1] ?? {};
     if (!maneuvers.length || finiteNumber(mileage.LMiles) == null || finiteNumber(mileage.LMiles)! < 0 || !Number.isFinite(clockToSeconds(mileage.LHours))) throw new RoutingProviderError("Trimble","TRIMBLE_INCOMPLETE_ROUTE","Route leg data is incomplete.");
     return {
       distanceMiles: finiteNumber(mileage.LMiles)!,
@@ -420,7 +467,7 @@ export function matchTrimbleManeuversToGeometry(maneuvers: RouteManeuver[], geom
   });
 }
 
-function parseAlternateRoutes(reports: any[]): RouteOption[] {
+function parseAlternateRoutes(reports: any[], input: RouteBuildInput): RouteOption[] {
   const alternateReport = reportOfType(reports, "AlternateRoutesReport");
   const alternatives = Array.isArray(alternateReport?.AlternateRoutes) ? alternateReport.AlternateRoutes : [];
   return alternatives.flatMap((alternate: any, index: number) => {
@@ -430,6 +477,7 @@ function parseAlternateRoutes(reports: any[]): RouteOption[] {
     const distance = finiteNumber(path?.TDistance);
     const durationMinutes = finiteNumber(path?.TMinutes);
     if (geometry.length < 2 || distance == null || distance < 0 || durationMinutes == null || durationMinutes <= 0) throw new RoutingProviderError("Trimble", "TRIMBLE_ALTERNATIVE_INVALID", "Alternative route data is invalid.");
+    validatePathStops(geometry,[input.origin,...(input.viaStops??[]),input.destination]);
     const durationSeconds = Math.round(durationMinutes * 60);
     return [{
       id: String(path?.RouteID ?? `trimble-alternative-${index + 1}`),
@@ -494,6 +542,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     );
   }
 
+  const validatedStops=validateStopCoverage(directions,mileage,routeGeometry,input);
   const { legs, warnings } = parseDirectionLegs(directions, routeGeometry, mileage);
   if (!legs.length) throw new RoutingProviderError("Trimble", "TRIMBLE_INCOMPLETE_ROUTE", "No route legs were returned.");
   const matchedManeuvers = matchTrimbleManeuversToGeometry(
@@ -506,9 +555,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     maneuvers: leg.maneuvers.map(() => matchedManeuvers[matchedIndex++]!),
   }));
   const alerts = [...new Set(warnings)];
-  if (input.truck.avoidResidential) alerts.push("Trimble does not expose a direct avoid-residential Route Reports option; truck restrictions remain enforced.");
-  if (input.truck.avoidHighways) alerts.push("Trimble does not expose a direct avoid-highways Route Reports option; Practical truck routing was used.");
-  if (input.truck.avoidDirtRoads) alerts.push("Trimble Route Reports does not expose a verified dirt-road avoidance field; no unsupported option was sent.");
+  alerts.push(...optionalPreferenceWarnings(input.truck).map(warning => warning.message));
   if ((input.alternatives ?? 0) > 0 && !(config.routePathEnabled && config.alternateRoutesEnabled)) {
     alerts.push("Trimble alternatives were not requested because RoutePath and Alternate Routes entitlements are disabled.");
   }
@@ -527,7 +574,9 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     routeGeometry,
     legs: matchedLegs,
     turnByTurn: matchedManeuvers,
-    alternatives: parseAlternateRoutes(reports),
+    alternatives: parseAlternateRoutes(reports,input),
+    validatedStops,
+    preferenceWarnings: optionalPreferenceWarnings(input.truck),
     alerts,
   };
 }

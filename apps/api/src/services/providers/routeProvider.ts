@@ -1,6 +1,8 @@
 import type { RouteBuildInput, RouteBuildResult, RoutingProviderName } from "../../types.js";
 
 export class RoutingProviderError extends Error {
+  readonly truckSafe = false;
+  readonly navigationAllowed = false;
   readonly provider: RoutingProviderName;
   readonly code: string;
   readonly httpStatus: number;

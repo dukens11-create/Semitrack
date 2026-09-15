@@ -72,6 +72,7 @@ export type RouteOption = {
 };
 
 export type RouteBuildResult = {
+  validatedStops?: Array<{lat:number;lng:number}>;
   provider: RoutingProviderName;
   truckSafe: boolean;
   navigationAllowed: boolean;

@@ -138,7 +138,7 @@ export function PlanningScreen({
     }
     return { lat: fix.latitude, lng: fix.longitude };
   }
-  async function calculate(plan: StopPlan) {
+  async function calculate(plan: StopPlan, alternatives = 0) {
     const truck = services.trucks.getSnapshot().selected;
     if (!truck) {
       throw new DriverError('VERIFIED_TRUCK_REQUIRED');
@@ -160,7 +160,7 @@ export function PlanningScreen({
       setAcquiringGps(false);
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
-    if (await services.routes.calculate(origin(), plan, truck)) {
+    if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
       searchStore.cancel();
       setDetail(null);
       closeSheet();
@@ -656,6 +656,11 @@ export function PlanningScreen({
               <DriverCopy>
                 Final destination: {routes.plan.destination.name}
               </DriverCopy>
+              <DriverButton
+                title="Compare alternatives"
+                disabled={pending}
+                onPress={() => { void run(() => calculate(routes.plan!, 2)); }}
+              />
               <DriverButton
                 title="Recalculate from current location"
                 disabled={pending}

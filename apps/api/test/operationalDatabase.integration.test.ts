@@ -13,3 +13,24 @@ test('database rejects cross-owner confirmation and invalid units without mutati
 test('database concurrent edits cannot silently overwrite reviewed revision', {skip:!enabled},async()=>{const p=await db();const {saveTruck}=await import('../dist/modules/trucks/profileRevision.js');const a=await user(p);const t=await saveTruck(p,a.id,a.id,profile);const outcomes=await Promise.allSettled([saveTruck(p,a.id,a.id,{heightFt:14},t.id,1),saveTruck(p,a.id,a.id,{heightFt:14.5},t.id,1)]);assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);assert.equal((await p.truck.findUniqueOrThrow({where:{id:t.id}})).revision,2);});
 test('database revocation immediately invalidates access-session ownership and suspension', {skip:!enabled},async()=>{const p=await db();const {currentAccessSession}=await import('../dist/services/accessSession.js');const a=await user(p);const s=await p.refreshToken.create({data:{userId:a.id,tokenHash:crypto.randomBytes(32).toString('hex'),expiresAt:new Date(Date.now()+60000)}});const claims={userId:a.id,sessionId:s.id};assert.equal((await currentAccessSession(p,claims)).id,a.id);assert.equal(await currentAccessSession(p,{...claims,userId:'someone-else'}),null);await p.refreshToken.update({where:{id:s.id},data:{revokedAt:new Date()}});assert.equal(await currentAccessSession(p,claims),null);});
 test('database fleet scope denies nonmembers and immediately applies staff demotion', {skip:!enabled},async()=>{const p=await db();const {operationalActor,requireDriver,requirePermission}=await import('../dist/modules/admin/operationalPolicy.js');const staff=await user(p),driver=await user(p),other=await user(p);const fleet=await p.operationalFleet.create({data:{name:'Isolated fleet'}});const grant=await p.staffAccess.create({data:{userId:staff.id,role:'OPERATIONS',fleets:{create:{fleetId:fleet.id}}}});await p.operationalFleetDriver.create({data:{userId:driver.id,fleetId:fleet.id}});const actor=await operationalActor(p,{userId:staff.id,role:staff.role});await requireDriver(p,actor,driver.id);await assert.rejects(()=>requireDriver(p,actor,other.id));await p.staffAccess.update({where:{id:grant.id},data:{role:'READ_ONLY'}});const current=await operationalActor(p,{userId:staff.id,role:staff.role});assert.throws(()=>requirePermission(current,'trucks.edit'));});
+
+test('durable create operation survives lost response, concurrency and owner isolation', {skip:!enabled},async()=>{
+ const p=await db();const {saveTruck}=await import('../dist/modules/trucks/profileRevision.js');
+ const a=await user(p),b=await user(p);const createOperationId=crypto.randomUUID();const body={...profile,createOperationId};
+ const committed=await saveTruck(p,a.id,a.id,body); // response intentionally discarded by caller
+ const replay=await saveTruck(p,a.id,a.id,body);
+ assert.equal(replay.id,committed.id);assert.equal(replay.revision,1);assert.equal(await p.truck.count({where:{userId:a.id}}),1);
+ assert.equal(await p.adminAuditLog.count({where:{targetId:committed.id,action:'TRUCK_CREATED'}}),1);
+ await assert.rejects(()=>saveTruck(p,a.id,a.id,{...body,heightFt:14}),e=>e.safeCode==='TRUCK_CREATE_OPERATION_CONFLICT');
+ const other=await saveTruck(p,b.id,b.id,body);assert.notEqual(other.id,committed.id);assert.equal(other.userId,b.id);
+ const operation={...profile,createOperationId:crypto.randomUUID()};
+ const concurrent=await Promise.all([saveTruck(p,a.id,a.id,operation),saveTruck(p,a.id,a.id,operation)]);
+ assert.equal(concurrent[0].id,concurrent[1].id);assert.notEqual(concurrent[0].id,committed.id);
+ assert.equal(await p.truck.count({where:{userId:a.id}}),2);
+ const edited=await saveTruck(p,a.id,a.id,{heightFt:14},committed.id,1);
+ assert.equal((await saveTruck(p,a.id,a.id,body)).revision,1);
+ assert.equal((await p.truck.findUniqueOrThrow({where:{id:committed.id}})).revision,edited.revision);
+ await p.truck.delete({where:{id:committed.id}});
+ await assert.rejects(()=>saveTruck(p,a.id,a.id,body),e=>e.safeCode==='TRUCK_CREATE_RESULT_REMOVED');
+ assert.equal(await p.truck.count({where:{userId:a.id}}),1);
+});

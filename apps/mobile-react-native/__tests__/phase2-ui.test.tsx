@@ -236,7 +236,8 @@ test('real route preview labels estimates and keeps unverified guidance disabled
   });
   await press('Review route and stops');
   expect(content()).toContain('planning estimates');
-  expect(content()).toContain('Alternative route selection is unavailable');
+  expect(content()).toContain('No alternatives were returned');
+  expect(button('Compare alternatives')).toBeDefined();
   expect(button('Start navigation — unavailable').props.disabled).toBe(true);
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
@@ -498,7 +499,7 @@ test('route selection requests GPS and sends the exact fresh origin only after a
     expect(content()).toContain('Acquiring a fresh precise GPS fix'); expect(calculate).not.toHaveBeenCalled(); expect(gps.provider.permission).toHaveBeenCalledWith(false);
     await act(async () => { gps.emit(); });
     expect(calculate).toHaveBeenCalledTimes(1);
-    expect(calculate).toHaveBeenCalledWith({ lat: 40.25, lng: -100.5 }, expect.objectContaining({ destination: expect.objectContaining({ id: 'dest' }) }), truck);
+    expect(calculate).toHaveBeenCalledWith({ lat: 40.25, lng: -100.5 }, expect.objectContaining({ destination: expect.objectContaining({ id: 'dest' }) }), truck, 0);
   } finally { await act(async () => { await gps.service.stop(); }); AppState.currentState = previousAppState; }
 });
 test('closing destination sheet while acquiring GPS never dispatches a late route', async () => {
@@ -518,4 +519,15 @@ test('changed truck during GPS acquisition is rejected before routing', async ()
     const next = { ...services.trucks.getSnapshot(), selected: { ...truck } }; jest.spyOn(services.trucks, 'getSnapshot').mockReturnValue(next);
     await act(async () => { gps.emit(); }); expect(calculate).not.toHaveBeenCalled(); expect(content()).toContain('verified truck profile first');
   } finally { await act(async () => { await gps.service.stop(); }); AppState.currentState = previousAppState; }
+});
+
+test('alternative geometry renders as comparison only without replacing the primary route', async () => {
+  const primary=route(); const geometry:[number,number][]=[[-100,40],[-100.01,40.001],[-100.02,40]];
+  primary.alternatives=[{id:'alternate-fixture',routeGeometry:geometry,distanceMiles:13,durationSeconds:1260,etaMinutes:21,
+    legs:[],turnByTurn:[],notices:[{code:'TRIMBLE_ALTERNATE_PREVIEW'}]}];
+  await act(async()=>{screen=create(<TruckMap token="pk.fixture" route={primary} plan={null} fix={null} night={false} pois={[]}/>);});
+  const sources=screen.root.findAllByType(Mapbox.ShapeSource);
+  expect(sources.find(n=>n.props.id==='truck-route')?.props.shape.geometry.coordinates).toEqual(primary.routeGeometry);
+  expect(sources.find(n=>n.props.id==='truck-alternative-0')?.props.shape).toMatchObject({properties:{previewOnly:true},geometry:{coordinates:geometry}});
+  expect(primary.selectedRouteId).toBe('test-route'); expect(primary.turnByTurn).toHaveLength(2);
 });

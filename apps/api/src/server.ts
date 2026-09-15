@@ -223,7 +223,7 @@ app.patch("/me", requireAuth, asyncRoute(async (req, res) => {
 app.get('/trucks', requireAuth, asyncRoute(async (req,res)=>{
  const items=await prisma.truck.findMany({where:{userId:req.user!.userId},orderBy:[{isDefault:'desc'},{updatedAt:'desc'}]});res.json({items:items.map(publicTruck)});
 }));
-app.post('/trucks',requireAuth,asyncRoute(async(req,res)=>{res.status(201).json(await saveTruck(prisma,req.user!.userId,req.user!.userId,req.body));}));
+app.post('/trucks',requireAuth,asyncRoute(async(req,res)=>{z.object({createOperationId:z.string().uuid()}).parse(req.body);res.status(201).json(await saveTruck(prisma,req.user!.userId,req.user!.userId,req.body));}));
 app.patch('/trucks/:id',requireAuth,asyncRoute(async(req,res)=>{
  const {expectedRevision}=z.object({expectedRevision:z.number().int().positive()}).parse(req.body);
  res.json(await saveTruck(prisma,req.user!.userId,req.user!.userId,req.body,String(req.params.id),expectedRevision));
@@ -772,6 +772,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
       crypto.randomUUID(), _req.path.slice(0, 300), _req.method.slice(0, 12), error.httpStatus, error.code.slice(0, 120),
     ).catch(() => undefined);
     return res.status(error.httpStatus).json({
+      truckSafe: error.truckSafe,
+      navigationAllowed: error.navigationAllowed,
       error: {
         code: error.code,
         message: error.message,

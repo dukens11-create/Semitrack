@@ -7,7 +7,7 @@ import {
   DriverTitle,
   useDriverPalette,
 } from '../../components/DriverUI';
-export function routeEstimate(route: TruckRoute, metric: boolean) {
+export function routeEstimate(route: Pick<TruckRoute, 'durationSeconds' | 'distanceMiles'>, metric: boolean) {
   const minutes = Math.ceil(route.durationSeconds / 60);
   return {
     distance:
@@ -68,9 +68,20 @@ export function RoutePreview({
           {estimate.distance} · {estimate.duration}
         </Text>
       </View>
+      {route.alternatives.map((alternative, index) => {
+        const summary = routeEstimate(alternative, metric);
+        return (
+          <View key={alternative.id} style={styles.alternative}>
+            <DriverTitle small>Alternative {index + 1} · planning preview</DriverTitle>
+            <DriverCopy>{summary.distance} · {summary.duration}</DriverCopy>
+            <DriverCopy>Purple dashed line on the map. This is not the selected route.</DriverCopy>
+          </View>
+        );
+      })}
       <DriverCopy>
-        Alternative route selection is unavailable. The current integration
-        requests one validated truck route.
+        {route.alternatives.length
+          ? 'Alternatives are comparison previews only. The API does not yet support selecting and recalculating an alternative for guidance. The primary route and ordered stops remain selected.'
+          : 'No alternatives were returned for this request. Use Compare alternatives to request them when the Trimble entitlement is available.'}
       </DriverCopy>
       {route.alerts.map((alert, index) => (
         <Text key={index} accessibilityRole="alert" style={styles.alert}>
@@ -100,6 +111,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     gap: 6,
   },
+  alternative: { padding: 12, gap: 6, borderWidth: 1, borderRadius: 10, borderColor: '#8B5CF6' },
   selectedTitle: { color: '#1565C0', fontWeight: '800' },
   selectedCopy: { color: '#526273', fontSize: 12 },
   alert: { color: '#B42318', fontSize: 14, lineHeight: 20 },

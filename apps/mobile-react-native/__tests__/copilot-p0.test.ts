@@ -203,9 +203,13 @@ test('passing prerequisites permits profile assessment only, never activates nav
 });
 test('every SemiTraX truck field has an explicit classification', () => {
   expect(Object.keys(copilotTruckFieldMatrix).sort()).toEqual(
-    Object.keys(truck).sort(),
+    Object.keys({ ...truck, createOperationId: undefined }).sort(),
   );
 });
+test('create-operation identity is metadata, never a CoPilot routing field', () => {
+  expect(copilotTruckFieldMatrix.createOperationId.routing).toBe(false);
+});
+
 test('dimensions convert upward; pounds and the input remain unchanged', () => {
   const original = JSON.stringify(truck);
   const result = assessCopilotTruckProfile({ ...truck, heightFt: 13.51 });

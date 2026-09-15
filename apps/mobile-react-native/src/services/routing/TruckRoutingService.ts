@@ -8,7 +8,7 @@ import {
   type Coordinate,
   type TruckProfile,
 } from '../../models/contracts';
-import type { StopPlan } from '../../features/stops/StopPlan';
+import { validateStopPlan, type StopPlan } from '../../features/stops/StopPlan';
 export class TruckRoutingService {
   constructor(private api: ApiClient) {}
   async calculate(
@@ -16,8 +16,11 @@ export class TruckRoutingService {
     plan: StopPlan,
     truck: TruckProfile,
     signal?: AbortSignal,
+    alternatives = 0,
   ) {
     if (!truck.id || !isServerVerifiedTruck(truck)) throw new TruckProfileError();
+    validateStopPlan(plan);
+    if (!Number.isInteger(alternatives) || alternatives < 0 || alternatives > 3) throw new Error('Invalid alternative count');
     // Exactly one request for the entire authoritative plan. Never skip a failed leg.
     return parseTruckRoute(
       await this.api.request(
@@ -31,10 +34,11 @@ export class TruckRoutingService {
           truckProfileId: truck.id,
           truckRevision: truck.revision,
           routeMode: 'fastest',
-          alternatives: 0,
+          alternatives,
         },
         signal,
       ),
+      [origin, ...plan.stops, plan.destination],
     );
   }
 }

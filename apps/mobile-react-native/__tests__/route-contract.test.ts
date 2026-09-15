@@ -92,3 +92,18 @@ test('validation failures and raw responses never become driver-facing error tex
     );
   }
 });
+
+
+test('maneuver step ordering is enforced independently of geometry offsets', () => {
+  for (const step of [1,0]) expect(() => parseTruckRoute({...input,
+    turnByTurn:[input.turnByTurn[0],{...input.turnByTurn[1],step}]})).toThrow(DriverError);
+});
+test('alternative previews cannot duplicate route identities or smuggle mismatched legs', () => {
+  const alternative = {id:'alt',distanceMiles:1,durationSeconds:60,etaMinutes:1,routeGeometry:input.routeGeometry,
+    legs:[],turnByTurn:[],notices:[{code:'TRIMBLE_ALTERNATE_PREVIEW'}]};
+  expect(parseTruckRoute({...input,alternatives:[alternative]}).alternatives[0]?.turnByTurn).toEqual([]);
+  for (const alternatives of [[alternative,alternative],[{...alternative,id:input.selectedRouteId}],
+    [{...alternative,legs:[{distanceMiles:1,durationSeconds:60,geometry:[],maneuvers:[maneuver]}]}],
+    [{...alternative,notices:[]}], [{...alternative,routeGeometry:[[181,40],[0,40]]}]])
+    expect(()=>parseTruckRoute({...input,alternatives})).toThrow(DriverError);
+});

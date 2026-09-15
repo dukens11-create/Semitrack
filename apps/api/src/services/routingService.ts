@@ -71,7 +71,11 @@ export function configuredRoutingProviderName() {
 }
 
 export async function buildTruckRoute(input: RouteBuildInput) {
-  const provider = selectedTruckProvider();
+  if (env.routingProvider !== "trimble") {
+    throw new RoutingProviderError("Trimble", "TRIMBLE_PROVIDER_REQUIRED",
+      "Commercial truck routing requires the configured Trimble provider.", 503);
+  }
+  const provider = trimble;
   const route = await provider.buildRoute(input);
   if (!route.truckSafe || !route.navigationAllowed) {
     throw new RoutingProviderError(
@@ -90,7 +94,7 @@ export async function buildTrafficPreview(input: RouteBuildInput) {
 }
 
 export async function compareRoutes(input: RouteBuildInput) {
-  if (!env.routingCompareEnabled) {
+  if (env.nodeEnv === "production" || !env.routingCompareEnabled) {
     throw new RoutingProviderError(
       "Trimble",
       "ROUTING_COMPARISON_DISABLED",

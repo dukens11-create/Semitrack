@@ -60,3 +60,15 @@ export function intermediateArrival(plan: StopPlan, id: string): StopPlan {
   }
   return { ...plan, stops: plan.stops.slice(1) };
 }
+
+/** Validate the complete runtime boundary, including plans not made by UI helpers. */
+export function validateStopPlan(plan: StopPlan): void {
+  valid(plan.destination);
+  if (!Array.isArray(plan.stops) || plan.stops.length > 20) throw new Error('Invalid stop count.');
+  const ids = new Set([plan.destination.id]);
+  for (const stop of plan.stops) {
+    valid(stop);
+    if (ids.has(stop.id)) throw new Error('Duplicate stop identity.');
+    ids.add(stop.id);
+  }
+}

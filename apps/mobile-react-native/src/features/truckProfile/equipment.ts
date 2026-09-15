@@ -87,13 +87,14 @@ export function verifyRoutingProfile(value: unknown): TruckProfile {
   return truck;
 }
 export function profileFingerprint(profile: TruckProfile): string {
-  const { isDefault: _default, verifiedRevision: _verifiedRevision, verifiedAt: _verifiedAt, verificationState: _state, ...values } = truckSchema.parse(profile);
+  const { createOperationId: _operation, isDefault: _default, verifiedRevision: _verifiedRevision, verifiedAt: _verifiedAt, verificationState: _state, ...values } = truckSchema.parse(profile);
   return JSON.stringify(values);
 }
 export function duplicateProfile(profile: TruckProfile): TruckProfile {
   return {
     ...profile,
     id: '',
+    createOperationId: undefined,
     revision: undefined, verifiedRevision: undefined, verifiedAt: undefined, verificationState: undefined,
     name: profile.name.slice(0, 73) + ' (copy)',
     isDefault: false,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Switch, TextInput } from 'react-native';
+import { Modal, Switch, TextInput } from 'react-native';
 import { TruckProfileScreen } from '../src/screens/TruckProfileScreen';
 import { TruckProfileStore } from '../src/features/truckProfile/TruckProfileStore';
 import {
@@ -47,6 +47,7 @@ function setup(profiles: TruckProfile[] = [{ ...valid }]) {
   const store = new TruckProfileStore(
     { request } as unknown as ApiClient,
     onChange,
+    async () => '11111111-1111-4111-8111-111111111111',
   );
   return {
     store,
@@ -98,7 +99,7 @@ test('sign-out during activation cannot restore confirmation', async () => {
   const activation = store.select(valid);
   store.clear();
   pending.resolve(undefined);
-  await expect(activation).rejects.toThrow('Session changed');
+  await expect(activation).rejects.toMatchObject({code:'SESSION_CHANGED'});
   expect(store.getSnapshot().selected).toBeNull();
 });
 test('duplicate preserves actual specs but gets no id or default selection', () => {
@@ -313,4 +314,63 @@ test('rapid confirmation taps issue exactly one profile mutation',async()=>{
  const confirm=screen!.root.findAllByType(Button).find(b=>b.props.title==='Confirm & Use')!;
  await act(async()=>{confirm.props.onPress();confirm.props.onPress();});
  expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+});
+
+
+test('confirmation reloads remote revision and never automatically verifies changed values', async () => {
+  const {store,request,mutate} = setup(); await store.load();
+  mutate([{...valid,revision:2,heightFt:14,verifiedRevision:null,verificationState:'ADMIN_UPDATED'}]);
+  await expect(store.select(valid)).rejects.toMatchObject({code:'TRUCK_PROFILE_CHANGED'});
+  expect(store.getSnapshot().profiles[0]?.heightFt).toBe(14);
+  expect(request.mock.calls.some(call=>call[1].endsWith('/verify'))).toBe(false);
+});
+test('409 verification refreshes state once without retrying the mutation', async () => {
+  const {store,request} = setup(); await store.load();
+  const original=request.getMockImplementation()!;
+  request.mockImplementation(async (method,path,body)=>{if(path.endsWith('/verify'))throw {status:409};return original(method,path,body);});
+  await expect(store.select(valid)).rejects.toMatchObject({code:'TRUCK_PROFILE_CHANGED'});
+  expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(1);
+  expect(store.getSnapshot().selected).toBeNull();
+});
+test('successful create retains its identity before any later readback failure', async () => {
+  const {store,request}=setup([]); const original=request.getMockImplementation()!;
+  request.mockImplementation(async (method,path,body)=>{if(method==='GET')throw {status:503};return original(method,path,body);});
+  const saved=await store.save(duplicateProfile(valid));
+  expect(saved.id).toBe('new-truck'); expect(store.getSnapshot().profiles[0]?.id).toBe(saved.id);
+  await expect(store.select(saved)).rejects.toMatchObject({status:503});
+  expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+});
+
+test('retry after successful create and failed verification never posts a second profile', async () => {
+  const {request}=await mount(); const original=request.getMockImplementation()!;
+  request.mockImplementation(async(method,path,body)=>{if(path.endsWith('/verify'))throw {status:503};return original(method,path,body);});
+  await press('Duplicate'); await press('Review truck profile');
+  const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
+  await acknowledge(); await press('Confirm & Use');
+  expect(screen!.root.findAllByType(Button).find(b=>b.props.title==='Confirm & Use')!.props.disabled).toBe(true);
+  await acknowledge(); await press('Confirm & Use');
+  expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+  expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(2);
+});
+
+test('created identity survives failed verify, Android Back and reopening review', async () => {
+ const {request}=await mount();const original=request.getMockImplementation()!;
+ request.mockImplementation(async(method,path,body)=>{if(path.endsWith('/verify'))throw {status:503};return original(method,path,body);});
+ await press('Duplicate');await press('Review truck profile');
+ const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
+ await acknowledge();await press('Confirm & Use');
+ await act(async()=>screen!.root.findByType(Modal).props.onRequestClose());
+ await press('Review truck profile');await acknowledge();await press('Confirm & Use');
+ expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+ expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(2);
+});
+test('ambiguous create retries the same operation, including after dialog close',async()=>{
+ const {request}=await mount();const original=request.getMockImplementation()!;let lost=true;
+ request.mockImplementation(async(method,path,body)=>{if(method==='POST'&&path==='/trucks'&&lost){lost=false;await original(method,path,body);throw {code:'REQUEST_TIMEOUT',status:0};}return original(method,path,body);});
+ await press('Duplicate');await press('Review truck profile');
+ const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
+ await acknowledge();await press('Confirm & Use');await act(async()=>screen!.root.findByType(Modal).props.onRequestClose());
+ await press('Review truck profile');await acknowledge();await press('Confirm & Use');
+ const creates=request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks');
+ expect(creates).toHaveLength(2);expect(creates[0]![2]?.createOperationId).toBeTruthy();expect(creates[1]![2]?.createOperationId).toBe(creates[0]![2]?.createOperationId);
 });

@@ -22,6 +22,7 @@ export const hazardousGoods = [
 export const truckSchema = z
   .object({
     id: z.string().default(''),
+    createOperationId: z.string().uuid().optional(),
     revision: z.number().int().positive().optional(),
     verifiedRevision: z.number().int().positive().nullable().optional(),
     verifiedAt: z.string().datetime({ offset: true }).nullable().optional(),
@@ -72,7 +73,7 @@ export function isServerVerifiedTruck(profile: TruckProfile) {
   return profile.isDefault && !!profile.revision && profile.verifiedRevision === profile.revision && profile.verificationState === 'VERIFIED' && !!profile.verifiedAt;
 }
 export function serializeTruck(profile: TruckProfile, routing = false) {
-  const { id: _id, revision: _revision, verifiedRevision: _verifiedRevision, verifiedAt: _verifiedAt, verificationState: _verificationState, ...body } = truckSchema.parse(profile);
+  const { createOperationId: _operation, id: _id, revision: _revision, verifiedRevision: _verifiedRevision, verifiedAt: _verifiedAt, verificationState: _verificationState, ...body } = truckSchema.parse(profile);
   if (!routing) {
     return body;
   }
@@ -122,6 +123,7 @@ const routePosition = z.tuple([z.number().finite().min(-180).max(180),z.number()
 const legSchema = z.object({distanceMiles:z.number().finite().nonnegative(),durationSeconds:z.number().int().nonnegative(),geometry:z.array(routePosition).max(200000),maneuvers:z.array(maneuverSchema).min(1).max(50000)});
 const alternativeSchema = z.object({id:z.string().min(1),distanceMiles:z.number().finite().nonnegative(),etaMinutes:z.number().finite().nonnegative(),durationSeconds:z.number().int().positive(),routeGeometry:z.array(routePosition).min(2).max(200000),legs:z.array(legSchema).max(22),turnByTurn:z.array(maneuverSchema).max(50000),notices:z.array(z.object({code:z.string().min(1),title:z.string().optional(),severity:z.string().optional()})).max(100)});
 export const routeSchema = z.object({
+  validatedStops: z.array(coordinateSchema).min(2).max(22).optional(),
   provider: z.literal('Trimble'),
   truckSafe: z.literal(true),
   navigationAllowed: z.literal(true),
@@ -138,32 +140,47 @@ export const routeSchema = z.object({
         z.number().finite().min(-90).max(90),
       ]),
     )
-    .min(2),
+    .min(2).max(200000),
   turnByTurn: z.array(maneuverSchema).min(1).max(50000),
   alerts: z.array(z.string()),
   legs: z.array(legSchema).max(22).default([]),
   alternatives: z.array(alternativeSchema).max(5).default([]),
 });
 export type TruckRoute = z.infer<typeof routeSchema>;
-export function parseTruckRoute(value: unknown): TruckRoute {
+export function parseTruckRoute(value: unknown, requestedStops?: readonly Coordinate[]): TruckRoute {
   const parsed = routeSchema.safeParse(value);
   if (!parsed.success) throw new DriverError('ROUTE_CONTRACT_INVALID');
   const route = parsed.data;
+  if (requestedStops) {
+    if (!route.validatedStops || route.validatedStops.length !== requestedStops.length || route.legs.length !== requestedStops.length - 1) throw new DriverError('ROUTE_CONTRACT_INVALID');
+    for (let i=0;i<requestedStops.length;i++) {
+      const expected=requestedStops[i]!, actual=route.validatedStops[i]!;
+      // One metre-equivalent coordinate precision; API separately proves road-path coverage.
+      if (Math.hypot(expected.lat-actual.lat,(expected.lng-actual.lng)*Math.cos(expected.lat*Math.PI/180))>0.0000089) throw new DriverError('ROUTE_CONTRACT_INVALID');
+    }
+  }
   if (route.etaMinutes !== Math.ceil(route.durationSeconds / 60)) throw new DriverError('ROUTE_CONTRACT_INVALID');
   let previous = -1;
+  let previousStep = 0;
   for (const maneuver of route.turnByTurn) {
     if (
+      maneuver.step <= previousStep ||
       maneuver.offset < previous ||
       maneuver.offset >= route.routeGeometry.length
     ) {
       throw new DriverError('ROUTE_CONTRACT_INVALID');
     }
     previous = maneuver.offset;
+    previousStep = maneuver.step;
   }
+  const ids = new Set([route.selectedRouteId]);
   for (const alternative of route.alternatives) {
+    if (ids.has(alternative.id)) throw new DriverError('ROUTE_CONTRACT_INVALID');
+    ids.add(alternative.id);
     if (alternative.etaMinutes !== Math.ceil(alternative.durationSeconds / 60)) throw new DriverError('ROUTE_CONTRACT_INVALID');
-    let offset=-1;
-    for(const maneuver of alternative.turnByTurn){if(maneuver.offset<offset||maneuver.offset>=alternative.routeGeometry.length)throw new DriverError('ROUTE_CONTRACT_INVALID');offset=maneuver.offset;}
+    let offset=-1, step=0;
+    for(const maneuver of alternative.turnByTurn){if(maneuver.step<=step||maneuver.offset<offset||maneuver.offset>=alternative.routeGeometry.length)throw new DriverError('ROUTE_CONTRACT_INVALID');offset=maneuver.offset;step=maneuver.step;}
+    if (alternative.legs.length && JSON.stringify(alternative.legs.flatMap(leg => leg.maneuvers)) !== JSON.stringify(alternative.turnByTurn)) throw new DriverError('ROUTE_CONTRACT_INVALID');
     if(!alternative.turnByTurn.length&&!alternative.notices.some(n=>n.code==='TRIMBLE_ALTERNATE_PREVIEW'))throw new DriverError('ROUTE_CONTRACT_INVALID');
   }
   if(route.legs.length){

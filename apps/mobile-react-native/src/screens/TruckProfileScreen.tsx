@@ -269,12 +269,15 @@ export function TruckProfileScreen({ services }: { services: Services }) {
       if (mounted.current) setBusy(false);
     }
   }
-  function openReview(profile?: TruckProfile) {
+  async function openReview(profile?: TruckProfile) {
     setError(undefined);
     try {
-      const checked = profile
+      let checked = profile
         ? verifyRoutingProfile(profile)
         : parseTruckForm(form);
+      checked = await services.trucks.prepareCreate(checked);
+      if (!mounted.current) return;
+      if (!checked.id) setForm(current => ({...current, createOperationId: checked.createOperationId}));
       setFieldErrors({});
       Keyboard.dismiss();
       setAcknowledged(false);
@@ -287,14 +290,28 @@ export function TruckProfileScreen({ services }: { services: Services }) {
     if (!review || !acknowledged) return;
     const checked = review.profile;
     const saved = review.save ? await services.trucks.save(checked) : checked;
+    if (!mounted.current) return;
+    setForm(formFrom(saved));
+    setReview({ profile: saved, save: false });
     if (
       profileFingerprint({ ...checked, id: saved.id, revision: saved.revision }) !==
       profileFingerprint(saved)
-    )
+    ) {
+      setAcknowledged(false);
       throw new Error(
         'The server returned different profile values. Edit and review the saved profile again.',
       );
-    await services.trucks.select(saved);
+    }
+    try {
+      await services.trucks.select(saved);
+    } catch (failure) {
+      if (mounted.current) {
+        setAcknowledged(false);
+        const latest = services.trucks.getSnapshot().profiles.find(item => item.id === saved.id);
+        if (latest) setReview({ profile: latest, save: false });
+      }
+      throw failure;
+    }
     if (!mounted.current) return;
     setReview(undefined);
     edit();
@@ -362,7 +379,7 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           <Button
             title="Set Active"
             disabled={busy || state.selected?.id === profile.id}
-            onPress={() => openReview(profile)}
+            onPress={() => { void run(() => openReview(profile)); }}
           />
         </Card>
       ))}
@@ -590,7 +607,7 @@ export function TruckProfileScreen({ services }: { services: Services }) {
       <Button
         title="Review truck profile"
         disabled={busy}
-        onPress={() => openReview()}
+        onPress={() => { void run(() => openReview()); }}
       />
       {review && (
         <Dialog

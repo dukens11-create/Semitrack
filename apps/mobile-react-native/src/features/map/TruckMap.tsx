@@ -30,6 +30,7 @@ const routeLineStyle = {
   lineCap: 'round',
   lineJoin: 'round',
 } as const;
+const alternativeLineStyle = { lineColor: '#8B5CF6', lineWidth: 3, lineDasharray: [2, 2] };
 export function TruckMap({
   token,
   route,
@@ -88,7 +89,7 @@ export function TruckMap({
       return;
     }
     setFollow(false);
-    const bounds = route.routeGeometry.reduce(
+    const bounds = [route.routeGeometry, ...route.alternatives.map(item => item.routeGeometry)].flat().reduce(
       (acc, [lng, lat]) => ({
         minLng: Math.min(acc.minLng, lng),
         maxLng: Math.max(acc.maxLng, lng),
@@ -168,6 +169,14 @@ export function TruckMap({
               pitch: 0,
             }}
           />
+          {route?.alternatives.map((alternative, index) => (
+            <Mapbox.ShapeSource key={alternative.id} id={'truck-alternative-' + index}
+              shape={{ type: 'Feature', properties: { previewOnly: true },
+                geometry: { type: 'LineString', coordinates: alternative.routeGeometry } }}>
+              <Mapbox.LineLayer id={'truck-alternative-line-' + index}
+                style={alternativeLineStyle} />
+            </Mapbox.ShapeSource>
+          ))}
           {route && (
             <Mapbox.ShapeSource
               id="truck-route"

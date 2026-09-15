@@ -1,3 +1,5 @@
+import NativePlatform from '../../native/navigation/NativeSemiTraxPlatform';
+import { DriverError } from '../../errors/driverErrors';
 import { z } from 'zod';
 import { Store } from '../../state/Store';
 import {
@@ -16,14 +18,20 @@ export class TruckProfileStore extends Store<{
   private session = 0;
   // Confirmation is deliberately session-local. Never trust a legacy default as verified.
   private confirmed: { id: string; fingerprint: string } | null = null;
-  constructor(private api: ApiClient, private onChange: () => void) {
+  private pendingCreates = new Map<string, Promise<string>>();
+  constructor(private api: ApiClient, private onChange: () => void, private newOperation: () => Promise<string> = async () => {
+    if (!NativePlatform) throw new DriverError('NATIVE_MODULE_UNAVAILABLE');
+    return NativePlatform.createOperationId();
+  }) {
     super({ profiles: [], selected: null });
   }
   async load() {
     const generation = ++this.generation;
     let profiles: TruckProfile[];
     try {
-      const data = z.object({ items: z.array(truckSchema).max(1000) }).parse(await this.api.request('GET', '/trucks'));
+      const response = await this.api.request('GET', '/trucks');
+      if (generation !== this.generation) return;
+      const data = z.object({ items: z.array(truckSchema).max(1000) }).parse(response);
       profiles = data.items;
     } catch (error) {
       if (generation === this.generation) this.invalidate();
@@ -46,38 +54,58 @@ export class TruckProfileStore extends Store<{
     this.publish({ profiles, selected });
     if (changed) this.onChange();
   }
+  async prepareCreate(profile: TruckProfile): Promise<TruckProfile> {
+    if (profile.id || profile.createOperationId) return profile;
+    const key = profileFingerprint(profile);
+    let pending = this.pendingCreates.get(key);
+    if (!pending) { pending = this.newOperation(); this.pendingCreates.set(key, pending); }
+    try { return {...profile, createOperationId: z.string().uuid().parse(await pending)}; }
+    catch (error) { this.pendingCreates.delete(key); throw error; }
+  }
   async save(profile: TruckProfile): Promise<TruckProfile> {
     verifyRoutingProfile(profile);
     const session = this.session;
+    const submitted = await this.prepareCreate(profile);
+    if (session !== this.session) throw new DriverError('SESSION_CHANGED');
     if (profile.id === this.value.selected?.id) this.invalidate();
     const saved = truckSchema.parse(
       await this.api.request(
         profile.id ? 'PATCH' : 'POST',
         '/trucks' + (profile.id ? '/' + encodeURIComponent(profile.id) : ''),
-        profile.id ? { ...serializeTruck(profile), expectedRevision: profile.revision } : serializeTruck(profile),
+        profile.id ? { ...serializeTruck(profile), expectedRevision: profile.revision } : { ...serializeTruck(profile), createOperationId: submitted.createOperationId },
       ),
     );
     if (session !== this.session)
       throw new Error('Session changed. Sign in and review the profile again.');
+    this.pendingCreates.delete(profileFingerprint(profile));
     this.onChange();
-    await this.load();
+    // Retain a successful POST identity even if the later verification refresh fails.
+    ++this.generation;
+    const profiles = this.value.profiles.filter(item => item.id !== saved.id);
+    this.publish({ profiles: [...profiles, saved], selected: null });
     return saved;
   }
   async select(reviewed: TruckProfile) {
     verifyRoutingProfile(reviewed);
     const fingerprint = profileFingerprint(reviewed);
+    const selectionSession = this.session;
+    await this.load();
+    if (selectionSession !== this.session) throw new DriverError('SESSION_CHANGED');
     const current = this.value.profiles.find(item => item.id === reviewed.id);
     if (!current || !reviewed.revision || current.revision !== reviewed.revision || profileFingerprint(current) !== fingerprint)
-      throw new Error(
-        'Truck profile changed. Review its current values before using it.',
-      );
+      throw new DriverError('TRUCK_PROFILE_CHANGED');
     const session = this.session;
     this.invalidate();
-    await this.api.request(
-      'POST',
-      '/trucks/' + encodeURIComponent(reviewed.id) + '/verify',
-      { expectedRevision: reviewed.revision },
-    );
+    try {
+      await this.api.request('POST', '/trucks/' + encodeURIComponent(reviewed.id) + '/verify',
+        { expectedRevision: reviewed.revision });
+    } catch (error) {
+      if ((error as {status?: number})?.status === 409) {
+        await this.load();
+        throw new DriverError('TRUCK_PROFILE_CHANGED');
+      }
+      throw error;
+    }
     if (session !== this.session)
       throw new Error('Session changed. Review the profile again.');
     this.confirmed = { id: reviewed.id, fingerprint };
@@ -108,6 +136,7 @@ export class TruckProfileStore extends Store<{
   }
   clear() {
     ++this.session;
+    this.pendingCreates.clear();
     ++this.generation;
     this.confirmed = null;
     this.publish({ profiles: [], selected: null });

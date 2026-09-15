@@ -15,6 +15,7 @@ class SemiTraxPlatformModule(private val context: ReactApplicationContext) : Nat
   private var pendingPermission: Promise? = null
   private var foregroundOnly = false
   init { context.addLifecycleEventListener(this) }
+  override fun createOperationId(promise: Promise) { promise.resolve(java.util.UUID.randomUUID().toString()) }
   override fun guidanceCommand(command: String, payload: String, promise: Promise) {
     try { promise.resolve(guidance.command(command, payload)) }
     catch (_: IllegalStateException) { promise.reject("NATIVE_TRUCK_GUIDANCE_NOT_CONFIGURED", "Native commercial guidance is not configured.") }

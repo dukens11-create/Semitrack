@@ -40,6 +40,7 @@ const confirm = (target: string): FieldRule => ({
 // Exhaustive at compile time: adding a model field requires a mapping decision.
 export const copilotTruckFieldMatrix: Record<keyof TruckProfile, FieldRule> = {
   id: metadata,
+  createOperationId: metadata,
   revision: metadata,
   verifiedRevision: metadata,
   verifiedAt: metadata,

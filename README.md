@@ -44,7 +44,7 @@ For a local Windows build, save the secret token in
 MAPBOX_DOWNLOADS_TOKEN=YOUR_PRIVATE_SK_TOKEN
 ```
 
-For local HERE-enabled builds, copy the public-token template and fill only the
+For local Mapbox-enabled builds, copy the public-token template and fill only the
 `pk.` value. The real file is ignored by Git:
 
 ```powershell
@@ -61,6 +61,36 @@ flutter build apk --debug --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_T
 
 GitHub Actions requires repository secrets named `MAPBOX_ACCESS_TOKEN` and
 `MAPBOX_DOWNLOADS_TOKEN`.
+
+## Production and Android release configuration
+
+The API must run with `NODE_ENV=production` and explicit values for
+`DATABASE_URL`, `JWT_SECRET` (at least 32 characters), `ACCESS_TOKEN_MINUTES`,
+`REFRESH_TOKEN_DAYS`, `PUBLIC_API_URL`, and `CORS_ORIGINS`. Production public
+URLs and CORS origins must use HTTPS and cannot point at localhost. See
+`apps/api/.env.example`; startup fails immediately when this configuration is
+missing or unsafe.
+
+Release Flutter builds must supply an HTTPS backend endpoint:
+
+```powershell
+flutter build apk --release --dart-define=SEMITRACK_API_URL=https://api.example.com --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
+```
+
+Android release builds use `com.semitrax.app` by default. Override it only with
+the Gradle property or environment variable `SEMITRACK_APPLICATION_ID`. Release
+signing requires `SEMITRACK_RELEASE_STORE_FILE`,
+`SEMITRACK_RELEASE_STORE_PASSWORD`, `SEMITRACK_RELEASE_KEY_ALIAS`, and
+`SEMITRACK_RELEASE_KEY_PASSWORD`; a release task fails instead of falling back
+to debug signing.
+
+The APK workflow additionally requires the base64-encoded keystore secret
+`SEMITRACK_RELEASE_KEYSTORE_BASE64` plus the three signing secrets above.
+
+Trimble remains the authoritative commercial-truck routing provider. Mapbox is
+used for map display only; it is not a passenger-navigation fallback. Native
+turn-by-turn guidance remains fail-closed until a separately licensed and
+validated commercial-truck guidance SDK is integrated.
 
 ## Downloading the Android APK
 

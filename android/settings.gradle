@@ -27,15 +27,12 @@ def mapboxDownloadsToken = providers
     .orElse(providers.environmentVariable("MAPBOX_DOWNLOADS_TOKEN"))
     .orNull
 
-def tomtomRepositoryUsername = providers
-    .gradleProperty("repositoriesTomtomComUsername")
-    .orElse(providers.environmentVariable("TOMTOM_REPOSITORY_USERNAME"))
-    .orNull
-
-def tomtomRepositoryPassword = providers
-    .gradleProperty("repositoriesTomtomComPassword")
-    .orElse(providers.environmentVariable("TOMTOM_REPOSITORY_PASSWORD"))
-    .orNull
+if (!mapboxDownloadsToken?.trim()) {
+    throw new GradleException(
+        "MAPBOX_DOWNLOADS_TOKEN is required to download the Mapbox Android SDK. " +
+        "Set it in the environment or as a local Gradle property; never commit the token."
+    )
+}
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
@@ -43,15 +40,6 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
-        maven {
-            url = uri("https://repositories.tomtom.com/artifactory/maven")
-            if (tomtomRepositoryUsername && tomtomRepositoryPassword) {
-                credentials {
-                    username = tomtomRepositoryUsername
-                    password = tomtomRepositoryPassword
-                }
-            }
-        }
         maven {
             url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
             authentication { basic(BasicAuthentication) }

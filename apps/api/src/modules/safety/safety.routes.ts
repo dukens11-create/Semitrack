@@ -364,13 +364,14 @@ safetyRouter.get("/community-reports/:type/:entityId/aggregate", requireAuth, as
   } catch (error) { next(error); }
 }));
 
-safetyRouter.patch("/admin/community-reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR", "FLEET_ADMIN"]), asyncRoute(async (req, res, next) => {
+safetyRouter.patch("/admin/community-reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR"]), asyncRoute(async (req, res, next) => {
   try {
     const input = z.object({ status: z.enum(["APPROVED", "REJECTED", "REMOVED", "EXPIRED"]), reason: z.string().trim().min(2).max(500) }).parse(req.body);
     const id = z.string().min(1).parse(req.params.id);
-    const report = await prisma.communityDataReport.update({
-      where: { id },
-      data: { moderationStatus: input.status, moderationReason: input.reason },
+    const report = await prisma.$transaction(async tx => {
+      const updated = await tx.communityDataReport.update({ where: { id }, data: { moderationStatus: input.status, moderationReason: input.reason } });
+      await tx.adminAuditLog.create({ data: { actorUserId: req.user!.userId, action: 'COMMUNITY_DATA_MODERATED', targetType: 'COMMUNITY_DATA_REPORT', targetId: id, metadataJson: { status: input.status, reason: input.reason } } });
+      return updated;
     });
     res.json(report);
   } catch (error) { next(error); }
@@ -382,11 +383,12 @@ safetyRouter.get("/admin/provider-status", requireAuth, requireRole(["ADMIN", "M
   } catch (error) { next(error); }
 }));
 
-safetyRouter.post("/admin/provider-sync", requireAuth, requireRole(["ADMIN", "FLEET_ADMIN"]), asyncRoute(async (_req, res, next) => {
+safetyRouter.post("/admin/provider-sync", requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res, next) => {
   try {
+    await prisma.adminAuditLog.create({ data: { actorUserId: req.user!.userId, action: 'PROVIDER_SYNC_REQUESTED', targetType: 'PROVIDER', metadataJson: {} } });
     const results = await refreshDotProviders(true);
     res.json({ items: results.map((result) => result.status === "fulfilled"
       ? { ok: true, ...result.value }
-      : { ok: false, error: result.reason instanceof Error ? result.reason.message : "Provider failed" }) });
+      : { ok: false, error: "Provider refresh failed" }) });
   } catch (error) { next(error); }
 }));

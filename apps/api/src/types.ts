@@ -48,6 +48,8 @@ export type RouteManeuver = {
   nextRoadName?: string;
   exitNumber?: string;
   offset?: number;
+  coordinate?: LatLng;
+  geometryMatchDistanceMeters?: number;
   lanes?: Array<{ directions: string[]; active: boolean }>;
 };
 

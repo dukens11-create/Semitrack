@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { env } from "../../config/env.js";
 import type { AnalyticsRange } from "./analyticsRange.js";
@@ -271,9 +272,9 @@ export async function getFinancialAnalytics(range: AnalyticsRange, activeSubscri
   };
 }
 
-export async function getAdminDriverProfile(driverId: string, includeFinancial: boolean) {
-  const user = await prisma.user.findUnique({
-    where: { id: driverId },
+export async function getAdminDriverProfile(driverId: string, includeFinancial: boolean, scope: Prisma.UserWhereInput) {
+  const user = await prisma.user.findFirst({
+    where: { AND: [{ id: driverId, role: "DRIVER" }, scope] },
     select: {
       id: true, fullName: true, email: true, phone: true, role: true, plan: true,
       emailVerified: true, disabledAt: true, createdAt: true, updatedAt: true,

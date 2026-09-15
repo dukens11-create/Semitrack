@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 import android.Manifest
 import android.app.Activity
@@ -16,13 +16,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 class NavigationChannelHandler(private val activity: Activity) : EventChannel.StreamHandler {
-    private val manager = SemiTrackNavigationManager(
-        activity.applicationContext,
-        // The bridge is registered before asynchronous SDK initialization.
-        // TomTomGuidanceEngine checks readiness at operation time, so it can
-        // become available without recreating Flutter's platform channel.
-        TomTomGuidanceEngine(),
-    )
+    private val manager = SemiTrackNavigationManager(activity.applicationContext)
 
     fun register(messenger: BinaryMessenger) {
         MethodChannel(messenger, METHODS).setMethodCallHandler(::handle)

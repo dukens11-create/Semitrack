@@ -98,3 +98,12 @@ android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 ios/Flutter/ephemeral/
 ios/Runner/GeneratedPluginRegistrant.h
 ios/Runner/GeneratedPluginRegistrant.m
+
+# React Native migration: private/native build artifacts stay local.
+/apps/mobile-react-native/node_modules/
+/apps/mobile-react-native/src/config/generated.ts
+/apps/mobile-react-native/**/build/
+/apps/mobile-react-native/**/*.keystore
+/apps/mobile-react-native/**/*.jks
+/apps/mobile-react-native/**/*.p12
+/apps/mobile-react-native/**/*.mobileprovision

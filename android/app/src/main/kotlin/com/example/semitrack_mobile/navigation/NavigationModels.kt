@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 data class Coordinate(val latitude: Double, val longitude: Double) {
     init {

@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 import android.location.Location
 import android.os.Build

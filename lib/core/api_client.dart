@@ -2,7 +2,31 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+String validateSemiTrackApiUrl(
+  String value, {
+  bool releaseMode = kReleaseMode,
+}) {
+  final normalized = value.replaceFirst(RegExp(r'/$'), '');
+  final uri = Uri.tryParse(normalized);
+  if (uri == null || !uri.hasAuthority) {
+    throw StateError('SEMITRACK_API_URL must be a valid absolute URL.');
+  }
+  if (releaseMode) {
+    final host = uri.host.toLowerCase();
+    if (uri.scheme != 'https' ||
+        host == 'localhost' ||
+        host == '127.0.0.1' ||
+        host == '10.0.2.2') {
+      throw StateError(
+        'Release builds require an explicit HTTPS SEMITRACK_API_URL that does not target a development host.',
+      );
+    }
+  }
+  return normalized;
+}
 
 class ApiException implements Exception {
   const ApiException(this.statusCode, this.code, this.message);
@@ -32,7 +56,7 @@ class ApiClient {
        _readSession = readSession,
        _writeSession = writeSession,
        _clearSession = clearSession,
-       _baseUrl = (apiBaseUrl ?? baseUrl).replaceFirst(RegExp(r'/$'), ''),
+       _baseUrl = validateSemiTrackApiUrl(apiBaseUrl ?? baseUrl),
        _requestTimeout = requestTimeout ?? const Duration(seconds: 20);
 
   static const baseUrl = String.fromEnvironment(

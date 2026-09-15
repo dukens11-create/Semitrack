@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { routingTruckSchema } from "../../modules/trucks/truck.schemas.js";
 import { env } from "../../config/env.js";
 import type {
   HazardousGood,
@@ -38,18 +40,17 @@ const defaultConfig = (): TrimbleProviderConfig => ({
 function finiteNumber(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string" || value.trim() === "") return null;
+  if (!/^-?\d+(?:\.\d+)?$/.test(value.trim())) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function clockToSeconds(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
-  if (typeof value !== "string") return 0;
-  const parts = value.trim().split(":").map(Number);
-  if (!parts.length || parts.some((part) => !Number.isFinite(part))) return 0;
-  if (parts.length === 3) return Math.max(0, parts[0]! * 3600 + parts[1]! * 60 + parts[2]!);
-  if (parts.length === 2) return Math.max(0, parts[0]! * 3600 + parts[1]! * 60);
-  return Math.max(0, parts[0]! * 3600);
+  // Trimble clock strings are hours:minutes[:seconds]. Missing is unavailable, never zero.
+  if (typeof value !== 'string' || !/^\d+:[0-5]\d(?::[0-5]\d)?$/.test(value.trim())) return NaN;
+  const parts = value.trim().split(':').map(Number);
+  const seconds = parts[0]! * 3600 + parts[1]! * 60 + (parts.length === 3 ? parts[2]! : 0);
+  return Number.isSafeInteger(seconds) ? seconds : NaN;
 }
 
 function assertRange(label: string, value: number, minimum: number, maximum: number) {
@@ -79,12 +80,12 @@ const hazmatCode: Record<HazardousGood, number> = {
 
 function trimbleHazmatTypes(input: RouteBuildInput): number[] {
   if (!input.truck.hazmatEnabled) return [];
-  const goods: HazardousGood[] = input.truck.hazardousGoods?.length ? input.truck.hazardousGoods : ["other"];
+  const goods: HazardousGood[] = input.truck.hazardousGoods!;
   return [...new Set(goods.map((good) => hazmatCode[good]))];
 }
 
 function trailerType(input: RouteBuildInput): number {
-  const count = input.truck.trailerCount ?? 1;
+  const count = input.truck.trailerCount!;
   if (count <= 0) return 1;
   const configured = input.truck.trailerType?.trim().toLowerCase() ?? "";
   if (configured.includes("caravan") || configured.includes("rv")) return 2;
@@ -108,7 +109,12 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
     );
   }
 
-  const truck = input.truck;
+  const checked = z.object({ origin: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), destination: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), viaStops: z.array(z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)})).max(20).optional(), truck: routingTruckSchema, routeMode: z.enum(['fastest','fuel_optimized','shortest']).optional(), alternatives: z.number().int().min(0).max(5).optional() }).safeParse(input);
+  if (!checked.success) throw new RoutingProviderError('Trimble','TRIMBLE_REQUEST_INVALID','Truck routing inputs are incomplete or invalid.',422);
+  const truck = checked.data.truck;
+  const bodyType=truck.trailerType?.trim().toLowerCase();
+  if (!bodyType || /caravan|rv/i.test(bodyType) || (bodyType==='no trailer') !== (truck.trailerCount===0)) throw new RoutingProviderError('Trimble','TRIMBLE_REQUEST_INVALID','Trailer type and count must describe the actual commercial vehicle.',422);
+  if (truck.avoidHighways || truck.avoidResidential || truck.avoidDirtRoads) throw new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_UNSUPPORTED','A selected road-avoidance restriction cannot be guaranteed by this provider.',422);
   const heightInches = truck.heightFt * 12;
   const widthInches = truck.widthFt * 12;
   const lengthInches = truck.lengthFt * 12;
@@ -120,7 +126,7 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
   if (truck.weightPerAxleLbs != null) {
     assertRange("Maximum weight per axle group (pounds)", truck.weightPerAxleLbs, 800, 45_000);
   }
-  const trailerCount = truck.trailerCount ?? 1;
+  const trailerCount = truck.trailerCount;
   if (!Number.isInteger(trailerCount) || trailerCount < 0) {
     throw new RoutingProviderError(
       "Trimble",
@@ -239,19 +245,18 @@ function coordinate(value: any): number[] | null {
 }
 
 function flattenRoutePathGeometry(report: any): number[][] {
-  const coordinates = report?.geometry?.coordinates;
-  if (!Array.isArray(coordinates)) return [];
-  const points: number[][] = [];
-  const visit = (value: unknown) => {
-    const point = coordinate(value);
-    if (point) {
-      points.push(point);
-      return;
-    }
-    if (Array.isArray(value)) value.forEach(visit);
-  };
-  visit(coordinates);
-  return points;
+  if (!report) return [];
+  const shape = report.geometry;
+  const position = z.tuple([z.number().finite().min(-180).max(180), z.number().finite().min(-90).max(90)]);
+  const line = z.array(position).min(2).max(200000);
+  const parsed = z.discriminatedUnion('type', [z.object({type:z.literal('LineString'),coordinates:line}),z.object({type:z.literal('MultiLineString'),coordinates:z.array(line).min(1).max(1000)})]).safeParse(shape);
+  if (!parsed.success) throw new RoutingProviderError('Trimble','TRIMBLE_ROUTE_GEOMETRY_INVALID','RoutePath contains invalid coordinates or shape.');
+  const lines = parsed.data.type === 'LineString' ? [parsed.data.coordinates] : parsed.data.coordinates;
+  for (let i=1; i<lines.length; i++) {
+    const before=lines[i-1]!.at(-1)!; const after=lines[i]![0]!;
+    if (before[0]!==after[0] || before[1]!==after[1]) throw new RoutingProviderError('Trimble','TRIMBLE_ROUTE_GEOMETRY_INVALID','RoutePath contains disconnected segments.');
+  }
+  return lines.flat();
 }
 
 function longestCoordinateSequence(value: unknown): number[][] {
@@ -279,7 +284,7 @@ function maneuverAction(turnInstruction: unknown, instruction: string) {
   if (value.includes("right")) return { action: "turn", direction: "right" };
   if (value.includes("left")) return { action: "turn", direction: "left" };
   if (value.includes("exit")) return { action: "exit", direction: "straight" };
-  return { action: "continue", direction: "straight" };
+  return {};
 }
 
 function roadNameFrom(instruction: string): string | undefined {
@@ -308,46 +313,111 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
       const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
-      if (warning) warnings.push(warning);
+      if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) throw new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
       const instruction = typeof line?.Direction === "string" ? line.Direction.trim() : "";
       const isArrival = /^destination\b/i.test(instruction);
       if (!line?.TurnInstruction && !isArrival) continue;
 
       let cumulativeDistance = finiteNumber(line?.Dist);
-      let cumulativeDuration = line?.Time == null ? 0 : clockToSeconds(line.Time);
+      let cumulativeDuration = clockToSeconds(line?.Time);
       if (cumulativeDistance == null && !isArrival) {
         for (let next = index + 1; next < lines.length; next++) {
+          if (lines[next]?.TurnInstruction || /^destination\b/i.test(String(lines[next]?.Direction ?? ''))) break;
           cumulativeDistance = finiteNumber(lines[next]?.Dist);
           cumulativeDuration = clockToSeconds(lines[next]?.Time);
           if (cumulativeDistance != null) break;
         }
       }
+      if (!instruction || cumulativeDistance == null || cumulativeDistance < lastDistance || !Number.isFinite(cumulativeDuration) || cumulativeDuration < lastDuration) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','Maneuver distance, time or instruction is missing or inconsistent.');
       const action = maneuverAction(line?.TurnInstruction, instruction);
+      const rawCoordinate = isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End;
+      const latitude = finiteNumber(rawCoordinate?.Lat ?? rawCoordinate?.lat);
+      const longitude = finiteNumber(rawCoordinate?.Lon ?? rawCoordinate?.lon ?? rawCoordinate?.Lng ?? rawCoordinate?.lng);
       maneuvers.push({
         step: ++maneuverStep,
-        instruction: instruction || (isArrival ? "Arrive at destination" : "Continue"),
-        distanceMiles: cumulativeDistance == null ? 0 : Number(Math.max(0, cumulativeDistance - lastDistance).toFixed(3)),
-        durationSeconds: Math.max(0, cumulativeDuration - lastDuration),
+        instruction,
+        distanceMiles: Number((cumulativeDistance - lastDistance).toFixed(3)),
+        durationSeconds: cumulativeDuration - lastDuration,
         action: action.action,
         direction: action.direction,
         roadName: roadNameFrom(instruction),
         nextRoadName: roadNameFrom(instruction),
         exitNumber: exitNumberFrom(instruction, line?.InterCh),
+        ...(latitude == null || longitude == null ? {} : { coordinate: { lat: latitude, lng: longitude } }),
       });
       if (cumulativeDistance != null) lastDistance = cumulativeDistance;
       if (cumulativeDuration > 0) lastDuration = cumulativeDuration;
     }
 
     const mileage = mileageLines[legIndex] ?? {};
+    if (!maneuvers.length || finiteNumber(mileage.LMiles) == null || finiteNumber(mileage.LMiles)! < 0 || !Number.isFinite(clockToSeconds(mileage.LHours))) throw new RoutingProviderError("Trimble","TRIMBLE_INCOMPLETE_ROUTE","Route leg data is incomplete.");
     return {
-      distanceMiles: finiteNumber(mileage.LMiles) ?? Number(Math.max(0, lastDistance).toFixed(3)),
-      durationSeconds: clockToSeconds(mileage.LHours) || Math.max(0, lastDuration),
+      distanceMiles: finiteNumber(mileage.LMiles)!,
+      durationSeconds: clockToSeconds(mileage.LHours),
       geometry: legIndex === 0 ? geometry : [],
       maneuvers,
     };
   });
 
   return { legs, warnings };
+}
+
+const MANEUVER_MATCH_MAX_METERS = 250;
+
+function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const radians = (degrees: number) => degrees * Math.PI / 180;
+  const lat1 = radians(a.lat);
+  const lat2 = radians(b.lat);
+  const deltaLat = lat2 - lat1;
+  const deltaLng = radians(b.lng - a.lng);
+  const value = Math.sin(deltaLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+/** Maps authoritative Trimble maneuver coordinates monotonically to RoutePath. */
+export function matchTrimbleManeuversToGeometry(maneuvers: RouteManeuver[], geometry: number[][]) {
+  if (geometry.length < 2) throw new Error("Route geometry must contain at least two points");
+  let minimumOffset = 0;
+  return maneuvers.map((maneuver, index) => {
+    const coordinate = maneuver.coordinate;
+    if (!coordinate || !Number.isFinite(coordinate.lat) || !Number.isFinite(coordinate.lng) || Math.abs(coordinate.lat) > 90 || Math.abs(coordinate.lng) > 180) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_COORDINATE_REQUIRED",
+        `Trimble maneuver ${index + 1} has no coordinate and cannot be placed safely on the route geometry`,
+        502,
+      );
+    }
+
+    let bestOffset = minimumOffset;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let offset = minimumOffset; offset < geometry.length; offset++) {
+      const point = geometry[offset];
+      if (!Array.isArray(point) || point.length < 2) continue;
+      const candidate = { lat: Number(point[1]), lng: Number(point[0]) };
+      if (!Number.isFinite(candidate.lat) || !Number.isFinite(candidate.lng)) continue;
+      const distance = distanceMeters(coordinate, candidate);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestOffset = offset;
+      }
+    }
+    if (!Number.isFinite(bestDistance) || bestDistance > MANEUVER_MATCH_MAX_METERS) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_GEOMETRY_MISMATCH",
+        `Trimble maneuver ${index + 1} is ${Math.round(bestDistance)} meters from the RoutePath geometry`,
+        502,
+      );
+    }
+    minimumOffset = bestOffset;
+    return {
+      ...maneuver,
+      offset: bestOffset,
+      geometryMatchDistanceMeters: Number(bestDistance.toFixed(1)),
+    };
+  });
 }
 
 function parseAlternateRoutes(reports: any[]): RouteOption[] {
@@ -359,7 +429,7 @@ function parseAlternateRoutes(reports: any[]): RouteOption[] {
     const geometry = flattenRoutePathGeometry(path);
     const distance = finiteNumber(path?.TDistance);
     const durationMinutes = finiteNumber(path?.TMinutes);
-    if (!geometry.length || distance == null || durationMinutes == null) return [];
+    if (geometry.length < 2 || distance == null || distance < 0 || durationMinutes == null || durationMinutes <= 0) throw new RoutingProviderError("Trimble", "TRIMBLE_ALTERNATIVE_INVALID", "Alternative route data is invalid.");
     const durationSeconds = Math.round(durationMinutes * 60);
     return [{
       id: String(path?.RouteID ?? `trimble-alternative-${index + 1}`),
@@ -392,6 +462,8 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     );
   }
 
+  const routeIds=[directions.RouteID,mileage.RouteID,routePath?.RouteID].filter(id=>id!=null).map(String);
+  if (new Set(routeIds).size>1) throw new RoutingProviderError('Trimble','TRIMBLE_ROUTE_ID_MISMATCH','Route reports refer to different routes.');
   const mileageLines = Array.isArray(mileage.ReportLines) ? mileage.ReportLines : [];
   const finalMileage = mileageLines.at(-1) ?? {};
   const distanceMiles = finiteNumber(finalMileage.TMiles);
@@ -414,7 +486,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
       "Trimble returned no usable route geometry. Verify RoutePath or GeoTunnel access for this API key.",
     );
   }
-  if (distanceMiles == null || durationSeconds <= 0) {
+  if (distanceMiles == null || distanceMiles < 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new RoutingProviderError(
       "Trimble",
       "TRIMBLE_INCOMPLETE_ROUTE",
@@ -423,6 +495,16 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
   }
 
   const { legs, warnings } = parseDirectionLegs(directions, routeGeometry, mileage);
+  if (!legs.length) throw new RoutingProviderError("Trimble", "TRIMBLE_INCOMPLETE_ROUTE", "No route legs were returned.");
+  const matchedManeuvers = matchTrimbleManeuversToGeometry(
+    legs.flatMap((leg) => leg.maneuvers),
+    routeGeometry,
+  );
+  let matchedIndex = 0;
+  const matchedLegs = legs.map((leg) => ({
+    ...leg,
+    maneuvers: leg.maneuvers.map(() => matchedManeuvers[matchedIndex++]!),
+  }));
   const alerts = [...new Set(warnings)];
   if (input.truck.avoidResidential) alerts.push("Trimble does not expose a direct avoid-residential Route Reports option; truck restrictions remain enforced.");
   if (input.truck.avoidHighways) alerts.push("Trimble does not expose a direct avoid-highways Route Reports option; Practical truck routing was used.");
@@ -435,7 +517,7 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
   return {
     provider: "Trimble",
     truckSafe: true,
-    navigationAllowed: true,
+    navigationAllowed: config.routePathEnabled,
     trafficAware: mileage.TrafficDataUsed === true,
     calculatedAt: new Date().toISOString(),
     selectedRouteId: routeId,
@@ -443,8 +525,8 @@ export function parseTrimbleRouteResponse(payload: unknown, input: RouteBuildInp
     etaMinutes: Math.ceil(durationSeconds / 60),
     durationSeconds,
     routeGeometry,
-    legs,
-    turnByTurn: legs.flatMap((leg) => leg.maneuvers),
+    legs: matchedLegs,
+    turnByTurn: matchedManeuvers,
     alternatives: parseAlternateRoutes(reports),
     alerts,
   };
@@ -532,13 +614,13 @@ export class TrimbleRouteProvider implements RouteProvider {
     const request = buildTrimbleRouteRequest(input, this.config);
     const url = `${this.config.baseUrl.replace(/\/$/, "")}/route/routeReports?dataVersion=${encodeURIComponent(this.config.dataVersion)}`;
     const requestController = new AbortController();
-    const requestTimeout = setTimeout(
-      () => requestController.abort(),
-      this.config.requestTimeoutMs,
-    );
+    let timeoutReject!: (error: Error) => void;
+    const deadline=new Promise<never>((_resolve,reject)=>{timeoutReject=reject;});
+    const requestTimeout=setTimeout(()=>{requestController.abort();timeoutReject(new Error('Provider deadline exceeded'));},this.config.requestTimeoutMs);
     let response: Response;
+    let responseBody: string;
     try {
-      response = await this.fetchImpl(url, {
+      response = await Promise.race([this.fetchImpl(url, {
         method: "POST",
         headers: {
           Authorization: this.config.apiKey,
@@ -547,8 +629,12 @@ export class TrimbleRouteProvider implements RouteProvider {
         },
         body: JSON.stringify(request),
         signal: requestController.signal,
-      });
-    } catch {
+        redirect: "error",
+      }),deadline]);
+      responseBody = await Promise.race([response.text(),deadline]);
+      if (responseBody.length > 20_000_000) throw new RoutingProviderError("Trimble", "TRIMBLE_RESPONSE_TOO_LARGE", "Route response exceeds the supported size.");
+    } catch (error) {
+      if (error instanceof RoutingProviderError) throw error;
       const timedOut = requestController.signal.aborted;
       throw new RoutingProviderError(
         "Trimble",
@@ -563,13 +649,13 @@ export class TrimbleRouteProvider implements RouteProvider {
       clearTimeout(requestTimeout);
     }
     if (!response.ok) {
-      const body = (await response.text()).slice(0, 2_000);
+      const body = responseBody.slice(0, 2_000);
       throw trimbleFailure(response.status, body);
     }
 
     let payload: unknown;
     try {
-      payload = await response.json();
+      payload = JSON.parse(responseBody);
     } catch {
       throw new RoutingProviderError(
         "Trimble",

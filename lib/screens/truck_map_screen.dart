@@ -45,6 +45,7 @@ import 'package:semitrack_mobile/services/here_places_service.dart';
 import 'package:semitrack_mobile/services/destination_time_zone_service.dart';
 import 'package:semitrack_mobile/services/weigh_station_service.dart';
 import 'package:semitrack_mobile/services/analytics_service.dart';
+import 'package:semitrack_mobile/services/authoritative_stop_plan.dart';
 import 'package:semitrack_mobile/services/latest_request_coordinator.dart';
 import 'package:semitrack_mobile/theme/semitrack_theme.dart';
 import 'package:semitrack_mobile/utils/navigation_utils.dart' as nav_utils;
@@ -818,6 +819,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
   // reset by _clearActiveRoute().
   List<TripLeg> _tripLegs = const [];
   int _activeLegIndex = 0;
+  AuthoritativeStopPlan? _authoritativeStopPlan;
 
   // ── Truck Stop POI state ───────────────────────────────────────────────────
   //
@@ -5924,6 +5926,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
 
       // Leg arrival detection: advance active leg when driver reaches each stop.
       _checkLegArrival(gpsPoint);
+      _checkAuthoritativeIntermediateArrival(gpsPoint);
 
       // Step advancement: keep the live street header aligned with the route.
       _checkStepAdvancement(gpsPoint);
@@ -6496,6 +6499,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       _truckStops = const [];
       _tripLegs = const [];
       _activeLegIndex = 0;
+      _authoritativeStopPlan = null;
       _closestTruckStopsAhead = const [];
       _closestWeighStationsAhead = const [];
       _closestRestAreasAhead = const [];
@@ -7008,7 +7012,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       if (!status.truckSafeGuidanceAvailable) {
         throw const NativeNavigationException(
           'TRUCK_SAFE_NATIVE_ROUTING_UNAVAILABLE',
-          'Turn-by-turn navigation requires TomTom guidance initialized with the selected Trimble truck route. The truck-safe route preview is still available.',
+          'Native turn-by-turn guidance is not available in this build. The authoritative Trimble truck-route preview remains available.',
         );
       }
       final destination = _selectedDestination ?? _destination;
@@ -7165,7 +7169,11 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     for (int i = 0; i < stops.length; i++) {
       final stop = stops[i];
       final result = await _fetchRouteFromApi(from, stop.position);
-      if (result == null) continue;
+      if (result == null) {
+        throw StateError(
+          'Required route leg ${i + 1} could not be calculated. The previous route was preserved.',
+        );
+      }
 
       final restrictions = _evaluateRouteRestrictions(result.points);
 
@@ -7990,15 +7998,20 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     final steps = maneuverJson.indexed
         .where((entry) => entry.$2 is Map<String, dynamic>)
         .map((entry) {
-          final index = entry.$1;
           final item = entry.$2 as Map<String, dynamic>;
-          final offset = ((item['offset'] as num?)?.toInt() ?? index).clamp(
-            0,
-            decoded.length - 1,
-          );
+          final rawOffset = (item['offset'] as num?)?.toInt();
+          final coordinate = item['coordinate'];
+          if (rawOffset == null && coordinate is! Map) return null;
+          final offset = rawOffset?.clamp(0, decoded.length - 1);
+          final maneuverLocation = offset != null
+              ? decoded[offset]
+              : LatLng(
+                  ((coordinate as Map)['lat'] as num).toDouble(),
+                  (coordinate['lng'] as num).toDouble(),
+                );
           return _NavStep(
             item['instruction']?.toString() ?? 'Continue',
-            decoded[offset],
+            maneuverLocation,
             maneuver: item['direction']?.toString() ?? 'straight',
             type: item['action']?.toString() ?? '',
             distanceMeters:
@@ -8010,6 +8023,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
             nextRoadName: item['nextRoadName']?.toString(),
           );
         })
+        .whereType<_NavStep>()
         .toList(growable: false);
 
     final rawNotices =
@@ -8044,7 +8058,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
   Future<RouteResult?> _fetchRouteFromApi(
     LatLng origin,
     LatLng destination, {
-    LatLng? viaPoint,
+    List<LatLng> viaPoints = const [],
   }) async {
     final profile = _activeTruckProfile;
     if (profile == null) {
@@ -8061,10 +8075,12 @@ class _TruckMapScreenState extends State<TruckMapScreen>
               'lat': destination.latitude,
               'lng': destination.longitude,
             },
-            if (viaPoint != null)
-              'viaStops': [
-                {'lat': viaPoint.latitude, 'lng': viaPoint.longitude},
-              ],
+            if (viaPoints.isNotEmpty)
+              'viaStops': viaPoints
+                  .map(
+                    (point) => {'lat': point.latitude, 'lng': point.longitude},
+                  )
+                  .toList(growable: false),
             'truck': truck,
             'routeMode': 'fastest',
             'alternatives': 2,
@@ -8158,7 +8174,10 @@ class _TruckMapScreenState extends State<TruckMapScreen>
         final result = await _fetchRouteFromApi(
           origin,
           request.destination,
-          viaPoint: avoidPoint,
+          viaPoints: [
+            avoidPoint,
+            ..._remainingAuthoritativeStops(request.destination),
+          ],
         );
         if (!mounted || !isCurrent()) return;
         if (result == null || result.points.isEmpty) break;
@@ -10439,7 +10458,11 @@ class _TruckMapScreenState extends State<TruckMapScreen>
       });
     }
 
-    final primary = await _fetchRouteFromApi(origin, request.destination);
+    final primary = await _fetchRouteFromApi(
+      origin,
+      request.destination,
+      viaPoints: _remainingAuthoritativeStops(request.destination),
+    );
     if (!mounted || !isCurrent()) return;
     if (primary == null) {
       throw StateError('The truck-routing provider returned no usable route.');
@@ -10510,7 +10533,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     if (provider.toLowerCase() != 'trimble') {
       throw const NativeNavigationException(
         'TRIMBLE_ROUTE_REQUIRED',
-        'TomTom guidance requires an authoritative Trimble truck route.',
+        'Native guidance requires an authoritative Trimble truck route.',
       );
     }
     if (points.length < 2) {
@@ -10522,10 +10545,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     await NativeNavigationService.instance.setExternalRoute(
       provider: 'Trimble',
       geometry: points.map(
-        (point) => (
-          latitude: point.latitude,
-          longitude: point.longitude,
-        ),
+        (point) => (latitude: point.latitude, longitude: point.longitude),
       ),
     );
   }
@@ -12657,7 +12677,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                 Expanded(
                   child: Text(
                     _routeOptions.length > 1
-                        ? 'Tap any route line to select it. TomTom guidance follows the selected Trimble truck route.'
+                        ? 'Tap any route line to select it. The selected Trimble route remains authoritative.'
                         : 'Foreground GPS, maneuvers, voice, alerts, and truck-safe rerouting are available.',
                     style: const TextStyle(
                       color: Color(0xFF5F6E7C),
@@ -20413,7 +20433,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
   void _showAheadTruckStopSheet(AheadTruckStop ahead) {
     final stop = ahead.poi;
     final estimatedDuration = _estimatedDurationToAheadStop(ahead);
-    final canInsertIntoNativeRoute =
+    final canAddStopToActiveRoute =
         _nativeNavigationStatus?.truckSafeGuidanceAvailable == true &&
         (_nativeNavigationPhase == NativeNavigationPhase.navigating ||
             _nativeNavigationPhase == NativeNavigationPhase.previewing ||
@@ -20571,7 +20591,7 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                   Expanded(
                     flex: 2,
                     child: FilledButton.icon(
-                      onPressed: canInsertIntoNativeRoute
+                      onPressed: canAddStopToActiveRoute
                           ? () async {
                               Navigator.pop(sheetContext);
                               await _addTruckStopToNativeRoute(ahead);
@@ -20579,9 +20599,9 @@ class _TruckMapScreenState extends State<TruckMapScreen>
                           : null,
                       icon: const Icon(Icons.add_location_alt_rounded),
                       label: Text(
-                        canInsertIntoNativeRoute
+                        canAddStopToActiveRoute
                             ? 'Add Stop'
-                            : 'Add Stop needs HERE Navigate',
+                            : 'Start navigation to add a stop',
                       ),
                     ),
                   ),
@@ -20634,20 +20654,66 @@ class _TruckMapScreenState extends State<TruckMapScreen>
     return Duration(seconds: (routeTimeLeft.inSeconds * ratio).round());
   }
 
+  AuthoritativeStopPlan _stopPlanFor(LatLng destination) {
+    final existing = _authoritativeStopPlan;
+    if (existing != null &&
+        (existing.destination.latitude - destination.latitude).abs() <
+            0.000001 &&
+        (existing.destination.longitude - destination.longitude).abs() <
+            0.000001) {
+      return existing;
+    }
+    return _authoritativeStopPlan = AuthoritativeStopPlan(
+      destination: AuthoritativeRouteStop(
+        id: 'destination',
+        latitude: destination.latitude,
+        longitude: destination.longitude,
+      ),
+    );
+  }
+
+  List<LatLng> _remainingAuthoritativeStops(LatLng destination) =>
+      _stopPlanFor(destination).intermediateStops
+          .map((stop) => LatLng(stop.latitude, stop.longitude))
+          .toList(growable: false);
+
+  void _checkAuthoritativeIntermediateArrival(LatLng current) {
+    final plan = _authoritativeStopPlan;
+    if (plan == null || plan.intermediateStops.isEmpty) return;
+    final next = plan.intermediateStops.first;
+    if (_distanceBetween(current, LatLng(next.latitude, next.longitude)) >
+        _arrivalThresholdMeters) {
+      return;
+    }
+    if (plan.markIntermediateArrived(next.id)) {
+      _showSnack('Intermediate stop reached. Continuing to the next stop.');
+    }
+  }
+
   Future<void> _addTruckStopToNativeRoute(AheadTruckStop ahead) async {
+    final destination = _selectedDestination ?? _destination;
+    final plan = _stopPlanFor(destination);
+    final stop = AuthoritativeRouteStop(
+      id: ahead.poi.id,
+      latitude: ahead.poi.latitude,
+      longitude: ahead.poi.longitude,
+    );
+    plan.add(stop);
     try {
-      await NativeNavigationService.instance.addWaypoint(
-        ahead.poi.id,
-        ahead.poi.latitude,
-        ahead.poi.longitude,
-      );
-      await _requestReroute(
+      final completion = await _requestReroute(
         _truckPosition ?? LatLng(ahead.poi.latitude, ahead.poi.longitude),
         reason: 'waypoint-added',
       );
+      if (completion != LatestRequestCompletion.completed) {
+        plan.remove(stop.id);
+        throw StateError(
+          'The truck route could not be updated with the required stop.',
+        );
+      }
       if (!mounted) return;
       _showSnack('${ahead.poi.name} added to the active truck route.');
     } catch (error) {
+      plan.remove(stop.id);
       if (!mounted) return;
       setState(() => _error = 'Unable to add truck stop: $error');
     }

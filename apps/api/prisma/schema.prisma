@@ -15,6 +15,27 @@ enum UserRole {
   MODERATOR
 }
 
+enum StaffRole {
+  SUPER_ADMIN
+  OPERATIONS
+  DISPATCH
+  SAFETY
+  SUPPORT
+  BILLING
+  READ_ONLY
+}
+
+enum TruckVerificationState {
+  DRIVER_VERIFICATION_REQUIRED
+  ADMIN_UPDATED
+  VERIFIED
+}
+
+enum EquipmentKind {
+  TRACTOR
+  TRAILER
+}
+
 enum SubscriptionPlan {
   FREE
   GOLD
@@ -288,6 +309,10 @@ model User {
   lastActivityAt            DateTime?
   createdAt                 DateTime                      @default(now())
   updatedAt                 DateTime                      @updatedAt
+  staffAccess               StaffAccess?
+  operationalMemberships    OperationalFleetDriver[]
+  assignedEquipment         Equipment[]
+
   trucks                    Truck[]
   trips                     Trip[]
   documents                 Document[]
@@ -364,6 +389,11 @@ model PasswordResetToken {
 }
 
 model Truck {
+  revision         Int      @default(1)
+  verifiedRevision Int?
+  verifiedAt       DateTime?
+  verifiedByUserId String?
+  verificationState TruckVerificationState @default(DRIVER_VERIFICATION_REQUIRED)
   id               String   @id @default(cuid())
   userId           String
   name             String
@@ -770,7 +800,7 @@ model FleetMembership {
 
   @@unique([fleetBillingAccountId, userId])
   @@index([userId, unassignedAt])
-  @@index([fleetBillingAccountId, requiresSeat, unassignedAt])
+  @@index([fleetBillingAccountId, requiresSeat, unassignedAt], map: "FleetMembership_fleetBillingAccountId_requiresSeat_unassignedAt")
 }
 
 model FleetSeatChange {
@@ -857,7 +887,7 @@ model SubscriptionPlanCatalog {
   sortOrder        Int            @default(0)
   version          Int            @default(1)
   createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  updatedAt        DateTime       @default(now()) @updatedAt
   subscriptions    Subscription[]
 }
 
@@ -943,6 +973,7 @@ model SubscriptionStatusEvent {
 }
 
 model SupportTicket {
+
   id        String    @id @default(cuid())
   userId    String
   subject   String
@@ -970,6 +1001,7 @@ model ApiErrorLog {
 }
 
 model EldConnection {
+  revision Int @default(1)
   id                    String              @id @default(cuid())
   userId                String
   provider              EldProvider
@@ -991,6 +1023,7 @@ model EldConnection {
 }
 
 model EldOAuthState {
+  connectionRevision Int @default(0)
   id        String      @id @default(cuid())
   userId    String
   provider  EldProvider
@@ -1253,4 +1286,60 @@ model ProviderSyncState {
 
   @@unique([provider, jurisdiction, dataType])
   @@index([status, lastSuccessAt])
+}
+
+model StaffAccess {
+  id          String @id @default(cuid())
+  userId      String @unique
+  role        StaffRole
+  globalScope Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fleets      StaffFleetAccess[]
+}
+model OperationalFleet {
+  id        String @id @default(cuid())
+  name      String
+  active    Boolean @default(true)
+  revision  Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  drivers   OperationalFleetDriver[]
+  staff     StaffFleetAccess[]
+  equipment Equipment[]
+}
+model StaffFleetAccess {
+  staffAccessId String
+  fleetId String
+  staffAccess StaffAccess @relation(fields: [staffAccessId], references: [id], onDelete: Cascade)
+  fleet OperationalFleet @relation(fields: [fleetId], references: [id], onDelete: Cascade)
+  @@id([staffAccessId, fleetId])
+}
+model OperationalFleetDriver {
+  fleetId String
+  userId String
+  active Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  fleet OperationalFleet @relation(fields: [fleetId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([fleetId, userId])
+  @@index([userId, active])
+}
+model Equipment {
+  id String @id @default(cuid())
+  fleetId String
+  kind EquipmentKind
+  name String
+  unitNumber String
+  active Boolean @default(true)
+  revision Int @default(1)
+  assignedDriverId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  fleet OperationalFleet @relation(fields: [fleetId], references: [id], onDelete: Restrict)
+  assignedDriver User? @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  @@unique([fleetId, kind, unitNumber])
+  @@index([assignedDriverId, active])
 }

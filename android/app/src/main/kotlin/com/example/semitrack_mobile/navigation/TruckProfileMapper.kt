@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 object TruckProfileMapper {
     fun fromMap(arguments: Map<*, *>): CommercialTruckProfile {

@@ -4,7 +4,7 @@ analyzer:
   exclude:
     - plugins/**
     # Preserved dormant HERE adapter; excluded while the licensed plugin is
-    # intentionally not part of the Trimble + TomTom build.
+    # intentionally not part of the active Trimble routing build.
     - lib/services/here_sdk_service.dart
     - build/**
     - android/**

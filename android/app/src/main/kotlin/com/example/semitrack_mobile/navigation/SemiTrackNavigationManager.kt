@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 import android.content.Context
 import android.content.Intent
@@ -137,8 +137,6 @@ class SemiTrackNavigationManager(
         "phase" to phase,
         "guidanceProvider" to guidanceEngine.providerName,
         "truckSafeGuidanceAvailable" to guidanceEngine.isAvailable,
-        "tomtomSdkReady" to TomTomSdkManager.isReady,
-        "tomtomSdkError" to TomTomSdkManager.error,
         "running" to NavigationForegroundService.running,
     )
 }

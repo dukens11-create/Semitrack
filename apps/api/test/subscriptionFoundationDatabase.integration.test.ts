@@ -1,3 +1,4 @@
+import { requireIsolatedDatabase } from './isolatedDatabaseGuard.ts';
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test, { after } from "node:test";
@@ -18,7 +19,7 @@ after(async () => {
 test("applied Phase 2 database exposes the capped pilot campaign and entitlement tables", {
   skip: !testDatabaseUrl,
 }, async () => {
-  process.env.DATABASE_URL = testDatabaseUrl!;
+  process.env.DATABASE_URL = requireIsolatedDatabase(testDatabaseUrl);
   const { prisma } = await loadDatabase();
   const campaign = await prisma.pilotCampaign.findUnique({ where: { code: "FOUNDING_100" } });
   assert.ok(campaign);

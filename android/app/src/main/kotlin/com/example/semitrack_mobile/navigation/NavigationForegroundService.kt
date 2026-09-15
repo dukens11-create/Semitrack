@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
@@ -11,8 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
-import com.example.semitrack_mobile.MainActivity
-import com.example.semitrack_mobile.R
+import com.semitrax.app.MainActivity
+import com.semitrax.app.R
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest

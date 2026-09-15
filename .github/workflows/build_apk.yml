@@ -1,48 +1,87 @@
-name: Build Release APK
-
+name: SemiTraX React Native validation
 on:
   push:
   pull_request:
-
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: semitrax-validation-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  build:
+  backend:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: semitrax_test
+          # Disposable CI credential, never used by a deployed database.
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: semitrax_test_0123456789abcdef
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U semitrax_test -d semitrax_test_0123456789abcdef"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    defaults:
+      run:
+        working-directory: apps/api
     env:
-      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
-      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
-      TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
-      TOMTOM_REPOSITORY_USERNAME: ${{ secrets.TOMTOM_REPOSITORY_USERNAME }}
-      TOMTOM_REPOSITORY_PASSWORD: ${{ secrets.TOMTOM_REPOSITORY_PASSWORD }}
-
+      NODE_ENV: test
+      BILLING_MODE: disabled
+      JWT_SECRET: isolated-ci-validation-only-not-a-production-secret
+      DATABASE_URL: postgresql://semitrax_test:isolated-ci-only@127.0.0.1:5433/semitrax_test_0123456789abcdef
+      SUBSCRIPTION_TEST_DATABASE_URL: postgresql://semitrax_test:isolated-ci-only@127.0.0.1:5433/semitrax_test_0123456789abcdef
+      SEMITRAX_ISOLATED_DATABASE: semitrax_test_0123456789abcdef
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter (stable)
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          channel: stable
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Check build credentials
-        shell: bash
-        run: |
-          test -n "$MAPBOX_DOWNLOADS_TOKEN" || { echo "MAPBOX_DOWNLOADS_TOKEN is not configured"; exit 1; }
-          test -n "$MAPBOX_ACCESS_TOKEN" || { echo "MAPBOX_ACCESS_TOKEN is not configured"; exit 1; }
-          test -n "$TOMTOM_API_KEY" || { echo "TOMTOM_API_KEY is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_USERNAME" || { echo "TOMTOM_REPOSITORY_USERNAME is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_PASSWORD" || { echo "TOMTOM_REPOSITORY_PASSWORD is not configured"; exit 1; }
-
-      - name: Build release APK
-        run: flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci --include=dev --no-audit
+      - run: npm run prisma:generate
+      - run: npm run prisma:validate
+      # Only this job's disposable service database is supplied.
+      - run: npm run prisma:deploy
+      - run: npm run typecheck
+      - run: npm test
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile-react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: apps/mobile-react-native/package-lock.json
+      - run: npm ci --include=dev --no-audit
+      - run: npm run typecheck
+      - run: npm run lint -- --max-warnings=0
+      - run: npm test -- --runInBand
+      - run: npm run test:tooling
+  admin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+      - run: npm ci --include=dev --no-audit
+      - run: npm run typecheck
+      - run: node --experimental-strip-types --test test/*.test.cjs test/*.test.ts
+      - run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.SEMITRAX_API_URL }}
+# Source validation only: no APK publication, API deployment, production database,
+# CoPilot provisioning, or release-readiness claim.

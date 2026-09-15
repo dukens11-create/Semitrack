@@ -1,4 +1,4 @@
-package com.example.semitrack_mobile.navigation
+package com.semitrax.app.navigation
 
 interface NativeGuidanceEngine {
     val providerName: String
@@ -35,9 +35,8 @@ interface NativeGuidanceEngine {
  * Production fail-safe used until a native SDK capable of honoring SemiTrack's
  * full commercial-truck route contract is licensed and validated.
  *
- * Route operations are callback-based because TomTom's RoutePlanner is
- * asynchronous. Keeping the provider contract async avoids blocking Flutter's
- * platform thread once the TomTom implementation is enabled.
+ * The provider contract remains asynchronous so a future validated commercial-
+ * truck guidance SDK can be added without blocking Flutter's platform thread.
  */
 class TruckSafeGuidanceUnavailableEngine : NativeGuidanceEngine {
     override val providerName = "unavailable"

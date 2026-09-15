@@ -299,21 +299,23 @@ function exitNumberFrom(instruction: string, interchange: unknown): string | und
   return instruction.match(/\bexit\s+([A-Z0-9-]+)/i)?.[1];
 }
 
-// Directions Report: each ReportLeg has Origin/Dest; Mileage Report has one Stops row per requested point.
-// https://developer.trimblemaps.com/restful-apis/routing/route-reports/directions/
-// https://developer.trimblemaps.com/restful-apis/routing/route-reports/mileage/
-// SemiTraX policy: 1 m for echoed stop-coordinate precision, never a road-snapping allowance.
-// RoutePath uses the existing 250 m measured geometry ceiling separately, with fixed endpoints and ordered visits.
-const STOP_METADATA_TOLERANCE_METERS = 1;
+// MileageReport.ReportLines[].Stop.Coords is the ordered provider stop evidence.
+// SemiTraX policy allows at most 50 m for a small curb/access-road snap, not a
+// facility-wide relocation. This conservative cap is separate from the existing
+// 250 m geometry matching ceiling; neither geometry nor a nearby different stop
+// can replace explicit, ordered stop metadata.
+export const TRIMBLE_STOP_SNAP_TOLERANCE_METERS = 50;
 function coverageFailure(): never {
   throw new RoutingProviderError('Trimble','TRIMBLE_STOP_COVERAGE_UNPROVEN','The provider did not prove the complete requested stop plan.',422);
 }
-function checkedStop(value:any, expected:{lat:number;lng:number}) {
-  if (!value || (Array.isArray(value.Errors) && value.Errors.length)) coverageFailure();
-  const p=coordinate(value?.Coords);
-  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || Math.abs(p[0]!)>180 || Math.abs(p[1]!)>90) coverageFailure();
-  const actual={lat:p[1]!,lng:p[0]!};
-  if(distanceMeters(actual,expected)>STOP_METADATA_TOLERANCE_METERS)coverageFailure();
+function checkedStop(value: any, expected: {lat: number; lng: number}) {
+  if (!value || (value.Errors != null && (!Array.isArray(value.Errors) || value.Errors.length))) coverageFailure();
+  const lat = finiteNumber(value.Coords?.Lat);
+  const lng = finiteNumber(value.Coords?.Lon);
+  if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) coverageFailure();
+  const actual = {lat, lng};
+  const distance = distanceMeters(actual, expected);
+  if (!Number.isFinite(distance) || distance > TRIMBLE_STOP_SNAP_TOLERANCE_METERS) coverageFailure();
   return actual;
 }
 function validatePathStops(geometry:number[][],points:{lat:number;lng:number}[]) {
@@ -336,7 +338,15 @@ function validateStopCoverage(directions:any,mileage:any,geometry:number[][],inp
   const legs=directions?.ReportLegs,rows=mileage?.ReportLines;
   if(!Array.isArray(legs)||legs.length!==points.length-1||!Array.isArray(rows)||rows.length!==points.length)coverageFailure();
   checkedStop(directions.Origin,points[0]!);checkedStop(directions.Destination,points.at(-1)!);
-  const validatedStops=points.map((point,index)=>checkedStop(rows[index]?.Stops,point));
+  const validatedStops = points.map((point, index) => {
+    const actual = checkedStop(rows[index]?.Stop, point);
+    const expectedDistance = distanceMeters(actual, point);
+    // Reject ambiguous/reordered evidence even when nearby stops fall inside the
+    // snap radius. Identical requested coordinates remain legitimate repeat stops.
+    if (points.some(other => (other.lat !== point.lat || other.lng !== point.lng)
+      && distanceMeters(actual, other) <= expectedDistance)) coverageFailure();
+    return actual;
+  });
   legs.forEach((leg:any,index:number)=>{
     checkedStop(leg.Origin,points[index]!);checkedStop(leg.Dest,points[index+1]!);
     if(!Array.isArray(leg.ReportLines)||!leg.ReportLines.length)coverageFailure();
@@ -354,8 +364,15 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
   const legs: RouteLeg[] = reportLegs.map((leg: any, legIndex: number) => {
     const lines = Array.isArray(leg?.ReportLines) ? leg.ReportLines : [];
     const maneuvers: RouteManeuver[] = [];
-    let lastDistance = legIndex === 0 ? 0 : finiteNumber(mileageLines[legIndex]?.TMiles) ?? 0;
-    let lastDuration = legIndex === 0 ? 0 : clockToSeconds(mileageLines[legIndex]?.THours);
+    // A straight leg may end at leg.Dest without a turn or arrival report row.
+    // Only in that case use provider driving rows as continue maneuvers.
+    const straightLeg = !lines.some((line: any) => line?.TurnInstruction
+      || /^destination\b/i.test(String(line?.Direction ?? '').trim()));
+    const startingDistance = finiteNumber(mileageLines[legIndex]?.TMiles);
+    const startingDuration = clockToSeconds(mileageLines[legIndex]?.THours);
+    if (startingDistance == null || startingDistance < 0 || !Number.isFinite(startingDuration)) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','The provider did not supply valid cumulative leg starting totals.');
+    let lastDistance = startingDistance;
+    let lastDuration = startingDuration;
 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
@@ -363,11 +380,14 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) throw new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
       const instruction = typeof line?.Direction === "string" ? line.Direction.trim() : "";
       const isArrival = /^destination\b/i.test(instruction);
-      if (!line?.TurnInstruction && !isArrival) continue;
+      if (!straightLeg && !line?.TurnInstruction && !isArrival) continue;
+      // Descriptive-only rows supply no distance/time evidence. Never borrow
+      // another row's totals to manufacture a straight-leg instruction.
+      if (straightLeg && line?.Dist == null && line?.Time == null) continue;
 
       let cumulativeDistance = finiteNumber(line?.Dist);
       let cumulativeDuration = clockToSeconds(line?.Time);
-      if (cumulativeDistance == null && !isArrival) {
+      if (!straightLeg && cumulativeDistance == null && !isArrival) {
         for (let next = index + 1; next < lines.length; next++) {
           if (lines[next]?.TurnInstruction || /^destination\b/i.test(String(lines[next]?.Direction ?? ''))) break;
           cumulativeDistance = finiteNumber(lines[next]?.Dist);
@@ -377,20 +397,24 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       }
       if (!instruction || cumulativeDistance == null || cumulativeDistance < lastDistance || !Number.isFinite(cumulativeDuration) || cumulativeDuration < lastDuration) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','Maneuver distance, time or instruction is missing or inconsistent.');
       const action = maneuverAction(line?.TurnInstruction, instruction);
-      const rawCoordinate = isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End;
-      const latitude = finiteNumber(rawCoordinate?.Lat ?? rawCoordinate?.lat);
-      const longitude = finiteNumber(rawCoordinate?.Lon ?? rawCoordinate?.lon ?? rawCoordinate?.Lng ?? rawCoordinate?.lng);
+      const candidates = straightLeg ? [line?.Begin, line?.End]
+        : [isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End];
+      const providerCoordinate = candidates.map(raw => ({
+        lat: finiteNumber(raw?.Lat ?? raw?.lat),
+        lng: finiteNumber(raw?.Lon ?? raw?.lon ?? raw?.Lng ?? raw?.lng),
+      })).find((point): point is {lat: number; lng: number} =>
+        point.lat != null && point.lng != null && Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180);
       maneuvers.push({
         step: ++maneuverStep,
         instruction,
         distanceMiles: Number((cumulativeDistance - lastDistance).toFixed(3)),
         durationSeconds: cumulativeDuration - lastDuration,
-        action: action.action,
-        direction: action.direction,
+        action: action.action ?? (straightLeg ? "continue" : undefined),
+        direction: action.direction ?? (straightLeg ? "straight" : undefined),
         roadName: roadNameFrom(instruction),
         nextRoadName: roadNameFrom(instruction),
         exitNumber: exitNumberFrom(instruction, line?.InterCh),
-        ...(latitude == null || longitude == null ? {} : { coordinate: { lat: latitude, lng: longitude } }),
+        ...(providerCoordinate ? { coordinate: providerCoordinate } : {}),
       });
       if (cumulativeDistance != null) lastDistance = cumulativeDistance;
       if (cumulativeDuration > 0) lastDuration = cumulativeDuration;

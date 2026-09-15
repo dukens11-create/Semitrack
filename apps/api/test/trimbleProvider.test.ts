@@ -93,7 +93,7 @@ function withStops(payload:any[], origin=input.origin, destination=input.destina
  directions.Origin=loc(origin);directions.Destination=loc(destination);
  for(const leg of directions.ReportLegs){leg.Origin=loc(origin);leg.Dest=loc(destination);}
  const mileage=payload.find(p=>p.__type.startsWith('MileageReport'));
- mileage.ReportLines[0].Stops=loc(destination);mileage.ReportLines.unshift({Stops:loc(origin),LMiles:'0',TMiles:'0',LHours:'0:00:00',THours:'0:00:00'});
+ mileage.ReportLines[0].Stop=loc(destination);mileage.ReportLines.unshift({Stop:loc(origin),LMiles:'0',TMiles:'0',LHours:'0:00:00',THours:'0:00:00'});
  return payload;
 }
 

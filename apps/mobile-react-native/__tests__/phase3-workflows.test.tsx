@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Text, TextInput } from 'react-native';
+import { DocumentDateField } from '../src/components/DocumentsPresentation';
 let mockOperation = 0;
 const mockSecureDocuments = new Map<string, string>();
 jest.mock('react-native-keychain', () => ({
@@ -96,6 +97,7 @@ test('assignment entry is read-only; acceptance requires explicit confirmation a
     tree = create(<TripsScreen services={s} onMap={jest.fn()} />);
   });
   expect(request.mock.calls.map(c => c[0])).toEqual(['GET']);
+  await press('More: Ordered assignment');
   await press('Accept assignment');
   expect(request.mock.calls.length).toBe(1);
   request.mockImplementation(async method =>
@@ -125,10 +127,16 @@ test('revision conflict refreshes latest trip without automatic status retry', a
       <TripsScreen services={services(request)} onMap={jest.fn()} />,
     );
   });
+  await press('More: Ordered assignment');
   await press('Accept assignment');
   await press('Confirm trip update');
   expect(count).toBe(1);
-  expect(JSON.stringify(tree.toJSON())).toContain('This trip changed');
+  expect(
+    tree.root
+      .findAllByType(Text)
+      .flatMap(node => [node.props.children].flat(Infinity))
+      .join(''),
+  ).toContain('This trip changed');
 });
 test('documents render actual stored expiration and no public storage action', async () => {
   const request = jest.fn().mockResolvedValue({
@@ -156,7 +164,8 @@ test('documents render actual stored expiration and no public storage action', a
     .flat()
     .join(' ');
   expect(text).toContain('Expired');
-  expect(text).toContain('metadata records only');
+  expect(text).toContain('Labels and dates only.');
+  expect(text).not.toContain('metadata');
   expect(request).toHaveBeenCalledTimes(1);
 });
 test('password change uses existing API and clears local session only after successful replacement', async () => {
@@ -202,6 +211,7 @@ test('document double-submit and lost-response retry preserve one create operati
   await act(async () => {
     tree = create(<DocumentsScreen services={services(request)} />);
   });
+  await press('Add CDL');
   const input = () =>
     tree.root
       .findAllByType(TextInput)
@@ -211,7 +221,7 @@ test('document double-submit and lost-response retry preserve one create operati
   });
   const button = tree.root.findAll(
     n =>
-      n.props.accessibilityLabel === 'Save document metadata' &&
+      n.props.accessibilityLabel === 'Save document' &&
       typeof n.props.onPress === 'function',
   )[0]!;
   await act(async () => {
@@ -224,10 +234,11 @@ test('document double-submit and lost-response retry preserve one create operati
   const creates = request.mock.calls.filter(c => c[0] === 'POST');
   expect(creates).toHaveLength(2);
   expect(creates[1]![2]).toEqual(creates[0]![2]);
+  await press('Add CDL');
   await act(async () => {
     input().props.onChangeText('A different synthetic record');
   });
-  await press('Save document metadata');
+  await press('Save document');
   const all = request.mock.calls.filter(c => c[0] === 'POST');
   expect(all).toHaveLength(3);
   expect(all[2]![2].createOperationId).not.toEqual(
@@ -253,6 +264,7 @@ function field(label: string) {
     .find(n => n.props.accessibilityLabel === label)!;
 }
 async function fill(label: string, value: string) {
+  if (label === 'Document label' && !field(label)) await press('Add CDL');
   await act(async () => field(label).props.onChangeText(value));
 }
 function actionButton(label: string) {
@@ -284,7 +296,9 @@ test.each([false, true])(
     await act(async () => {
       tree = create(<TripsScreen services={s} onMap={jest.fn()} />);
     });
+    await press('View trip: Ordered assignment');
     await press('Calculate with current verified truck');
+    await press('View trip: Ordered assignment');
     await press('Calculate with current verified truck');
     expect(calculate.mock.calls[0][0]).toEqual({
       lat: atPickup ? 40 : 39,
@@ -297,6 +311,7 @@ test.each([false, true])(
     ]);
     expect(calculate.mock.calls[1]![1]).toEqual(calculate.mock.calls[0]![1]);
     current = { ...current, completedStopIds: ['o'] };
+    await press('View trip: Ordered assignment');
     await press('Calculate with current verified truck');
     expect(calculate.mock.calls[2][1].stops.map((p: any) => p.id)).toEqual([
       'a',
@@ -306,6 +321,7 @@ test.each([false, true])(
     await act(async () => {
       tree = create(<TripsScreen services={s} onMap={jest.fn()} />);
     });
+    await press('View trip: Ordered assignment');
     await press('Calculate with current verified truck');
     expect(calculate.mock.calls[3][1].stops.map((p: any) => p.id)).toEqual([
       'a',
@@ -346,6 +362,7 @@ test('stop completion is explicit, revision checked, and is never inferred by op
       <TripsScreen services={services(request)} onMap={jest.fn()} />,
     );
   });
+  await press('More: Ordered assignment');
   await press('Record next stop completed');
   expect(request.mock.calls.every(c => c[0] === 'GET')).toBe(true);
   await press('Confirm trip update');
@@ -375,13 +392,13 @@ test('document repeated conflict requires review of newest server revision and p
   await act(async () => {
     tree = create(<DocumentsScreen services={services(request)} />);
   });
-  await press('Edit document metadata');
+  await press('Edit document: Synthetic label');
   await fill('Document label', 'My unsaved edit');
-  await press('Save document metadata');
+  await press('Save document');
   expect(field('Document label').props.value).toBe('My unsaved edit');
-  expect(actionButton('Save document metadata').props.disabled).toBe(true);
+  expect(actionButton('Save document').props.disabled).toBe(true);
   await press('Review latest and keep my edits');
-  await press('Save document metadata');
+  await press('Save document');
   expect(
     request.mock.calls
       .filter(c => c[0] === 'PATCH')
@@ -389,15 +406,15 @@ test('document repeated conflict requires review of newest server revision and p
   ).toEqual([1, 2]);
   current = { ...current, revision: 4 };
   await press('Review latest and keep my edits');
-  expect(actionButton('Save document metadata').props.disabled).toBe(true);
+  expect(actionButton('Save document').props.disabled).toBe(true);
   await press('Review latest and keep my edits');
   conflict = false;
-  await press('Save document metadata');
+  await press('Save document');
   expect(
     (request.mock.calls.filter(c => c[0] === 'PATCH').at(-1) as any)[2]
       .expectedRevision,
   ).toBe(4);
-  expect(field('Document label').props.value).toBe('');
+  expect(field('Document label')).toBeUndefined();
 });
 test.each(['save', 'cancel', 'conflict'])(
   'edit -> %s -> new document has canonical blank defaults',
@@ -410,20 +427,25 @@ test.each(['save', 'cancel', 'conflict'])(
     await act(async () => {
       tree = create(<DocumentsScreen services={services(request)} />);
     });
-    await press('Edit document metadata');
-    if (mode === 'cancel') await press('Cancel editing / create new document');
+    await press('Edit document: Synthetic label');
+    if (mode === 'cancel') await press('Cancel editing');
     else {
-      await press('Save document metadata');
-      if (mode === 'conflict')
-        await press('Cancel editing / create new document');
+      await press('Save document');
+      if (mode === 'conflict') await press('Cancel editing');
     }
-    expect(field('Issue date (YYYY-MM-DD, optional)').props.value).toBe('');
-    expect(field('Expiration date (YYYY-MM-DD, optional)').props.value).toBe(
-      '',
-    );
+    await press('Add Insurance');
+    expect(
+      tree.root
+        .findAllByType(DocumentDateField)
+        .find(n => n.props.label === 'Issue date')!.props.value,
+    ).toBe('');
+    expect(
+      tree.root
+        .findAllByType(DocumentDateField)
+        .find(n => n.props.label === 'Expiration date')!.props.value,
+    ).toBe('');
     await fill('Document label', 'New insurance');
-    await press('INSURANCE');
-    await press('Save document metadata');
+    await press('Save document');
     const body = (request.mock.calls.find(c => c[0] === 'POST') as any)[2];
     expect(body).toMatchObject({
       issuedOn: null,
@@ -440,7 +462,7 @@ test.each(['save', 'cancel', 'conflict'])(
     ])
       expect(body).not.toHaveProperty(key);
     await fill('Document label', 'Another document');
-    await press('Save document metadata');
+    await press('Save document');
     const creates = request.mock.calls.filter(c => c[0] === 'POST');
     expect((creates[1] as any)[2].createOperationId).not.toBe(
       body.createOperationId,
@@ -469,7 +491,7 @@ test('committed lost-response create survives remount and uses the exact persist
     tree = create(<DocumentsScreen services={s} />);
   });
   await fill('Document label', 'One logical document');
-  await press('Save document metadata');
+  await press('Save document');
   expect(records.size).toBe(1);
   await act(async () => tree.unmount());
   await act(async () => {
@@ -483,7 +505,7 @@ test('committed lost-response create survives remount and uses the exact persist
   const posts = request.mock.calls.filter(c => c[0] === 'POST');
   expect(posts[1]![2]).toEqual(posts[0]![2]);
   await fill('Document label', 'Intentional second document');
-  await press('Save document metadata');
+  await press('Save document');
   expect(records.size).toBe(2);
 });
 test('secure storage failures block POST and another user cannot view or replay the prior owner pending operation', async () => {
@@ -499,9 +521,9 @@ test('secure storage failures block POST and another user cannot view or replay 
   (Keychain.setGenericPassword as jest.Mock).mockRejectedValueOnce(
     new Error('storage unavailable'),
   );
-  await press('Save document metadata');
+  await press('Save document');
   expect(request.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0);
-  await press('Save document metadata');
+  await press('Save document');
   expect(request.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1);
   await act(async () => tree.unmount());
   const other = services(request);
@@ -512,8 +534,13 @@ test('secure storage failures block POST and another user cannot view or replay 
   await act(async () => {
     tree = create(<DocumentsScreen services={other} />);
   });
-  expect(field('Document label').props.value).toBe('');
-  expect(JSON.stringify(tree.toJSON())).not.toContain('Private label');
+  expect(field('Document label')).toBeUndefined();
+  expect(
+    tree.root
+      .findAllByType(Text)
+      .flatMap(n => [n.props.children].flat(Infinity))
+      .join(''),
+  ).not.toContain('Private label');
 });
 test('secure pending-create recovery survives a new storage wrapper; cross-owner and concurrent operations are isolated', async () => {
   const disk = new Map<string, string>();
@@ -566,14 +593,14 @@ test('abandoning unresolved recovery requires explicit confirmation; remount aft
     tree = create(<DocumentsScreen services={s} />);
   });
   await fill('Document label', 'Unconfirmed');
-  await press('Save document metadata');
+  await press('Save document');
   await press('Abandon document recovery');
   expect(request.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1);
   await press('Confirm abandon and start a different document');
-  expect(field('Document label').props.value).toBe('');
+  expect(field('Document label')).toBeUndefined();
   lost = false;
   await fill('Document label', 'Genuinely new');
-  await press('Save document metadata');
+  await press('Save document');
   const creates = request.mock.calls.filter(c => c[0] === 'POST');
   expect((creates[1] as any)[2].createOperationId).not.toBe(
     (creates[0] as any)[2].createOperationId,
@@ -582,9 +609,18 @@ test('abandoning unresolved recovery requires explicit confirmation; remount aft
   await act(async () => {
     tree = create(<DocumentsScreen services={s} />);
   });
-  expect(field('Document label').props.value).toBe('');
-  expect(field('Issue date (YYYY-MM-DD, optional)').props.value).toBe('');
-  expect(field('Expiration date (YYYY-MM-DD, optional)').props.value).toBe('');
+  expect(field('Document label')).toBeUndefined();
+  await press('Add CDL');
+  expect(
+    tree.root
+      .findAllByType(DocumentDateField)
+      .find(n => n.props.label === 'Issue date')!.props.value,
+  ).toBe('');
+  expect(
+    tree.root
+      .findAllByType(DocumentDateField)
+      .find(n => n.props.label === 'Expiration date')!.props.value,
+  ).toBe('');
 });
 
 test('account replacement while secure write is pending cannot send the old owner document through the new session', async () => {
@@ -606,7 +642,7 @@ test('account replacement while secure write is pending cannot send the old owne
   });
   await fill('Document label', 'Private owner draft');
   await act(async () => {
-    actionButton('Save document metadata').props.onPress();
+    actionButton('Save document').props.onPress();
     await Promise.resolve();
   });
   (s.auth as any).publish({

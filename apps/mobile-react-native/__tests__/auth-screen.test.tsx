@@ -126,7 +126,9 @@ test('forgot password validates email and does not promise unimplemented email d
   await fill('Email', 'driver@example.test');
   await press('Forgot password?');
   expect(requestPasswordReset).toHaveBeenCalledWith('driver@example.test');
-  expect(text()).toContain('Recovery email delivery is not yet available.');
+  expect(text()).toContain(
+    'If an account exists for this email, we’ve sent password reset instructions.',
+  );
   expect(authenticate).not.toHaveBeenCalled();
 });
 
@@ -139,25 +141,48 @@ test('failed recovery stays signed out and reports unavailability', async () => 
   expect(button('Sign in').props.disabled).toBe(false);
 });
 
-
-test.each([200, 240, 320, 412, 768, 1024])('logo overrides intrinsic artwork dimensions at viewport width %i', async width => {
- const originalWindow = Dimensions.get('window');
- const originalScreen = Dimensions.get('screen');
- try {
-   await act(async () => Dimensions.set({ window: {...originalWindow, width}, screen: {...originalScreen, width} }));
-   for (const mode of ['Sign in mode', 'Create account mode']) {
-     await press(mode);
-     const image = screen.root.findAllByType(Image).find(n => n.props.accessibilityLabel === 'Semi-TraX — Smarter routes. Safer deliveries.')!;
-     const nativeStyle = StyleSheet.flatten([{width:1723,height:541}, image.props.style]);
-     expect(typeof nativeStyle.width).toBe('number');
-     expect(typeof nativeStyle.height).toBe('number');
-     expect(nativeStyle.width).toBeLessThanOrEqual(188);
-     expect(nativeStyle.width).toBeLessThanOrEqual(width - 52);
-     expect(nativeStyle.height).toBeCloseTo(Number(nativeStyle.width) * 541 / 1723, 6);
-     expect(image.props.resizeMode).toBe('contain');
-     expect(image.props.source).toBe(require('../src/assets/semitrax_login_lockup.png'));
-   }
- } finally {
-   await act(async () => Dimensions.set({window:originalWindow,screen:originalScreen}));
- }
-});
+test.each([200, 240, 320, 412, 768, 1024])(
+  'logo overrides intrinsic artwork dimensions at viewport width %i',
+  async width => {
+    const originalWindow = Dimensions.get('window');
+    const originalScreen = Dimensions.get('screen');
+    try {
+      await act(async () =>
+        Dimensions.set({
+          window: { ...originalWindow, width },
+          screen: { ...originalScreen, width },
+        }),
+      );
+      for (const mode of ['Sign in mode', 'Create account mode']) {
+        await press(mode);
+        const image = screen.root
+          .findAllByType(Image)
+          .find(
+            n =>
+              n.props.accessibilityLabel ===
+              'Semi-TraX — Smarter routes. Safer deliveries.',
+          )!;
+        const nativeStyle = StyleSheet.flatten([
+          { width: 1723, height: 541 },
+          image.props.style,
+        ]);
+        expect(typeof nativeStyle.width).toBe('number');
+        expect(typeof nativeStyle.height).toBe('number');
+        expect(nativeStyle.width).toBeLessThanOrEqual(188);
+        expect(nativeStyle.width).toBeLessThanOrEqual(width - 52);
+        expect(nativeStyle.height).toBeCloseTo(
+          (Number(nativeStyle.width) * 541) / 1723,
+          6,
+        );
+        expect(image.props.resizeMode).toBe('contain');
+        expect(image.props.source).toBe(
+          require('../src/assets/semitrax_login_lockup.png'),
+        );
+      }
+    } finally {
+      await act(async () =>
+        Dimensions.set({ window: originalWindow, screen: originalScreen }),
+      );
+    }
+  },
+);

@@ -1,4 +1,9 @@
-import React from 'react';
+import {
+  currentObservation,
+  currentDieselPrice,
+} from '../navigation/providerEvidence';
+import { stationStatus } from '../poi/stationStatus';
+import React, { useEffect, useState } from 'react';
 import { Image, Linking, StyleSheet } from 'react-native';
 import { Card, Copy, Button } from '../../components/ui';
 
@@ -60,7 +65,11 @@ export function recordLines(item: Record<string, unknown>): string[] {
       const report = value as Record<string, unknown>;
       lines.push(
         'Reported status: ' +
-          (report.stale === false && typeof report.value === 'string'
+          (key === 'currentStatus'
+            ? stationStatus(report)
+            : report.stale === false &&
+              currentObservation(report, 900000) &&
+              typeof report.value === 'string'
             ? report.value
             : 'UNKNOWN'),
       );
@@ -74,14 +83,7 @@ export function recordLines(item: Record<string, unknown>): string[] {
     for (const raw of item.prices) {
       if (!raw || typeof raw !== 'object') continue;
       const p = raw as Record<string, unknown>;
-      const age = Date.now() - Date.parse(String(p.observedAt));
-      if (
-        age < 0 ||
-        age > 86400000 ||
-        Date.parse(String(p.expiresAt)) <= Date.now() ||
-        !Number.isFinite(age)
-      )
-        continue;
+      if (!currentDieselPrice(p)) continue;
       for (const key of ['cashPrice', 'creditPrice']) {
         const price = Number(p[key]);
         if (price > 0 && Number.isFinite(price))
@@ -113,11 +115,17 @@ export function CorridorRecords({
 }: {
   items: Record<string, unknown>[];
 }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick(v => v + 1), 5000);
+    return () => clearInterval(timer);
+  }, []);
   return (
     <>
       {items.map((item, index) => {
         const image =
-          item.dataStatus === 'CURRENT_PROVIDER_REPORT'
+          item.dataStatus === 'CURRENT_PROVIDER_REPORT' &&
+          currentObservation(item, 900000)
             ? safePublicMedia(item.imageUrl)
             : null;
         const stream =

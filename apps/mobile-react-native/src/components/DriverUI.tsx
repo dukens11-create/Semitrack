@@ -1,11 +1,11 @@
 import React, { useContext } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
-  useColorScheme,
   KeyboardAvoidingView,
   Platform,
   TextInput,
@@ -23,8 +23,7 @@ export const driverColors = {
 };
 export function useDriverPalette() {
   const mode = useContext(DriverAppearanceContext);
-  const scheme = useColorScheme();
-  const dark = mode === 'night' || (mode === 'system' && scheme === 'dark');
+  const dark = mode === 'night';
   return {
     dark,
     canvas: dark ? '#0C131B' : '#F3F5F7',
@@ -33,6 +32,12 @@ export function useDriverPalette() {
     muted: dark ? '#B9C6D3' : '#637080',
     border: dark ? '#2D3742' : '#E4E8ED',
     input: dark ? '#202C38' : '#EEF1F4',
+    actionText: dark ? '#FF9877' : '#9F341E',
+    warningSurface: dark ? '#392B1B' : '#FFF3D6',
+    warningText: dark ? '#FFE5BD' : '#714600',
+    danger: dark ? '#FFB4AB' : '#A32121',
+    toggleThumb: dark ? '#E4E8ED' : '#FFFFFF',
+    toggleActive: driverColors.orange,
   };
 }
 export function DriverPage({ children }: React.PropsWithChildren) {
@@ -90,28 +95,45 @@ export function DriverButton({
   onPress,
   disabled = false,
   secondary = false,
+  loading = false,
 }: {
   title: string;
   onPress: () => void;
   disabled?: boolean;
   secondary?: boolean;
+  loading?: boolean;
 }) {
   const p = useDriverPalette();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
+      disabled={disabled || loading}
       onPress={onPress}
-      style={[
+      style={({ pressed }) => [
         ds.button,
-        { backgroundColor: secondary ? p.input : driverColors.orange },
-        disabled && ds.disabled,
+        {
+          backgroundColor: disabled
+            ? p.border
+            : secondary
+            ? p.input
+            : driverColors.orange,
+        },
+        pressed && { borderColor: p.text },
       ]}
     >
+      {loading && (
+        <ActivityIndicator
+          accessibilityLabel="Working"
+          color={secondary ? p.text : '#FFFFFF'}
+        />
+      )}
       <Text
-        style={[ds.buttonText, secondary ? { color: p.text } : ds.whiteText]}
+        style={[
+          ds.buttonText,
+          secondary || disabled ? { color: p.text } : ds.whiteText,
+        ]}
       >
         {title}
       </Text>
@@ -120,12 +142,14 @@ export function DriverButton({
 }
 export function DriverTile({
   icon,
+  iconColors,
   title,
   caption,
   onPress,
   disabled = false,
 }: {
   icon: DriverIconName;
+  iconColors?: { foreground: string; background: string };
   title: string;
   caption: string;
   onPress?: () => void;
@@ -141,8 +165,13 @@ export function DriverTile({
       onPress={onPress}
       style={[ds.tile, { backgroundColor: p.card, borderColor: p.border }]}
     >
-      <View style={ds.iconBox}>
-        <DriverIcon name={icon} />
+      <View
+        style={[
+          ds.iconBox,
+          iconColors && { backgroundColor: iconColors.background },
+        ]}
+      >
+        <DriverIcon name={icon} color={iconColors?.foreground} />
       </View>
       <View style={ds.grow}>
         <Text style={[ds.tileTitle, { color: p.text }]}>{title}</Text>
@@ -201,6 +230,10 @@ export const ds = StyleSheet.create({
     boxShadow: '0 7px 18px #1018200D',
   },
   button: {
+    borderWidth: 2,
+    borderColor: 'transparent',
+    flexDirection: 'row',
+    gap: 8,
     minHeight: 52,
     padding: 14,
     borderRadius: 14,
@@ -208,8 +241,12 @@ export const ds = StyleSheet.create({
     justifyContent: 'center',
   },
   whiteText: { color: 'white' },
-  buttonText: { fontSize: 16, fontWeight: '900', textAlign: 'center' },
-  disabled: { opacity: 0.4 },
+  buttonText: {
+    fontSize: 16,
+    fontWeight: '900',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
   tile: {
     padding: 14,
     borderRadius: 20,
@@ -250,6 +287,7 @@ export function DriverField({
     <View style={ds.field}>
       <Text style={[ds.fieldLabel, { color: p.text }]}>{label}</Text>
       <TextInput
+        keyboardAppearance={p.dark ? 'dark' : 'light'}
         accessibilityLabel={label}
         placeholderTextColor={p.muted}
         {...props}

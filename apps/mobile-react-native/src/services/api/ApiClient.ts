@@ -1,3 +1,4 @@
+import { sanitizeRestrictionDiagnostic } from '../../features/routing/restrictionDiagnostic';
 import { safeDriverError } from '../../errors/driverErrors';
 import { tokensSchema } from '../../models/contracts';
 import type { TokenVault } from '../storage/TokenVault';
@@ -8,6 +9,7 @@ export class ApiError extends Error {
     readonly status = 0,
     readonly retryable = false,
     readonly validationFields: string[] = [],
+    readonly restrictionDiagnostic: ReturnType<typeof sanitizeRestrictionDiagnostic> = null,
   ) {
     super(message);
   }
@@ -32,10 +34,16 @@ export class ApiClient {
     body?: unknown,
     signal?: AbortSignal,
     authenticated = true,
+    onRouteResponse?: (status: number) => void,
   ): Promise<T> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
       throw new ApiError('INVALID_PATH', 'Invalid API path.');
     }
+    const observeRouteResponse = (status: number) => {
+      if (method === 'POST' && path === '/routing/truck-route') {
+        try { onRouteResponse?.(status); } catch { /* Observability cannot change requests. */ }
+      }
+    };
     const generation = this.sessionGeneration;
     const tokens = authenticated ? await this.vault.read() : null;
     if (authenticated && generation !== this.sessionGeneration) {
@@ -48,6 +56,7 @@ export class ApiClient {
       tokens?.accessToken,
       signal,
     );
+    observeRouteResponse(response.status);
     if (authenticated && generation !== this.sessionGeneration) {
       throw new ApiError('SESSION_CHANGED', 'Session changed.');
     }
@@ -61,6 +70,7 @@ export class ApiClient {
         const retryTokens = await this.vault.read();
         if (generation !== this.sessionGeneration || !retryTokens) throw new ApiError('SESSION_CHANGED', 'Session changed.');
         response = await this.send(method, path, body, retryTokens.accessToken, signal);
+        observeRouteResponse(response.status);
       }
     }
     if (authenticated && generation !== this.sessionGeneration) {
@@ -96,6 +106,7 @@ export class ApiClient {
               code?: unknown;
               message?: unknown;
               retryable?: unknown;
+              restrictionDiagnostic?: unknown;
               details?: { fieldErrors?: unknown };
             })
           : {};
@@ -111,6 +122,7 @@ export class ApiClient {
         typeof detail.details.fieldErrors === 'object'
           ? Object.keys(detail.details.fieldErrors).slice(0, 50)
           : [],
+        detail.code === 'TRIMBLE_RESTRICTION_WARNING' ? sanitizeRestrictionDiagnostic(detail.restrictionDiagnostic) : null,
       );
     }
     return data as T;

@@ -1,6 +1,33 @@
 import NativePlatform from '../native/navigation/NativeSemiTraxPlatform';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Text } from 'react-native';
+import {
+  ActivityIndicator,
+  AppState,
+  RefreshControl,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
+import { DriverSheet } from '../components/DriverSheet';
+import { DriverIcon } from '../components/DriverIcon';
+import {
+  TripAction,
+  TripFilters,
+  TripIllustration,
+  TripQuickActions,
+  TripStatus,
+  TripTruck,
+  ts,
+} from '../components/TripsPresentation';
+import {
+  DocumentCategories,
+  DocumentDateField,
+  DocumentRow,
+  documentCategory,
+  documentDay,
+  documentExpiry,
+  ds,
+} from '../components/DocumentsPresentation';
 import { z } from 'zod';
 import type { Services } from '../app/services';
 import { useStore } from '../hooks/useStore';
@@ -9,8 +36,8 @@ import {
   DriverCard,
   DriverCopy,
   DriverField,
-  DriverPage,
   DriverTitle,
+  useDriverPalette,
 } from '../components/DriverUI';
 import { ErrorText, errorMessage } from '../components/ui';
 import {
@@ -40,6 +67,19 @@ export const savedTripSchema = z.object({
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   completedStopIds: z.array(z.string()).default([]),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  // Optional display metadata never substitutes for the current verified truck.
+  truckSnapshot: z
+    .object({
+      name: z.string().optional(),
+      heightFt: z.number().finite().positive().optional(),
+      weightLbs: z.number().finite().positive().optional(),
+      axleCount: z.number().int().positive().optional(),
+    })
+    .nullable()
+    .optional()
+    .catch(undefined),
 });
 type SavedTrip = z.infer<typeof savedTripSchema>;
 export function planFromTrip(value: unknown) {
@@ -124,6 +164,17 @@ export function TripsScreen({
       completedStopId?: string;
     } | null>(null),
     [notice, setNotice] = useState('');
+  const p = useDriverPalette();
+  const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState<'Recent' | 'Saved' | 'Planned'>(
+    'Recent',
+  );
+  const [opened, setOpened] = useState<{
+    id: string;
+    mode: 'details' | 'actions';
+  } | null>(null);
+  const trucks = useStore(services.trucks);
   const routes = useStore(services.routes),
     request = useLibraryRequest(services);
   const { account: getAccount, valid: isCurrent, run } = request;
@@ -133,22 +184,43 @@ export function TripsScreen({
     createOperation = useRef<string | undefined>(undefined);
   const load = useCallback(async () => {
     const account = getAccount();
-    const data = await services.api.request('GET', '/trips');
-    const rows = z
-      .object({ items: z.array(savedTripSchema) })
-      .parse(data).items;
-    if (isCurrent(account)) setItems(rows);
+    if (!account) return;
+    setRefreshing(true);
+    try {
+      const data = await services.api.request('GET', '/trips');
+      const rows = z
+        .object({ items: z.array(savedTripSchema) })
+        .parse(data).items;
+      if (isCurrent(account)) {
+        setItems(rows);
+        setLoaded(true);
+      }
+    } finally {
+      if (isCurrent(account)) setRefreshing(false);
+    }
   }, [services, getAccount, isCurrent]);
   useEffect(() => {
     void run(load);
-  }, [load, run]); // Only refresh/read on entry; no automatic writes.
+  }, [load, run, routes.route]); // Automatic reads only; never writes.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') void run(load);
+    });
+    return () => subscription.remove();
+  }, [load, run]);
   async function savePlan() {
     if (saveAttempted.current) return;
     const account = getAccount(),
       state = services.routes.getSnapshot(),
       truck = services.trucks.getSnapshot().selected,
       fix = services.location.getFreshFix();
-    if (!state.plan || !state.route || !truck || !fix)
+    if (
+      !state.plan ||
+      !state.route?.truckSafe ||
+      !state.route.navigationAllowed ||
+      !truck ||
+      !fix
+    )
       throw new Error('A reviewed route and fresh location are required.');
     if (!NativePlatform)
       throw new Error('Native operation identifier unavailable.');
@@ -233,8 +305,10 @@ export function TripsScreen({
         planFromTrip(current),
         truck,
       )
-    )
+    ) {
+      setOpened(null);
       onMap();
+    }
   }
   const actions: Record<string, string[]> = {
     ASSIGNED: ['PLANNED', 'CANCELLED'],
@@ -249,45 +323,67 @@ export function TripsScreen({
     COMPLETED: 'Record trip completed',
     CANCELLED: 'Cancel / reject trip',
   };
+  const shown =
+    filter === 'Planned'
+      ? items.filter(trip => ['PLANNED', 'ASSIGNED'].includes(trip.status))
+      : filter === 'Saved'
+      ? // Saved is a view of persisted driver-created plans, not a new API status.
+        items.filter(trip => trip.status === 'PLANNED' && !trip.assigned)
+      : items;
+  const trip = items.find(item => item.id === opened?.id);
+  const canSave = !!(
+    routes.plan &&
+    routes.route?.truckSafe &&
+    routes.route.navigationAllowed &&
+    trucks.selected &&
+    services.location.getFreshFix()
+  );
   return (
-    <DriverPage>
-      <DriverTitle>Trips</DriverTitle>
-      <DriverCopy>
-        Saved plans and driver-reported history. Progress does not certify
-        navigation, mileage or arrival.
-      </DriverCopy>
-      <DriverButton
-        title="Refresh trips"
-        disabled={request.busy}
-        onPress={() => {
-          void run(load);
-        }}
-      />
-      <DriverButton
-        title="Save current route as trip plan"
-        disabled={request.busy || !routes.route || saveAttempted.current}
-        onPress={() => {
-          void run(savePlan);
-        }}
-      />
-      {saveAttempted.current && (
-        <DriverCopy>
-          {planSaved
-            ? 'Plan saved.'
-            : 'Save result unconfirmed. Retry uses the same operation and unchanged values.'}
-        </DriverCopy>
-      )}
-      {pendingPlan.current && (
-        <DriverButton
-          title="Retry same trip save"
+    <ScrollView
+      style={{ backgroundColor: p.canvas }}
+      contentContainerStyle={ts.page}
+      refreshControl={
+        <RefreshControl
+          refreshing={loaded && refreshing}
+          onRefresh={() => {
+            void run(load);
+          }}
+          tintColor={p.muted}
+          colors={['#A63D0B']}
+        />
+      }
+    >
+      <View style={ts.section}>
+        <DriverTitle>Trips</DriverTitle>
+        <DriverCopy>Your routes, plans and trip history</DriverCopy>
+      </View>
+      <TripFilters value={filter} onChange={setFilter} />
+      {canSave && !saveAttempted.current && (
+        <TripAction
+          title="Save current route"
+          icon="bookmark_border_rounded"
           disabled={request.busy}
           onPress={() => {
-            void run(() => sendPlan());
+            void run(savePlan);
           }}
         />
       )}
+      {pendingPlan.current && (
+        <View style={ts.section}>
+          <DriverCopy>
+            Save result unconfirmed. Retry keeps the same plan and operation.
+          </DriverCopy>
+          <TripAction
+            title="Retry same trip save"
+            disabled={request.busy}
+            onPress={() => {
+              void run(() => sendPlan());
+            }}
+          />
+        </View>
+      )}
       {planSaved && (
-        <DriverButton
+        <TripAction
           title="Prepare a different trip plan"
           disabled={request.busy}
           onPress={() => {
@@ -298,80 +394,227 @@ export function TripsScreen({
           }}
         />
       )}
-      <ErrorText message={request.error} />
-      <DriverCopy>{notice}</DriverCopy>
-      {!items.length && <DriverCopy>No saved trips returned.</DriverCopy>}
-      {items.map(trip => (
-        <DriverCard key={trip.id}>
-          <DriverTitle small>{trip.name}</DriverTitle>
+      {!!notice && <DriverCopy>{notice}</DriverCopy>}
+      {!!request.error && (
+        <DriverCard>
           <DriverCopy>
-            {trip.status.replace(/_/g, ' ')} · Revision {trip.revision}
+            {loaded
+              ? 'Showing last loaded trips. Changes and routing require a connection.'
+              : "Trips couldn't be loaded."}
           </DriverCopy>
+          <ErrorText message={request.error} />
+          <TripAction
+            title="Retry trips"
+            icon="replay"
+            disabled={request.busy}
+            onPress={() => {
+              void run(load);
+            }}
+          />
+        </DriverCard>
+      )}
+      {!loaded && !request.error && (
+        <View style={ts.empty} accessibilityLiveRegion="polite">
+          <ActivityIndicator color={p.muted} />
+          <DriverCopy>Loading trips…</DriverCopy>
+        </View>
+      )}
+      {loaded && !shown.length && (
+        <DriverCard>
+          <TripIllustration />
+          <View style={ts.empty}>
+            <DriverTitle small>No trips yet</DriverTitle>
+            <Text style={[ts.centered, { color: p.muted }]}>
+              Your saved and planned trips will appear here.
+            </Text>
+          </View>
+          <DriverButton title="Plan a truck route" onPress={onMap} />
+        </DriverCard>
+      )}
+      {shown.map(item => {
+        const rawDate = item.updatedAt ?? item.createdAt;
+        const date = rawDate ? new Date(rawDate) : undefined;
+        const validDate =
+          date && Number.isFinite(date.getTime())
+            ? date.toLocaleDateString()
+            : undefined;
+        return (
+          <DriverCard key={item.id}>
+            <View style={ts.cardTop}>
+              <DriverIcon
+                name="route_rounded"
+                color={p.dark ? '#66DEC3' : '#007B65'}
+                size={28}
+              />
+              <View style={ts.flex}>
+                <Text style={[ts.title, { color: p.text }]}>
+                  {item.origin.name} → {item.destination.name}
+                </Text>
+              </View>
+            </View>
+            <View style={ts.actions}>
+              <TripStatus status={item.status} />
+            </View>
+            {(validDate || item.stops.length > 0) && (
+              <DriverCopy>
+                {[
+                  validDate
+                    ? (item.updatedAt ? 'Updated ' : 'Saved ') + validDate
+                    : null,
+                  item.stops.length
+                    ? item.stops.length + ' intermediate stops'
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </DriverCopy>
+            )}
+            <TripTruck truck={item.truckSnapshot} />
+            {['STARTED', 'IN_PROGRESS', 'COMPLETED'].includes(item.status) && (
+              <DriverCopy>
+                Stored trip record · no verified navigation history.
+              </DriverCopy>
+            )}
+            <View style={ts.actions}>
+              <TripAction
+                title={'View trip: ' + item.name}
+                label="View trip"
+                icon="chevron_right_rounded"
+                onPress={() => setOpened({ id: item.id, mode: 'details' })}
+              />
+              <TripAction
+                title={'More: ' + item.name}
+                label="More"
+                icon="more_horiz_rounded"
+                onPress={() => setOpened({ id: item.id, mode: 'actions' })}
+              />
+            </View>
+          </DriverCard>
+        );
+      })}
+      {loaded && shown.length > 0 && (
+        <DriverButton title="Plan a truck route" onPress={onMap} />
+      )}
+      {loaded && (
+        <TripQuickActions onPlan={onMap} onSaved={() => setFilter('Saved')} />
+      )}
+      {trip && opened && (
+        <DriverSheet
+          title={opened.mode === 'details' ? 'Trip details' : 'Trip actions'}
+          onClose={() => setOpened(null)}
+        >
+          <DriverTitle small>{trip.name}</DriverTitle>
+          <TripStatus status={trip.status} />
           <DriverCopy>
             {trip.origin.name} →{' '}
-            {[...trip.stops, trip.destination].map(p => p.name).join(' → ')}
+            {[...trip.stops, trip.destination]
+              .map(stop => stop.name)
+              .join(' → ')}
           </DriverCopy>
-          {!['ASSIGNED', 'CANCELLED', 'COMPLETED'].includes(trip.status) && (
-            <DriverButton
-              title="Calculate with current verified truck"
-              disabled={request.busy}
-              onPress={() => {
-                void run(() => calculate(trip));
-              }}
-            />
-          )}
-          {trip.status === 'PLANNED' && (
-            <DriverButton
-              title="Use current verified truck for this trip"
-              disabled={request.busy}
-              onPress={() => {
-                void run(async () => {
-                  const truck = services.trucks.getSnapshot().selected;
-                  if (!truck) throw new Error('Verify a truck first.');
-                  try {
-                    await services.api.request(
-                      'PATCH',
-                      '/trips/' + encodeURIComponent(trip.id) + '/truck',
-                      {
-                        expectedRevision: trip.revision,
-                        truckId: truck.id,
-                        expectedTruckRevision: truck.revision,
-                      },
-                    );
-                  } finally {
-                    await load();
-                  }
-                });
-              }}
-            />
-          )}
-          {(actions[trip.status] ?? []).map(status => (
-            <DriverButton
-              key={status}
-              title={labels[status] ?? status}
-              disabled={request.busy}
-              onPress={() => setReview({ trip, status })}
-            />
-          ))}
-          {['STARTED', 'IN_PROGRESS'].includes(trip.status) &&
-            nextTripStop(trip) && (
-              <DriverButton
-                title="Record next stop completed"
-                disabled={request.busy}
-                onPress={() =>
-                  setReview({
-                    trip,
-                    status: 'IN_PROGRESS',
-                    completedStopId: nextTripStop(trip)?.id,
-                  })
-                }
+          <TripTruck truck={trip.truckSnapshot} />
+          <DriverCopy>
+            Stored plan · revision {trip.revision}. Progress is driver-reported,
+            not verified navigation.
+          </DriverCopy>
+          <ErrorText message={request.error} />
+          {opened.mode === 'details' ? (
+            <>
+              {!['ASSIGNED', 'CANCELLED', 'COMPLETED'].includes(
+                trip.status,
+              ) && (
+                <>
+                  <DriverCopy>
+                    Calculate a fresh truck-safe route from your current GPS
+                    location using your current verified truck.
+                  </DriverCopy>
+                  <DriverButton
+                    title="Calculate with current verified truck"
+                    disabled={request.busy}
+                    onPress={() => {
+                      void run(async () => {
+                        await calculate(trip);
+                      });
+                    }}
+                  />
+                </>
+              )}
+              <TripAction
+                title="More trip actions"
+                onPress={() => setOpened({ id: trip.id, mode: 'actions' })}
               />
-            )}
-        </DriverCard>
-      ))}
+            </>
+          ) : (
+            <>
+              {trip.status === 'PLANNED' && (
+                <DriverButton
+                  secondary
+                  title="Use current verified truck for this trip"
+                  disabled={request.busy}
+                  onPress={() => {
+                    void run(async () => {
+                      const truck = services.trucks.getSnapshot().selected;
+                      if (!truck) throw new Error('Verify a truck first.');
+                      try {
+                        await services.api.request(
+                          'PATCH',
+                          '/trips/' + encodeURIComponent(trip.id) + '/truck',
+                          {
+                            expectedRevision: trip.revision,
+                            truckId: truck.id,
+                            expectedTruckRevision: truck.revision,
+                          },
+                        );
+                      } finally {
+                        await load();
+                      }
+                    });
+                  }}
+                />
+              )}
+              {(actions[trip.status] ?? []).map(status => (
+                <DriverButton
+                  secondary
+                  key={status}
+                  title={labels[status] ?? status}
+                  disabled={request.busy}
+                  onPress={() => {
+                    setOpened(null);
+                    setReview({ trip, status });
+                  }}
+                />
+              ))}
+              {['STARTED', 'IN_PROGRESS'].includes(trip.status) &&
+                nextTripStop(trip) && (
+                  <DriverButton
+                    secondary
+                    title="Record next stop completed"
+                    disabled={request.busy}
+                    onPress={() => {
+                      setOpened(null);
+                      setReview({
+                        trip,
+                        status: 'IN_PROGRESS',
+                        completedStopId: nextTripStop(trip)?.id,
+                      });
+                    }}
+                  />
+                )}
+              {!(actions[trip.status] ?? []).length && (
+                <DriverCopy>
+                  No further updates are available for this trip.
+                </DriverCopy>
+              )}
+            </>
+          )}
+        </DriverSheet>
+      )}
       {review && (
-        <DriverCard>
-          <DriverTitle small>Confirm trip update</DriverTitle>
+        <DriverSheet
+          title="Confirm trip update"
+          onClose={() => {
+            if (!request.busy) setReview(null);
+          }}
+        >
           <DriverCopy>
             {review.trip.name}:{' '}
             {review.completedStopId
@@ -391,12 +634,12 @@ export function TripsScreen({
             disabled={request.busy}
             onPress={() => setReview(null)}
           />
-        </DriverCard>
+        </DriverSheet>
       )}
-      <DriverButton title="Plan truck route" onPress={onMap} />
-    </DriverPage>
+    </ScrollView>
   );
 }
+
 const docSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -409,19 +652,14 @@ const docSchema = z.object({
   expired: z.boolean(),
   fileAvailable: z.literal(false),
 });
-const documentTypes = [
-  'CDL',
-  'MEDICAL',
-  'REGISTRATION',
-  'INSURANCE',
-  'PERMIT',
-  'IFTA',
-  'BOL',
-  'POD',
-  'RATE_CONFIRMATION',
-  'GENERAL',
-] as const;
 export function DocumentsScreen({ services }: { services: Services }) {
+  const p = useDriverPalette();
+  const [formOpen, setFormOpen] = useState(false);
+  const [changingType, setChangingType] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [today, setToday] = useState(() => new Date());
+  const [notice, setNotice] = useState('');
   const request = useLibraryRequest(services),
     [items, setItems] = useState<z.infer<typeof docSchema>[]>([]),
     [type, setType] = useState<string>('CDL'),
@@ -439,6 +677,8 @@ export function DocumentsScreen({ services }: { services: Services }) {
   const submitted = useRef(false),
     createOperation = useRef<string | undefined>(undefined);
   function resetForm() {
+    setFormOpen(false);
+    setChangingType(false);
     setType('CDL');
     setName('');
     setIssued('');
@@ -460,6 +700,7 @@ export function DocumentsScreen({ services }: { services: Services }) {
         body,
       };
       submitted.current = true;
+      setFormOpen(true);
       setEditing(null);
       setConflict(false);
       setType(body.type);
@@ -471,11 +712,20 @@ export function DocumentsScreen({ services }: { services: Services }) {
   );
   const load = useCallback(async () => {
     const account = getAccount();
-    const data = z
-      .object({ items: z.array(docSchema) })
-      .parse(await services.api.request('GET', '/documents'));
-    if (isCurrent(account)) setItems(data.items);
-    return data.items;
+    setRefreshing(true);
+    try {
+      const data = z
+        .object({ items: z.array(docSchema) })
+        .parse(await services.api.request('GET', '/documents'));
+      if (isCurrent(account)) {
+        setItems(data.items);
+        setLoaded(true);
+        setToday(new Date());
+      }
+      return data.items;
+    } finally {
+      if (isCurrent(account)) setRefreshing(false);
+    }
   }, [services, getAccount, isCurrent]);
   const initialize = useCallback(async () => {
     const owner = getAccount();
@@ -489,8 +739,24 @@ export function DocumentsScreen({ services }: { services: Services }) {
   useEffect(() => {
     void run(initialize);
   }, [initialize, run]);
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        setToday(new Date());
+        void run(async () => {
+          await load();
+        });
+      }
+    });
+    const timer = setInterval(() => setToday(new Date()), 60000);
+    return () => {
+      listener.remove();
+      clearInterval(timer);
+    };
+  }, [load, run]);
   async function save() {
     if (!ready || submitted.current || conflict) return;
+    if (dateError) throw new Error(dateError);
     const account = getAccount();
     if (!account || !isCurrent(account)) return;
     if (!NativePlatform)
@@ -546,6 +812,7 @@ export function DocumentsScreen({ services }: { services: Services }) {
         );
       if (isCurrent(account)) {
         resetForm();
+        setNotice('Document saved.');
         await load();
       }
     } catch (e) {
@@ -573,190 +840,301 @@ export function DocumentsScreen({ services }: { services: Services }) {
       throw e;
     }
   }
+
+  const dateError =
+    (issued && documentDay(issued) === undefined) ||
+    (expires && documentDay(expires) === undefined)
+      ? 'Choose a valid document date.'
+      : issued && expires && issued > expires
+      ? 'Expiration date must be on or after the issue date.'
+      : undefined;
+  const blocked = !ready || request.busy || submitted.current;
+  function addDocument(category: string) {
+    if (blocked) return;
+    resetForm();
+    setType(category);
+    setName(documentCategory(category).defaultLabel);
+    setNotice('');
+    setFormOpen(true);
+  }
+  function editDocument(record: z.infer<typeof docSchema>) {
+    if (blocked) return;
+    resetForm();
+    setEditing(record);
+    setType(record.type);
+    setName(record.fileName);
+    setIssued(record.issuedOn?.slice(0, 10) ?? '');
+    setExpires(record.expiresOn?.slice(0, 10) ?? '');
+    setFormOpen(true);
+  }
+  const expiring = items
+    .filter(record => documentExpiry(record.expiresOn, today).soon)
+    .sort((a, b) => documentDay(a.expiresOn)! - documentDay(b.expiresOn)!);
+  const row = (record: z.infer<typeof docSchema>) => (
+    <DocumentRow
+      key={record.id}
+      document={record}
+      now={today}
+      disabled={blocked}
+      onPress={() => editDocument(record)}
+    />
+  );
   return (
-    <DriverPage>
-      <DriverTitle>Documents</DriverTitle>
-      <DriverCopy>
-        Private metadata records only. File upload/download and document
-        verification are unavailable; do not enter document numbers or contents.
-      </DriverCopy>
-      <ErrorText message={request.error} />
-      <DriverButton
-        title="Refresh documents"
-        disabled={request.busy}
-        onPress={() => {
-          void run(initialize);
-        }}
-      />
-      {items.map(d => (
-        <DriverCard key={d.id}>
-          <DriverTitle small>{d.fileName}</DriverTitle>
-          <DriverCopy>
-            {d.type.replace(/_/g, ' ')} · {d.verificationState}
-          </DriverCopy>
-          <DriverCopy>
-            {d.expiresOn
-              ? 'Expires ' + d.expiresOn.slice(0, 10)
-              : 'Expiration not recorded'}
-            {d.expired ? ' · Expired' : ''}
-          </DriverCopy>
-          <DriverButton
-            title="Edit document metadata"
-            disabled={!ready || request.busy || submitted.current}
-            onPress={() => {
-              setEditing(d);
-              setType(d.type);
-              setName(d.fileName);
-              setIssued(d.issuedOn?.slice(0, 10) ?? '');
-              setExpires(d.expiresOn?.slice(0, 10) ?? '');
-              submitted.current = false;
-              setConflict(false);
-              createOperation.current = undefined;
-            }}
-          />
-        </DriverCard>
-      ))}
-      <DriverTitle small>
-        {editing ? 'Edit metadata' : 'Add metadata'}
-      </DriverTitle>
-      {conflict && (
-        <DriverCard>
-          <DriverCopy>
-            The document changed. Your unsaved fields are preserved. Review the
-            latest server record before intentionally merging your edits. No
-            save was retried.
-          </DriverCopy>
-          <DriverCopy>
-            Latest revision {editing?.revision}: {editing?.fileName},{' '}
-            {editing?.type}, issued {editing?.issuedOn ?? 'not recorded'},
-            expires {editing?.expiresOn ?? 'not recorded'}.
-          </DriverCopy>
-          <DriverButton
-            title="Review latest and keep my edits"
-            disabled={request.busy}
-            onPress={() => {
-              void run(async () => {
-                const owner = getAccount();
-                const rows = await load();
-                if (!isCurrent(owner)) return;
-                const latest = rows.find(d => d.id === editing?.id);
-                if (!latest)
-                  throw new Error(
-                    'This document is no longer available. Cancel editing to create a different document.',
-                  );
-                if (latest.revision !== editing?.revision) {
-                  setEditing(latest);
-                  return;
-                }
-                setEditing(latest);
-                setConflict(false);
-              });
-            }}
-          />
-        </DriverCard>
-      )}
-      {(editing || conflict) && (
-        <DriverButton
-          title="Cancel editing / create new document"
-          disabled={request.busy || submitted.current}
-          onPress={resetForm}
-        />
-      )}
-      {documentTypes.map(t => (
-        <DriverButton
-          key={t}
-          title={t.replace(/_/g, ' ') + (type === t ? ' · Selected' : '')}
-          secondary
-          disabled={request.busy || submitted.current}
-          onPress={() => setType(t)}
-        />
-      ))}
-      <DriverField
-        editable={!request.busy && !submitted.current}
-        label="Document label"
-        value={name}
-        onChangeText={setName}
-        maxLength={150}
-      />
-      <DriverField
-        editable={!request.busy && !submitted.current}
-        label="Issue date (YYYY-MM-DD, optional)"
-        value={issued}
-        onChangeText={setIssued}
-      />
-      <DriverField
-        editable={!request.busy && !submitted.current}
-        label="Expiration date (YYYY-MM-DD, optional)"
-        value={expires}
-        onChangeText={setExpires}
-      />
-      <DriverButton
-        title="Save document metadata"
-        disabled={
-          !ready ||
-          request.busy ||
-          !name.trim() ||
-          submitted.current ||
-          conflict
-        }
-        onPress={() => {
-          void run(save);
-        }}
-      />
-      {pendingDocument.current && (
-        <DriverButton
-          title="Retry same document save"
-          disabled={request.busy}
-          onPress={() => {
-            void run(() => sendDocument());
+    <ScrollView
+      style={{ backgroundColor: p.canvas }}
+      contentContainerStyle={ds.page}
+      refreshControl={
+        <RefreshControl
+          refreshing={loaded && refreshing}
+          onRefresh={() => {
+            void run(async () => {
+              await (ready ? load() : initialize());
+            });
           }}
+          tintColor={p.muted}
+          colors={['#A63D0B']}
         />
-      )}
-      {submitted.current && (
-        <Text>
-          Save result unconfirmed. Retry sends the same operation and unchanged
-          metadata.
-        </Text>
-      )}
-      {pendingDocument.current?.method === 'POST' && (
-        <DriverButton
-          title="Abandon document recovery"
-          disabled={request.busy}
-          onPress={() => setAbandon(true)}
-        />
-      )}
-      {abandon && (
+      }
+    >
+      <View style={ds.section}>
+        <DriverTitle>Documents</DriverTitle>
+        <DriverCopy>
+          Keep your driver, truck and trip records organized.
+        </DriverCopy>
+      </View>
+      {!!notice && <DriverCopy>{notice}</DriverCopy>}
+      {!!request.error && !formOpen && (
         <DriverCard>
           <DriverCopy>
-            The previous save may already exist. Refresh and check the list
-            before starting a genuinely different document. Abandoning recovery
-            does not delete any server record.
+            {loaded
+              ? 'Showing last loaded documents.'
+              : "Documents couldn't be loaded."}
           </DriverCopy>
-          <DriverButton
-            title="Confirm abandon and start a different document"
+          <ErrorText message={request.error} />
+          <TripAction
+            title="Retry documents"
+            icon="replay"
             disabled={request.busy}
             onPress={() => {
               void run(async () => {
-                const owner = getAccount(),
-                  pending = pendingDocument.current;
-                if (!owner || pending?.method !== 'POST') return;
-                await load();
-                if (!isCurrent(owner)) return;
-                await pendingDocumentCreates.complete(
-                  owner,
-                  (pending.body as PendingDocumentBody).createOperationId,
-                );
-                if (isCurrent(owner)) resetForm();
+                await (ready ? load() : initialize());
               });
             }}
           />
-          <DriverButton
-            title="Keep recovery operation"
-            disabled={request.busy}
-            onPress={() => setAbandon(false)}
-          />
         </DriverCard>
       )}
-    </DriverPage>
+      {submitted.current && !formOpen && (
+        <TripAction
+          title="Continue document save"
+          onPress={() => setFormOpen(true)}
+        />
+      )}
+      {!submitted.current && !!name && !formOpen && (
+        <TripAction
+          title="Continue editing document"
+          onPress={() => setFormOpen(true)}
+        />
+      )}
+      <DriverCard>
+        <DriverTitle small>My Documents</DriverTitle>
+        <DriverCopy>
+          Your saved document records and expiration dates.
+        </DriverCopy>
+        {!loaded && !request.error && (
+          <View style={ds.header}>
+            <ActivityIndicator color={p.muted} />
+            <DriverCopy>Loading documents…</DriverCopy>
+          </View>
+        )}
+        {loaded && !items.length && (
+          <DriverCopy>
+            No documents yet. Choose a category below to add one.
+          </DriverCopy>
+        )}
+        {items.map(row)}
+      </DriverCard>
+      <DriverCard>
+        <DriverTitle small>Add Document</DriverTitle>
+        <DriverCopy>Select a document type to add.</DriverCopy>
+        <DocumentCategories disabled={blocked} onSelect={addDocument} />
+      </DriverCard>
+      <DriverCard>
+        <DriverTitle small>Expiring Soon</DriverTitle>
+        <DriverCopy>
+          Dates you saved that expire in the next 90 days. This is not document
+          verification.
+        </DriverCopy>
+        {expiring.map(row)}
+        {loaded && !expiring.length && (
+          <DriverCopy>
+            No saved expiration dates in the next 90 days.
+          </DriverCopy>
+        )}
+      </DriverCard>
+      <DriverCopy>
+        Labels and dates only. Photos, file storage and document verification
+        are not available yet. Do not enter document numbers or contents.
+      </DriverCopy>
+      {formOpen && (
+        <DriverSheet
+          title={(editing ? 'Edit ' : 'Add ') + documentCategory(type).label}
+          onClose={() => {
+            if (!request.busy) setFormOpen(false);
+          }}
+        >
+          <DriverCopy>
+            Save a label and dates for your records. A document photo or file is
+            not stored.
+          </DriverCopy>
+          <ErrorText message={request.error} />
+          {conflict && (
+            <DriverCard>
+              <DriverCopy>
+                The document changed. Your unsaved fields are preserved. Review
+                the latest server record before intentionally merging your
+                edits. No save was retried.
+              </DriverCopy>
+              <DriverCopy>
+                Latest revision {editing?.revision}: {editing?.fileName},{' '}
+                {editing?.type}, issued {editing?.issuedOn ?? 'not recorded'},
+                expires {editing?.expiresOn ?? 'not recorded'}.
+              </DriverCopy>
+              <DriverButton
+                title="Review latest and keep my edits"
+                disabled={request.busy}
+                onPress={() => {
+                  void run(async () => {
+                    const owner = getAccount();
+                    const rows = await load();
+                    if (!isCurrent(owner)) return;
+                    const latest = rows.find(d => d.id === editing?.id);
+                    if (!latest)
+                      throw new Error(
+                        'This document is no longer available. Cancel editing to create a different document.',
+                      );
+                    if (latest.revision !== editing?.revision) {
+                      setEditing(latest);
+                      return;
+                    }
+                    setEditing(latest);
+                    setConflict(false);
+                  });
+                }}
+              />
+            </DriverCard>
+          )}
+          {(editing || conflict) && (
+            <DriverButton
+              title="Cancel editing"
+              disabled={request.busy || submitted.current}
+              onPress={resetForm}
+            />
+          )}
+
+          <TripAction
+            title="Change document type"
+            disabled={request.busy || submitted.current}
+            onPress={() => setChangingType(!changingType)}
+          />
+          {changingType && (
+            <DocumentCategories
+              disabled={request.busy || submitted.current}
+              onSelect={category => {
+                setType(category);
+                setChangingType(false);
+              }}
+            />
+          )}
+          <DriverField
+            editable={!request.busy && !submitted.current}
+            label="Document label"
+            value={name}
+            onChangeText={setName}
+            maxLength={150}
+          />
+          <DocumentDateField
+            label="Issue date"
+            value={issued}
+            onChange={setIssued}
+            disabled={request.busy || submitted.current}
+          />
+          <DocumentDateField
+            label="Expiration date"
+            value={expires}
+            onChange={setExpires}
+            disabled={request.busy || submitted.current}
+          />
+          <ErrorText message={dateError} />
+          <DriverButton
+            title="Save document"
+            disabled={
+              !ready ||
+              request.busy ||
+              !name.trim() ||
+              submitted.current ||
+              conflict ||
+              !!dateError
+            }
+            onPress={() => {
+              void run(save);
+            }}
+          />
+          {pendingDocument.current && (
+            <DriverButton
+              title="Retry same document save"
+              disabled={request.busy}
+              onPress={() => {
+                void run(() => sendDocument());
+              }}
+            />
+          )}
+          {submitted.current && (
+            <DriverCopy>
+              Save result unconfirmed. Retry sends the same operation and
+              unchanged details.
+            </DriverCopy>
+          )}
+          {pendingDocument.current?.method === 'POST' && (
+            <DriverButton
+              title="Abandon document recovery"
+              disabled={request.busy}
+              onPress={() => setAbandon(true)}
+            />
+          )}
+          {abandon && (
+            <DriverCard>
+              <DriverCopy>
+                The previous save may already exist. Refresh and check the list
+                before starting a genuinely different document. Abandoning
+                recovery does not delete any server record.
+              </DriverCopy>
+              <DriverButton
+                title="Confirm abandon and start a different document"
+                disabled={request.busy}
+                onPress={() => {
+                  void run(async () => {
+                    const owner = getAccount(),
+                      pending = pendingDocument.current;
+                    if (!owner || pending?.method !== 'POST') return;
+                    await load();
+                    if (!isCurrent(owner)) return;
+                    await pendingDocumentCreates.complete(
+                      owner,
+                      (pending.body as PendingDocumentBody).createOperationId,
+                    );
+                    if (isCurrent(owner)) resetForm();
+                  });
+                }}
+              />
+              <DriverButton
+                title="Keep recovery operation"
+                disabled={request.busy}
+                onPress={() => setAbandon(false)}
+              />
+            </DriverCard>
+          )}
+        </DriverSheet>
+      )}
+    </ScrollView>
   );
 }

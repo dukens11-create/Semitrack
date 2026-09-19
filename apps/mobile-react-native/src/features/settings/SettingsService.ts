@@ -20,7 +20,12 @@ export type SettingsState = {
 export class SettingsService extends Store<SettingsState> {
   private generation = 0;
   private loadFlight: Promise<Settings | null> | null = null;
-  constructor(private api: ApiClient) {
+  constructor(
+    private api: ApiClient,
+    private retainAppearance?: (
+      mode: Settings['dayNightMode'],
+    ) => Promise<void>,
+  ) {
     super({ settings: null, phase: 'idle' });
   }
   clear() {
@@ -48,6 +53,8 @@ export class SettingsService extends Store<SettingsState> {
         await this.api.request('GET', '/navigation-settings'),
       );
       if (generation !== this.generation) return null;
+      await this.retainAppearance?.(settings.dayNightMode);
+      if (generation !== this.generation) return null;
       this.publish({ settings, phase: 'ready' });
       return settings;
     } catch (error) {
@@ -71,6 +78,8 @@ export class SettingsService extends Store<SettingsState> {
       const settings = settingsSchema.parse(
         await this.api.request('PUT', '/navigation-settings', body),
       );
+      if (generation !== this.generation) return null;
+      await this.retainAppearance?.(settings.dayNightMode);
       if (generation !== this.generation) return null;
       this.publish({ settings, phase: 'ready' });
       return settings;

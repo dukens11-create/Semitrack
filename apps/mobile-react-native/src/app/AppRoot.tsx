@@ -2,7 +2,8 @@ import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { safeLog } from '../services/telemetry/safeLog';
 import React, { useEffect, useState } from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { StyleSheet } from 'react-native';
+import { useDriverPalette } from '../components/DriverUI';
+import { StatusBar, StyleSheet, View } from 'react-native';
 import { createEnvironment } from '../config/environment';
 import {
   apiUrl,
@@ -15,13 +16,22 @@ import { useStore } from '../hooks/useStore';
 import { Page, Heading, Copy, Button } from '../components/ui';
 import { BrandedSplash } from '../components/BrandedSplash';
 import { AuthScreen } from '../screens/AuthScreen';
-import { DriverPreferences } from '../features/settings/DriverPreferences';
+import { ApplicationAppearance } from '../features/settings/ApplicationAppearance';
+import { ThemedAlertHost } from '../components/ThemedAlert';
 import { AppNavigator } from '../navigation/AppNavigator';
 import { CopilotStatus } from '../components/CopilotStatus';
+function SessionFrame({ children }: React.PropsWithChildren) {
+  const p = useDriverPalette();
+  return (
+    <SafeAreaView style={[styles.fill, { backgroundColor: p.canvas }]}>
+      <CopilotStatus />
+      {children}
+    </SafeAreaView>
+  );
+}
 function Session({ services }: { services: Services }) {
   const auth = useStore(services.auth);
   useEffect(() => {
-    void services.auth.restore();
     return () => {
       void services.location.stop().catch(() => {});
     };
@@ -31,30 +41,49 @@ function Session({ services }: { services: Services }) {
   }
   if (auth.status === 'unavailable') {
     return (
-      <Page>
-        <Heading>Connection unavailable</Heading>
-        <Copy>{auth.error}</Copy>
-        <Button
-          title="Retry"
-          onPress={() => {
-            void services.auth.restore();
-          }}
-        />
-        <Button
-          title="Sign out on this device"
-          onPress={() => {
-            void services.auth.logout();
-          }}
-        />
-      </Page>
+      <SessionFrame>
+        <Page>
+          <Heading>Connection unavailable</Heading>
+          <Copy>{auth.error}</Copy>
+          <Button
+            title="Retry"
+            onPress={() => {
+              void services.auth.restore();
+            }}
+          />
+          <Button
+            title="Sign out on this device"
+            onPress={() => {
+              void services.auth.logout();
+            }}
+          />
+        </Page>
+      </SessionFrame>
     );
   }
   return auth.status === 'signedIn' ? (
-    <DriverPreferences key={auth.user?.id} services={services}>
-      <AppNavigator services={services} />
-    </DriverPreferences>
+    <>
+      <SessionFrame>
+        <AppNavigator services={services} />
+      </SessionFrame>
+    </>
   ) : (
-    <AuthScreen services={services} />
+    <SessionFrame>
+      <AuthScreen services={services} />
+    </SessionFrame>
+  );
+}
+function ApplicationFrame({ children }: React.PropsWithChildren) {
+  const p = useDriverPalette();
+  return (
+    <View style={[styles.fill, { backgroundColor: p.canvas }]}>
+      <StatusBar
+        barStyle={p.dark ? 'light-content' : 'dark-content'}
+        backgroundColor={p.canvas}
+      />
+      {children}
+      <ThemedAlertHost />
+    </View>
   );
 }
 export function AppRoot() {
@@ -82,28 +111,42 @@ export function AppRoot() {
       );
     }
   }, [state]);
+  const content = (
+    <ApplicationFrame>
+      <View style={styles.fill}>
+        <AppErrorBoundary
+          onFailure={() => {
+            state.services?.routes.clear();
+            void state.services?.guidance
+              .stopNavigation()
+              .catch(() => safeLog('GUIDANCE_STOP_FAILED'));
+            void state.services?.location
+              .stop()
+              .catch(() => safeLog('NATIVE_CALLBACK_INVALID'));
+          }}
+        >
+          {state.services ? (
+            <Session services={state.services} />
+          ) : (
+            <Page>
+              <Heading>Configuration required</Heading>
+              <Copy>{state.error}</Copy>
+            </Page>
+          )}
+        </AppErrorBoundary>
+      </View>
+    </ApplicationFrame>
+  );
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.fill}>
-        <AppErrorBoundary onFailure={() => {
-          state.services?.routes.clear();
-          void state.services?.guidance.stopNavigation().catch(() => safeLog('GUIDANCE_STOP_FAILED'));
-          void state.services?.location.stop().catch(() => safeLog('NATIVE_CALLBACK_INVALID'));
-        }}>
-        <CopilotStatus />
-        {state.services ? (
-          <Session services={state.services} />
-        ) : (
-          <Page>
-            <Heading>Configuration required</Heading>
-            <Copy>{state.error}</Copy>
-          </Page>
-        )}
-        </AppErrorBoundary>
-      </SafeAreaView>
+      {
+        <ApplicationAppearance services={state.services}>
+          {content}
+        </ApplicationAppearance>
+      }
     </SafeAreaProvider>
   );
 }
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: '#0C131B' },
+  fill: { flex: 1 },
 });

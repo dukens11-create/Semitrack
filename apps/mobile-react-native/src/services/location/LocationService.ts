@@ -1,3 +1,4 @@
+import { stopDistanceMeters } from '../../models/stopCoverage';
 import { z } from 'zod';
 import { DriverError } from '../../errors/driverErrors';
 import { Store } from '../../state/Store';
@@ -43,8 +44,12 @@ export class LocationService extends Store<LocationState> {
   getFreshFix(): LocationFix | null {
     const fix = this.value.fix;
     const now = Date.now();
-    return fix && now - fix.timestamp <= 15000 && fix.timestamp <= now + 5000 && fix.accuracy <= 100
-      ? fix : null;
+    return fix &&
+      now - fix.timestamp <= 15000 &&
+      fix.timestamp <= now + 5000 &&
+      fix.accuracy <= 100
+      ? fix
+      : null;
   }
   /** Called only for an explicit location-dependent action, never merely opening Map. */
   requestFreshFix(signal?: AbortSignal): Promise<LocationFix> {
@@ -62,26 +67,40 @@ export class LocationService extends Store<LocationState> {
         else resolve(fix!);
       };
       const abort = () => finish(new DriverError('REQUEST_CANCELLED'));
-      const timer = setTimeout(() => finish(new DriverError('GPS_ACQUISITION_TIMEOUT')), 30000);
+      const timer = setTimeout(
+        () => finish(new DriverError('GPS_ACQUISITION_TIMEOUT')),
+        30000,
+      );
       const check = () => {
         if (!ready || done) return;
         const fix = this.getFreshFix();
         if (fix && this.value.tracking) finish(undefined, fix);
-        else if (!this.value.tracking) finish(new DriverError('GPS_UNAVAILABLE'));
+        else if (!this.value.tracking)
+          finish(new DriverError('GPS_UNAVAILABLE'));
       };
       unsubscribe = this.subscribe(check);
       signal?.addEventListener('abort', abort, { once: true });
-      if (signal?.aborted) { abort(); return; }
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
       void (async () => {
         // Recheck Android/iOS permission even when the map retains a previous fix.
         const permission = await this.provider.permissionStatus();
         if (done) return;
         if (permission !== 'granted') await this.start(false, true);
-        else if (!this.value.tracking || !this.getFreshFix()) await this.start(false, false);
+        else if (!this.value.tracking || !this.getFreshFix())
+          await this.start(false, false);
         if (done) return;
         ready = true;
         check();
-      })().catch(error => finish(error instanceof DriverError ? error : new DriverError('GPS_UNAVAILABLE')));
+      })().catch(error =>
+        finish(
+          error instanceof DriverError
+            ? error
+            : new DriverError('GPS_UNAVAILABLE'),
+        ),
+      );
     });
   }
   /** Map opening may reuse permission, but must never trigger a permission prompt. */
@@ -123,11 +142,38 @@ export class LocationService extends Store<LocationState> {
           ) {
             return;
           }
-          this.publish({ tracking: true, fix });
+          const previous = this.value.fix;
+          // Reject physically implausible single-fix jumps, allowing both accuracy radii.
+          if (
+            previous &&
+            fix.timestamp - previous.timestamp < 15000 &&
+            stopDistanceMeters(
+              { lat: previous.latitude, lng: previous.longitude },
+              { lat: fix.latitude, lng: fix.longitude },
+            ) >
+              (60 * (fix.timestamp - previous.timestamp)) / 1000 +
+                previous.accuracy +
+                fix.accuracy
+          )
+            return;
+          this.publish({
+            tracking: true,
+            fix: { ...fix, heading: fix.heading === 360 ? 0 : fix.heading },
+          });
         },
-        _error => {
+        providerError => {
           if (generation === this.generation) {
-            this.publish({ tracking: false, fix: null, error: 'Location is unavailable. Check device location settings and retry.' });
+            this.publish({
+              tracking: false,
+              fix: null,
+              error:
+                providerError ===
+                  'Mock location is not accepted for truck routing.' ||
+                providerError ===
+                  'Simulated location is not accepted for truck routing.'
+                  ? 'Mock or simulated location was rejected. Use real device GPS for truck routing.'
+                  : 'Location is unavailable. Check device location settings and retry.',
+            });
           }
         },
       );
@@ -154,7 +200,9 @@ export class LocationService extends Store<LocationState> {
       }, 5000);
     });
     this.starting = operation;
-    const clear = () => { if (this.starting === operation) this.starting = undefined; };
+    const clear = () => {
+      if (this.starting === operation) this.starting = undefined;
+    };
     void operation.then(clear, clear);
     return operation;
   }

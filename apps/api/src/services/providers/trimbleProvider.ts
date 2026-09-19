@@ -1,3 +1,4 @@
+import { restrictionDiagnostic } from "./restrictionDiagnostic.js";
 import { optionalPreferenceWarnings } from '../routingCapabilities.js';
 import { z } from "zod";
 import { routingTruckSchema } from "../../modules/trucks/truck.schemas.js";
@@ -377,7 +378,11 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
       const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
-      if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) throw new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
+      if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) {
+        const failure = new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
+        failure.restrictionDiagnostic = restrictionDiagnostic(line, legIndex, index);
+        throw failure;
+      }
       const instruction = typeof line?.Direction === "string" ? line.Direction.trim() : "";
       const isArrival = /^destination\b/i.test(instruction);
       if (!straightLeg && !line?.TurnInstruction && !isArrival) continue;

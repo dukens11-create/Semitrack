@@ -1,16 +1,33 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  ELD_PROVIDER_NOT_CONFIGURED:
+    'This ELD provider is not configured. Connection setup is required before use.',
+  ELD_NOT_CONNECTED: 'Connect this ELD provider before syncing.',
+  ELD_CONNECTION_CHANGED: 'The ELD connection changed. Refresh and retry.',
+  REPORT_TOO_FAR_AWAY:
+    'You must be near this station to submit an observation.',
+  DUPLICATE_REPORT:
+    'An observation was recently submitted. Wait before reporting again.',
   AUTH_EXPIRED: 'Please sign in again to continue.',
-  PROVIDER_UNAVAILABLE: 'The requested provider is temporarily unavailable. Please retry later.',
-  TRIMBLE_API_KEY_MISSING: 'Trimble truck routing is not configured. Contact SemiTraX support.',
-  TRIMBLE_CONFIGURATION_INVALID: 'Trimble routing configuration needs attention. Contact SemiTraX support.',
-  TRIMBLE_AUTHORIZATION_FAILED: 'Trimble routing access could not be authorized. Contact SemiTraX support.',
-  TRIMBLE_NETWORK_ERROR: 'Trimble truck routing is temporarily unreachable. Please retry.',
+  PROVIDER_UNAVAILABLE:
+    'The requested provider is temporarily unavailable. Please retry later.',
+  TRIMBLE_API_KEY_MISSING:
+    'Trimble truck routing is not configured. Contact SemiTraX support.',
+  TRIMBLE_CONFIGURATION_INVALID:
+    'Trimble routing configuration needs attention. Contact SemiTraX support.',
+  TRIMBLE_AUTHORIZATION_FAILED:
+    'Trimble routing access could not be authorized. Contact SemiTraX support.',
+  TRIMBLE_NETWORK_ERROR:
+    'Trimble truck routing is temporarily unreachable. Please retry.',
   TRIMBLE_REQUEST_TIMEOUT: 'Trimble truck routing took too long. Please retry.',
-  TRIMBLE_HTTP_ERROR: 'Trimble truck routing is temporarily unavailable. Please retry later.',
-  POI_PROVIDER_NOT_CONFIGURED: 'An approved places provider is not configured. Place search is unavailable.',
-  TIMEZONE_PROVIDER_NOT_CONFIGURED: 'An approved timezone provider is not configured.',
-  ROUTE_REQUEST_INVALID: 'Review the truck profile and stops before requesting a route.',
+  TRIMBLE_HTTP_ERROR:
+    'Trimble truck routing is temporarily unavailable. Please retry later.',
+  POI_PROVIDER_NOT_CONFIGURED:
+    'An approved places provider is not configured. Place search is unavailable.',
+  TIMEZONE_PROVIDER_NOT_CONFIGURED:
+    'An approved timezone provider is not configured.',
+  ROUTE_REQUEST_INVALID:
+    'Review the truck profile and stops before requesting a route.',
   CORRIDOR_ROUTE_REQUIRED:
     'Plan a truck route before requesting corridor information.',
   CORRIDOR_LOCATION_REQUIRED:
@@ -26,13 +43,19 @@ const messages: Record<string, string> = {
   CORRIDOR_CORRELATION_FAILED:
     'Location could not be matched to the route. Review the route and retry.',
   TRIMBLE_RESTRICTION_WARNING:
-    'The provider reported a restriction or warning on this route. Review your truck profile and choose another destination or stop; do not follow an unverified route.',
+    'Trimble returned a warning that the backend could not classify as safe. No verified truck route was accepted. Keep your actual truck dimensions; try another destination or contact support with code TRIMBLE_RESTRICTION_WARNING.',
   TRUCK_PROFILE_CHANGED:
     'Your saved truck profile changed. Refresh and verify it before routing.',
   TRIMBLE_REQUEST_INVALID:
     'Review the truck profile and stops before requesting a route.',
   TRIMBLE_RESTRICTION_UNSUPPORTED:
     'The routing provider cannot guarantee one or more selected road avoidances. Review your route preferences; do not remove a restriction your vehicle requires.',
+  TRIMBLE_INCOMPLETE_ROUTE:
+    'Truck route details are incomplete. No safe route was accepted; retry later.',
+  INVALID_RESET_TOKEN:
+    'This recovery link is invalid, expired, or already used. Request a new email.',
+  RECOVERY_UNAVAILABLE:
+    'Password recovery is temporarily unavailable. Please retry later.',
   TRIMBLE_MANEUVER_DATA_REQUIRED:
     'The route instructions are incomplete. A safe truck route cannot be displayed.',
   INVALID_RESPONSE:
@@ -117,8 +140,25 @@ export function safeDriverError(
   error: unknown,
   fallback = 'Unable to complete this request. Please try again.',
 ): string {
-  if (error instanceof ZodError)
-    return 'The returned information could not be validated. Please review your entries or try again.';
+  if (error instanceof ZodError) {
+    const fields: Record<string, string> = {
+      heightFt: 'Truck height',
+      widthFt: 'Truck width',
+      lengthFt: 'Truck length',
+      weightLbs: 'Gross truck weight',
+      currentWeightLbs: 'Current truck weight',
+      axleCount: 'Axle count',
+      trailerCount: 'Trailer count',
+      hazardousGoods: 'Hazmat selection',
+    };
+    const field = error.issues
+      .map(issue => fields[String(issue.path[0])])
+      .find(Boolean);
+    return field
+      ? field +
+          ' needs attention. Enter the actual vehicle measurement; do not reduce it to obtain a route.'
+      : 'The returned information could not be validated. Please review your entries or try again.';
+  }
   if (error && typeof error === 'object') {
     const detail = error as { code?: unknown; status?: unknown };
     if (typeof detail.code === 'string' && Object.hasOwn(messages, detail.code))
@@ -126,8 +166,10 @@ export function safeDriverError(
     if (detail.status === 401) return 'Please sign in again to continue.';
     if (detail.status === 403)
       return 'This action is not available for your account.';
-    if (detail.status === 400 || detail.status === 422) return 'Review the request details and truck profile before retrying.';
-    if (detail.status === 404) return 'This item or service is not available. Refresh and try again.';
+    if (detail.status === 400 || detail.status === 422)
+      return 'Review the request details and truck profile before retrying.';
+    if (detail.status === 404)
+      return 'This item or service is not available. Refresh and try again.';
     if (detail.status === 409)
       return 'This information changed. Refresh it and review before trying again.';
     if (detail.status === 429)

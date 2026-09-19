@@ -26,7 +26,7 @@ export function DriverSheet({
     <Modal transparent animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.backdrop}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.keyboard}
         >
           <View

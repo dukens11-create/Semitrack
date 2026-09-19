@@ -1,3 +1,4 @@
+import { useDriverPalette } from './DriverUI';
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
@@ -8,6 +9,7 @@ import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
 
 /** Non-blocking status; backend setup/authentication remains independent. */
 export function CopilotStatus() {
+  const p = useDriverPalette();
   const [state, setState] = useState(initialCopilotState);
   const [details, setDetails] = useState(false);
   useEffect(() => {
@@ -38,17 +40,23 @@ export function CopilotStatus() {
   if (state.warning)
     return (
       <View
-        style={styles.warning}
+        style={[styles.warning, { backgroundColor: p.warningSurface }]}
         accessibilityRole="alert"
         accessibilityLiveRegion="assertive"
       >
-        <Text style={styles.warningText}>{state.warning}</Text>
+        <Text style={[styles.warningText, { color: p.warningText }]}>
+          {state.warning}
+        </Text>
       </View>
     );
-  const label = state.copilotReady ? 'CoPilot setup checked · Navigation not started'
-    : state.phase === 'NOT_STARTED' || state.phase === 'STARTING' ? 'CoPilot setup pending'
-    : state.error === 'COPILOT_MAP_DATA_REQUIRED' ? 'CoPilot maps required'
-    : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED' ? 'CoPilot provisioning required'
+  const label = state.copilotReady
+    ? 'CoPilot setup checked · Navigation not started'
+    : state.phase === 'NOT_STARTED' || state.phase === 'STARTING'
+    ? 'CoPilot setup pending'
+    : state.error === 'COPILOT_MAP_DATA_REQUIRED'
+    ? 'CoPilot maps required'
+    : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
+    ? 'CoPilot provisioning required'
     : 'CoPilot turn-by-turn unavailable';
   const message = state.copilotReady
     ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
@@ -59,15 +67,22 @@ export function CopilotStatus() {
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={label + ". View CoPilot status"}
+        accessibilityLabel={label + '. View CoPilot status'}
         onPress={() => setDetails(true)}
-        style={styles.status}
+        style={[styles.status, { backgroundColor: p.canvas }]}
       >
         <View style={styles.dot} />
-        <Text numberOfLines={1} style={styles.text}>
+        <Text numberOfLines={1} style={[styles.text, { color: p.muted }]}>
           {label}
         </Text>
-        <Text style={styles.details}>Details</Text>
+        <Text
+          style={[
+            styles.details,
+            p.dark ? styles.nightAction : styles.dayAction,
+          ]}
+        >
+          Details
+        </Text>
       </Pressable>
       <Modal
         visible={details}
@@ -76,16 +91,25 @@ export function CopilotStatus() {
         onRequestClose={() => setDetails(false)}
       >
         <View style={styles.scrim}>
-          <View style={styles.card}>
-            <Text style={styles.title}>CoPilot navigation</Text>
-            <Text style={styles.message}>{message}</Text>
+          <View style={[styles.card, { backgroundColor: p.card }]}>
+            <Text style={[styles.title, { color: p.text }]}>
+              CoPilot navigation
+            </Text>
+            <Text style={[styles.message, { color: p.muted }]}>{message}</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close CoPilot status"
               onPress={() => setDetails(false)}
               style={styles.close}
             >
-              <Text style={styles.closeText}>Close</Text>
+              <Text
+                style={[
+                  styles.closeText,
+                  p.dark ? styles.nightAction : styles.dayAction,
+                ]}
+              >
+                Close
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -95,6 +119,8 @@ export function CopilotStatus() {
 }
 
 const styles = StyleSheet.create({
+  nightAction: { color: '#F0A45A' },
+  dayAction: { color: '#9F341E' },
   status: {
     minHeight: 32,
     paddingHorizontal: 16,

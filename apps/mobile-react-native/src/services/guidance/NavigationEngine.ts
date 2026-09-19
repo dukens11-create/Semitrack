@@ -1,3 +1,4 @@
+import type { GuidanceDetails } from '../../features/navigation/navigationPresentation';
 import type {
   Coordinate,
   TruckProfile,
@@ -14,12 +15,15 @@ export type NavigationState = {
     | 'rerouting'
     | 'arrived';
   routeId?: string;
+  guidance?: GuidanceDetails;
   maneuverOffset?: number;
+  progressObservedAt?: number;
   remainingMeters?: number;
   remainingSeconds?: number;
   speedLimitMph?: number;
 };
 export type NavigationEvent =
+  | { type: 'onGuidanceDetails'; routeId: string; details: GuidanceDetails }
   | { type: 'onNavigationStarted'; routeId: string }
   | { type: 'onLocationUpdate'; coordinate: Coordinate }
   | {

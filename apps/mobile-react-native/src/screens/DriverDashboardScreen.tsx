@@ -5,10 +5,8 @@ import { useStore } from '../hooks/useStore';
 import { DriverIcon } from '../components/DriverIcon';
 import {
   DriverButton,
-  DriverCard,
   DriverCopy,
   DriverPage,
-  DriverTile,
   DriverTitle,
   driverColors,
   ds,
@@ -32,6 +30,8 @@ export function DriverDashboardScreen({
   const auth = useStore(services.auth),
     trucks = useStore(services.trucks);
   const p = useDriverPalette();
+  const colors = p.dark ? homeIconColors.night : homeIconColors.day;
+  const activeTruck = trucks.selected;
   const first = auth.user?.fullName.trim().split(/\s+/)[0] || 'Driver';
   return (
     <DriverPage>
@@ -54,7 +54,7 @@ export function DriverDashboardScreen({
       <View style={styles.greeting}>
         <DriverTitle>Ready to roll, {first}?</DriverTitle>
         <DriverCopy>
-          Plan around truck restrictions, stops, and live road conditions.
+          Plan around truck restrictions, stops, and road conditions.
         </DriverCopy>
       </View>
       <View style={styles.hero}>
@@ -75,12 +75,23 @@ export function DriverDashboardScreen({
       <View style={styles.shortcuts}>
         {(
           [
-            { icon: 'route_rounded', label: 'Trips', action: onTrips },
-            { icon: 'description', label: 'Documents', action: onDocs },
+            {
+              icon: 'route_rounded',
+              label: 'Trips',
+              action: onTrips,
+              color: colors.trips,
+            },
+            {
+              icon: 'description',
+              label: 'Documents',
+              action: onDocs,
+              color: colors.documents,
+            },
             {
               icon: 'local_shipping_rounded',
               label: 'My truck',
               action: onTrucks,
+              color: driverColors.orange,
             },
           ] as const
         ).map(item => (
@@ -94,7 +105,7 @@ export function DriverDashboardScreen({
               { backgroundColor: p.card, borderColor: p.border },
             ]}
           >
-            <DriverIcon name={item.icon} size={28} />
+            <DriverIcon name={item.icon} size={28} color={item.color} />
             <Text style={[styles.shortcutText, { color: p.text }]}>
               {item.label}
             </Text>
@@ -102,12 +113,17 @@ export function DriverDashboardScreen({
         ))}
       </View>
       <View>
-        <DriverTitle small>Truck-safe by design</DriverTitle>
+        <DriverTitle small>Truck-safe routing</DriverTitle>
         <DriverCopy>
-          SemiTraX never substitutes a passenger-car route
+          Uses your truck profile and verified provider data.
         </DriverCopy>
       </View>
-      <DriverCard>
+      <View
+        style={[
+          styles.safetyCard,
+          { backgroundColor: p.card, borderColor: p.border },
+        ]}
+      >
         {(
           [
             {
@@ -116,11 +132,11 @@ export function DriverDashboardScreen({
             },
             {
               icon: 'scale_rounded',
-              title: 'Weight, axle, and prohibited roads',
+              title: 'Weight, axle and restricted roads',
             },
             {
               icon: 'warning_amber_rounded',
-              title: 'Road alerts, grades, and live DOT data',
+              title: 'Road conditions and alerts',
             },
           ] as const
         ).map((item, i) => (
@@ -132,7 +148,7 @@ export function DriverDashboardScreen({
               i > 0 && { borderColor: p.border },
             ]}
           >
-            <DriverIcon name={item.icon} color={driverColors.green} size={22} />
+            <DriverIcon name={item.icon} color={colors.safety} size={22} />
             <View style={ds.grow}>
               <Text style={[styles.safetyText, { color: p.text }]}>
                 {item.title}
@@ -140,30 +156,108 @@ export function DriverDashboardScreen({
             </View>
           </View>
         ))}
-        <DriverCopy>
-          Safety checks require a verified truck profile and provider data.
-          Missing coverage is unknown; live navigation is not available.
-        </DriverCopy>
-      </DriverCard>
+      </View>
       <View>
         <DriverTitle small>Before departure</DriverTitle>
-        <DriverCopy>Verify the details that control your route</DriverCopy>
+        <DriverCopy>Confirm your active truck before routing.</DriverCopy>
       </View>
-      <DriverTile
-        icon="straighten_rounded"
-        title="Truck dimensions and weight"
-        caption={
-          trucks.selected
-            ? trucks.selected.name +
-              ' · Review height, width, length, axles, trailer and HAZMAT'
-            : 'No active truck · Enter and verify your vehicle facts'
-        }
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Review truck profile"
         onPress={onTrucks}
-      />
+        style={[
+          styles.departureCard,
+          { backgroundColor: p.card, borderColor: p.border },
+        ]}
+      >
+        <View style={ds.row}>
+          <View style={styles.truckIcon}>
+            <DriverIcon
+              name="local_shipping_rounded"
+              color={driverColors.orange}
+              size={28}
+            />
+          </View>
+          <View style={styles.truckDetails}>
+            <Text style={[styles.truckTitle, { color: p.text }]}>
+              {activeTruck
+                ? activeTruck.name + ' · Active'
+                : 'No active truck profile'}
+            </Text>
+            {activeTruck ? (
+              <>
+                <DriverCopy>
+                  {activeTruck.heightFt} ft H · {activeTruck.widthFt} ft W ·{' '}
+                  {activeTruck.lengthFt} ft L
+                </DriverCopy>
+                <DriverCopy>
+                  {activeTruck.weightLbs.toLocaleString('en-US')} lb ·{' '}
+                  {activeTruck.axleCount} axles
+                </DriverCopy>
+              </>
+            ) : (
+              <DriverCopy>Add and verify your truck before routing.</DriverCopy>
+            )}
+          </View>
+          <DriverIcon name="chevron_right_rounded" color={p.muted} />
+        </View>
+        <View style={styles.reviewAction}>
+          <Text style={[styles.reviewText, { color: colors.review }]}>
+            Review truck profile
+          </Text>
+          <DriverIcon
+            name="chevron_right_rounded"
+            color={colors.review}
+            size={20}
+          />
+        </View>
+      </Pressable>
     </DriverPage>
   );
 }
+const homeIconColors = {
+  day: {
+    trips: '#0969B6',
+    documents: '#475569',
+    safety: '#087F68',
+    review: '#A63F0A',
+  },
+  night: {
+    trips: '#7CC4FF',
+    documents: '#C0CDDC',
+    safety: '#6FE0B8',
+    review: '#FFAD80',
+  },
+};
 const styles = StyleSheet.create({
+  safetyCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+  departureCard: { borderWidth: 1, borderRadius: 20, padding: 14, gap: 12 },
+  truckIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#FF6B2C1F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  truckDetails: { flex: 1, minWidth: 0, gap: 2 },
+  truckTitle: { fontSize: 16, fontWeight: '800' },
+  reviewAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#FF6B2C1F',
+  },
+  reviewText: { flex: 1, fontSize: 14, fontWeight: '800' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -179,14 +273,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   initial: { color: '#FF6B2C', fontWeight: '900' },
-  greeting: { marginTop: 12, gap: 6 },
+  greeting: { gap: 4 },
   hero: {
-    padding: 20,
+    padding: 18,
     borderRadius: 24,
     backgroundColor: '#172433',
     experimental_backgroundImage:
       'linear-gradient(135deg, #172433 0%, #263C52 100%)',
-    gap: 18,
+    gap: 12,
     boxShadow: '0 12px 24px #10182033',
   },
   pill: {
@@ -211,19 +305,27 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: -0.5,
   },
-  heroCopy: { color: '#FFFFFFB3', lineHeight: 20, marginTop: -12 },
+  heroCopy: { color: '#CDD9E5', lineHeight: 20 },
   shortcuts: { flexDirection: 'row', gap: 10 },
   shortcut: {
     flex: 1,
+    minWidth: 0,
+    minHeight: 88,
     paddingHorizontal: 8,
-    paddingVertical: 15,
+    paddingVertical: 12,
     borderRadius: 20,
     borderWidth: 1,
     alignItems: 'center',
     gap: 8,
   },
   shortcutText: { fontSize: 12, fontWeight: '900', textAlign: 'center' },
-  safetyDivider: { borderTopWidth: 1, paddingTop: 12 },
-  safetyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  safetyDivider: { borderTopWidth: 1 },
+  safetyRow: {
+    minHeight: 48,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   safetyText: { fontSize: 14, fontWeight: '800' },
 });

@@ -1,5 +1,12 @@
+import { stationBrandId, stationBrandPictures } from './stationBrandPictures';
+import { useDriverPalette } from '../../components/DriverUI';
 import React from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import {
+  Image,
+  StyleSheet,
+  View,
+  type ImageSourcePropType,
+} from 'react-native';
 import { DriverIcon, type DriverIconName } from '../../components/DriverIcon';
 import type { PlaceCategory, Poi } from './PoiService';
 export const placeShortcuts: {
@@ -11,26 +18,20 @@ export const placeShortcuts: {
   {
     label: 'Truck Stops',
     category: 'truck_stop',
-    icon: 'restaurant_rounded',
+    icon: 'truck_stop_symbol',
     color: '#E8583E',
   },
   {
     label: 'Weigh Stations',
     category: 'weigh_station',
-    icon: 'scale_rounded',
+    icon: 'weigh_station_symbol',
     color: '#008F7D',
   },
   {
     label: 'Parking',
     category: 'truck_parking',
-    icon: 'local_parking_rounded',
+    icon: 'truck_parking_symbol',
     color: '#0B68E8',
-  },
-  {
-    label: 'Truck Fuel',
-    category: 'fuel_stop',
-    icon: 'local_gas_station_rounded',
-    color: '#FF8A00',
   },
   {
     label: 'Rest Areas',
@@ -47,64 +48,105 @@ export const placeShortcuts: {
   {
     label: 'Truck Washes',
     category: 'truck_wash',
-    icon: 'local_car_wash_rounded',
+    icon: 'truck_wash_symbol',
     color: '#008F7D',
-  },
-  {
-    label: 'CAT Scales',
-    category: 'cat_scale',
-    icon: 'scale_rounded',
-    color: '#FFB000',
   },
   {
     label: 'Truck Repair',
     category: 'truck_repair',
-    icon: 'settings_rounded',
+    icon: 'truck_repair_symbol',
     color: '#7189AC',
   },
 ];
-const logos = {
-  petroCanada: require('../../assets/original/logo_brand_markers/petro_canada_truck_stop.png'),
-  circle: require('../../assets/original/logo_brand_markers/circle_truck_stop.png'),
-  quiktrip: require('../../assets/original/logo_brand_markers/quicktrip_truck_stop.png'),
-  pilot: require('../../assets/original/logo_brand_markers/pilot.png'),
-  loves: require('../../assets/original/logo_brand_markers/loves.png'),
-  flyingj: require('../../assets/original/logo_brand_markers/flying_j_truck_stop.png'),
-  ta: require('../../assets/original/logo_brand_markers/ta_truck_stop.png'),
-  petro: require('../../assets/original/logo_brand_markers/petro_truck_stop.png'),
-  truck_stop: require('../../assets/original/logo_brand_markers/truck_stop_default.png'),
-  weigh_station: require('../../assets/original/logo_brand_markers/weight_station.png'),
-  rest_area: require('../../assets/original/logo_brand_markers/rest_area.png'),
-  truck_parking: require('../../assets/original/logo_brand_markers/truck_parking.png'),
-  walmart_store: require('../../assets/original/logo_brand_markers/walmart_store.png'),
-  truck_wash: require('../../assets/original/logo_brand_markers/commercial_vehicle_wash.png'),
+export function poiIcon(category?: string): DriverIconName {
+  return (
+    placeShortcuts.find(item => item.category === category)?.icon ??
+    (category === 'cat_scale'
+      ? 'commercial_scale_symbol'
+      : category === 'fuel_stop'
+      ? 'truck_stop_symbol'
+      : category === 'restaurant'
+      ? 'restaurant_rounded'
+      : 'add_location')
+  );
+}
+// User-supplied category artwork; a picture never establishes provider availability.
+export const poiPictures: Record<PlaceCategory, ImageSourcePropType> = {
+  truck_stop: require('../../assets/poi-pictures/truck-stop.png'),
+  weigh_station: require('../../assets/poi-pictures/weigh-station.png'),
+  cat_scale: require('../../assets/poi-pictures/cat-scale.png'),
+  fuel_stop: require('../../assets/poi-pictures/truck-stop.png'),
+  truck_wash: require('../../assets/poi-pictures/truck-wash.png'),
+  truck_repair: require('../../assets/poi-pictures/truck-repair.png'),
+  truck_parking: require('../../assets/poi-pictures/truck-parking.png'),
+  rest_area: require('../../assets/poi-pictures/rest-area.png'),
+  walmart_store: require('../../assets/poi-pictures/retail.png'),
 };
-export function logo(poi: Poi) {
-  const name = poi.name.toLowerCase();
-  if (/\bpetro[- ]canada\b/.test(name)) return logos.petroCanada;
-  if (/\bcircle k\b/.test(name)) return logos.circle;
-  if (/\b(?:quiktrip|quicktrip)\b/.test(name)) return logos.quiktrip;
-  if (poi.category === 'cat_scale' || poi.category === 'truck_repair')
-    return null;
-  if (/\bpilot\b/.test(name)) return logos.pilot;
-  if (/\blove['’]?s\b/.test(name)) return logos.loves;
-  if (/\bflying j\b/.test(name)) return logos.flyingj;
-  if (/\bpetro\b/.test(name)) return logos.petro;
-  if (/\bta\b|travelcenters of america/.test(name)) return logos.ta;
-  return logos[poi.category as keyof typeof logos] || logos.truck_stop;
+export function PoiCategoryPicture({
+  category,
+  size = 40,
+}: {
+  category?: string;
+  size?: number;
+}) {
+  const p = useDriverPalette();
+  const source =
+    category && Object.prototype.hasOwnProperty.call(poiPictures, category)
+      ? poiPictures[category as PlaceCategory]
+      : undefined;
+  return source ? (
+    <View
+      style={[
+        styles.categoryFrame,
+        { width: size, height: size, borderRadius: size * 0.24 },
+      ]}
+    >
+      <Image
+        testID={'poi-picture-' + category}
+        source={source}
+        accessible={false}
+        importantForAccessibility="no"
+        resizeMode="cover"
+        style={{ width: size, height: size }}
+      />
+    </View>
+  ) : (
+    <DriverIcon
+      name={poiIcon(category)}
+      size={size * 0.8}
+      color={p.dark ? '#FFC08B' : '#235577'}
+    />
+  );
 }
 export function PoiArtwork({ poi, pin = false }: { poi: Poi; pin?: boolean }) {
+  const p = useDriverPalette();
+  const brand = stationBrandId(poi);
   return (
-    <View accessibilityLabel={poi.name} style={pin ? styles.pin : styles.disc}>
+    <View
+      accessibilityLabel={poi.name}
+      style={[
+        pin ? styles.pin : styles.disc,
+        { backgroundColor: p.card, borderColor: p.border },
+      ]}
+    >
       {pin && <View style={styles.tail} />}
-      {logo(poi) ? (
-        <Image source={logo(poi)} resizeMode="contain" style={styles.image} />
+      {brand ? (
+        <View style={styles.logoFrame}>
+          <Image
+            testID={'station-logo-' + brand}
+            source={stationBrandPictures[brand]}
+            accessible={false}
+            importantForAccessibility="no"
+            resizeMode="contain"
+            style={styles.image}
+          />
+        </View>
       ) : (
-        <DriverIcon
-          name={
-            poi.category === 'cat_scale' ? 'scale_rounded' : 'settings_rounded'
+        <PoiCategoryPicture
+          category={
+            poi.category === 'gas_station' ? 'truck_stop' : poi.category
           }
-          size={32}
+          size={40}
         />
       )}
     </View>
@@ -112,22 +154,32 @@ export function PoiArtwork({ poi, pin = false }: { poi: Poi; pin?: boolean }) {
 }
 // A grey outline deliberately does not claim a verified truck entrance.
 const styles = StyleSheet.create({
+  categoryFrame: { overflow: 'hidden' },
   disc: {
     width: 50,
     height: 50,
     borderRadius: 25,
     backgroundColor: 'white',
     padding: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   pin: {
     width: 50,
     height: 58,
-    padding: 5,
+    padding: 2,
     borderRadius: 25,
     backgroundColor: 'white',
     borderWidth: 3,
     borderColor: '#637080',
     alignItems: 'center',
+  },
+  logoFrame: {
+    width: 40,
+    height: 40,
+    borderRadius: 9,
+    overflow: 'hidden',
+    backgroundColor: 'white',
   },
   image: { width: 40, height: 40 },
   tail: {
@@ -163,6 +215,13 @@ export function poiDetails(poi: Poi): string {
         ' · ' +
         String(poi.priceObservedAt),
     );
+  if (poi.category === 'weigh_station') {
+    parts.push(
+      'Weigh station status: UNKNOWN unless a current sourced station report is shown in Road and truck services',
+    );
+    if (typeof poi.direction === 'string')
+      parts.push('Direction: ' + poi.direction);
+  }
   parts.push('Truck entrance, opening status and availability unverified');
   return parts.filter(Boolean).join(' · ');
 }

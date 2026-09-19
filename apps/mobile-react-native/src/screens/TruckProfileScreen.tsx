@@ -1,3 +1,4 @@
+import { useDriverPalette } from '../components/DriverUI';
 import {
   dimensionFields,
   dimensionForm,
@@ -119,11 +120,12 @@ function Dialog({
   children,
   close,
 }: React.PropsWithChildren<{ close: () => void }>) {
+  const p = useDriverPalette();
   return (
     <Modal animationType="slide" onRequestClose={close}>
-      <SafeAreaView style={styles.dialog}>
+      <SafeAreaView style={[styles.dialog, { backgroundColor: p.canvas }]}>
         <KeyboardAvoidingView
-          style={styles.dialog}
+          style={[styles.dialog, { backgroundColor: p.canvas }]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <ScrollView
@@ -150,6 +152,7 @@ function Choices({
   onChange: (value: string) => void;
   disabled: boolean;
 }) {
+  const p = useDriverPalette();
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState(false);
   const known = options.some(
@@ -163,9 +166,14 @@ function Choices({
         accessibilityLabel={'Choose ' + label}
         disabled={disabled}
         onPress={() => setOpen(true)}
-        style={styles.selector}
+        style={[
+          styles.selector,
+          { backgroundColor: p.card, borderColor: p.border },
+        ]}
       >
-        <Text style={styles.selectorText}>{value || 'Select equipment'} ▾</Text>
+        <Text style={[styles.selectorText, { color: p.text }]}>
+          {value || 'Select equipment'} ▾
+        </Text>
       </Pressable>
       {(custom || (!!value && !known)) && (
         <Field
@@ -197,6 +205,7 @@ function Choices({
   );
 }
 export function TruckProfileScreen({ services }: { services: Services }) {
+  const p = useDriverPalette();
   const state = useStore(services.trucks);
   const [form, setForm] = useState(formFrom());
   const [formKey, setFormKey] = useState(0);
@@ -252,8 +261,12 @@ export function TruckProfileScreen({ services }: { services: Services }) {
   };
   useEffect(() => {
     mounted.current = true;
-    services.trucks.load().catch(e => { if (mounted.current) showError(e); });
-    return () => { mounted.current = false; };
+    services.trucks.load().catch(e => {
+      if (mounted.current) showError(e);
+    });
+    return () => {
+      mounted.current = false;
+    };
   }, [services]);
   async function run(action: () => Promise<void>) {
     if (submitting.current || !mounted.current) return;
@@ -277,7 +290,11 @@ export function TruckProfileScreen({ services }: { services: Services }) {
         : parseTruckForm(form);
       checked = await services.trucks.prepareCreate(checked);
       if (!mounted.current) return;
-      if (!checked.id) setForm(current => ({...current, createOperationId: checked.createOperationId}));
+      if (!checked.id)
+        setForm(current => ({
+          ...current,
+          createOperationId: checked.createOperationId,
+        }));
       setFieldErrors({});
       Keyboard.dismiss();
       setAcknowledged(false);
@@ -294,8 +311,11 @@ export function TruckProfileScreen({ services }: { services: Services }) {
     setForm(formFrom(saved));
     setReview({ profile: saved, save: false });
     if (
-      profileFingerprint({ ...checked, id: saved.id, revision: saved.revision }) !==
-      profileFingerprint(saved)
+      profileFingerprint({
+        ...checked,
+        id: saved.id,
+        revision: saved.revision,
+      }) !== profileFingerprint(saved)
     ) {
       setAcknowledged(false);
       throw new Error(
@@ -307,7 +327,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
     } catch (failure) {
       if (mounted.current) {
         setAcknowledged(false);
-        const latest = services.trucks.getSnapshot().profiles.find(item => item.id === saved.id);
+        const latest = services.trucks
+          .getSnapshot()
+          .profiles.find(item => item.id === saved.id);
         if (latest) setReview({ profile: latest, save: false });
       }
       throw failure;
@@ -322,7 +344,8 @@ export function TruckProfileScreen({ services }: { services: Services }) {
     <ScrollView
       ref={scroll}
       keyboardShouldPersistTaps="handled"
-      contentContainerStyle={styles.page}
+      style={{ backgroundColor: p.canvas }}
+      contentContainerStyle={[styles.page, { backgroundColor: p.canvas }]}
     >
       <Heading>Truck profiles</Heading>
       <Copy>
@@ -338,7 +361,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
         <Card key={profile.id}>
           <Copy>
             {profile.name}
-            {profile.verificationState === 'ADMIN_UPDATED' ? ' · Updated by operations — review required' : ''}
+            {profile.verificationState === 'ADMIN_UPDATED'
+              ? ' · Updated by operations — review required'
+              : ''}
             {state.selected?.id === profile.id
               ? ' · Active'
               : profile.isDefault
@@ -379,7 +404,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           <Button
             title="Set Active"
             disabled={busy || state.selected?.id === profile.id}
-            onPress={() => { void run(() => openReview(profile)); }}
+            onPress={() => {
+              void run(() => openReview(profile));
+            }}
           />
         </Card>
       ))}
@@ -573,6 +600,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
         <View key={key}>
           <Copy>{labels[key]}</Copy>
           <Switch
+            trackColor={{ false: p.border, true: p.toggleActive }}
+            thumbColor={p.toggleThumb}
+            ios_backgroundColor={p.border}
             accessibilityLabel={labels[key]}
             disabled={busy}
             value={form[key] === true}
@@ -586,6 +616,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
         <View key={good}>
           <Copy>{hazmatLabels[good]}</Copy>
           <Switch
+            trackColor={{ false: p.border, true: p.toggleActive }}
+            thumbColor={p.toggleThumb}
+            ios_backgroundColor={p.border}
             accessibilityLabel={hazmatLabels[good]}
             disabled={busy}
             value={goods.includes(good)}
@@ -607,7 +640,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
       <Button
         title="Review truck profile"
         disabled={busy}
-        onPress={() => { void run(() => openReview()); }}
+        onPress={() => {
+          void run(() => openReview());
+        }}
       />
       {review && (
         <Dialog
@@ -650,6 +685,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             hazardous goods against this vehicle.
           </Copy>
           <Switch
+            trackColor={{ false: p.border, true: p.toggleActive }}
+            thumbColor={p.toggleThumb}
+            ios_backgroundColor={p.border}
             accessibilityLabel="I verified the actual truck and load"
             disabled={busy}
             value={acknowledged}

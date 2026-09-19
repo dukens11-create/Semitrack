@@ -94,6 +94,15 @@ export class AuthStore extends Store<AuthState> {
     });
     if (generation === this.generation) await this.logout();
   }
+  async confirmPasswordReset(token: string, password: string) {
+    await this.api.request(
+      'POST',
+      '/auth/password-reset/confirm',
+      { token, password },
+      undefined,
+      false,
+    );
+  }
   async logout() {
     const generation = ++this.generation;
     this.api.invalidateSession();

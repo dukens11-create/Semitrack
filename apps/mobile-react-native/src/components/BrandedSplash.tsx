@@ -1,21 +1,16 @@
+import { useDriverPalette } from './DriverUI';
 import React, { useState } from 'react';
-import {
-  ActivityIndicator,
-  Image,
-  StatusBar,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, View } from 'react-native';
 
 export function BrandedSplash() {
+  const p = useDriverPalette();
   const [imageFailed, setImageFailed] = useState(false);
   return (
     <View
-      style={styles.fill}
+      style={[styles.fill, { backgroundColor: p.canvas }]}
       accessibilityLabel="SemiTraX is loading"
       accessibilityState={{ busy: true }}
     >
-      <StatusBar barStyle="light-content" />
       <Image
         accessible={false}
         source={
@@ -23,8 +18,8 @@ export function BrandedSplash() {
             ? require('../assets/semitrax_brand_lockup.png')
             : require('../assets/semitrax_splash.png')
         }
-        resizeMode={imageFailed ? 'contain' : 'cover'}
-        style={imageFailed ? styles.fallback : StyleSheet.absoluteFill}
+        resizeMode="contain"
+        style={styles.fallback}
         onError={() => setImageFailed(true)}
       />
       <ActivityIndicator

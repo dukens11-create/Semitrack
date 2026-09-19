@@ -93,17 +93,94 @@ test('validation failures and raw responses never become driver-facing error tex
   }
 });
 
-
 test('maneuver step ordering is enforced independently of geometry offsets', () => {
-  for (const step of [1,0]) expect(() => parseTruckRoute({...input,
-    turnByTurn:[input.turnByTurn[0],{...input.turnByTurn[1],step}]})).toThrow(DriverError);
+  for (const step of [1, 0])
+    expect(() =>
+      parseTruckRoute({
+        ...input,
+        turnByTurn: [input.turnByTurn[0], { ...input.turnByTurn[1], step }],
+      }),
+    ).toThrow(DriverError);
 });
 test('alternative previews cannot duplicate route identities or smuggle mismatched legs', () => {
-  const alternative = {id:'alt',distanceMiles:1,durationSeconds:60,etaMinutes:1,routeGeometry:input.routeGeometry,
-    legs:[],turnByTurn:[],notices:[{code:'TRIMBLE_ALTERNATE_PREVIEW'}]};
-  expect(parseTruckRoute({...input,alternatives:[alternative]}).alternatives[0]?.turnByTurn).toEqual([]);
-  for (const alternatives of [[alternative,alternative],[{...alternative,id:input.selectedRouteId}],
-    [{...alternative,legs:[{distanceMiles:1,durationSeconds:60,geometry:[],maneuvers:[maneuver]}]}],
-    [{...alternative,notices:[]}], [{...alternative,routeGeometry:[[181,40],[0,40]]}]])
-    expect(()=>parseTruckRoute({...input,alternatives})).toThrow(DriverError);
+  const alternative = {
+    id: 'alt',
+    distanceMiles: 1,
+    durationSeconds: 60,
+    etaMinutes: 1,
+    routeGeometry: input.routeGeometry,
+    legs: [],
+    turnByTurn: [],
+    notices: [{ code: 'TRIMBLE_ALTERNATE_PREVIEW' }],
+  };
+  expect(
+    parseTruckRoute({ ...input, alternatives: [alternative] }).alternatives[0]
+      ?.turnByTurn,
+  ).toEqual([]);
+  for (const alternatives of [
+    [alternative, alternative],
+    [{ ...alternative, id: input.selectedRouteId }],
+    [
+      {
+        ...alternative,
+        legs: [
+          {
+            distanceMiles: 1,
+            durationSeconds: 60,
+            geometry: [],
+            maneuvers: [maneuver],
+          },
+        ],
+      },
+    ],
+    [{ ...alternative, notices: [] }],
+    [
+      {
+        ...alternative,
+        routeGeometry: [
+          [181, 40],
+          [0, 40],
+        ],
+      },
+    ],
+  ])
+    expect(() => parseTruckRoute({ ...input, alternatives })).toThrow(
+      DriverError,
+    );
+});
+
+test('real Trimble stop snaps up to 50 m are accepted, ordered count and leg evidence remain mandatory', () => {
+  const stops = [
+    { lat: 40, lng: -120 },
+    { lat: 40, lng: -119.998 },
+  ];
+  const build = (offset: number) => ({
+    ...input,
+    validatedStops: [{ ...stops[0], lat: 40 + offset }, stops[1]],
+    legs: [
+      {
+        distanceMiles: input.distanceMiles,
+        durationSeconds: input.durationSeconds,
+        geometry: input.routeGeometry,
+        maneuvers: input.turnByTurn,
+      },
+    ],
+  });
+  expect(parseTruckRoute(build(0.0004), stops).validatedStops).toHaveLength(2);
+  expect(() => parseTruckRoute(build(0.00046), stops)).toThrow(DriverError);
+  expect(() =>
+    parseTruckRoute(
+      { ...build(0), validatedStops: [stops[1], stops[0]] },
+      stops,
+    ),
+  ).toThrow(DriverError);
+  expect(() =>
+    parseTruckRoute({ ...build(0), validatedStops: [stops[0]] }, stops),
+  ).toThrow(DriverError);
+  expect(() => parseTruckRoute({ ...build(0), legs: [] }, stops)).toThrow(
+    DriverError,
+  );
+  expect(() =>
+    parseTruckRoute({ ...build(0), validatedStops: undefined }, stops),
+  ).toThrow(DriverError);
 });

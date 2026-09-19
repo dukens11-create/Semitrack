@@ -10,6 +10,7 @@ import type { SearchService } from './SearchService';
 import type { PoiService, Poi, PlaceCategory } from '../poi/PoiService';
 export type DestinationSearchState = {
   query: string;
+  recentQueries?: string[];
   phase: 'idle' | 'waiting' | 'loading' | 'ready' | 'error';
   results: Stop[];
   pois: Poi[];
@@ -31,10 +32,24 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
     this.controller = null;
     this.publish({
       query: this.value.query,
+      recentQueries: this.value.recentQueries,
       phase: 'idle',
       results: [],
       pois: [],
     });
+  }
+  clear() {
+    this.cancel();
+    this.publish({
+      query: '',
+      phase: 'idle',
+      results: [],
+      pois: [],
+      recentQueries: this.value.recentQueries,
+    });
+  }
+  clearRecent() {
+    this.publish({ ...this.value, recentQueries: [] });
   }
   schedule(query: string, center?: Coordinate) {
     this.cancel();
@@ -51,15 +66,30 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
   }
   searchNow(center?: Coordinate) {
     if (this.value.phase === 'loading') return Promise.resolve();
+    const query = this.value.query.trim();
     return this.execute(async signal => ({
-      results: await this.search.search(this.value.query, center, signal),
+      results: await this.search.search(query, center, signal),
       pois: [],
+      recentQueries: [
+        query,
+        ...(this.value.recentQueries ?? []).filter(
+          value => value.toLowerCase() !== query.toLowerCase(),
+        ),
+      ]
+        .filter(Boolean)
+        .slice(0, 5),
     }));
   }
   nearby(category: PlaceCategory, center: Coordinate) {
     return this.execute(async signal => ({
       results: [],
       pois: await this.poi.nearby(category, center, signal),
+    }));
+  }
+  alongRoute(category: PlaceCategory, route: TruckRoute, fix: LocationFix) {
+    return this.execute(async signal => ({
+      results: [],
+      pois: await this.poi.alongRoute(category, route, fix, signal),
     }));
   }
   reverse(point: Coordinate) {
@@ -179,6 +209,7 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
     action: (signal: AbortSignal) => Promise<{
       results: Stop[];
       pois: Poi[];
+      recentQueries?: string[];
       advisories?: Record<string, unknown>[];
     }>,
   ) {
@@ -196,7 +227,10 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
         this.publish({
           ...this.value,
           phase: 'error',
-          error: safeDriverError(error, 'Places could not be loaded. Check your connection and retry.'),
+          error: safeDriverError(
+            error,
+            'Places could not be loaded. Check your connection and retry.',
+          ),
         });
     } finally {
       if (generation === this.generation) this.controller = null;

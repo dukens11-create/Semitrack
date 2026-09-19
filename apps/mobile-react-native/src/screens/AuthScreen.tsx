@@ -1,3 +1,4 @@
+import { useDriverPalette } from '../components/DriverUI';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -7,7 +8,6 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Services } from '../app/services';
+import { PasswordRecoveryPanel } from '../features/auth/PasswordRecoveryPanel';
 import { AuthIcon } from '../components/AuthIcon';
 import {
   emailError,
@@ -42,30 +43,35 @@ function AuthField({
   inputRef: React.RefObject<TextInput | null>;
   trailing?: React.ReactNode;
 }) {
+  const p = useDriverPalette();
   const [focused, setFocused] = useState(false);
   return (
     <View>
       <View
         style={[
           styles.field,
+          { backgroundColor: p.input, borderColor: p.border },
           focused && styles.focusedField,
           !!error && styles.invalidField,
         ]}
       >
-        <AuthIcon name={icon} color={focused ? orange : '#9FAAB5'} />
+        <AuthIcon name={icon} color={focused ? orange : p.muted} />
         <View style={styles.inputContent}>
           {(!!props.value || focused) && (
-            <Text style={styles.floatingLabel}>{label}</Text>
+            <Text style={[styles.floatingLabel, { color: p.muted }]}>
+              {label}
+            </Text>
           )}
           <TextInput
+            keyboardAppearance={p.dark ? 'dark' : 'light'}
             {...props}
             ref={inputRef}
             accessibilityLabel={label}
             accessibilityHint={error}
             placeholder={focused ? undefined : label}
-            placeholderTextColor="#B6C0CA"
+            placeholderTextColor={p.muted}
             selectionColor={orange}
-            style={styles.input}
+            style={[styles.input, { color: p.text }]}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
           />
@@ -76,7 +82,7 @@ function AuthField({
         <Text
           accessibilityRole="alert"
           accessibilityLiveRegion="polite"
-          style={styles.fieldError}
+          style={[styles.fieldError, { color: p.danger }]}
         >
           {error}
         </Text>
@@ -86,6 +92,8 @@ function AuthField({
 }
 
 export function AuthScreen({ services }: { services: Services }) {
+  const p = useDriverPalette();
+  const [resetOpen, setResetOpen] = useState(false);
   const [register, setRegister] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -105,7 +113,10 @@ export function AuthScreen({ services }: { services: Services }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Override both intrinsic PNG dimensions; aspectRatio alone leaves the asset height.
-  const logoWidth = Math.min(188, Math.max(1, width - insets.left - insets.right - 52));
+  const logoWidth = Math.min(
+    188,
+    Math.max(1, width - insets.left - insets.right - 52),
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -188,10 +199,8 @@ export function AuthScreen({ services }: { services: Services }) {
     try {
       await services.auth.requestPasswordReset(email);
       if (mounted.current) {
-        // The existing API accepts requests, but has no email delivery implementation.
-        // Do not promise a recovery email or disclose whether an account exists.
         setNotice(
-          'Recovery request received. Recovery email delivery is not yet available.',
+          'If an account exists for this email, we’ve sent password reset instructions.',
         );
       }
     } catch {
@@ -208,10 +217,15 @@ export function AuthScreen({ services }: { services: Services }) {
   );
   return (
     <View
-      style={styles.screen}
+      style={[styles.screen, { backgroundColor: p.canvas }]}
       onLayout={event => setViewportHeight(event.nativeEvent.layout.height)}
     >
-      <StatusBar barStyle="light-content" />
+      {resetOpen && (
+        <PasswordRecoveryPanel
+          auth={services.auth}
+          onClose={() => setResetOpen(false)}
+        />
+      )}
       <Image
         accessible={false}
         source={require('../assets/semitrax_auth_background_v2.png')}
@@ -220,7 +234,10 @@ export function AuthScreen({ services }: { services: Services }) {
       />
       <View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFill, styles.overlay]}
+        style={[
+          StyleSheet.absoluteFill,
+          p.dark ? styles.overlay : { backgroundColor: p.canvas + 'E8' },
+        ]}
       />
       <KeyboardAvoidingView
         style={styles.fill}
@@ -243,16 +260,22 @@ export function AuthScreen({ services }: { services: Services }) {
                 accessibilityLabel="Semi-TraX — Smarter routes. Safer deliveries."
                 source={require('../assets/semitrax_login_lockup.png')}
                 resizeMode="contain"
-                style={[styles.logo, { width: logoWidth, height: (logoWidth * 541) / 1723 }]}
+                style={[
+                  styles.logo,
+                  { width: logoWidth, height: (logoWidth * 541) / 1723 },
+                ]}
               />
             </View>
             <View style={styles.introduction}>
-              <Text accessibilityRole="header" style={styles.heading}>
+              <Text
+                accessibilityRole="header"
+                style={[styles.heading, { color: p.text }]}
+              >
                 {register
                   ? 'Create your driver account'
                   : 'Truck-safe navigation starts here'}
               </Text>
-              <Text style={styles.subtitle}>
+              <Text style={[styles.subtitle, { color: p.muted }]}>
                 {register
                   ? 'Build a secure profile for your commercial vehicle.'
                   : 'Routes built around your vehicle—not a passenger car.'}
@@ -265,7 +288,12 @@ export function AuthScreen({ services }: { services: Services }) {
                   28 + (keyboardVisible ? 18 : viewportHeight > 760 ? 122 : 36),
               }}
             />
-            <View style={styles.card}>
+            <View
+              style={[
+                styles.card,
+                { backgroundColor: p.card, borderColor: p.border },
+              ]}
+            >
               <View style={styles.modes} accessibilityRole="tablist">
                 {[false, true].map(mode => (
                   <Pressable
@@ -282,6 +310,7 @@ export function AuthScreen({ services }: { services: Services }) {
                     onPress={() => changeMode(mode)}
                     style={({ pressed }) => [
                       styles.mode,
+                      { borderColor: p.border },
                       register === mode && styles.selectedMode,
                       pressed && styles.pressed,
                     ]}
@@ -289,6 +318,7 @@ export function AuthScreen({ services }: { services: Services }) {
                     <Text
                       style={[
                         styles.modeText,
+                        { color: p.text },
                         register === mode && styles.selectedModeText,
                       ]}
                     >
@@ -391,17 +421,30 @@ export function AuthScreen({ services }: { services: Services }) {
               ) : (
                 <View style={styles.registrationGap} />
               )}
+              {!register && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Use recovery link"
+                  onPress={() => setResetOpen(true)}
+                  style={styles.recovery}
+                >
+                  <Text style={styles.recoveryText}>Use recovery link</Text>
+                </Pressable>
+              )}
               {error && (
                 <Text
                   accessibilityRole="alert"
                   accessibilityLiveRegion="assertive"
-                  style={styles.messageError}
+                  style={[styles.messageError, { color: p.danger }]}
                 >
                   {error}
                 </Text>
               )}
               {notice && (
-                <Text accessibilityLiveRegion="polite" style={styles.notice}>
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[styles.notice, { color: p.muted }]}
+                >
                   {notice}
                 </Text>
               )}
@@ -437,7 +480,7 @@ export function AuthScreen({ services }: { services: Services }) {
               </Pressable>
               <View style={styles.footer}>
                 <AuthIcon name="shield" size={16} />
-                <Text style={styles.footerText}>
+                <Text style={[styles.footerText, { color: p.muted }]}>
                   Secure access for commercial drivers
                 </Text>
               </View>

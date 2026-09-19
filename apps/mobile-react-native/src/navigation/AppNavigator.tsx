@@ -1,6 +1,15 @@
+import { Alert } from '../components/ThemedAlert';
+import { isNavigationSession } from '../features/navigation/navigationPresentation';
+import { EldScreen } from '../screens/EldScreen';
+import { OfflineMapsScreen } from '../screens/OfflineMapsScreen';
 import React, { useEffect, useState } from 'react';
 import { BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer, useIsFocused } from '@react-navigation/native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+  useIsFocused,
+} from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { Services } from '../app/services';
 import { DriverIcon, type DriverIconName } from '../components/DriverIcon';
@@ -17,6 +26,8 @@ type Routes = {
   Trucks: undefined;
   Services: undefined;
   Settings: undefined;
+  Eld: undefined;
+  Offline: undefined;
 };
 const Stack = createNativeStackNavigator<Routes>();
 const tabs: { label: string; icon: DriverIconName; active: DriverIconName }[] =
@@ -33,13 +44,32 @@ export function DriverShell({
   open,
 }: {
   services: Services;
-  open: (screen: 'Trucks' | 'Settings' | 'Services') => void;
+  open: (
+    screen: 'Trucks' | 'Settings' | 'Services' | 'Eld' | 'Offline',
+  ) => void;
 }) {
   const p = useDriverPalette();
   const [tab, setTab] = useState(1);
   const [visited, setVisited] = useState([1]);
+  const [fullNavigation, setFullNavigation] = useState(false);
   const focused = useIsFocused();
-  function select(index: number) {
+  function select(index: number, confirmed = false) {
+    if (
+      index !== 1 &&
+      tab === 1 &&
+      !confirmed &&
+      isNavigationSession(services.guidance.getNavigationState())
+    ) {
+      Alert.alert(
+        'Leave navigation view?',
+        'Guidance will continue. Return to Map for navigation controls.',
+        [
+          { text: 'Stay on Map', style: 'cancel' },
+          { text: 'Continue', onPress: () => select(index, true) },
+        ],
+      );
+      return;
+    }
     setTab(index);
     setVisited(old => (old.includes(index) ? old : [...old, index]));
   }
@@ -78,9 +108,11 @@ export function DriverShell({
             ) : index === 1 ? (
               <PlanningScreen
                 active={focused && tab === 1}
+                onNavigationActiveChange={setFullNavigation}
                 services={services}
                 onTrucks={() => open('Trucks')}
                 onServices={() => open('Services')}
+                onSettings={() => open('Settings')}
               />
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />
@@ -97,53 +129,68 @@ export function DriverShell({
           </View>
         ))}
       </View>
-      <View
-        accessibilityRole="tablist"
-        style={[
-          styles.bar,
-          {
-            backgroundColor: p.card,
-            borderColor: p.border,
-          },
-        ]}
-      >
-        {tabs.map((item, index) => (
-          <Pressable
-            key={item.label}
-            accessibilityRole="tab"
-            accessibilityLabel={item.label}
-            accessibilityState={{ selected: index === tab }}
-            onPress={() => select(index)}
-            style={styles.tab}
-          >
-            <View style={[styles.indicator, index === tab && styles.selected]}>
-              <DriverIcon
-                name={index === tab ? item.active : item.icon}
-                size={25}
-                color={index === tab ? '#FF6B2C' : p.muted}
-              />
-            </View>
-            <Text
-              style={[
-                styles.label,
-                index === tab && styles.selectedLabel,
-                {
-                  color: index === tab ? driverColors.orange : p.muted,
-                },
-              ]}
+      {!(tab === 1 && fullNavigation) && (
+        <View
+          accessibilityRole="tablist"
+          style={[
+            styles.bar,
+            {
+              backgroundColor: p.card,
+              borderColor: p.border,
+            },
+          ]}
+        >
+          {tabs.map((item, index) => (
+            <Pressable
+              key={item.label}
+              accessibilityRole="tab"
+              accessibilityLabel={item.label}
+              accessibilityState={{ selected: index === tab }}
+              onPress={() => select(index)}
+              style={styles.tab}
             >
-              {item.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+              <View
+                style={[styles.indicator, index === tab && styles.selected]}
+              >
+                <DriverIcon
+                  name={index === tab ? item.active : item.icon}
+                  size={25}
+                  color={index === tab ? '#FF6B2C' : p.muted}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.label,
+                  index === tab && styles.selectedLabel,
+                  {
+                    color: index === tab ? driverColors.orange : p.muted,
+                  },
+                ]}
+              >
+                {item.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
 export function AppNavigator({ services }: { services: Services }) {
   const p = useDriverPalette();
   return (
-    <NavigationContainer>
+    <NavigationContainer
+      theme={{
+        ...(p.dark ? DarkTheme : DefaultTheme),
+        colors: {
+          ...(p.dark ? DarkTheme : DefaultTheme).colors,
+          background: p.canvas,
+          card: p.card,
+          text: p.text,
+          border: p.border,
+        },
+      }}
+    >
       <Stack.Navigator
         screenOptions={{
           headerStyle: { backgroundColor: p.card },
@@ -166,13 +213,30 @@ export function AppNavigator({ services }: { services: Services }) {
           name="Services"
           options={{ title: 'Road and truck services' }}
         >
-          {() => <ServicesScreen services={services} />}
+          {({ navigation }) => (
+            <ServicesScreen
+              services={services}
+              onEld={() => navigation.navigate('Eld')}
+              onOffline={() => navigation.navigate('Offline')}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="Settings" options={{ headerShown: false }}>
+          {({ navigation }) => (
+            <SettingsScreen
+              services={services}
+              onBack={() => navigation.goBack()}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="Eld" options={{ title: 'ELD connections' }}>
+          {() => <EldScreen services={services} />}
         </Stack.Screen>
         <Stack.Screen
-          name="Settings"
-          options={{ title: 'Account and settings' }}
+          name="Offline"
+          options={{ title: 'Offline display maps' }}
         >
-          {() => <SettingsScreen services={services} />}
+          {() => <OfflineMapsScreen services={services} />}
         </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>

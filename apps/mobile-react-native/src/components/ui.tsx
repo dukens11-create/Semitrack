@@ -1,8 +1,8 @@
+import { useDriverPalette, DriverButton } from './DriverUI';
 import { safeDriverError } from '../errors/driverErrors';
 import React from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,71 +19,73 @@ export const colors = {
   border: '#CED5DE',
 };
 export function Page({ children }: React.PropsWithChildren) {
+  const p = useDriverPalette();
   return (
     <ScrollView
       keyboardShouldPersistTaps="handled"
-      contentContainerStyle={styles.page}
+      style={{ backgroundColor: p.canvas }}
+      contentContainerStyle={[styles.page, { backgroundColor: p.canvas }]}
     >
       {children}
     </ScrollView>
   );
 }
 export function Heading({ children }: React.PropsWithChildren) {
+  const p = useDriverPalette();
   return (
-    <Text accessibilityRole="header" style={styles.heading}>
+    <Text
+      accessibilityRole="header"
+      style={[styles.heading, { color: p.text }]}
+    >
       {children}
     </Text>
   );
 }
 export function Copy({ children }: React.PropsWithChildren) {
-  return <Text style={styles.copy}>{children}</Text>;
+  const p = useDriverPalette();
+  return <Text style={[styles.copy, { color: p.text }]}>{children}</Text>;
 }
 export function Card({ children }: React.PropsWithChildren) {
-  return <View style={styles.card}>{children}</View>;
+  const p = useDriverPalette();
+  return (
+    <View
+      style={[styles.card, { backgroundColor: p.card, borderColor: p.border }]}
+    >
+      {children}
+    </View>
+  );
 }
 export function ErrorText({ message }: { message?: string }) {
+  const p = useDriverPalette();
   return message ? (
-    <Text accessibilityRole="alert" style={styles.error}>
+    <Text
+      accessibilityRole="alert"
+      style={[styles.error, p.dark ? styles.nightError : styles.error]}
+    >
       {message}
     </Text>
   ) : null;
 }
-export function Button({
-  title,
-  onPress,
-  disabled = false,
-  secondary = false,
-}: {
-  title: string;
-  onPress: () => void;
-  disabled?: boolean;
-  secondary?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.button,
-        secondary && styles.secondary,
-        disabled && styles.disabled,
-      ]}
-    >
-      <Text style={styles.buttonText}>{title}</Text>
-    </Pressable>
-  );
-}
-export function Field({ label, ...props }: TextInputProps & { label: string }) {
+export const Button = DriverButton;
+export function Field({
+  label,
+  style,
+  ...props
+}: TextInputProps & { label: string }) {
+  const p = useDriverPalette();
   return (
     <View>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: p.text }]}>{label}</Text>
       <TextInput
+        keyboardAppearance={p.dark ? 'dark' : 'light'}
         accessibilityLabel={label}
-        placeholderTextColor={colors.muted}
-        style={styles.input}
+        placeholderTextColor={p.muted}
         {...props}
+        style={[
+          styles.input,
+          { color: p.text, backgroundColor: p.input, borderColor: p.border },
+          style,
+        ]}
       />
     </View>
   );
@@ -97,6 +99,7 @@ export function errorMessage(error: unknown) {
   return safeDriverError(error);
 }
 const styles = StyleSheet.create({
+  nightError: { color: '#FFB4AB' },
   page: { padding: 20, gap: 14, backgroundColor: colors.canvas, flexGrow: 1 },
   heading: { fontSize: 25, fontWeight: '800', color: colors.navy },
   copy: { fontSize: 15, lineHeight: 22, color: colors.ink },
@@ -118,17 +121,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     color: colors.ink,
   },
-  button: {
-    minHeight: 48,
-    padding: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.navy,
-    borderRadius: 8,
-    marginVertical: 4,
-  },
-  secondary: { backgroundColor: '#435468' },
-  disabled: { opacity: 0.45 },
-  buttonText: { color: 'white', fontWeight: '700', fontSize: 15 },
   error: { color: '#9C2020', fontSize: 14, lineHeight: 21 },
 });

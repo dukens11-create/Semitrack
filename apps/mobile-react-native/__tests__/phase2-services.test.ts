@@ -4,7 +4,7 @@ import {
   reportedDieselCandidates,
   type Poi,
 } from '../src/features/poi/PoiService';
-import { logo, poiDetails } from '../src/features/poi/PoiPresentation';
+import { poiIcon, poiDetails } from '../src/features/poi/PoiPresentation';
 import {
   interpretDriverIntent,
   acceptDriverTranscript,
@@ -51,12 +51,11 @@ test('POI dedup preserves different businesses, distance zero and unknown status
   );
   expect(poiDetails(poi)).toContain('availability unverified');
 });
-test('Original brand assets distinguish Petro Canada from Petro and category icons do not imply a truck stop', () => {
-  expect(logo({ ...poi, name: 'Petro Canada' })).not.toEqual(
-    logo({ ...poi, name: 'Petro Travel Center' }),
-  );
-  expect(logo({ ...poi, category: 'cat_scale', name: 'CAT Scale' })).toBeNull();
-  expect(logo({ ...poi, name: 'Circle K Truck Stop' })).toBeDefined();
+test('unlicensed brand matching is replaced with semantic category symbols', () => {
+  expect(poiIcon('truck_stop')).toBe('truck_stop_symbol');
+  expect(poiIcon('cat_scale')).toBe('commercial_scale_symbol');
+  expect(poiIcon('weigh_station')).toBe('weigh_station_symbol');
+  expect(poiIcon('unknown')).toBe('add_location');
 });
 test.each([
   ['Find the closest truck stop.', 'places'],
@@ -235,23 +234,44 @@ test('Unknown diesel volume unit cannot be compared as cheapest', () => {
   ).toEqual([]);
 });
 
-
 import type { TokenVault } from '../src/services/storage/TokenVault';
 import { safeDriverError } from '../src/errors/driverErrors';
 test.each([
- ['CORRIDOR_ROUTE_REQUIRED','Plan a truck route'],
- ['CORRIDOR_LOCATION_REQUIRED','Enable precise location'],
- ['CORRIDOR_LOCATION_INVALID','valid precise location'],
- ['CORRIDOR_LOCATION_STALE','Location is stale'],
- ['CORRIDOR_LOCATION_OFF_ROUTE','off the planned route'],
- ['CORRIDOR_LOCATION_AMBIGUOUS','ambiguous'],
- ['CORRIDOR_CORRELATION_FAILED','could not be matched'],
-])('correlation HTTP contract %s survives canonical POI and assistant error handling',async(code,copy)=>{
- const transport=jest.fn().mockResolvedValue({status:422,ok:false,text:async()=>JSON.stringify({error:{code,message:'untrusted server detail'}})});
- const api=new ApiClient('https://fixture.invalid',{read:async()=>null} as unknown as TokenVault,transport);
- const service=new PoiService(api);
- try{await service.corridor('road-events',route,0,fix());throw Error('unexpected success');}catch(e){expect(safeDriverError(e)).toContain(copy);expect(safeDriverError(e)).not.toContain('untrusted');}
- const store=new DestinationSearchStore({} as SearchService,service);
- await store.command('Find truck stops on my route',{fix:fix(),route});
- expect(store.getSnapshot().phase).toBe('error');expect(store.getSnapshot().pois).toEqual([]);expect(store.getSnapshot().error).toContain(copy);
-});
+  ['CORRIDOR_ROUTE_REQUIRED', 'Plan a truck route'],
+  ['CORRIDOR_LOCATION_REQUIRED', 'Enable precise location'],
+  ['CORRIDOR_LOCATION_INVALID', 'valid precise location'],
+  ['CORRIDOR_LOCATION_STALE', 'Location is stale'],
+  ['CORRIDOR_LOCATION_OFF_ROUTE', 'off the planned route'],
+  ['CORRIDOR_LOCATION_AMBIGUOUS', 'ambiguous'],
+  ['CORRIDOR_CORRELATION_FAILED', 'could not be matched'],
+])(
+  'correlation HTTP contract %s survives canonical POI and assistant error handling',
+  async (code, copy) => {
+    const transport = jest.fn().mockResolvedValue({
+      status: 422,
+      ok: false,
+      text: async () =>
+        JSON.stringify({
+          error: { code, message: 'untrusted server detail' },
+        }),
+    });
+    const api = new ApiClient(
+      'https://fixture.invalid',
+      { read: async () => null } as unknown as TokenVault,
+      transport,
+    );
+    const service = new PoiService(api);
+    try {
+      await service.corridor('road-events', route, 0, fix());
+      throw Error('unexpected success');
+    } catch (e) {
+      expect(safeDriverError(e)).toContain(copy);
+      expect(safeDriverError(e)).not.toContain('untrusted');
+    }
+    const store = new DestinationSearchStore({} as SearchService, service);
+    await store.command('Find truck stops on my route', { fix: fix(), route });
+    expect(store.getSnapshot().phase).toBe('error');
+    expect(store.getSnapshot().pois).toEqual([]);
+    expect(store.getSnapshot().error).toContain(copy);
+  },
+);

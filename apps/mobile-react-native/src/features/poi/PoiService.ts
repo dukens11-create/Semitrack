@@ -1,3 +1,4 @@
+import { currentDieselPrice } from '../navigation/providerEvidence';
 import type { LocationFix } from '../../services/location/LocationService';
 import { z } from 'zod';
 import type { ApiClient } from '../../services/api/ApiClient';
@@ -81,7 +82,7 @@ export class PoiService {
         signal,
       ),
     );
-    return uniquePois(
+    return aheadPois(
       data.items.flatMap(item => {
         const result = poiSchema.safeParse(item);
         return result.success ? [result.data] : [];
@@ -199,20 +200,7 @@ export function reportedDieselCandidates(
       if (!raw || typeof raw !== 'object') return false;
       const p = raw as Record<string, unknown>,
         price = Number(p.cashPrice);
-      const age = now - Date.parse(String(p.observedAt));
-      return (
-        p.fuelType === 'DIESEL' &&
-        p.currency === 'USD' &&
-        p.unit === 'US_GALLON' &&
-        p.verified === true &&
-        typeof p.source === 'string' &&
-        p.source.length > 0 &&
-        Number.isFinite(price) &&
-        price > 0 &&
-        age >= 0 &&
-        age <= 86400000 &&
-        Date.parse(String(p.expiresAt)) > now
-      );
+      return currentDieselPrice(p, now) && Number.isFinite(price) && price > 0;
     }) as Record<string, unknown> | undefined;
     if (!observation) continue;
     const parsed = poiSchema.safeParse({ ...station, category: 'fuel_stop' });
@@ -227,4 +215,14 @@ export function reportedDieselCandidates(
   return uniquePois(candidates).sort(
     (a, b) => Number(a.reportedCashPrice) - Number(b.reportedCashPrice),
   );
+}
+
+export function aheadPois(items: Poi[]) {
+  return uniquePois(
+    items.filter(
+      p =>
+        p.routeDistanceAheadMeters !== undefined &&
+        p.routeDistanceAheadMeters >= 0,
+    ),
+  ).sort((a, b) => a.routeDistanceAheadMeters! - b.routeDistanceAheadMeters!);
 }

@@ -30,7 +30,13 @@ function setup(profiles: TruckProfile[] = [{ ...valid }]) {
       if (method === 'GET') return { items: items.map(item => ({ ...item })) };
       if (path.endsWith('/verify')) {
         const id = path.split('/')[2];
-        items = items.map(item => ({ ...item, isDefault: item.id === id, verifiedRevision: item.revision, verifiedAt: '2026-09-12T12:00:00Z', verificationState: 'VERIFIED' as const }));
+        items = items.map(item => ({
+          ...item,
+          isDefault: item.id === id,
+          verifiedRevision: item.revision,
+          verifiedAt: '2026-09-12T12:00:00Z',
+          verificationState: 'VERIFIED' as const,
+        }));
         return;
       }
       if (method === 'DELETE') {
@@ -38,7 +44,15 @@ function setup(profiles: TruckProfile[] = [{ ...valid }]) {
         return;
       }
       const id = method === 'PATCH' ? path.split('/')[2]! : 'new-truck';
-      const saved = { ...body!, id, revision: (items.find(item => item.id === id)?.revision ?? 0) + 1, isDefault: false, verifiedRevision: null, verifiedAt: null, verificationState: 'DRIVER_VERIFICATION_REQUIRED' as const };
+      const saved = {
+        ...body!,
+        id,
+        revision: (items.find(item => item.id === id)?.revision ?? 0) + 1,
+        isDefault: false,
+        verifiedRevision: null,
+        verifiedAt: null,
+        verificationState: 'DRIVER_VERIFICATION_REQUIRED' as const,
+      };
       items = [...items.filter(item => item.id !== id), saved];
       return saved;
     },
@@ -59,7 +73,13 @@ function setup(profiles: TruckProfile[] = [{ ...valid }]) {
   };
 }
 test('legacy default requires review; unchanged refresh keeps confirmation; external changes invalidate it', async () => {
-  const { store, mutate, onChange } = setup();
+  const { store, mutate, onChange } = setup([
+    {
+      ...valid,
+      verifiedRevision: null,
+      verificationState: 'DRIVER_VERIFICATION_REQUIRED',
+    },
+  ]);
   await store.load();
   expect(store.getSnapshot().selected).toBeNull();
   await store.select(valid);
@@ -99,7 +119,7 @@ test('sign-out during activation cannot restore confirmation', async () => {
   const activation = store.select(valid);
   store.clear();
   pending.resolve(undefined);
-  await expect(activation).rejects.toMatchObject({code:'SESSION_CHANGED'});
+  await expect(activation).rejects.toMatchObject({ code: 'SESSION_CHANGED' });
   expect(store.getSnapshot().selected).toBeNull();
 });
 test('duplicate preserves actual specs but gets no id or default selection', () => {
@@ -168,8 +188,8 @@ test('only sourced length suggestions are offered; specialized types stay custom
   expect(suggestedLengths('No Trailer')).toEqual([]);
 });
 let screen: ReactTestRenderer | undefined;
-async function mount() {
-  const values = setup();
+async function mount(profiles?: TruckProfile[]) {
+  const values = setup(profiles);
   await act(async () => {
     screen = create(
       <TruckProfileScreen
@@ -192,7 +212,13 @@ afterEach(async () => {
   screen = undefined;
 });
 test('Set Active shows all thirteen values; acknowledgement is required before activation', async () => {
-  const { store } = await mount();
+  const { store } = await mount([
+    {
+      ...valid,
+      verifiedRevision: null,
+      verificationState: 'DRIVER_VERIFICATION_REQUIRED',
+    },
+  ]);
   await press('Set Active');
   const json = JSON.stringify(screen!.toJSON());
   for (const label of [
@@ -249,7 +275,7 @@ test('duplicate opens an unsaved form; review does not call API until confirmed'
   await press('Duplicate');
   await press('Review truck profile');
   expect(request.mock.calls.filter(call => call[0] !== 'GET')).toHaveLength(0);
-  expect(store.getSnapshot().selected).toBeNull();
+  expect(store.getSnapshot().selected?.id).toBe(valid.id);
   await act(async () => {
     screen!.root
       .findAllByType(Switch)
@@ -308,69 +334,198 @@ test('height and width inches reach saved API payload as decimal feet after conf
   expect(mutation[2]).not.toHaveProperty('heightIn');
 });
 
-test('rapid confirmation taps issue exactly one profile mutation',async()=>{
- const {request}=await mount();await press('Duplicate');await press('Review truck profile');
- await act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
- const confirm=screen!.root.findAllByType(Button).find(b=>b.props.title==='Confirm & Use')!;
- await act(async()=>{confirm.props.onPress();confirm.props.onPress();});
- expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+test('rapid confirmation taps issue exactly one profile mutation', async () => {
+  const { request } = await mount();
+  await press('Duplicate');
+  await press('Review truck profile');
+  await act(async () =>
+    screen!.root
+      .findAllByType(Switch)
+      .find(
+        s =>
+          s.props.accessibilityLabel === 'I verified the actual truck and load',
+      )!
+      .props.onValueChange(true),
+  );
+  const confirm = screen!.root
+    .findAllByType(Button)
+    .find(b => b.props.title === 'Confirm & Use')!;
+  await act(async () => {
+    confirm.props.onPress();
+    confirm.props.onPress();
+  });
+  expect(
+    request.mock.calls.filter(
+      call => call[0] === 'POST' && call[1] === '/trucks',
+    ),
+  ).toHaveLength(1);
 });
-
 
 test('confirmation reloads remote revision and never automatically verifies changed values', async () => {
-  const {store,request,mutate} = setup(); await store.load();
-  mutate([{...valid,revision:2,heightFt:14,verifiedRevision:null,verificationState:'ADMIN_UPDATED'}]);
-  await expect(store.select(valid)).rejects.toMatchObject({code:'TRUCK_PROFILE_CHANGED'});
+  const { store, request, mutate } = setup();
+  await store.load();
+  mutate([
+    {
+      ...valid,
+      revision: 2,
+      heightFt: 14,
+      verifiedRevision: null,
+      verificationState: 'ADMIN_UPDATED',
+    },
+  ]);
+  await expect(store.select(valid)).rejects.toMatchObject({
+    code: 'TRUCK_PROFILE_CHANGED',
+  });
   expect(store.getSnapshot().profiles[0]?.heightFt).toBe(14);
-  expect(request.mock.calls.some(call=>call[1].endsWith('/verify'))).toBe(false);
+  expect(request.mock.calls.some(call => call[1].endsWith('/verify'))).toBe(
+    false,
+  );
 });
 test('409 verification refreshes state once without retrying the mutation', async () => {
-  const {store,request} = setup(); await store.load();
-  const original=request.getMockImplementation()!;
-  request.mockImplementation(async (method,path,body)=>{if(path.endsWith('/verify'))throw {status:409};return original(method,path,body);});
-  await expect(store.select(valid)).rejects.toMatchObject({code:'TRUCK_PROFILE_CHANGED'});
-  expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(1);
+  const { store, request } = setup();
+  await store.load();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, path, body) => {
+    if (path.endsWith('/verify')) throw { status: 409 };
+    return original(method, path, body);
+  });
+  await expect(store.select(valid)).rejects.toMatchObject({
+    code: 'TRUCK_PROFILE_CHANGED',
+  });
+  expect(
+    request.mock.calls.filter(call => call[1].endsWith('/verify')),
+  ).toHaveLength(1);
   expect(store.getSnapshot().selected).toBeNull();
 });
 test('successful create retains its identity before any later readback failure', async () => {
-  const {store,request}=setup([]); const original=request.getMockImplementation()!;
-  request.mockImplementation(async (method,path,body)=>{if(method==='GET')throw {status:503};return original(method,path,body);});
-  const saved=await store.save(duplicateProfile(valid));
-  expect(saved.id).toBe('new-truck'); expect(store.getSnapshot().profiles[0]?.id).toBe(saved.id);
-  await expect(store.select(saved)).rejects.toMatchObject({status:503});
-  expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
+  const { store, request } = setup([]);
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, path, body) => {
+    if (method === 'GET') throw { status: 503 };
+    return original(method, path, body);
+  });
+  const saved = await store.save(duplicateProfile(valid));
+  expect(saved.id).toBe('new-truck');
+  expect(store.getSnapshot().profiles[0]?.id).toBe(saved.id);
+  await expect(store.select(saved)).rejects.toMatchObject({ status: 503 });
+  expect(
+    request.mock.calls.filter(
+      call => call[0] === 'POST' && call[1] === '/trucks',
+    ),
+  ).toHaveLength(1);
 });
 
 test('retry after successful create and failed verification never posts a second profile', async () => {
-  const {request}=await mount(); const original=request.getMockImplementation()!;
-  request.mockImplementation(async(method,path,body)=>{if(path.endsWith('/verify'))throw {status:503};return original(method,path,body);});
-  await press('Duplicate'); await press('Review truck profile');
-  const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
-  await acknowledge(); await press('Confirm & Use');
-  expect(screen!.root.findAllByType(Button).find(b=>b.props.title==='Confirm & Use')!.props.disabled).toBe(true);
-  await acknowledge(); await press('Confirm & Use');
-  expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
-  expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(2);
+  const { request } = await mount();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, path, body) => {
+    if (path.endsWith('/verify')) throw { status: 503 };
+    return original(method, path, body);
+  });
+  await press('Duplicate');
+  await press('Review truck profile');
+  const acknowledge = async () =>
+    act(async () =>
+      screen!.root
+        .findAllByType(Switch)
+        .find(
+          s =>
+            s.props.accessibilityLabel ===
+            'I verified the actual truck and load',
+        )!
+        .props.onValueChange(true),
+    );
+  await acknowledge();
+  await press('Confirm & Use');
+  expect(
+    screen!.root
+      .findAllByType(Button)
+      .find(b => b.props.title === 'Confirm & Use')!.props.disabled,
+  ).toBe(true);
+  await acknowledge();
+  await press('Confirm & Use');
+  expect(
+    request.mock.calls.filter(
+      call => call[0] === 'POST' && call[1] === '/trucks',
+    ),
+  ).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(call => call[1].endsWith('/verify')),
+  ).toHaveLength(2);
 });
 
 test('created identity survives failed verify, Android Back and reopening review', async () => {
- const {request}=await mount();const original=request.getMockImplementation()!;
- request.mockImplementation(async(method,path,body)=>{if(path.endsWith('/verify'))throw {status:503};return original(method,path,body);});
- await press('Duplicate');await press('Review truck profile');
- const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
- await acknowledge();await press('Confirm & Use');
- await act(async()=>screen!.root.findByType(Modal).props.onRequestClose());
- await press('Review truck profile');await acknowledge();await press('Confirm & Use');
- expect(request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks')).toHaveLength(1);
- expect(request.mock.calls.filter(call=>call[1].endsWith('/verify'))).toHaveLength(2);
+  const { request } = await mount();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, path, body) => {
+    if (path.endsWith('/verify')) throw { status: 503 };
+    return original(method, path, body);
+  });
+  await press('Duplicate');
+  await press('Review truck profile');
+  const acknowledge = async () =>
+    act(async () =>
+      screen!.root
+        .findAllByType(Switch)
+        .find(
+          s =>
+            s.props.accessibilityLabel ===
+            'I verified the actual truck and load',
+        )!
+        .props.onValueChange(true),
+    );
+  await acknowledge();
+  await press('Confirm & Use');
+  await act(async () => screen!.root.findByType(Modal).props.onRequestClose());
+  await press('Review truck profile');
+  await acknowledge();
+  await press('Confirm & Use');
+  expect(
+    request.mock.calls.filter(
+      call => call[0] === 'POST' && call[1] === '/trucks',
+    ),
+  ).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(call => call[1].endsWith('/verify')),
+  ).toHaveLength(2);
 });
-test('ambiguous create retries the same operation, including after dialog close',async()=>{
- const {request}=await mount();const original=request.getMockImplementation()!;let lost=true;
- request.mockImplementation(async(method,path,body)=>{if(method==='POST'&&path==='/trucks'&&lost){lost=false;await original(method,path,body);throw {code:'REQUEST_TIMEOUT',status:0};}return original(method,path,body);});
- await press('Duplicate');await press('Review truck profile');
- const acknowledge=async()=>act(async()=>screen!.root.findAllByType(Switch).find(s=>s.props.accessibilityLabel==='I verified the actual truck and load')!.props.onValueChange(true));
- await acknowledge();await press('Confirm & Use');await act(async()=>screen!.root.findByType(Modal).props.onRequestClose());
- await press('Review truck profile');await acknowledge();await press('Confirm & Use');
- const creates=request.mock.calls.filter(call=>call[0]==='POST'&&call[1]==='/trucks');
- expect(creates).toHaveLength(2);expect(creates[0]![2]?.createOperationId).toBeTruthy();expect(creates[1]![2]?.createOperationId).toBe(creates[0]![2]?.createOperationId);
+test('ambiguous create retries the same operation, including after dialog close', async () => {
+  const { request } = await mount();
+  const original = request.getMockImplementation()!;
+  let lost = true;
+  request.mockImplementation(async (method, path, body) => {
+    if (method === 'POST' && path === '/trucks' && lost) {
+      lost = false;
+      await original(method, path, body);
+      throw { code: 'REQUEST_TIMEOUT', status: 0 };
+    }
+    return original(method, path, body);
+  });
+  await press('Duplicate');
+  await press('Review truck profile');
+  const acknowledge = async () =>
+    act(async () =>
+      screen!.root
+        .findAllByType(Switch)
+        .find(
+          s =>
+            s.props.accessibilityLabel ===
+            'I verified the actual truck and load',
+        )!
+        .props.onValueChange(true),
+    );
+  await acknowledge();
+  await press('Confirm & Use');
+  await act(async () => screen!.root.findByType(Modal).props.onRequestClose());
+  await press('Review truck profile');
+  await acknowledge();
+  await press('Confirm & Use');
+  const creates = request.mock.calls.filter(
+    call => call[0] === 'POST' && call[1] === '/trucks',
+  );
+  expect(creates).toHaveLength(2);
+  expect(creates[0]![2]?.createOperationId).toBeTruthy();
+  expect(creates[1]![2]?.createOperationId).toBe(
+    creates[0]![2]?.createOperationId,
+  );
 });

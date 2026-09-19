@@ -10,7 +10,7 @@
     "test": "jest --runInBand",
     "typecheck": "tsc --noEmit",
     "configure": "node --experimental-strip-types scripts/configure.mts",
-    "postinstall": "npm run configure",
+    "postinstall": "npm run configure && patch-package",
     "configure:release": "npm run configure -- --release",
     "check:native": "node scripts/check-native.cjs",
     "check": "npm run typecheck && npm run lint -- --max-warnings=0 && npm test && npm run check:native && npm run test:tooling",
@@ -48,6 +48,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "eslint": "^8.19.0",
     "jest": "^29.6.3",
+    "patch-package": "^8.0.1",
     "prettier": "2.8.8",
     "react-test-renderer": "19.2.3",
     "typescript": "^6.0.3"

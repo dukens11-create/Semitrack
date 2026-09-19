@@ -1,7 +1,15 @@
+import { TruckPoiIcon, type TruckPoiIconName } from './TruckPoiIcon';
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
 // Original Flutter Material glyphs; uses the font already bundled for Phase 1.
+// Flutter MaterialIcons codepoints: https://api.flutter.dev/flutter/material/Icons-class.html
 const glyphs = {
+  satellite: 0xf0378,
+  volume_up: 0xf029a,
+  filter_list: 0xf755,
+  replay: 0xf00fc,
+  add_location: 0xf532,
+  share: 0xf016a,
   home_outlined: 61703,
   home: 58136,
   map_outlined: 61870,
@@ -36,7 +44,7 @@ const glyphs = {
   history_rounded: 63471,
   bookmark_border_rounded: 62927,
 };
-export type DriverIconName = keyof typeof glyphs;
+export type DriverIconName = keyof typeof glyphs | TruckPoiIconName;
 export function DriverIcon({
   name,
   size = 24,
@@ -46,6 +54,10 @@ export function DriverIcon({
   size?: number;
   color?: string;
 }) {
+  if (name.endsWith('_symbol'))
+    return (
+      <TruckPoiIcon name={name as TruckPoiIconName} size={size} color={color} />
+    );
   return (
     <Text
       accessible={false}
@@ -53,7 +65,7 @@ export function DriverIcon({
       allowFontScaling={false}
       style={[styles.icon, { fontSize: size, color }]}
     >
-      {String.fromCodePoint(glyphs[name])}
+      {String.fromCodePoint(glyphs[name as keyof typeof glyphs])}
     </Text>
   );
 }

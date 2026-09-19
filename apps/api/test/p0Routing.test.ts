@@ -484,3 +484,54 @@ test('straight-leg regression: explicit turn rows retain their existing mapping 
     ['turn', 'right', 0.5, 30], ['arrive', 'straight', 0.5, 30],
   ]);
 });
+
+test('restriction diagnostics retain numeric provider evidence without raw locations or secrets', () => {
+  const data=payload();
+  Object.assign(data[0].ReportLegs[0].ReportLines[0],{
+    Warn:'Token=secret-fixture at 123 Personal Street, 40,-120',
+    DetailedWarnings:[{Type:4,Message:'private-address'},{Type:4},{Type:0},{Type:'secret-fixture'},{Type:999999}],
+  });
+  assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>{
+    assert.equal(e.code,'TRIMBLE_RESTRICTION_WARNING');
+    assert.equal(e.httpStatus,422); assert.equal(e.truckSafe,false); assert.equal(e.navigationAllowed,false);
+    assert.deepEqual(e.restrictionDiagnostic,{
+      source:'TRIMBLE_DIRECTIONS_REPORT',category:'UNCLASSIFIED_PROVIDER_WARNING',
+      message:'Trimble reported a warning. The route remains blocked pending review.',
+      providerWarningTypes:[4],providerTextPresent:true,legNumber:1,lineNumber:1,
+    });
+    assert(!/secret-fixture|Personal Street|private-address|40,-120/.test(JSON.stringify(e)));
+    return true;
+  });
+});
+test('malformed detailed warning still fails closed without inventing a warning type',()=>{
+  for(const warning of [null,{}, {Type:'4'}, {Type:-1}]){
+    const data=payload();data[0].ReportLegs[0].ReportLines[0].DetailedWarnings=[warning];
+    assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>{
+      assert.equal(e.code,'TRIMBLE_RESTRICTION_WARNING');
+      assert.deepEqual(e.restrictionDiagnostic.providerWarningTypes,[]);
+      return true;
+    });
+  }
+});
+test('zero detailed warning type alone does not change the existing safe-route policy',()=>{
+  const data=payload(); data[0].ReportLegs[0].ReportLines[0].DetailedWarnings=[{Type:0}];
+  assert.equal(parseTrimbleRouteResponse(data,input,config).truckSafe,true);
+});
+test('provider restriction rejection records attempted transport while retaining sanitized evidence',async()=>{
+  const data=payload();data[0].ReportLegs[0].ReportLines[0].DetailedWarnings=[{Type:5}];
+  let count=0;
+  const provider=new TrimbleRouteProvider(config,async()=>{count++;return {ok:true,status:200,text:async()=>JSON.stringify(data)};});
+  await assert.rejects(()=>provider.buildRoute(input),e=>e.providerAttempted===true && e.code==='TRIMBLE_RESTRICTION_WARNING' && e.restrictionDiagnostic.providerWarningTypes[0]===5);
+  assert.equal(count,1);
+});
+
+test('restriction warning supersedes healthy evidence and later safe response recovers',async t=>{
+  const h=healthHarness(t);
+  await buildTruckRoute(input);assert.equal(h.health().status,'OPERATIONAL');
+  const warning=payload();warning[0].ReportLegs[0].ReportLines[0].DetailedWarnings=[{Type:4}];
+  h.response(warning);
+  await assert.rejects(()=>buildTruckRoute(input),e=>e.code==='TRIMBLE_RESTRICTION_WARNING' && e.providerAttempted && !e.truckSafe && !e.navigationAllowed);
+  assert.equal(h.health().status,'UNAVAILABLE');
+  h.response(payload());await buildTruckRoute(input);
+  assert.equal(h.health().status,'OPERATIONAL');
+});

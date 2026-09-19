@@ -15,14 +15,19 @@ export class TruckProfileStore extends Store<{
   selected: TruckProfile | null;
 }> {
   private generation = 0;
+  private canRestoreDefault = true;
   private session = 0;
-  // Confirmation is deliberately session-local. Never trust a legacy default as verified.
+  // Reload verification from the authenticated server; a legacy default is not evidence.
   private confirmed: { id: string; fingerprint: string } | null = null;
   private pendingCreates = new Map<string, Promise<string>>();
-  constructor(private api: ApiClient, private onChange: () => void, private newOperation: () => Promise<string> = async () => {
-    if (!NativePlatform) throw new DriverError('NATIVE_MODULE_UNAVAILABLE');
-    return NativePlatform.createOperationId();
-  }) {
+  constructor(
+    private api: ApiClient,
+    private onChange: () => void,
+    private newOperation: () => Promise<string> = async () => {
+      if (!NativePlatform) throw new DriverError('NATIVE_MODULE_UNAVAILABLE');
+      return NativePlatform.createOperationId();
+    },
+  ) {
     super({ profiles: [], selected: null });
   }
   async load() {
@@ -31,21 +36,38 @@ export class TruckProfileStore extends Store<{
     try {
       const response = await this.api.request('GET', '/trucks');
       if (generation !== this.generation) return;
-      const data = z.object({ items: z.array(truckSchema).max(1000) }).parse(response);
+      const data = z
+        .object({ items: z.array(truckSchema).max(1000) })
+        .parse(response);
       profiles = data.items;
     } catch (error) {
       if (generation === this.generation) this.invalidate();
       throw error;
     }
     if (generation !== this.generation) return;
+    const verifiedDefaults = profiles.filter(item => {
+      if (!isServerVerifiedTruck(item)) return false;
+      try {
+        verifyRoutingProfile(item);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     const selected =
       profiles.find(
         item =>
           item.id === this.confirmed?.id &&
           isServerVerifiedTruck(item) &&
           profileFingerprint(item) === this.confirmed.fingerprint,
-      ) ?? null;
-    if (!selected) this.confirmed = null;
+      ) ??
+      (this.canRestoreDefault && verifiedDefaults.length === 1
+        ? verifiedDefaults[0]!
+        : null);
+    this.canRestoreDefault = false;
+    this.confirmed = selected
+      ? { id: selected.id, fingerprint: profileFingerprint(selected) }
+      : null;
     const changed =
       this.value.selected &&
       (!selected ||
@@ -58,9 +80,22 @@ export class TruckProfileStore extends Store<{
     if (profile.id || profile.createOperationId) return profile;
     const key = profileFingerprint(profile);
     let pending = this.pendingCreates.get(key);
-    if (!pending) { pending = this.newOperation(); this.pendingCreates.set(key, pending); }
-    try { return {...profile, createOperationId: z.string().uuid().parse(await pending)}; }
-    catch (error) { this.pendingCreates.delete(key); throw error; }
+    if (!pending) {
+      pending = this.newOperation();
+      this.pendingCreates.set(key, pending);
+    }
+    try {
+      return {
+        ...profile,
+        createOperationId: z
+          .string()
+          .uuid()
+          .parse(await pending),
+      };
+    } catch (error) {
+      this.pendingCreates.delete(key);
+      throw error;
+    }
   }
   async save(profile: TruckProfile): Promise<TruckProfile> {
     verifyRoutingProfile(profile);
@@ -72,7 +107,12 @@ export class TruckProfileStore extends Store<{
       await this.api.request(
         profile.id ? 'PATCH' : 'POST',
         '/trucks' + (profile.id ? '/' + encodeURIComponent(profile.id) : ''),
-        profile.id ? { ...serializeTruck(profile), expectedRevision: profile.revision } : { ...serializeTruck(profile), createOperationId: submitted.createOperationId },
+        profile.id
+          ? { ...serializeTruck(profile), expectedRevision: profile.revision }
+          : {
+              ...serializeTruck(profile),
+              createOperationId: submitted.createOperationId,
+            },
       ),
     );
     if (session !== this.session)
@@ -90,17 +130,26 @@ export class TruckProfileStore extends Store<{
     const fingerprint = profileFingerprint(reviewed);
     const selectionSession = this.session;
     await this.load();
-    if (selectionSession !== this.session) throw new DriverError('SESSION_CHANGED');
+    if (selectionSession !== this.session)
+      throw new DriverError('SESSION_CHANGED');
     const current = this.value.profiles.find(item => item.id === reviewed.id);
-    if (!current || !reviewed.revision || current.revision !== reviewed.revision || profileFingerprint(current) !== fingerprint)
+    if (
+      !current ||
+      !reviewed.revision ||
+      current.revision !== reviewed.revision ||
+      profileFingerprint(current) !== fingerprint
+    )
       throw new DriverError('TRUCK_PROFILE_CHANGED');
     const session = this.session;
     this.invalidate();
     try {
-      await this.api.request('POST', '/trucks/' + encodeURIComponent(reviewed.id) + '/verify',
-        { expectedRevision: reviewed.revision });
+      await this.api.request(
+        'POST',
+        '/trucks/' + encodeURIComponent(reviewed.id) + '/verify',
+        { expectedRevision: reviewed.revision },
+      );
     } catch (error) {
-      if ((error as {status?: number})?.status === 409) {
+      if ((error as { status?: number })?.status === 409) {
         await this.load();
         throw new DriverError('TRUCK_PROFILE_CHANGED');
       }
@@ -116,11 +165,13 @@ export class TruckProfileStore extends Store<{
       );
   }
   invalidateFromRouting() {
-    this.confirmed=null;
+    this.canRestoreDefault = false;
+    this.confirmed = null;
     ++this.generation;
-    this.publish({...this.value,selected:null});
+    this.publish({ ...this.value, selected: null });
   }
   private invalidate() {
+    this.canRestoreDefault = false;
     this.confirmed = null;
     ++this.generation;
     this.publish({ ...this.value, selected: null });
@@ -135,6 +186,7 @@ export class TruckProfileStore extends Store<{
     await this.load();
   }
   clear() {
+    this.canRestoreDefault = true;
     ++this.session;
     this.pendingCreates.clear();
     ++this.generation;

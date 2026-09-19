@@ -1,3 +1,4 @@
+import { Alert } from '../components/ThemedAlert';
 import React, { useEffect, useRef, useState } from 'react';
 import type { Services } from '../app/services';
 import {
@@ -10,7 +11,16 @@ import {
 } from '../components/ui';
 import { useStore } from '../hooks/useStore';
 import { CorridorRecords } from '../features/dot511/CorridorRecords';
-export function ServicesScreen({ services }: { services: Services }) {
+export function ServicesScreen({
+  services,
+  onEld,
+  onOffline,
+}: {
+  services: Services;
+  onEld?: () => void;
+  onOffline?: () => void;
+}) {
+  const [kindLoaded, setKindLoaded] = useState('');
   const route = useStore(services.routes).route;
   const [items, setItems] = useState<Record<string, unknown>[]>([]);
   const [error, setError] = useState<string>();
@@ -68,6 +78,7 @@ export function ServicesScreen({ services }: { services: Services }) {
         services.routes.getSnapshot().route !== route
       )
         return;
+      setKindLoaded(kind);
       setItems(data);
       setStatus(
         data.length
@@ -114,6 +125,72 @@ export function ServicesScreen({ services }: { services: Services }) {
       <ErrorText message={error} />
       <Copy>{status}</Copy>
       <CorridorRecords items={items} />
+      {kindLoaded === 'weigh-stations' &&
+        items
+          .filter(item => typeof item.id === 'string')
+          .map(item => (
+            <React.Fragment key={String(item.id)}>
+              <Copy>
+                {String(item.name ?? 'Weigh station')}: missing or stale status
+                means UNKNOWN; never permission to bypass inspection.
+              </Copy>
+              {(['OPEN', 'CLOSED', 'INSPECTION'] as const).map(value => (
+                <Button
+                  key={value}
+                  title={
+                    'Report ' + String(item.name ?? 'station') + ' ' + value
+                  }
+                  disabled={busy}
+                  onPress={() =>
+                    Alert.alert(
+                      'Submit your observation?',
+                      'This is a community report, not an official instruction. Report only what you personally observed.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Submit',
+                          onPress: () => {
+                            const fix = services.location.getFreshFix();
+                            if (!fix) {
+                              setError(
+                                'Fresh GPS required to submit a station observation.',
+                              );
+                              return;
+                            }
+                            setBusy(true);
+                            void services.poi
+                              .report(
+                                'WEIGH_STATION_STATUS',
+                                String(item.id),
+                                value,
+                                { lat: fix.latitude, lng: fix.longitude },
+                              )
+                              .then(() =>
+                                setStatus(
+                                  'Observation submitted for community validation. Station status has not been assumed.',
+                                ),
+                              )
+                              .catch(e => setError(errorMessage(e)))
+                              .finally(() => setBusy(false));
+                          },
+                        },
+                      ],
+                    )
+                  }
+                />
+              ))}
+            </React.Fragment>
+          ))}
+      <Button
+        title="ELD connections and HOS"
+        onPress={() => onEld?.()}
+        disabled={!onEld}
+      />
+      <Button
+        title="Offline display maps"
+        onPress={() => onOffline?.()}
+        disabled={!onOffline}
+      />
       <Heading>Coming in a later version</Heading>
       <Copy>
         CAT Scales and truck repair are available through Map place search when
@@ -127,8 +204,8 @@ export function ServicesScreen({ services }: { services: Services }) {
         setup; billing remains disabled.
       </Copy>
       <Copy>
-        Offline map downloads and offline commercial truck navigation are
-        unavailable.
+        Mapbox display packs can be managed under Offline display maps. Offline
+        commercial truck navigation remains unavailable.
       </Copy>
     </Page>
   );

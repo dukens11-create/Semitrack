@@ -1,3 +1,4 @@
+import { writeAppearance } from '../features/settings/AppearanceStorage';
 import { safeLog } from '../services/telemetry/safeLog';
 import { ApiClient } from '../services/api/ApiClient';
 import { SerializedTokenVault } from '../services/storage/SerializedTokenVault';
@@ -17,7 +18,9 @@ export function createServices(environment: Environment) {
   const vault = new SerializedTokenVault(new SecureTokenVault());
   const api = new ApiClient(environment.apiUrl, vault);
   const auth = new AuthStore(api, vault);
-  const routes = new RouteStore(new TruckRoutingService(api), () => trucks.invalidateFromRouting());
+  const routes = new RouteStore(new TruckRoutingService(api), () =>
+    trucks.invalidateFromRouting(),
+  );
   const trucks = new TruckProfileStore(api, () => routes.clear());
   const location = new LocationService(new NativeLocationProvider());
   const guidance = new NativeGuidanceAdapter();
@@ -31,19 +34,22 @@ export function createServices(environment: Environment) {
     guidance,
     search: new SearchService(environment.mapboxToken),
     poi: new PoiService(api),
-    settings: new SettingsService(api),
+    settings: new SettingsService(api, writeAppearance),
   };
   let accountId: string | null = null;
   auth.subscribe(() => {
     const state = auth.getSnapshot();
-    const nextAccount = state.status === 'signedIn' ? state.user?.id ?? null : null;
+    const nextAccount =
+      state.status === 'signedIn' ? state.user?.id ?? null : null;
     if (nextAccount === null || accountId !== nextAccount) {
       accountId = nextAccount;
       services.settings.clear();
       routes.clear();
       trucks.clear();
       void location.stop().catch(() => {});
-      void guidance.stopNavigation().catch(() => safeLog('GUIDANCE_STOP_FAILED'));
+      void guidance
+        .stopNavigation()
+        .catch(() => safeLog('GUIDANCE_STOP_FAILED'));
     }
   });
   return services;

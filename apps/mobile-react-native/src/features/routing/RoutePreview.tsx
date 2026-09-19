@@ -7,7 +7,10 @@ import {
   DriverTitle,
   useDriverPalette,
 } from '../../components/DriverUI';
-export function routeEstimate(route: Pick<TruckRoute, 'durationSeconds' | 'distanceMiles'>, metric: boolean) {
+export function routeEstimate(
+  route: Pick<TruckRoute, 'durationSeconds' | 'distanceMiles'>,
+  metric: boolean,
+) {
   const minutes = Math.ceil(route.durationSeconds / 60);
   return {
     distance:
@@ -61,10 +64,17 @@ export function RoutePreview({
       <DriverTitle small>Route Options</DriverTitle>
       <View
         accessibilityLabel="Selected Trimble truck route"
-        style={styles.selected}
+        style={[styles.selected, { backgroundColor: p.input }]}
       >
-        <Text style={styles.selectedTitle}>Selected truck route · Trimble</Text>
-        <Text style={styles.selectedCopy}>
+        <Text
+          style={[
+            styles.selectedTitle,
+            p.dark ? styles.nightSelected : styles.selectedTitle,
+          ]}
+        >
+          Selected truck route · Trimble
+        </Text>
+        <Text style={[styles.selectedCopy, { color: p.muted }]}>
           {estimate.distance} · {estimate.duration}
         </Text>
       </View>
@@ -72,9 +82,15 @@ export function RoutePreview({
         const summary = routeEstimate(alternative, metric);
         return (
           <View key={alternative.id} style={styles.alternative}>
-            <DriverTitle small>Alternative {index + 1} · planning preview</DriverTitle>
-            <DriverCopy>{summary.distance} · {summary.duration}</DriverCopy>
-            <DriverCopy>Purple dashed line on the map. This is not the selected route.</DriverCopy>
+            <DriverTitle small>
+              Alternative {index + 1} · planning preview
+            </DriverTitle>
+            <DriverCopy>
+              {summary.distance} · {summary.duration}
+            </DriverCopy>
+            <DriverCopy>
+              Purple dashed line on the map. This is not the selected route.
+            </DriverCopy>
           </View>
         );
       })}
@@ -83,8 +99,26 @@ export function RoutePreview({
           ? 'Alternatives are comparison previews only. The API does not yet support selecting and recalculating an alternative for guidance. The primary route and ordered stops remain selected.'
           : 'No alternatives were returned for this request. Use Compare alternatives to request them when the Trimble entitlement is available.'}
       </DriverCopy>
+      {(route.preferenceWarnings ?? []).map(warning => (
+        <Text
+          key={warning.preference}
+          accessibilityRole="alert"
+          style={[styles.alert, p.dark ? styles.nightAlert : styles.dayAlert]}
+        >
+          {{
+            avoidHighways: 'Highway avoidance',
+            avoidResidential: 'Residential-road avoidance',
+            avoidDirtRoads: 'Unpaved-road avoidance',
+          }[warning.preference] +
+            ' was requested but is not guaranteed by Trimble. Vehicle dimensions remain enforced. Review this preference before departure.'}
+        </Text>
+      ))}
       {route.alerts.map((alert, index) => (
-        <Text key={index} accessibilityRole="alert" style={styles.alert}>
+        <Text
+          key={index}
+          accessibilityRole="alert"
+          style={[styles.alert, p.dark ? styles.nightAlert : styles.dayAlert]}
+        >
           {alert}
         </Text>
       ))}
@@ -100,6 +134,9 @@ export function RoutePreview({
   );
 }
 const styles = StyleSheet.create({
+  nightSelected: { color: '#8AC7FF' },
+  nightAlert: { color: '#FFC08B' },
+  dayAlert: { color: '#9F341E' },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   stat: { flexGrow: 1, minWidth: 88, gap: 4 },
   value: { fontSize: 20, fontWeight: '900' },
@@ -111,7 +148,13 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     gap: 6,
   },
-  alternative: { padding: 12, gap: 6, borderWidth: 1, borderRadius: 10, borderColor: '#8B5CF6' },
+  alternative: {
+    padding: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 10,
+    borderColor: '#8B5CF6',
+  },
   selectedTitle: { color: '#1565C0', fontWeight: '800' },
   selectedCopy: { color: '#526273', fontSize: 12 },
   alert: { color: '#B42318', fontSize: 14, lineHeight: 20 },

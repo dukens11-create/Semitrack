@@ -11,6 +11,7 @@ import { useDriverPalette } from '../src/components/DriverUI';
 import type { ApiClient } from '../src/services/api/ApiClient';
 import type { Services } from '../src/app/services';
 import { Store } from '../src/state/Store';
+import { UnavailableNavigationEngine } from '../src/services/guidance/NavigationEngine';
 import { deferred, user } from './fixtures';
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: require('react-native').View,
@@ -113,22 +114,25 @@ function action(label: string) {
 function servicesFor(settings: SettingsService) {
   return {
     settings,
+    guidance: new UnavailableNavigationEngine(),
+    location: Object.assign(new Store({ fix: null, tracking: false }), {
+      startIfPermitted: jest.fn().mockResolvedValue(undefined),
+    }),
     auth: Object.assign(new Store({ status: 'signedIn', user }), {
       updateProfile: jest.fn(),
       logout: jest.fn(),
     }),
   } as unknown as Services;
 }
-test('settings preserve draft on failed save, never announce success, and discard returns to saved values', async () => {
+test('immediate preference failure keeps accepted values and never announces success', async () => {
   const { request, settings } = setup();
   await act(async () => {
     screen = create(<SettingsScreen services={servicesFor(settings)} />);
   });
-  await act(async () => action('Night').props.onPress());
-  expect(action('Save preferences').props.disabled).toBe(false);
+  await act(async () => action('Map & display').props.onPress());
   request.mockRejectedValueOnce(new Error('offline'));
-  await act(async () => action('Save preferences').props.onPress());
-  expect(action('Night').props.accessibilityState.checked).toBe(true);
+  await act(async () => action('Night').props.onPress());
+  expect(action('Automatic').props.accessibilityState.checked).toBe(true);
   expect(settings.getSnapshot().settings?.dayNightMode).toBe('system');
   expect(
     screen!.root
@@ -136,22 +140,21 @@ test('settings preserve draft on failed save, never announce success, and discar
       .map(n => n.props.children)
       .flat()
       .join(' '),
-  ).not.toContain('Preferences saved and applied.');
-  await act(async () => action('Discard preference changes').props.onPress());
-  expect(action('Use device setting').props.accessibilityState.checked).toBe(
-    true,
-  );
+  ).not.toContain('Preference saved.');
+  expect(action('Save preferences')).toBeUndefined();
+  expect(screen!.root.findAllByType(TextInput)).toHaveLength(0);
+  request.mockResolvedValueOnce({ ...initial, dayNightMode: 'night' });
+  await act(async () => action('Night').props.onPress());
+  expect(action('Night').props.accessibilityState.checked).toBe(true);
   expect(
     screen!.root
-      .findAllByType(TextInput)
-      .filter(input => !input.props.secureTextEntry),
-  ).toHaveLength(3);
-  expect(
-    screen!.root
-      .findAllByType(TextInput)
-      .filter(input => input.props.secureTextEntry),
-  ).toHaveLength(3);
+      .findAllByType(Text)
+      .map(n => n.props.children)
+      .flat()
+      .join(' '),
+  ).toContain('Preference saved.');
 });
+
 test('server-accepted settings update appearance and retain unrelated settingsJson', async () => {
   const { request, settings } = setup();
   const services = servicesFor(settings);

@@ -1,3 +1,27 @@
+import { routeDiagnosticHistory } from '../features/routing/routeTelemetry';
+import { Alert } from '../components/ThemedAlert';
+import { WeatherStatus } from '../features/weather/WeatherStatus';
+import {
+  recentDestinations,
+  addRecent,
+  saveRecent,
+} from '../features/search/recentDestinations';
+import { RoutePoiBadges } from '../features/navigation/RoutePoiBadges';
+import {
+  NavigationPanel,
+  NavigationAction,
+} from '../features/navigation/NavigationPanel';
+import {
+  NavigationMenu,
+  type NavigationMenuAction,
+} from '../features/navigation/NavigationMenu';
+import { shareRouteSummary } from '../features/navigation/shareRouteSummary';
+import { GuidanceSession } from '../features/navigation/GuidanceSession';
+import { applyGuidanceEvent } from '../features/navigation/guidanceEvents';
+import { RouteAdvisories } from '../features/navigation/RouteAdvisories';
+import { NavigationHud } from '../features/navigation/NavigationHud';
+import { navigationPresentation } from '../features/navigation/navigationPresentation';
+import { mapPreferences } from '../features/settings/mapPreferences';
 import { RoutingCapabilityStatus } from '../components/RoutingCapabilityStatus';
 import { CorridorRecords } from '../features/dot511/CorridorRecords';
 import { DriverError } from '../errors/driverErrors';
@@ -5,13 +29,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  Keyboard,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
   View,
-  useColorScheme,
 } from 'react-native';
 import { DestinationSearchStore } from '../features/search/DestinationSearchStore';
 import type { Services } from '../app/services';
@@ -39,26 +64,30 @@ import {
 import { type PlaceCategory } from '../features/poi/PoiService';
 import {
   PoiArtwork,
+  PoiCategoryPicture,
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
 import { TruckMap } from '../features/map/TruckMap';
-import { RoutePreview, routeEstimate } from '../features/routing/RoutePreview';
+import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
   services,
   onTrucks,
   onServices,
+  onSettings,
   active = true,
+  onNavigationActiveChange,
 }: {
   services: Services;
   onTrucks?: () => void;
   onServices?: () => void;
+  onSettings?: () => void;
   active?: boolean;
+  onNavigationActiveChange?: (active: boolean) => void;
 }) {
   const routes = useStore(services.routes),
     trucks = useStore(services.trucks),
     location = useStore(services.location);
-  const scheme = useColorScheme();
   const { settings } = useStore(services.settings);
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
@@ -66,23 +95,115 @@ export function PlanningScreen({
   const searchState = useStore(searchStore);
   const { query, results, pois } = searchState;
   const [busy, setBusy] = useState(false);
+  const [truckLoading, setTruckLoading] = useState(true);
+  const [truckLoadFailed, setTruckLoadFailed] = useState(false);
   const [acquiringGps, setAcquiringGps] = useState(false);
   const gpsRequest = useRef<AbortController | null>(null);
   const [error, setError] = useState<string>();
-  const [sheet, setSheet] = useState<'search' | 'route' | 'location' | null>(
-    null,
-  );
+  const [sheet, setSheet] = useState<
+    | 'search'
+    | 'route'
+    | 'location'
+    | 'navigation'
+    | 'places'
+    | 'filter'
+    | 'diagnostic'
+    | null
+  >(null);
+  const [mapCommand, setMapCommand] = useState<{
+    type: 'overview' | 'recenter';
+    id: number;
+  }>();
+  const [satelliteOverride, setSatelliteOverride] = useState<boolean>();
+  const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
   const [bottomHeight, setBottomHeight] = useState(164);
   const [topHeight, setTopHeight] = useState(44);
   const busyRef = useRef(false);
+  const operation = useRef(0);
+  const [guidanceSession] = useState(
+    () => new GuidanceSession(services.guidance),
+  );
+  const [startingNavigation, setStartingNavigation] = useState(false);
+  const [stopUnconfirmed, setStopUnconfirmed] = useState(false);
+  const [navigation, setNavigation] = useState(() =>
+    services.guidance.getNavigationState(),
+  );
+  const navigationActive =
+    navigation.phase === 'navigating' ||
+    navigation.phase === 'paused' ||
+    navigation.phase === 'rerouting';
+  const navigationSession = navigationActive || navigation.phase === 'arrived';
   const palette = useDriverPalette();
   useEffect(() => {
-    void services.trucks.load().catch(e => setError(errorMessage(e)));
-    void services.settings.load().catch(e => setError(errorMessage(e)));
+    onNavigationActiveChange?.(active && navigationSession);
+    return () => onNavigationActiveChange?.(false);
+  }, [active, navigationSession, onNavigationActiveChange]);
+  useEffect(() => {
+    let mounted = true;
+    void services.trucks
+      .load()
+      .catch(e => {
+        if (mounted) {
+          setTruckLoadFailed(true);
+          setError(errorMessage(e));
+        }
+      })
+      .finally(() => {
+        if (mounted) setTruckLoading(false);
+      });
+    void services.settings.load().catch(e => {
+      if (mounted) setError(errorMessage(e));
+    });
+    return () => {
+      mounted = false;
+    };
   }, [services]);
+  useEffect(() => {
+    setNavigation({ ...services.guidance.getNavigationState() });
+    return services.guidance.subscribe(event => {
+      if (
+        !guidanceSession.acceptsEvents ||
+        !services.routes.getSnapshot().route
+      ) {
+        setNavigation({ phase: 'idle' });
+        return;
+      }
+      setNavigation(previous =>
+        applyGuidanceEvent(
+          previous,
+          services.guidance.getNavigationState(),
+          event,
+          services.routes.getSnapshot().route,
+        ),
+      );
+    });
+  }, [services, guidanceSession]);
+  useEffect(() => {
+    let previous = services.routes.getSnapshot().route;
+    let mounted = true;
+    const unsubscribe = services.routes.subscribe(() => {
+      const current = services.routes.getSnapshot().route;
+      if (previous && current !== previous && guidanceSession.acceptsEvents) {
+        setNavigation({ phase: 'idle' });
+        void guidanceSession.cancel().then(confirmed => {
+          if (!mounted) return;
+          setStopUnconfirmed(!confirmed);
+          if (!confirmed)
+            setError(
+              'The route changed, but guidance stop could not be confirmed. Retry stopping guidance before continuing.',
+            );
+        });
+      }
+      previous = current;
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [services, guidanceSession]);
   useEffect(() => {
     if (!active) return;
     const resume = () => {
@@ -131,15 +252,18 @@ export function PlanningScreen({
   async function run(action: () => Promise<unknown>) {
     if (busyRef.current) return;
     busyRef.current = true;
+    const generation = operation.current;
     setBusy(true);
     setError(undefined);
     try {
       await action();
     } catch (e) {
-      setError(errorMessage(e));
+      if (generation === operation.current) setError(errorMessage(e));
     } finally {
-      setBusy(false);
-      busyRef.current = false;
+      if (generation === operation.current) {
+        setBusy(false);
+        busyRef.current = false;
+      }
     }
   }
   function origin() {
@@ -149,7 +273,122 @@ export function PlanningScreen({
     }
     return { lat: fix.latitude, lng: fix.longitude };
   }
+  function refreshNavigationState() {
+    setNavigation(
+      guidanceSession.acceptsEvents && services.routes.getSnapshot().route
+        ? { ...services.guidance.getNavigationState() }
+        : { phase: 'idle' },
+    );
+  }
+  async function startNavigation() {
+    const current = services.routes.getSnapshot();
+    if (!current.route || !current.plan) return;
+    const truck = services.trucks.getSnapshot().selected;
+    if (!truck) throw new DriverError('VERIFIED_TRUCK_REQUIRED');
+    const generation = operation.current;
+    setStartingNavigation(true);
+    try {
+      const result = await guidanceSession.start(
+        current.route,
+        current.plan,
+        truck,
+        () =>
+          services.routes.getSnapshot().route === current.route &&
+          services.trucks.getSnapshot().selected === truck,
+      );
+      if (generation !== operation.current) return;
+      refreshNavigationState();
+      if (result === 'unavailable')
+        setError(
+          'CoPilot provisioning required. Your truck route is ready, but turn-by-turn navigation cannot start until the licensed CoPilot runtime and maps are provisioned.',
+        );
+      if (result === 'stop-unconfirmed') {
+        setStopUnconfirmed(true);
+        setError(
+          'Previous guidance stop is unconfirmed. Retry stopping guidance before starting another session.',
+        );
+      }
+      if (result === 'started') setSheet('navigation');
+    } finally {
+      if (generation === operation.current) setStartingNavigation(false);
+    }
+  }
+  async function toggleNavigationPause() {
+    const generation = operation.current;
+    await guidanceSession.pauseOrResume();
+    if (generation === operation.current) refreshNavigationState();
+  }
+  function finishNativeStop() {
+    const generation = operation.current;
+    void guidanceSession.cancel().then(confirmed => {
+      if (generation !== operation.current) return;
+      setStopUnconfirmed(!confirmed);
+      if (!confirmed)
+        setError(
+          'Route controls are cleared, but native guidance stop could not be confirmed. Retry stopping guidance.',
+        );
+    });
+  }
+  function confirmCancelRoute() {
+    const selectedRoute = services.routes.getSnapshot().route;
+    if (!selectedRoute) return;
+    Alert.alert('Cancel route?', 'Your current route will be cleared.', [
+      { text: 'Keep route', style: 'cancel' },
+      {
+        text: 'Cancel route',
+        style: 'destructive',
+        onPress: () => {
+          if (services.routes.getSnapshot().route !== selectedRoute) return;
+          ++operation.current;
+          // This path is deliberately independent of the ordinary busy/start guard.
+          finishNativeStop();
+          gpsRequest.current?.abort();
+          searchStore.clear();
+          services.routes.clear();
+          setNavigation({ phase: 'idle' });
+          setStartingNavigation(false);
+          busyRef.current = false;
+          setBusy(false);
+          setAcquiringGps(false);
+          setDetail(null);
+          setSheet(null);
+          setExpanded(false);
+          setError(undefined);
+          Keyboard.dismiss();
+        },
+      },
+    ]);
+  }
+  function confirmEndNavigation() {
+    Alert.alert(
+      'End navigation?',
+      'Turn-by-turn guidance will stop. The planned truck route will remain available on the map.',
+      [
+        { text: 'Keep navigating', style: 'cancel' },
+        {
+          text: 'End navigation',
+          style: 'destructive',
+          onPress: () => {
+            void run(async () => {
+              const confirmed = await guidanceSession.cancel();
+              refreshNavigationState();
+              setStopUnconfirmed(!confirmed);
+              if (!confirmed)
+                setError(
+                  'Native guidance stop could not be confirmed. Retry stopping guidance.',
+                );
+              setSheet(null);
+            });
+          },
+        },
+      ],
+    );
+  }
   async function calculate(plan: StopPlan, alternatives = 0) {
+    if (navigationSession || startingNavigation) {
+      setError('End navigation before changing the planned route.');
+      return;
+    }
     const truck = services.trucks.getSnapshot().selected;
     if (!truck) {
       throw new DriverError('VERIFIED_TRUCK_REQUIRED');
@@ -174,21 +413,26 @@ export function PlanningScreen({
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
     if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
+      // Store only what the driver typed, never temporary provider geometry or a route.
+      if (query.trim())
+        void saveRecent(services.settings, items =>
+          addRecent(items, query),
+        ).catch(() =>
+          setError(
+            'Route ready. Recent destination could not be saved; retry when connected.',
+          ),
+        );
       searchStore.cancel();
       setDetail(null);
       closeSheet();
     }
   }
   const pending =
-    busy ||
-    routes.phase === 'calculating' ||
-    routes.phase === 'rerouting' ||
-    searchState.phase === 'loading';
-  const night =
-    settings?.dayNightMode === 'night' ||
-    (settings?.dayNightMode !== 'day' && scheme === 'dark');
+    busy || routes.phase === 'calculating' || routes.phase === 'rerouting';
+  const searchPending = searchState.phase === 'loading';
 
   function search() {
+    Keyboard.dismiss();
     if (query.trim().length >= 3) {
       setError(undefined);
       setDetail(null);
@@ -200,10 +444,112 @@ export function PlanningScreen({
     setSheet('search');
     setDetail(null);
     try {
-      void searchStore.nearby(category, origin());
+      const fix = services.location.getFreshFix();
+      if (routes.route && fix)
+        void searchStore.alongRoute(category, routes.route, fix);
+      else void searchStore.nearby(category, origin());
     } catch (e) {
       setError(errorMessage(e));
     }
+  }
+  function menuAction(action: NavigationMenuAction) {
+    if (action === 'overview' || action === 'recenter') {
+      setMapCommand(previous => ({
+        type: action,
+        id: (previous?.id ?? 0) + 1,
+      }));
+      closeSheet();
+      return;
+    }
+    if (action === 'search') {
+      setDetail(null);
+      setSheet('search');
+      return;
+    }
+    if (action === 'reroute') {
+      if (navigationSession || startingNavigation) {
+        Alert.alert(
+          'Live rerouting unavailable',
+          'Live truck-safe rerouting requires the licensed CoPilot rerouting integration. Your current route is retained. End navigation to review a new Trimble route from your current location.',
+        );
+        return;
+      }
+      const current = services.routes.getSnapshot();
+      if (!current.route || !current.plan) return;
+      Alert.alert(
+        'Recalculate truck route?',
+        'Request a new Trimble truck route from fresh GPS using your verified truck dimensions and ordered stops.',
+        [
+          { text: 'Keep route', style: 'cancel' },
+          {
+            text: 'Recalculate',
+            onPress: () => {
+              if (services.routes.getSnapshot().route !== current.route) return;
+              void run(() => calculate(current.plan!));
+            },
+          },
+        ],
+      );
+      return;
+    }
+    if (action === 'warnings') {
+      setExpanded(true);
+      closeSheet();
+      return;
+    }
+    if (action === 'filter') {
+      setSheet('filter');
+      return;
+    }
+    if (action === 'truck') {
+      closeSheet();
+      onTrucks?.();
+      return;
+    }
+    if (action === 'location') {
+      setSheet('location');
+      return;
+    }
+    if (action === 'places') {
+      setSheet('places');
+      return;
+    }
+    if (action === 'options') {
+      setSheet('route');
+      return;
+    }
+    if (action === 'continue') {
+      closeSheet();
+      return;
+    }
+    if (action === 'audio') {
+      closeSheet();
+      onSettings?.();
+      return;
+    }
+    if (action === 'report') {
+      closeSheet();
+      onServices?.();
+      return;
+    }
+    const snapshot = services.routes.getSnapshot();
+    if (!snapshot.route || !snapshot.plan) return;
+    const message = shareRouteSummary(snapshot.route, snapshot.plan);
+    Alert.alert(
+      'Share route summary?',
+      'Destination and stop names will be included. Your current GPS location will not be shared.',
+      [
+        { text: 'Keep private', style: 'cancel' },
+        {
+          text: 'Share summary',
+          onPress: () => {
+            void Share.share({ message }).catch(() =>
+              setError('The share sheet could not be opened.'),
+            );
+          },
+        },
+      ],
+    );
   }
   function categories(compact = false, horizontal = false) {
     return (
@@ -228,13 +574,8 @@ export function PlanningScreen({
               pending && styles.disabled,
             ]}
           >
-            <View
-              style={[
-                styles.categoryIcon,
-                { backgroundColor: item.color + '1A' },
-              ]}
-            >
-              <DriverIcon name={item.icon} color={item.color} size={24} />
+            <View style={styles.categoryIcon}>
+              <PoiCategoryPicture category={item.category} size={40} />
             </View>
             <Text
               numberOfLines={2}
@@ -266,13 +607,34 @@ export function PlanningScreen({
       </View>
     );
   }
-  const estimate = routes.route
-    ? routeEstimate(routes.route, settings?.units === 'metric')
-    : null;
+  const mapPrefs = mapPreferences(settings);
+  const livePresentation = navigationPresentation(
+    routes.route,
+    navigation,
+    location.fix,
+  );
   const feedback = (
     <>
       <ErrorText message={error ?? searchState.error ?? routes.error} />
-      {pending && (
+      {routes.diagnostic && (
+        <DriverButton
+          title="Route diagnostic details"
+          secondary
+          onPress={() => setSheet('diagnostic')}
+        />
+      )}
+      {startingNavigation && (
+        <DriverCopy>
+          Starting navigation… Cancel Route remains available.
+        </DriverCopy>
+      )}
+      {stopUnconfirmed && (
+        <DriverButton
+          title="Retry stopping guidance"
+          onPress={finishNativeStop}
+        />
+      )}
+      {(pending || searchPending) && (
         <View style={ds.row}>
           <ActivityIndicator color="#FF6B2C" />
           <DriverCopy>
@@ -289,11 +651,29 @@ export function PlanningScreen({
       <View style={styles.map}>
         <TruckMap
           token={services.environment.mapboxToken}
+          command={mapCommand}
           route={routes.route}
           plan={routes.plan}
           fix={location.fix}
-          night={night}
-          pois={pois}
+          navigationActive={
+            navigation.phase === 'navigating' &&
+            navigation.routeId === routes.route?.selectedRouteId
+          }
+          maneuverMeters={livePresentation?.guidance?.maneuverMeters}
+          progressOffset={
+            livePresentation?.guidance?.maneuverMeters !== undefined
+              ? navigation.maneuverOffset
+              : undefined
+          }
+          satellite={satelliteOverride ?? mapPrefs.satellite}
+          onToggleSatellite={() =>
+            setSatelliteOverride(value => !(value ?? mapPrefs.satellite))
+          }
+          onAudio={() => menuAction('audio')}
+          autoZoom={mapPrefs.autoZoom}
+          pois={pois.filter(
+            poi => !hiddenCategories.includes(poi.category as PlaceCategory),
+          )}
           bottomInset={bottomHeight}
           topInset={topHeight + 12}
           onCoordinate={point => {
@@ -323,158 +703,344 @@ export function PlanningScreen({
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
-        <RoutingCapabilityStatus api={services.api} verified={Boolean(trucks.selected)} phase={routes.phase} errorCode={routes.errorCode} color={palette.text} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Review active truck"
-          accessibilityHint={
-            trucks.selected
-              ? 'Review truck dimensions and restrictions'
-              : 'A verified truck profile is required before routing'
-          }
-          onPress={onTrucks}
-          style={[styles.truckChip, { backgroundColor: palette.card }]}
-        >
-          <DriverIcon name="local_shipping_rounded" size={18} />
-          <Text
-            numberOfLines={1}
-            style={[styles.chipText, { color: palette.text }]}
+        {routes.route ? (
+          <View
+            style={[
+              styles.maneuverOverlay,
+              !navigationSession && styles.previewOverlay,
+            ]}
           >
-            {trucks.selected ? trucks.selected.name : 'Add truck'}
-          </Text>
-          {!trucks.selected && (
-            <DriverIcon
-              name="warning_amber_rounded"
-              size={16}
-              color="#FF6B2C"
+            <NavigationHud
+              route={routes.route}
+              destination={routes.plan?.destination.name}
+              state={navigation}
+              fix={location.fix}
+              metric={settings?.units === 'metric'}
+              placement="maneuver"
             />
-          )}
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Location status"
-          onPress={() => setSheet('location')}
-          style={[styles.gpsChip, { backgroundColor: palette.card }]}
-        >
-          <DriverIcon
-            name="my_location_rounded"
-            size={18}
-            color={palette.muted}
-          />
-          <Text
-            numberOfLines={1}
-            style={[styles.gpsText, { color: palette.text }]}
-          >
-            {location.fix
-              ? 'GPS ±' + Math.round(location.fix.accuracy) + ' m'
-              : location.tracking
-              ? 'Finding GPS…'
-              : 'Use my location'}
-          </Text>
-        </Pressable>
+          </View>
+        ) : (
+          <>
+            <RoutingCapabilityStatus
+              api={services.api}
+              verified={Boolean(trucks.selected)}
+              phase={routes.phase}
+              errorCode={routes.errorCode}
+              color={palette.text}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Review active truck"
+              accessibilityHint={
+                trucks.selected
+                  ? 'Review truck dimensions and restrictions'
+                  : 'A verified truck profile is required before routing'
+              }
+              onPress={onTrucks}
+              style={[styles.truckChip, { backgroundColor: palette.card }]}
+            >
+              <DriverIcon name="local_shipping_rounded" size={18} />
+              <Text
+                numberOfLines={2}
+                style={[styles.chipText, { color: palette.text }]}
+              >
+                {truckLoading
+                  ? 'Loading saved truck…'
+                  : truckLoadFailed
+                  ? 'Truck profiles unavailable · Review'
+                  : trucks.selected
+                  ? trucks.selected.name +
+                    ' · ' +
+                    trucks.selected.heightFt +
+                    ' ft H · ' +
+                    trucks.selected.weightLbs.toLocaleString() +
+                    ' lb · Change'
+                  : 'Add truck'}
+              </Text>
+              {!truckLoading && !trucks.selected && (
+                <DriverIcon
+                  name="warning_amber_rounded"
+                  size={16}
+                  color="#FF6B2C"
+                />
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Location status"
+              onPress={() => setSheet('location')}
+              style={[styles.gpsChip, { backgroundColor: palette.card }]}
+            >
+              <DriverIcon
+                name="my_location_rounded"
+                size={18}
+                color={palette.muted}
+              />
+              <Text
+                numberOfLines={1}
+                style={[styles.gpsText, { color: palette.text }]}
+              >
+                {location.fix
+                  ? 'GPS ±' + Math.round(location.fix.accuracy) + ' m'
+                  : location.tracking
+                  ? 'Finding GPS…'
+                  : 'Use my location'}
+              </Text>
+            </Pressable>
+          </>
+        )}
       </View>
       <View
         testID="map-bottom-panel"
         onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
-        style={[
-          styles.bottom,
-          expanded ? styles.expandedBottom : styles.collapsedBottom,
-          { backgroundColor: palette.card },
-        ]}
+        style={
+          routes.route
+            ? styles.routeBottom
+            : [
+                styles.bottom,
+                expanded ? styles.expandedBottom : styles.collapsedBottom,
+                { backgroundColor: palette.card },
+              ]
+        }
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={
-            expanded ? 'Collapse map places' : 'Expand map places'
-          }
-          accessibilityState={{ expanded }}
-          onPress={() => setExpanded(value => !value)}
-          style={styles.handleButton}
-        >
-          <View style={[styles.handle, { backgroundColor: palette.border }]} />
-        </Pressable>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.bottomContent}
-        >
-          {feedback}
-          {routes.route ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Review route and stops"
-              onPress={() => setSheet('route')}
-              style={ds.row}
+        <WeatherStatus
+          services={services}
+          route={routes.route}
+          fix={location.fix}
+        />
+        {routes.route ? (
+          <>
+            <View
+              style={[styles.routeFeedback, { backgroundColor: palette.card }]}
             >
-              <DriverIcon name="route_rounded" color="#0B68E8" size={26} />
-              <View style={ds.grow}>
-                <Text style={[styles.routeTitle, { color: palette.text }]}>
-                  Truck route ready
-                </Text>
-                <DriverCopy>
-                  {estimate?.distance} · {estimate?.duration} · Trimble estimate
-                </DriverCopy>
-              </View>
-              <DriverIcon name="chevron_right_rounded" color={palette.text} />
-            </Pressable>
-          ) : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Set destination for truck routes"
-              onPress={() => {
-                setDetail(null);
+              {feedback}
+            </View>
+            <RoutePoiBadges
+              pois={pois.filter(
+                poi =>
+                  !hiddenCategories.includes(poi.category as PlaceCategory),
+              )}
+              fix={location.fix}
+              metric={settings?.units === 'metric'}
+              onSelect={poi => {
+                setDetail({
+                  id: poi.id,
+                  name: poi.name,
+                  lat: poi.latitude,
+                  lng: poi.longitude,
+                });
                 setSheet('search');
               }}
-              style={[styles.searchBar, { backgroundColor: palette.input }]}
-            >
-              <DriverIcon name="search_rounded" size={24} />
-              <Text
-                numberOfLines={1}
-                style={[styles.searchLabel, { color: palette.text }]}
-              >
-                Set destination
-              </Text>
-              <DriverIcon name="chevron_right_rounded" color={palette.muted} />
-            </Pressable>
-          )}
-          {expanded ? (
-            <>
-              {routes.route && (
-                <DriverButton
-                  title="Change destination"
-                  secondary
+            />
+            <NavigationHud
+              route={routes.route}
+              destination={routes.plan?.destination.name}
+              state={navigation}
+              fix={location.fix}
+              metric={settings?.units === 'metric'}
+              placement="dashboard"
+              onMore={() => setSheet('navigation')}
+              onReview={
+                !navigationSession ? () => setSheet('route') : undefined
+              }
+            />
+            <View style={styles.routeActions}>
+              {!navigationSession && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Start Navigation"
+                  accessibilityState={{ disabled: pending }}
+                  disabled={pending}
                   onPress={() => {
-                    setDetail(null);
-                    setSheet('search');
+                    void run(startNavigation);
                   }}
-                />
+                  style={[styles.startAction, pending && styles.disabled]}
+                >
+                  <Text style={styles.startText}>Start Navigation</Text>
+                </Pressable>
               )}
-              {categories()}
-              <Text style={[styles.footnote, { color: palette.muted }]}>
-                Truck entrance verification is not available. Review access
-                before departure.
-              </Text>
-            </>
-          ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Cancel Route"
+                onPress={confirmCancelRoute}
+                style={[
+                  styles.cancelAction,
+                  { backgroundColor: palette.input },
+                ]}
+              >
+                <Text style={[styles.cancelText, { color: palette.text }]}>
+                  Cancel Route
+                </Text>
+              </Pressable>
+            </View>
+            <RouteAdvisories
+              key={
+                routes.route.selectedRouteId +
+                routes.route.calculatedAt +
+                String(navigationSession)
+              }
+              services={services}
+              route={routes.route}
+              fix={location.fix}
+              expanded={expanded}
+              onOpen={() => setExpanded(true)}
+              onClose={() => setExpanded(false)}
+            />
+          </>
+        ) : (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                expanded ? 'Collapse map places' : 'Expand map places'
+              }
+              accessibilityState={{ expanded }}
+              onPress={() => setExpanded(value => !value)}
+              style={styles.handleButton}
             >
-              {categories(false, true)}
+              <View
+                style={[styles.handle, { backgroundColor: palette.border }]}
+              />
+            </Pressable>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.bottomContent}
+            >
+              {feedback}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Set destination for truck routes"
+                onPress={() => {
+                  setDetail(null);
+                  setSheet('search');
+                }}
+                style={[styles.searchBar, { backgroundColor: palette.input }]}
+              >
+                <DriverIcon name="search_rounded" size={24} />
+                <Text style={[styles.searchLabel, { color: palette.text }]}>
+                  Set destination
+                </Text>
+                <DriverIcon
+                  name="chevron_right_rounded"
+                  color={palette.muted}
+                />
+              </Pressable>
+              {expanded ? (
+                <>
+                  {categories()}
+                  <Text style={[styles.footnote, { color: palette.muted }]}>
+                    Truck entrance verification is not available. Review access
+                    before departure.
+                  </Text>
+                </>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {categories(false, true)}
+                </ScrollView>
+              )}
+              {!location.fix && (
+                <Text style={[styles.footnote, { color: palette.muted }]}>
+                  U.S. overview ·{' '}
+                  {location.tracking
+                    ? 'Waiting for your GPS position'
+                    : 'Location off'}
+                </Text>
+              )}
             </ScrollView>
-          )}
-          {!location.fix && (
-            <Text style={[styles.footnote, { color: palette.muted }]}>
-              U.S. overview ·{' '}
-              {location.tracking
-                ? 'Waiting for your GPS position'
-                : 'Location off'}
-            </Text>
-          )}
-        </ScrollView>
+          </>
+        )}
       </View>
+      {active && sheet === 'filter' && (
+        <DriverSheet title="Places Filter" onClose={closeSheet}>
+          <DriverCopy>
+            Choose which loaded place categories appear on the map. This does
+            not claim live availability or enable an unconfigured POI provider.
+          </DriverCopy>
+          {placeShortcuts.map(item => (
+            <Pressable
+              key={item.category}
+              accessibilityRole="checkbox"
+              accessibilityLabel={item.label}
+              accessibilityState={{
+                checked: !hiddenCategories.includes(item.category),
+              }}
+              onPress={() =>
+                setHiddenCategories(old =>
+                  old.includes(item.category)
+                    ? old.filter(c => c !== item.category)
+                    : [...old, item.category],
+                )
+              }
+              style={[styles.filterRow, { backgroundColor: palette.input }]}
+            >
+              <PoiCategoryPicture category={item.category} size={32} />
+              <Text style={[styles.filterLabel, { color: palette.text }]}>
+                {item.label}
+              </Text>
+              <Text style={{ color: palette.text }}>
+                {hiddenCategories.includes(item.category) ? '○' : '✓'}
+              </Text>
+            </Pressable>
+          ))}
+          <DriverButton
+            title="Show all categories"
+            onPress={() => setHiddenCategories([])}
+          />
+          <DriverButton title="Done" onPress={closeSheet} />
+          {routes.route && (
+            <DriverButton
+              title="Cancel Route"
+              secondary
+              onPress={confirmCancelRoute}
+            />
+          )}
+        </DriverSheet>
+      )}
+      {active && sheet === 'diagnostic' && routes.diagnostic && (
+        <DriverSheet title="Route diagnostic" onClose={closeSheet}>
+          <DriverCopy>{'Code: ' + routes.diagnostic.code}</DriverCopy>
+          <DriverCopy>{'Category: ' + routes.diagnostic.category}</DriverCopy>
+          <DriverCopy>
+            {'Backend HTTP: ' + (routes.diagnostic.httpStatus ?? 'not available')}
+          </DriverCopy>
+          <DriverCopy>{routes.diagnostic.message}</DriverCopy>
+          {routes.diagnostic.providerDetail && (
+            <DriverCopy>
+              {'Provider warning types: ' +
+                (routes.diagnostic.providerDetail.providerWarningTypes.join(', ') || 'not supplied') +
+                ' · Leg ' + routes.diagnostic.providerDetail.legNumber +
+                ' · Report line ' + routes.diagnostic.providerDetail.lineNumber}
+            </DriverCopy>
+          )}
+          <DriverCopy>
+            {routes.diagnostic.providerDetailAvailable
+              ? 'Provider warning identifiers are available. Their specific road restriction is not yet classified.'
+              : 'The backend did not supply detailed provider warning evidence.'}
+            {' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'}
+          </DriverCopy>
+          <DriverButton
+            title="Share sanitized diagnostic"
+            onPress={() => {
+              void Share.share({
+                message: JSON.stringify({ ...routes.diagnostic, events: routeDiagnosticHistory() }, null, 2),
+              }).catch(() => setError('The share sheet could not be opened.'));
+            }}
+          />
+        </DriverSheet>
+      )}
       {active && sheet === 'location' && (
         <DriverSheet title="Location" onClose={() => closeSheet()}>
+          {routes.route && (
+            <DriverButton
+              title="Cancel Route"
+              secondary
+              onPress={confirmCancelRoute}
+            />
+          )}
           <DriverCopy>
             {location.fix
               ? 'GPS accuracy ±' + Math.round(location.fix.accuracy) + ' m'
@@ -497,13 +1063,38 @@ export function PlanningScreen({
           />
         </DriverSheet>
       )}
+      {active && sheet === 'places' && (
+        <DriverSheet title="POI Ahead" onClose={closeSheet}>
+          {routes.route && (
+            <DriverButton
+              title="Cancel Route"
+              secondary
+              onPress={confirmCancelRoute}
+            />
+          )}
+          <DriverCopy>
+            Choose a truck category. Results require an approved provider;
+            missing coverage is not replaced with passenger businesses.
+            Route-ahead search requires fresh GPS.
+          </DriverCopy>
+          {categories()}
+        </DriverSheet>
+      )}
       {active && sheet === 'search' && (
         <DriverSheet title="Set destination" onClose={() => closeSheet()}>
+          {routes.route && (
+            <DriverButton
+              title="Cancel Route"
+              secondary
+              onPress={confirmCancelRoute}
+            />
+          )}
           <View
             style={[styles.searchInput, { backgroundColor: palette.input }]}
           >
             <DriverIcon name="search_rounded" />
             <TextInput
+              keyboardAppearance={palette.dark ? 'dark' : 'light'}
               accessibilityLabel="Search address or destination"
               placeholder="Set destination for truck routes"
               placeholderTextColor={palette.muted}
@@ -520,13 +1111,89 @@ export function PlanningScreen({
               style={[styles.input, { color: palette.text }]}
             />
           </View>
+          {recentDestinations(settings).length > 0 && !detail && (
+            <>
+              <DriverTitle small>Recent</DriverTitle>
+              <DriverCopy>
+                Saved destination searches. Each selection resolves a fresh
+                address; no previous route is reused.
+              </DriverCopy>
+              <ScrollView
+                style={styles.recentList}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                {recentDestinations(settings, query).map(value => (
+                  <View key={value} style={ds.row}>
+                    <View style={ds.grow}>
+                      <DriverButton
+                        title={value}
+                        secondary
+                        disabled={pending}
+                        onPress={() => {
+                          changeQuery(value);
+                          void searchStore.searchNow(searchCenter());
+                        }}
+                      />
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={'Remove from Recent: ' + value}
+                      style={styles.removeRecent}
+                      onPress={() => {
+                        void run(() =>
+                          saveRecent(services.settings, items =>
+                            items.filter(item => item !== value),
+                          ),
+                        );
+                      }}
+                    >
+                      <DriverIcon name="close_rounded" color={palette.muted} />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+              {!!query && (
+                <DriverButton
+                  title="Show all recent destinations"
+                  secondary
+                  onPress={() => changeQuery('')}
+                />
+              )}
+              <DriverButton
+                title="Clear History"
+                secondary
+                disabled={pending}
+                onPress={() =>
+                  Alert.alert(
+                    'Clear destination history?',
+                    'Your saved truck profile and current route will be kept.',
+                    [
+                      { text: 'Keep history', style: 'cancel' },
+                      {
+                        text: 'Clear History',
+                        style: 'destructive',
+                        onPress: () => {
+                          void run(() =>
+                            saveRecent(services.settings, () => []),
+                          );
+                        },
+                      },
+                    ],
+                  )
+                }
+              />
+            </>
+          )}
           <DriverButton
             title="Search"
+            loading={searchPending}
             disabled={pending || query.trim().length < 3}
             onPress={search}
           />
           <DriverButton
             title="Ask driver assistant"
+            loading={searchPending}
             disabled={pending || !query.trim()}
             secondary
             onPress={() => {
@@ -554,6 +1221,7 @@ export function PlanningScreen({
           )}
           {feedback}
           {!pending &&
+            !searchPending &&
             searchState.phase !== 'waiting' &&
             !detail &&
             results.length === 0 &&
@@ -570,6 +1238,9 @@ export function PlanningScreen({
                 }
               />
             )}
+          {!detail && results.length > 0 && (
+            <DriverTitle small>Search results</DriverTitle>
+          )}
           {!detail &&
             results.map(stop => (
               <DriverCard key={stop.id} onPress={() => setDetail(stop)}>
@@ -612,6 +1283,11 @@ export function PlanningScreen({
                 onPress={() => setDetail(null)}
               />
               <DriverTitle small>{detail.name}</DriverTitle>
+              {pois.find(poi => poi.id === detail.id) && (
+                <DriverCopy>
+                  {poiDetails(pois.find(poi => poi.id === detail.id)!)}
+                </DriverCopy>
+              )}
               <DriverCopy>
                 Confirm the destination and truck access before departure.
               </DriverCopy>
@@ -648,6 +1324,11 @@ export function PlanningScreen({
       )}
       {active && sheet === 'route' && routes.route && (
         <DriverSheet title="Route Options" onClose={() => closeSheet()}>
+          <DriverButton
+            title="Cancel Route"
+            secondary
+            onPress={confirmCancelRoute}
+          />
           {feedback}
           <RoutePreview
             route={routes.route}
@@ -707,20 +1388,178 @@ export function PlanningScreen({
             </DriverCard>
           )}
           <DriverButton
-            title="Start navigation — unavailable"
-            disabled
-            onPress={() => {}}
+            title={
+              navigationSession
+                ? 'Open Navigation Controls'
+                : 'Start Navigation'
+            }
+            disabled={pending}
+            onPress={() => {
+              if (navigationSession) {
+                setSheet('navigation');
+              } else {
+                void run(startNavigation);
+              }
+            }}
           />
           <DriverCopy>
-            Live maneuvers, lane guidance, voice and arrival require verified
-            CoPilot runtime data. This screen is a route preview.
+            Start Navigation stays available even before provisioning. If the
+            licensed CoPilot runtime or maps are unavailable, SemiTraX will fail
+            closed and keep this route in preview mode instead of starting fake
+            or passenger-car guidance.
           </DriverCopy>
         </DriverSheet>
+      )}
+      {active && sheet === 'navigation' && routes.route && (
+        <NavigationPanel
+          onClose={closeSheet}
+          header={
+            <NavigationHud
+              route={routes.route}
+              destination={routes.plan?.destination.name}
+              state={navigation}
+              fix={location.fix}
+              metric={settings?.units === 'metric'}
+              placement="panel"
+            />
+          }
+          footer={
+            <>
+              {navigationSession ? (
+                <NavigationAction
+                  title="Quit Nav"
+                  label="End Navigation"
+                  secondary
+                  disabled={pending}
+                  onPress={confirmEndNavigation}
+                />
+              ) : (
+                <NavigationAction
+                  title="Cancel Route"
+                  secondary
+                  onPress={confirmCancelRoute}
+                />
+              )}
+              <NavigationAction
+                title={
+                  navigation.phase === 'paused'
+                    ? 'Resume Navigation'
+                    : navigationSession
+                    ? 'Continue Navigation'
+                    : 'Start Navigation'
+                }
+                disabled={pending}
+                onPress={() => {
+                  if (navigation.phase === 'paused') {
+                    void run(toggleNavigationPause);
+                  } else if (navigationSession) closeSheet();
+                  else void run(startNavigation);
+                }}
+              />
+            </>
+          }
+        >
+          {feedback}
+          <NavigationMenu phase={navigation.phase} onAction={menuAction} />
+          <Text style={[styles.panelStatus, { color: palette.muted }]}>
+            {!navigationSession
+              ? startingNavigation
+                ? 'Starting navigation…'
+                : 'Truck route ready'
+              : navigation.phase === 'arrived'
+              ? 'Destination reached'
+              : navigation.phase === 'paused'
+              ? 'Navigation paused'
+              : navigation.phase === 'rerouting'
+              ? 'Truck-safe reroute in progress'
+              : 'Turn-by-turn navigation active'}
+          </Text>
+          {navigationSession &&
+            navigation.phase !== 'arrived' &&
+            navigation.phase !== 'paused' && (
+              <NavigationAction
+                title={
+                  navigation.phase === 'rerouting'
+                    ? 'Rerouting…'
+                    : 'Pause Navigation'
+                }
+                secondary
+                disabled={pending || navigation.phase !== 'navigating'}
+                onPress={() => {
+                  void run(toggleNavigationPause);
+                }}
+              />
+            )}
+          {navigationSession && (
+            <NavigationAction
+              title="Cancel Route"
+              secondary
+              onPress={confirmCancelRoute}
+            />
+          )}
+
+          <Text style={[styles.panelStatus, { color: palette.muted }]}>
+            {navigationSession
+              ? 'Quit Nav stops guidance after confirmation and retains the route. Cancel Route clears it.'
+              : 'Route preview only. Start Navigation checks CoPilot licensing and maps.'}
+          </Text>
+        </NavigationPanel>
       )}
     </View>
   );
 }
 const styles = StyleSheet.create({
+  recentList: { maxHeight: 220 },
+  removeRecent: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  maneuverOverlay: { flex: 1, marginRight: 62 },
+  previewOverlay: { marginRight: 0 },
+  routeBottom: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 10,
+    gap: 8,
+  },
+  routeFeedback: { borderRadius: 12 },
+  routeActions: { flexDirection: 'row', gap: 8 },
+  startAction: {
+    flex: 1,
+    backgroundColor: '#FF6425',
+    padding: 12,
+    borderRadius: 14,
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  startText: { color: 'white', fontWeight: '900', fontSize: 16 },
+  cancelAction: {
+    backgroundColor: '#1B2732',
+    borderWidth: 1,
+    borderColor: '#445361',
+    padding: 12,
+    borderRadius: 14,
+    minHeight: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cancelText: { color: '#E8BDB1', fontWeight: '800', fontSize: 14 },
+  advisory: { maxHeight: 160, borderRadius: 12, backgroundColor: '#FFFFFFE8' },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    minHeight: 52,
+    gap: 12,
+    borderRadius: 14,
+  },
+  filterLabel: { flex: 1, fontSize: 16, fontWeight: '700' },
+  panelStatus: { color: '#A9BCCA', fontSize: 14, lineHeight: 20 },
+  cancelFooter: { paddingHorizontal: 16, paddingBottom: 10 },
   moreCategory: { backgroundColor: '#7189AC1A' },
   screen: { flex: 1 },
   map: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 },
@@ -764,6 +1603,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 26,
     boxShadow: '0 -6px 24px #1018203D',
   },
+  navigationBottom: { maxHeight: '60%' },
   collapsedBottom: { maxHeight: '35%' },
   expandedBottom: { maxHeight: '46%' },
   handleButton: { height: 28, alignItems: 'center', justifyContent: 'center' },

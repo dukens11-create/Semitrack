@@ -1,3 +1,4 @@
+import type { RestrictionDiagnostic } from "./restrictionDiagnostic.js";
 import type { RouteBuildInput, RouteBuildResult, RoutingProviderName } from "../../types.js";
 
 export class RoutingProviderError extends Error {
@@ -9,6 +10,7 @@ export class RoutingProviderError extends Error {
   readonly code: string;
   readonly httpStatus: number;
   readonly retryable: boolean;
+  restrictionDiagnostic?: RestrictionDiagnostic;
 
   constructor(
     provider: RoutingProviderName,

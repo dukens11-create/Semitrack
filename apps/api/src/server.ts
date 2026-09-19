@@ -789,6 +789,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
         message: error.message,
         provider: error.provider,
         retryable: error.retryable,
+        ...(error.code === "TRIMBLE_RESTRICTION_WARNING" && error.restrictionDiagnostic
+          ? { restrictionDiagnostic: error.restrictionDiagnostic } : {}),
       },
     });
   }

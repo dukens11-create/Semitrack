@@ -1,3 +1,19 @@
+import { dispatchRouter } from './modules/dispatch/dispatch.routes.js';
+import { routingCapabilities } from './services/routingCapabilities.js';
+import { currentHosStatus } from './services/eldNormalization.js';
+import { isCurrentAdminProvider } from './modules/analytics/providerHealth.js';
+import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
+import { documentRouter } from './modules/documents/document.routes.js';
+import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
+import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
+import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
+import { operationalRouter } from './modules/admin/operational.routes.js';
+import { auditTruck, isVerifiedTruck, publicTruck, saveTruck, verifyTruck } from "./modules/trucks/profileRevision.js";
+import { rotateRefreshSession } from "./services/sessionRotation.js";
+import { matchesSavedRoutingProfile } from "./modules/trucks/routingProfile.js";
+import { createRateLimiter, requestMetadata, logServerEvent } from "./middleware/security.js";
+import { truckSchema, truckUpdateSchema, routingTruckSchema } from "./modules/trucks/truck.schemas.js";
+import { driverRecordScope, globalAnalyticsRoles } from "./modules/admin/driverAccessPolicy.js";
 import crypto from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
@@ -7,7 +23,10 @@ import { isDatabaseUnavailableError } from "./lib/databaseErrors.js";
 import { env } from "./config/env.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
 import { signAccessToken } from "./utils/jwt.js";
-import { comparePassword, hashPassword } from "./utils/password.js";
+import { hashPassword } from "./utils/password.js";
+import { authenticatePassword } from './services/loginAuthentication.js';
+import { requestPasswordRecovery, confirmPasswordRecovery, changeUserPassword } from './services/passwordRecovery.js';
+import { createRecoveryQueue } from './services/recoveryQueue.js';
 import {
   buildTrafficPreview,
   buildTruckRoute,
@@ -28,11 +47,6 @@ import {
 } from "./services/eldService.js";
 import { safetyRouter } from "./modules/safety/safety.routes.js";
 import { refreshDotProviders } from "./services/dotFeedService.js";
-import {
-  searchHerePlaces,
-  searchHerePlacesAlongRoute,
-} from "./services/providers/herePlacesProvider.js";
-import { resolveHereTimeZone } from "./services/providers/hereTimeZoneProvider.js";
 import { adminAnalyticsRouter, telemetryRouter } from "./modules/analytics/adminAnalytics.routes.js";
 import {
   adminSubscriptionPlansRouter,
@@ -59,38 +73,9 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "1mb" }));
 
-app.use((req, res, next) => {
-  const requestId = req.header("x-request-id") ?? crypto.randomUUID();
-  res.setHeader("x-request-id", requestId);
-  const started = Date.now();
-  res.on("finish", () => {
-    console.info(JSON.stringify({
-      requestId,
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      durationMs: Date.now() - started,
-    }));
-  });
-  next();
-});
-
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-app.use((req, res, next) => {
-  const key = req.ip ?? "unknown";
-  const now = Date.now();
-  const bucket = rateBuckets.get(key);
-  if (!bucket || bucket.resetAt <= now) {
-    rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
-    return next();
-  }
-  bucket.count += 1;
-  if (bucket.count > 120) {
-    res.setHeader("retry-after", String(Math.ceil((bucket.resetAt - now) / 1000)));
-    return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many requests" } });
-  }
-  return next();
-});
+app.use(requestMetadata);
+app.use(createRateLimiter(120, 60_000));
+app.use("/auth", createRateLimiter(20, 60_000));
 
 const asyncRoute = (handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) =>
   (req: Request, res: Response, next: NextFunction) => void handler(req, res, next).catch(next);
@@ -115,18 +100,23 @@ function adminPagination(query: Request["query"]) {
   return { page, pageSize, skip: (page - 1) * pageSize };
 }
 
-async function issueSession(user: any) {
-  const accessToken = signAccessToken({ userId: user.id, email: user.email, role: user.role });
+async function issueSession(user: any, db: Pick<typeof prisma, "refreshToken"> = prisma) {
   const refreshToken = issueRefreshToken();
-  await prisma.refreshToken.create({
+  const session = await db.refreshToken.create({
     data: {
       userId: user.id,
       tokenHash: hashToken(refreshToken),
       expiresAt: new Date(Date.now() + env.refreshTokenDays * 86_400_000),
     },
   });
+  const accessToken = signAccessToken({ userId: user.id, email: user.email, role: user.role, sessionId: session.id });
   return { accessToken, refreshToken, user: publicUser(user) };
 }
+
+app.get('/capabilities', requireAuth, asyncRoute(async (_req,res)=>{
+ const states=await prisma.providerSyncState.findMany({where:{provider:'Trimble',dataType:'ROUTING'},select:{provider:true,dataType:true,status:true,lastSuccessAt:true,lastAttemptAt:true,lastErrorCode:true}});
+ res.json(routingCapabilities(Boolean(env.trimbleApiKey.trim()),states));
+}));
 
 app.get("/health", asyncRoute(async (_req, res) => {
   let database = "ok";
@@ -139,11 +129,11 @@ app.get("/health", asyncRoute(async (_req, res) => {
   res.status(status).json({
     status: database === "ok" ? "ok" : "degraded",
     database,
+    contracts: { truckProfileVerification: 'revision-v1', revocableAccessSessions: true },
     providers: {
       selectedTruckRoutingProvider: configuredRoutingProviderName(),
-      hereRoutingConfigured: Boolean(env.hereApiKey),
-      trimbleRoutingConfigured: Boolean(env.trimbleApiKey),
-      mapboxTrafficConfigured: Boolean(env.mapboxToken),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
+      mapboxTrafficConfigured: false,
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
       billingMode: env.billingMode,
       googlePlayBillingConfigured: false,
@@ -169,74 +159,58 @@ app.post("/auth/register", asyncRoute(async (req, res) => {
 }));
 
 app.post("/auth/login", asyncRoute(async (req, res) => {
-  const input = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
-  const user = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
-  if (!user || user.disabledAt || !(await comparePassword(input.password, user.passwordHash))) {
+  const input = z.object({ email: z.string().trim().email(), password: z.string().min(1).max(128) }).parse(req.body);
+  const session = await prisma.$transaction(async tx => {
+    const email=input.email.trim().toLowerCase();
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "email" = ${email} FOR UPDATE`;
+    const user=await authenticatePassword(tx,input.email,input.password);
+    return user?issueSession(user,tx):null;
+  });
+  if (!session) {
     return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Invalid credentials" } });
   }
-  res.json(await issueSession(user));
+  res.json(session);
 }));
 
 app.post("/auth/refresh", asyncRoute(async (req, res) => {
-  const { refreshToken } = z.object({ refreshToken: z.string().min(40) }).parse(req.body);
-  const record = await prisma.refreshToken.findUnique({
-    where: { tokenHash: hashToken(refreshToken) },
-    include: { user: true },
-  });
-  if (!record || record.revokedAt || record.expiresAt <= new Date() || record.user.disabledAt) {
-    return res.status(401).json({ error: { code: "INVALID_REFRESH_TOKEN", message: "Session expired" } });
-  }
-  await prisma.refreshToken.update({ where: { id: record.id }, data: { revokedAt: new Date() } });
-  res.json(await issueSession(record.user));
+  const { refreshToken } = z.object({ refreshToken: z.string().min(40).max(256) }).parse(req.body);
+  const session = await rotateRefreshSession(prisma, hashToken(refreshToken), issueSession);
+  if (!session) return res.status(401).json({ error: { code: "INVALID_REFRESH_TOKEN", message: "Session expired" } });
+  res.json(session);
 }));
 
-app.post("/auth/logout", requireAuth, asyncRoute(async (req, res) => {
-  const parsed = z.object({ refreshToken: z.string().optional() }).parse(req.body ?? {});
-  if (parsed.refreshToken) {
-    await prisma.refreshToken.updateMany({
-      where: { userId: req.user!.userId, tokenHash: hashToken(parsed.refreshToken), revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-  } else {
-    await prisma.refreshToken.updateMany({
-      where: { userId: req.user!.userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-  }
+// Possession of this opaque refresh credential authorizes revoking only that session.
+// No user id or revoke-all operation is accepted. Works after access-token expiry.
+app.post("/auth/logout", asyncRoute(async (req, res) => {
+  const { refreshToken } = z.object({ refreshToken: z.string().min(40).max(256) }).strict().parse(req.body);
+  await prisma.refreshToken.updateMany({ where: { tokenHash: hashToken(refreshToken), revokedAt: null }, data: { revokedAt: new Date() } });
   res.status(204).end();
 }));
 
+const enqueueRecovery = createRecoveryQueue(() => logServerEvent('RECOVERY_DELIVERY_FAILED'));
 app.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
-  const { email } = z.object({ email: z.string().email() }).parse(req.body);
-  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-  if (user) {
-    await prisma.passwordResetToken.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-    const rawToken = issueRefreshToken();
-    await prisma.passwordResetToken.create({
-      data: { userId: user.id, tokenHash: hashToken(rawToken), expiresAt: new Date(Date.now() + 3_600_000) },
-    });
-    if (!env.passwordResetBaseUrl) {
-      console.warn("Password reset requested but PASSWORD_RESET_BASE_URL/email delivery is not configured");
-    }
+  const { email } = z.object({ email: z.string().trim().email() }).parse(req.body);
+  if (!env.recoveryEmail) {
+    return res.status(503).json({ error: { code: 'RECOVERY_UNAVAILABLE', message: 'Password recovery is temporarily unavailable.' } });
+  }
+  const config = env.recoveryEmail;
+  if (!enqueueRecovery(() => requestPasswordRecovery(prisma, config, email, () => logServerEvent('RECOVERY_DELIVERY_FAILED')))) {
+    return res.status(503).json({ error: { code: 'RECOVERY_UNAVAILABLE', message: 'Password recovery is temporarily unavailable.' } });
   }
   res.status(202).json({ accepted: true });
 }));
 
 app.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
-  const { token, password } = z.object({ token: z.string().min(40), password: z.string().min(10).max(128) }).parse(req.body);
-  const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(token) } });
-  if (!record || record.usedAt || record.expiresAt <= new Date()) {
-    return res.status(400).json({ error: { code: "INVALID_RESET_TOKEN", message: "Reset token is invalid or expired" } });
-  }
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await hashPassword(password) } }),
-    prisma.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
-  ]);
+  const { token, password } = z.object({ token: z.string().min(40).max(256), password: z.string().min(10).max(128) }).parse(req.body);
+  const consumed = await confirmPasswordRecovery(prisma, token, password);
+  if (!consumed) return res.status(400).json({ error: { code: 'INVALID_RESET_TOKEN', message: 'Reset token is invalid or expired' } });
   res.status(204).end();
+}));
+
+app.post('/auth/password/change',requireAuth,asyncRoute(async(req,res)=>{
+ const input=z.object({currentPassword:z.string().min(1).max(128),password:z.string().min(10).max(128)}).strict().parse(req.body);
+ await changeUserPassword(prisma,req.user!.userId,input.currentPassword,input.password);
+ res.status(204).end();
 }));
 
 app.get("/me", requireAuth, asyncRoute(async (req, res) => {
@@ -251,84 +225,28 @@ app.patch("/me", requireAuth, asyncRoute(async (req, res) => {
   res.json(publicUser(user));
 }));
 
-const truckFields = {
-  name: z.string().trim().min(1).max(80),
-  isDefault: z.boolean().optional(),
-  tractorType: z.string().max(80).nullable().optional(),
-  trailerType: z.string().max(80).nullable().optional(),
-  trailerCount: z.number().int().min(0).max(4).default(1),
-  unitNumber: z.string().max(40).nullable().optional(),
-  trailerNumber: z.string().max(40).nullable().optional(),
-  heightFt: z.number().min(4).max(20),
-  currentWeightLbs: z.number().int().min(1_000).max(300_000).nullable().optional(),
-  weightLbs: z.number().int().min(1_000).max(300_000),
-  weightPerAxleLbs: z.number().int().min(500).max(100_000).nullable().optional(),
-  widthFt: z.number().min(4).max(20),
-  lengthFt: z.number().min(8).max(150),
-  hazmatEnabled: z.boolean().default(false),
-  hazardousGoods: z.array(z.enum(["explosive","gas","flammable","combustible","organic","poison","radioactive","corrosive","poisonousInhalation","harmfulToWater","other"])).default([]),
-  axleCount: z.number().int().min(2).max(20),
-  avoidTolls: z.boolean().default(false),
-  avoidFerries: z.boolean().default(false),
-  avoidHighways: z.boolean().default(false),
-  avoidResidential: z.boolean().default(true),
-  avoidDirtRoads: z.boolean().default(true),
-};
-const truckBaseSchema = z.object(truckFields);
-const validateTruck = (value: z.infer<typeof truckBaseSchema>, ctx: z.RefinementCtx) => {
-  if (value.currentWeightLbs && value.currentWeightLbs > value.weightLbs) {
-    ctx.addIssue({ code: "custom", path: ["currentWeightLbs"], message: "Current weight cannot exceed gross weight" });
-  }
-  if (value.hazmatEnabled && value.hazardousGoods.length === 0) {
-    ctx.addIssue({ code: "custom", path: ["hazardousGoods"], message: "Select at least one hazardous-goods class" });
-  }
-};
-const truckSchema = truckBaseSchema.superRefine(validateTruck);
-const truckUpdateSchema = truckBaseSchema.partial();
 
-app.get("/trucks", requireAuth, asyncRoute(async (req, res) => {
-  res.json({ items: await prisma.truck.findMany({ where: { userId: req.user!.userId }, orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }] }) });
+app.get('/trucks', requireAuth, asyncRoute(async (req,res)=>{
+ const items=await prisma.truck.findMany({where:{userId:req.user!.userId},orderBy:[{isDefault:'desc'},{updatedAt:'desc'}]});res.json({items:items.map(publicTruck)});
 }));
-app.post("/trucks", requireAuth, asyncRoute(async (req, res) => {
-  const input = truckSchema.parse(req.body);
-  const count = await prisma.truck.count({ where: { userId: req.user!.userId } });
-  const makeDefault = input.isDefault === true || count === 0;
-  const truck = await prisma.$transaction(async (tx) => {
-    if (makeDefault) await tx.truck.updateMany({ where: { userId: req.user!.userId }, data: { isDefault: false } });
-    return tx.truck.create({ data: { ...input, isDefault: makeDefault, userId: req.user!.userId } });
-  });
-  res.status(201).json(truck);
+app.post('/trucks',requireAuth,asyncRoute(async(req,res)=>{res.status(201).json(await saveTruck(prisma,req.user!.userId,req.user!.userId,req.body));}));
+app.patch('/trucks/:id',requireAuth,asyncRoute(async(req,res)=>{
+ const {expectedRevision}=z.object({expectedRevision:z.number().int().positive()}).parse(req.body);
+ res.json(await saveTruck(prisma,req.user!.userId,req.user!.userId,req.body,String(req.params.id),expectedRevision));
 }));
-app.patch("/trucks/:id", requireAuth, asyncRoute(async (req, res) => {
-  const input = truckUpdateSchema.parse(req.body);
-  const existing = await prisma.truck.findFirst({ where: { id: String(req.params.id), userId: req.user!.userId } });
-  if (!existing) return res.status(404).json({ error: { code: "TRUCK_NOT_FOUND", message: "Truck profile not found" } });
-  const truck = await prisma.$transaction(async (tx) => {
-    if (input.isDefault) await tx.truck.updateMany({ where: { userId: req.user!.userId }, data: { isDefault: false } });
-    return tx.truck.update({ where: { id: existing.id }, data: input });
-  });
-  res.json(truck);
+app.post('/trucks/:id/verify',requireAuth,asyncRoute(async(req,res)=>{
+ const {expectedRevision}=z.object({expectedRevision:z.number().int().positive()}).strict().parse(req.body);
+ res.json(await verifyTruck(prisma,req.user!.userId,String(req.params.id),expectedRevision));
 }));
-app.post("/trucks/:id/default", requireAuth, asyncRoute(async (req, res) => {
-  const existing = await prisma.truck.findFirst({ where: { id: String(req.params.id), userId: req.user!.userId } });
-  if (!existing) return res.status(404).json({ error: { code: "TRUCK_NOT_FOUND", message: "Truck profile not found" } });
-  await prisma.$transaction([
-    prisma.truck.updateMany({ where: { userId: req.user!.userId }, data: { isDefault: false } }),
-    prisma.truck.update({ where: { id: existing.id }, data: { isDefault: true } }),
-  ]);
-  res.status(204).end();
-}));
-app.delete("/trucks/:id", requireAuth, asyncRoute(async (req, res) => {
-  const existing = await prisma.truck.findFirst({ where: { id: String(req.params.id), userId: req.user!.userId } });
-  if (!existing) return res.status(404).json({ error: { code: "TRUCK_NOT_FOUND", message: "Truck profile not found" } });
-  const count = await prisma.truck.count({ where: { userId: req.user!.userId } });
-  if (count === 1) return res.status(409).json({ error: { code: "LAST_TRUCK", message: "At least one truck profile is required" } });
-  await prisma.truck.delete({ where: { id: existing.id } });
-  if (existing.isDefault) {
-    const replacement = await prisma.truck.findFirst({ where: { userId: req.user!.userId }, orderBy: { updatedAt: "desc" } });
-    if (replacement) await prisma.truck.update({ where: { id: replacement.id }, data: { isDefault: true } });
-  }
-  res.status(204).end();
+app.post('/trucks/:id/default',requireAuth,(_req,res)=>res.status(409).json({error:{code:'TRUCK_VERIFICATION_REQUIRED',message:'Review the current profile and confirm it using the updated app.'}}));
+app.delete('/trucks/:id',requireAuth,asyncRoute(async(req,res)=>{
+ const userId=req.user!.userId,id=String(req.params.id);
+ await prisma.$transaction(async tx=>{
+  const before=await tx.truck.findFirst({where:{id,userId}});
+  if(!before)throw Object.assign(new Error('Truck unavailable'),{safeCode:'TRUCK_NOT_FOUND',safeStatus:404});
+  if(await tx.truck.count({where:{userId}})<=1)throw Object.assign(new Error('Last truck'),{safeCode:'LAST_TRUCK',safeStatus:409});
+  await auditTruck(tx,userId,'TRUCK_DELETED',before,before);await tx.truck.delete({where:{id}});
+ },{isolationLevel:'Serializable'});res.status(204).end();
 }));
 
 app.get("/navigation-settings", requireAuth, asyncRoute(async (req, res) => {
@@ -357,14 +275,21 @@ const routeSchema = z.object({
   origin: coordinate,
   destination: coordinate,
   viaStops: z.array(coordinate).max(20).optional(),
-  truck: truckBaseSchema.omit({ name: true, isDefault: true, tractorType: true, unitNumber: true, trailerNumber: true }),
+  truck: routingTruckSchema,
   routeMode: z.enum(["fastest", "fuel_optimized", "shortest"]).optional(),
   alternatives: z.number().int().min(0).max(5).optional(),
   avoidSegments: z.array(z.string().min(1)).max(250).optional(),
 });
 app.post("/routing/truck-route", requireAuth, asyncRoute(async (req, res) => {
-  const input = routeSchema.parse(req.body);
-  res.json(await buildTruckRoute(input));
+  const input = routeSchema.extend({ truckProfileId: z.string().min(1).max(120), truckRevision: z.number().int().positive() }).parse(req.body);
+  const where = { id: input.truckProfileId, userId: req.user!.userId, isDefault: true };
+  const saved = await prisma.truck.findFirst({ where });
+  if (!saved || !isVerifiedTruck(saved) || saved.revision !== input.truckRevision || !matchesSavedRoutingProfile(saved, input.truck)) return res.status(409).json({ error: { code: 'TRUCK_PROFILE_CHANGED', message: 'Refresh and verify the saved truck profile before routing.' } });
+  const route = await buildTruckRoute({...input, truck:routingTruckSchema.parse(saved)});
+  // An edit/default change during provider work invalidates the calculated result.
+  const current = await prisma.truck.findFirst({ where });
+  if (!current || !isVerifiedTruck(current) || current.revision !== saved.revision || current.updatedAt.getTime() !== saved.updatedAt.getTime() || !matchesSavedRoutingProfile(current, input.truck)) return res.status(409).json({ error: { code: 'TRUCK_PROFILE_CHANGED', message: 'Truck profile changed during routing. Review it again.' } });
+  res.json(route);
 }));
 app.post("/routing/traffic-preview", requireAuth, asyncRoute(async (req, res) => {
   const input = routeSchema.parse(req.body);
@@ -379,7 +304,11 @@ app.get("/location/timezone", requireAuth, asyncRoute(async (req, res) => {
     lat: z.coerce.number().min(-90).max(90),
     lng: z.coerce.number().min(-180).max(180),
   }).parse(req.query);
-  res.json(await resolveHereTimeZone(input.lat, input.lng));
+  res.status(503).json({error:{code:'TIMEZONE_PROVIDER_NOT_CONFIGURED',message:'An approved timezone provider is not configured.',retryable:false}});
+}));
+
+app.post("/weather/route", requireAuth, asyncRoute(async (req, res) => {
+  res.json({ items: await getCorrelatedRouteWeather(routeWeatherSchema.parse(req.body)) });
 }));
 
 const placeCategory = z.enum([
@@ -390,6 +319,8 @@ const placeCategory = z.enum([
   "fuel_stop",
   "truck_parking",
   "truck_wash",
+  "cat_scale",
+  "truck_repair",
 ]);
 app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
@@ -399,33 +330,18 @@ app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
     radiusMeters: z.coerce.number().int().min(100).max(100_000).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
   }).parse(req.query);
-  const items = await searchHerePlaces({
-    category: input.category,
-    center: { lat: input.lat, lng: input.lng },
-    radiusMeters: input.radiusMeters,
-    limit: input.limit,
-  });
-  res.json({
-    items,
-    provider: "HERE",
-    regulatoryAuthority: false,
-    generatedAt: new Date().toISOString(),
-  });
+  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
 }));
 app.post("/places/corridor", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
     category: placeCategory,
-    route: z.array(coordinate).min(2).max(2_000),
+    route: z.array(coordinate).min(2).max(20_000),
+    currentLocation: coordinate.extend({accuracy: z.number().min(0).max(100), timestamp: z.number().finite()}).optional(),
     radiusMeters: z.number().int().min(100).max(100_000).optional(),
     maxResults: z.number().int().min(1).max(250).optional(),
   }).parse(req.body);
-  const items = await searchHerePlacesAlongRoute(input);
-  res.json({
-    items,
-    provider: "HERE",
-    regulatoryAuthority: false,
-    generatedAt: new Date().toISOString(),
-  });
+  const offset = corridorRouteOffset(input.route, input.currentLocation);
+  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
 }));
 
 app.get("/favorites", requireAuth, asyncRoute(async (req, res) => {
@@ -456,8 +372,8 @@ app.post("/community/reports", requireAuth, asyncRoute(async (req, res) => {
   const report = await prisma.communityReport.create({ data: { ...input, evidenceJson: input.evidenceJson as any, userId: req.user!.userId } });
   res.status(201).json(report);
 }));
-app.get("/admin/reports", requireAuth, requireRole(["ADMIN", "FLEET_ADMIN", "MODERATOR"]), asyncRoute(async (req, res) => {
-  const status = req.query.status ? String(req.query.status) : undefined;
+app.get("/admin/reports", requireAuth, requireRole(["ADMIN", "MODERATOR"]), asyncRoute(async (req, res) => {
+  const status = req.query.status ? z.enum(["PENDING", "APPROVED", "REJECTED", "REMOVED", "EXPIRED"]).parse(req.query.status) : undefined;
   res.json({ items: await prisma.communityReport.findMany({ where: status ? { status: status as any } : {}, orderBy: { createdAt: "desc" }, take: 200 }) });
 }));
 app.patch("/admin/reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR"]), asyncRoute(async (req, res) => {
@@ -466,9 +382,10 @@ app.patch("/admin/reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR"])
     reason: z.string().min(3).max(500),
     duplicateOfId: z.string().nullable().optional(),
   }).parse(req.body);
-  const report = await prisma.communityReport.update({
-    where: { id: String(req.params.id) },
-    data: { status: input.status, moderationReason: input.reason, duplicateOfId: input.duplicateOfId, moderatorId: req.user!.userId, moderatedAt: new Date() },
+  const report = await prisma.$transaction(async tx => {
+    const updated = await tx.communityReport.update({ where: { id: String(req.params.id) }, data: { status: input.status, moderationReason: input.reason, duplicateOfId: input.duplicateOfId, moderatorId: req.user!.userId, moderatedAt: new Date() } });
+    await tx.adminAuditLog.create({ data: { actorUserId: req.user!.userId, action: 'COMMUNITY_REPORT_MODERATED', targetType: 'COMMUNITY_REPORT', targetId: updated.id, metadataJson: { status: input.status, reason: input.reason } } });
+    return updated;
   });
   res.json(report);
 }));
@@ -485,23 +402,27 @@ app.post("/eld/:provider/connect", requireAuth, asyncRoute(async (req, res) => {
   const configured = provider === "SAMSARA"
     ? Boolean(env.samsaraClientId && env.samsaraClientSecret && env.samsaraRedirectUri)
     : Boolean(env.motiveClientId && env.motiveClientSecret && env.motiveRedirectUri);
-  if (!configured) {
+  if (!configured || env.eldEncryptionKey.length < 32) {
     return res.status(503).json({ error: { code: "ELD_PROVIDER_NOT_CONFIGURED", message: `${provider} OAuth credentials are required` } });
   }
   const state = crypto.randomBytes(32).toString("base64url");
-  await prisma.eldConnection.upsert({
+  await prisma.$transaction(async tx=>{
+  await tx.eldOAuthState.updateMany({where:{userId:req.user!.userId,provider,usedAt:null},data:{usedAt:new Date()}});
+  const pending = await tx.eldConnection.upsert({
     where: { userId_provider: { userId: req.user!.userId, provider } },
     create: { userId: req.user!.userId, provider, status: "PENDING" },
-    update: { status: "PENDING", lastErrorCode: null, lastErrorMessage: null },
+    update: { revision:{increment:1}, status: "PENDING", lastErrorCode: null, lastErrorMessage: null },
   });
-  await prisma.eldOAuthState.create({
+  await tx.eldOAuthState.create({
     data: {
       userId: req.user!.userId,
       provider,
       stateHash: hashToken(state),
+      connectionRevision: pending.revision,
       expiresAt: new Date(Date.now() + 10 * 60_000),
     },
   });
+  },{isolationLevel:"Serializable"});
   const clientId = provider === "SAMSARA" ? env.samsaraClientId : env.motiveClientId;
   const redirectUri = provider === "SAMSARA" ? env.samsaraRedirectUri : env.motiveRedirectUri;
   const authorizeBase = provider === "SAMSARA" ? "https://api.samsara.com/oauth2/authorize" : "https://gomotive.com/oauth/authorize";
@@ -516,26 +437,9 @@ app.post("/eld/:provider/connect", requireAuth, asyncRoute(async (req, res) => {
 app.get("/eld/:provider/callback", asyncRoute(async (req, res) => {
   const provider = z.enum(["SAMSARA", "MOTIVE"]).parse(String(req.params.provider).toUpperCase()) as EldProviderName;
   const { state, code } = z.object({ state: z.string().min(20), code: z.string().min(2) }).parse(req.query);
-  const oauthState = await prisma.eldOAuthState.findUnique({ where: { stateHash: hashToken(state) } });
-  if (!oauthState || oauthState.provider !== provider || oauthState.usedAt || oauthState.expiresAt <= new Date()) {
-    return res.status(400).json({ error: { code: "INVALID_OAUTH_STATE", message: "OAuth state is invalid or expired" } });
-  }
-  const tokens = await exchangeAuthorizationCode(provider, code);
-  await prisma.$transaction([
-    prisma.eldOAuthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date() } }),
-    prisma.eldConnection.update({
-      where: { userId_provider: { userId: oauthState.userId, provider } },
-      data: {
-        encryptedAccessToken: encryptSecret(tokens.accessToken),
-        encryptedRefreshToken: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : null,
-        accessTokenExpiresAt: tokens.expiresAt,
-        scopes: tokens.scopes,
-        status: "CONNECTED",
-        lastErrorCode: null,
-        lastErrorMessage: null,
-      },
-    }),
-  ]);
+  const {connection}=await claimEldOAuth(prisma,hashToken(state),provider);
+  const tokens=await exchangeAuthorizationCode(provider,code);
+  await updateEldRevision(prisma,connection,{encryptedAccessToken:encryptSecret(tokens.accessToken),encryptedRefreshToken:tokens.refreshToken?encryptSecret(tokens.refreshToken):null,accessTokenExpiresAt:tokens.expiresAt,scopes:tokens.scopes,status:'CONNECTED',lastErrorCode:null,lastErrorMessage:null});
   res.json({ connected: true, provider });
 }));
 
@@ -545,17 +449,9 @@ async function eldAccessToken(connection: any) {
     return decryptSecret(connection.encryptedAccessToken);
   }
   if (!connection.encryptedRefreshToken) throw new Error("ELD connection requires reauthorization");
+  connection.revision=await updateEldRevision(prisma,connection,{});
   const tokens = await refreshProviderToken(connection.provider, decryptSecret(connection.encryptedRefreshToken));
-  await prisma.eldConnection.update({
-    where: { id: connection.id },
-    data: {
-      encryptedAccessToken: encryptSecret(tokens.accessToken),
-      encryptedRefreshToken: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : connection.encryptedRefreshToken,
-      accessTokenExpiresAt: tokens.expiresAt,
-      scopes: tokens.scopes.length ? tokens.scopes : connection.scopes,
-      status: "CONNECTED",
-    },
-  });
+  connection.revision=await updateEldRevision(prisma,connection,{encryptedAccessToken:encryptSecret(tokens.accessToken),encryptedRefreshToken:tokens.refreshToken?encryptSecret(tokens.refreshToken):connection.encryptedRefreshToken,accessTokenExpiresAt:tokens.expiresAt,scopes:tokens.scopes.length?tokens.scopes:connection.scopes,status:'CONNECTED'});
   return tokens.accessToken;
 }
 
@@ -577,22 +473,11 @@ app.post("/eld/:provider/sync", requireAuth, asyncRoute(async (req, res) => {
     ]);
     const syncedAt = new Date();
     const normalized = normalizeEldSnapshot(provider, { drivers, vehicles, hos });
-    await prisma.eldConnection.update({
-      where: { id: connection.id },
-      data: {
-        lastSyncedAt: syncedAt,
-        lastErrorCode: null,
-        lastErrorMessage: null,
-        metadataJson: JSON.parse(JSON.stringify(normalized)),
-      },
-    });
+    connection.revision=await updateEldRevision(prisma,connection,{lastSyncedAt:syncedAt,lastErrorCode:null,lastErrorMessage:null,metadataJson:JSON.parse(JSON.stringify(normalized))});
     res.json({ ...normalized, syncedAt });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "ELD sync failed";
-    await prisma.eldConnection.update({
-      where: { id: connection.id },
-      data: { status: "ERROR", lastErrorCode: "SYNC_FAILED", lastErrorMessage: message },
-    });
+    const message = "ELD sync failed. Reconnect the provider or try again.";
+    await updateEldRevision(prisma,connection,{status:'ERROR',lastErrorCode:'SYNC_FAILED',lastErrorMessage:message}).catch(()=>undefined);
     throw error;
   }
 }));
@@ -602,39 +487,29 @@ app.get("/eld/hos/current", requireAuth, asyncRoute(async (req, res) => {
     select: { provider: true, lastSyncedAt: true, metadataJson: true },
     orderBy: { lastSyncedAt: "desc" },
   });
-  res.json({
-    items: connections.flatMap((connection) => {
-      const metadata = connection.metadataJson as { hos?: unknown[] } | null;
-      return (metadata?.hos ?? []).map((hos) => ({ provider: connection.provider, lastSyncedAt: connection.lastSyncedAt, ...(hos as object) }));
-    }),
-  });
+  res.json(currentHosStatus(connections));
 }));
 app.delete("/eld/:provider", requireAuth, asyncRoute(async (req, res) => {
   const provider = z.enum(["SAMSARA", "MOTIVE"]).parse(String(req.params.provider).toUpperCase());
   const connection = await prisma.eldConnection.findUnique({
     where: { userId_provider: { userId: req.user!.userId, provider } },
   });
-  if (connection?.encryptedRefreshToken) {
-    try {
-      await revokeProviderToken(provider, decryptSecret(connection.encryptedRefreshToken));
-    } catch (error) {
-      console.warn(`${provider} remote revocation failed; local credentials will still be deleted`, error);
-    }
-  }
-  await prisma.eldConnection.updateMany({
-    where: { userId: req.user!.userId, provider },
-    data: { encryptedAccessToken: null, encryptedRefreshToken: null, accessTokenExpiresAt: null, status: "DISCONNECTED", scopes: [] },
-  });
+  await prisma.$transaction(async tx=>{
+    await tx.eldOAuthState.updateMany({where:{userId:req.user!.userId,provider,usedAt:null},data:{usedAt:new Date()}});
+    await tx.eldConnection.updateMany({where:{userId:req.user!.userId,provider},data:{revision:{increment:1},encryptedAccessToken:null,encryptedRefreshToken:null,accessTokenExpiresAt:null,status:'DISCONNECTED',scopes:[],metadataJson:{}}});
+  },{isolationLevel:'Serializable'});
+  if(connection?.encryptedRefreshToken){try{await revokeProviderToken(provider,decryptSecret(connection.encryptedRefreshToken));}catch{logServerEvent('ELD_REVOKE_FAILED');}}
   res.status(204).end();
 }));
 
-app.get("/admin/overview", requireAuth, requireRole(adminRoles), asyncRoute(async (_req, res) => {
+app.get("/admin/overview", requireAuth, requireRole(globalAnalyticsRoles), asyncRoute(async (_req, res) => {
   const [users, activeSubscriptions, pendingReports, disabledUsers, providerIssues] = await Promise.all([
     prisma.user.count(),
     prisma.subscription.count({ where: { status: { in: ["ACTIVE", "TRIALING"] } } }),
     prisma.communityReport.count({ where: { status: "PENDING" } }),
     prisma.user.count({ where: { disabledAt: { not: null } } }),
-    prisma.providerSyncState.count({ where: { status: { in: ["DEGRADED", "ERROR"] } } }),
+    prisma.providerSyncState.findMany({ where: { status: { in: ["DEGRADED", "ERROR"] } }, select: { provider: true } })
+      .then(states => states.filter(isCurrentAdminProvider).length),
   ]);
   res.json({
     users,
@@ -654,8 +529,8 @@ app.get("/admin/application", requireAuth, requireRole(adminRoles), asyncRoute(a
     environment: env.nodeEnv,
     supportedRoles: ["DRIVER", "MODERATOR", "FLEET_ADMIN", "ADMIN"],
     providers: {
-      hereRoutingConfigured: Boolean(env.hereApiKey),
-      mapboxTrafficConfigured: Boolean(env.mapboxToken),
+      trimbleRoutingConfigured: Boolean(env.trimbleApiKey.trim()),
+      mapboxTrafficConfigured: false,
       dot511Configured: env.dotProviderConfigured,
       eldEncryptionConfigured: env.eldEncryptionKey.length >= 32,
       samsaraConfigured: Boolean(env.samsaraClientId && env.samsaraClientSecret),
@@ -668,12 +543,15 @@ app.get("/admin/application", requireAuth, requireRole(adminRoles), asyncRoute(a
 app.get("/admin/users", requireAuth, requireRole(userManagementRoles), asyncRoute(async (req, res) => {
   const { page, pageSize, skip } = adminPagination(req.query);
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 120) : "";
-  const where = search
-    ? { OR: [
-        { email: { contains: search, mode: "insensitive" as const } },
-        { fullName: { contains: search, mode: "insensitive" as const } },
-      ] }
-    : {};
+  const role = req.query.role === undefined ? undefined : z.enum(["DRIVER", "ADMIN", "FLEET_ADMIN", "MODERATOR"]).parse(req.query.role);
+  const where = { AND: [
+    driverRecordScope(req.user!),
+    ...(role ? [{ role }] : []),
+    ...(search ? [{ OR: [
+      { email: { contains: search, mode: "insensitive" as const } },
+      { fullName: { contains: search, mode: "insensitive" as const } },
+    ] }] : []),
+  ] };
   const [items, total] = await Promise.all([
     prisma.user.findMany({
       where,
@@ -707,30 +585,33 @@ app.patch("/admin/users/:id", requireAuth, requireRole(["ADMIN"]), asyncRoute(as
     message: "A role or disabled change is required",
   }).parse(req.body);
 
-  const current = await prisma.user.findUnique({ where: { id: targetId } });
-  if (!current) {
-    return res.status(404).json({ error: { code: "USER_NOT_FOUND", message: "User not found" } });
-  }
   if (targetId === req.user!.userId && (input.disabled === true || (input.role && input.role !== "ADMIN"))) {
     return res.status(409).json({ error: { code: "SELF_LOCKOUT_BLOCKED", message: "Administrators cannot disable or demote their own account" } });
   }
+  const updated = await prisma.$transaction(async tx => {
+  // Recheck actor authorization and the last-admin invariant inside the same serializable transaction.
+  const actor = await tx.user.findUnique({ where: { id: req.user!.userId } });
+  if (!actor || actor.role !== 'ADMIN' || actor.disabledAt) throw Object.assign(new Error('Access changed'), { safeCode: 'ACCESS_CHANGED', safeStatus: 403 });
+  const current = await tx.user.findUnique({ where: { id: targetId } });
+  if (!current) {
+    throw Object.assign(new Error('User unavailable'), { safeCode: 'USER_NOT_FOUND', safeStatus: 404 });
+  }
   if (current.role === "ADMIN" && (input.disabled === true || (input.role && input.role !== "ADMIN"))) {
-    const activeAdminCount = await prisma.user.count({ where: { role: "ADMIN", disabledAt: null } });
+    const activeAdminCount = await tx.user.count({ where: { role: "ADMIN", disabledAt: null } });
     if (activeAdminCount <= 1) {
-      return res.status(409).json({ error: { code: "LAST_ADMIN_BLOCKED", message: "The final active administrator cannot be disabled or demoted" } });
+      throw Object.assign(new Error('Last administrator'), { safeCode: 'LAST_ADMIN_BLOCKED', safeStatus: 409 });
     }
   }
 
   const disabledAt = input.disabled === undefined
     ? current.disabledAt
     : input.disabled ? new Date() : null;
-  const [updated] = await prisma.$transaction([
-    prisma.user.update({
+  const updated = await tx.user.update({
       where: { id: targetId },
       data: { role: input.role, disabledAt },
       select: { id: true, fullName: true, email: true, role: true, plan: true, emailVerified: true, disabledAt: true, updatedAt: true },
-    }),
-    prisma.adminAuditLog.create({
+    });
+    await tx.adminAuditLog.create({
       data: {
         actorUserId: req.user!.userId,
         action: "USER_ACCESS_UPDATED",
@@ -745,12 +626,14 @@ app.patch("/admin/users/:id", requireAuth, requireRole(["ADMIN"]), asyncRoute(as
           newDisabled: Boolean(disabledAt),
         },
       },
-    }),
-  ]);
+    });
+  if (input.role !== undefined || input.disabled === true) await tx.refreshToken.updateMany({ where: { userId: targetId, revokedAt: null }, data: { revokedAt: new Date() } });
+  return updated;
+  }, { isolationLevel: "Serializable" });
   res.json(updated);
 }));
 
-app.get("/admin/subscriptions", requireBillingEnabled, requireAuth, requireRole(userManagementRoles), asyncRoute(async (req, res) => {
+app.get("/admin/subscriptions", requireBillingEnabled, requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res) => {
   const { page, pageSize, skip } = adminPagination(req.query);
   const status = req.query.status
     ? z.enum([
@@ -802,7 +685,7 @@ app.get("/admin/provider-health", requireAuth, requireRole(adminRoles), asyncRou
       updatedAt: true,
     },
   });
-  res.json({ items });
+  res.json({ items: items.filter(isCurrentAdminProvider) });
 }));
 
 app.get("/admin/audit-logs", requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res) => {
@@ -828,8 +711,12 @@ app.get("/admin/audit-logs", requireAuth, requireRole(["ADMIN"]), asyncRoute(asy
   res.json({ items, page, pageSize, total });
 }));
 
+app.use("/dispatch", dispatchRouter);
+app.use("/trips", tripStatusRouter);
+app.use("/documents", documentRouter);
 app.use("/safety", safetyRouter);
 app.use("/analytics", telemetryRouter);
+app.use("/admin/operations", operationalRouter);
 app.use("/admin/analytics", adminAnalyticsRouter);
 app.use("/admin/account", adminAccountRouter);
 app.use("/subscription-plans", requireBillingEnabled, publicSubscriptionPlansRouter);
@@ -849,8 +736,29 @@ app.use("/billing", requireBillingEnabled, requireAllowedStripeWebOrigin, (_req,
 
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (error instanceof CorridorCorrelationError) return res.status(error.httpStatus).json({error: {code: error.code, message: error.message}});
+  const safe = error as { safeCode?: string; safeStatus?: number; code?: string } | null;
+  const workflowErrors: Record<string, [number,string]> = {
+    TRIP_NOT_FOUND:[404,'Trip not found.'], DOCUMENT_NOT_FOUND:[404,'Document not found.'], FLEET_NOT_FOUND:[404,'Fleet not found.'],
+    TRIP_CHANGED:[409,'This trip changed. Refresh and review it again.'], DOCUMENT_CHANGED:[409,'This document changed. Refresh and review it again.'],
+    TRIP_STOP_PLAN_INVALID:[409,'Stop completion must match the next required stop. Refresh and review the trip.'],
+    TRIP_TRANSITION_INVALID:[409,'This trip status change is not allowed. Refresh the trip.'],
+    DISPATCH_MEMBERSHIP_REQUIRED:[403,'An active assignment in your fleet is required.'],
+    VERIFIED_TRUCK_REQUIRED:[409,'Review and verify the current truck profile before recording trip progress.'],
+    CREATE_OPERATION_REQUIRED:[400,'A create operation identifier is required.'], CREATE_OPERATION_CONFLICT:[409,'This save operation already has different values. Review the saved record.'],
+    CURRENT_PASSWORD_INVALID:[400,'Your current password was not accepted.'], PASSWORD_TOO_LONG:[400,'Use a password of at most 72 UTF-8 bytes.'],
+    ACCOUNT_CHANGED:[409,'Your account changed. Sign in and review it again.'],
+  };
+  const workflowError=safe?.safeCode?workflowErrors[safe.safeCode]:undefined;
+  if (workflowError) return res.status(workflowError[0]).json({error:{code:safe!.safeCode,message:workflowError[1]}});
+  if (safe?.safeCode && ['TRUCK_CREATE_OPERATION_CONFLICT','TRUCK_CREATE_RESULT_REMOVED','ACCESS_CHANGED','USER_NOT_FOUND','LAST_ADMIN_BLOCKED','TRUCK_NOT_FOUND','LAST_TRUCK','FORBIDDEN','DRIVER_NOT_FOUND','RECORD_NOT_FOUND','RECORD_CHANGED','TRUCK_PROFILE_CHANGED','INVALID_OAUTH_STATE','ELD_CONNECTION_CHANGED'].includes(safe.safeCode)) return res.status(safe.safeStatus ?? 409).json({ error: { code: safe.safeCode, message: 'This action could not be completed. Refresh and review the account.' } });
+  if (safe?.code === 'P2034') return res.status(409).json({ error: { code: 'CONCURRENT_CHANGE', message: 'Information changed. Refresh and review before trying again.' } });
+  if (safe?.code === 'P2002') return res.status(409).json({ error: { code: 'ALREADY_EXISTS', message: 'This record already exists.' } });
+  const transportError = error as { type?: string } | null;
+  if (transportError?.type === 'entity.too.large') return res.status(413).json({ error: { code: 'REQUEST_TOO_LARGE', message: 'Request is too large.' } });
+  if (transportError?.type === 'entity.parse.failed') return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid request.' } });
   if (error instanceof z.ZodError) {
-    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid request", details: error.flatten() } });
+    return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid request", details: { fieldErrors: Object.fromEntries(Object.keys(error.flatten().fieldErrors).map(key => [key, ["Invalid value"]])) } } });
   }
   if (error instanceof BillingFoundationError) {
     return res.status(error.httpStatus).json({
@@ -858,8 +766,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
   if (isDatabaseUnavailableError(error)) {
-    const errorName = error instanceof Error ? error.name : "UnknownDatabaseError";
-    console.error(`[database] unavailable method=${_req.method} path=${_req.path} error=${errorName}`);
+    logServerEvent("DATABASE_UNAVAILABLE");
     return res.status(503).json({
       error: {
         code: "DATABASE_UNAVAILABLE",
@@ -869,38 +776,41 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
   if (error instanceof RoutingProviderError) {
-    console.warn(`[routing] provider=${error.provider} code=${error.code} retryable=${error.retryable}`);
+    logServerEvent("PROVIDER_FAILURE");
     void prisma.$executeRawUnsafe(
       `INSERT INTO "ApiErrorLog" (id, route, method, "statusCode", "errorCode", "occurredAt") VALUES ($1,$2,$3,$4,$5,NOW())`,
       crypto.randomUUID(), _req.path.slice(0, 300), _req.method.slice(0, 12), error.httpStatus, error.code.slice(0, 120),
     ).catch(() => undefined);
     return res.status(error.httpStatus).json({
+      truckSafe: error.truckSafe,
+      navigationAllowed: error.navigationAllowed,
       error: {
         code: error.code,
         message: error.message,
         provider: error.provider,
         retryable: error.retryable,
+        ...(error.code === "TRIMBLE_RESTRICTION_WARNING" && error.restrictionDiagnostic
+          ? { restrictionDiagnostic: error.restrictionDiagnostic } : {}),
       },
     });
   }
-  const message = error instanceof Error ? error.message : "Internal server error";
-  console.error(error);
+  logServerEvent("INTERNAL_ERROR");
   void prisma.$executeRawUnsafe(
     `INSERT INTO "ApiErrorLog" (id, route, method, "statusCode", "errorCode", "occurredAt") VALUES ($1,$2,$3,500,$4,NOW())`,
     crypto.randomUUID(), _req.path.slice(0, 300), _req.method.slice(0, 12), error instanceof Error ? error.name.slice(0, 120) : "UNKNOWN",
   ).catch(() => undefined);
   return res.status(500).json({
-    error: { code: "INTERNAL_ERROR", message: env.nodeEnv === "production" ? "Internal server error" : message },
+    error: { code: "INTERNAL_ERROR", message: "Internal server error" },
   });
 });
 
-const server = app.listen(env.port, () => {
+const server = app.listen(env.port, env.nodeEnv === "test" ? "127.0.0.1" : "0.0.0.0", () => {
   console.info(`SemiTrack API listening on port ${env.port}`);
 });
 
 const dotSyncTimer = setInterval(() => {
   void refreshDotProviders().catch((error) =>
-    console.error("DOT/511 provider refresh failed", error),
+    logServerEvent("DOT_REFRESH_FAILED"),
   );
 }, 60_000);
 dotSyncTimer.unref();

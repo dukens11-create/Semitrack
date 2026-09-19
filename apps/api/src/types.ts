@@ -48,6 +48,8 @@ export type RouteManeuver = {
   nextRoadName?: string;
   exitNumber?: string;
   offset?: number;
+  coordinate?: LatLng;
+  geometryMatchDistanceMeters?: number;
   lanes?: Array<{ directions: string[]; active: boolean }>;
 };
 
@@ -70,6 +72,8 @@ export type RouteOption = {
 };
 
 export type RouteBuildResult = {
+  preferenceWarnings?: Array<{code: 'OPTIONAL_PREFERENCE_UNSUPPORTED'; preference: string; requested: true; supported: false; guaranteed: false; message: string}>;
+  validatedStops?: Array<{lat:number;lng:number}>;
   provider: RoutingProviderName;
   truckSafe: boolean;
   navigationAllowed: boolean;

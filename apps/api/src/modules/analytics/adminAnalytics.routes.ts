@@ -1,3 +1,4 @@
+import { driverRecordScope, globalAnalyticsRoles } from "../admin/driverAccessPolicy.js";
 import crypto from "node:crypto";
 import { Router, type Response } from "express";
 import { z } from "zod";
@@ -13,7 +14,7 @@ import {
 export const adminAnalyticsRouter = Router();
 export const telemetryRouter = Router();
 
-const dashboardRoles = ["ADMIN", "FLEET_ADMIN", "MODERATOR"];
+const dashboardRoles = globalAnalyticsRoles;
 const operationalRoles = ["ADMIN", "FLEET_ADMIN"];
 
 function parseRangeOrRespond(query: Record<string, unknown>, res: Response) {
@@ -62,7 +63,7 @@ adminAnalyticsRouter.get("/drivers/:driverId", requireAuth, requireRole(operatio
   try {
     const includeFinancial = req.user!.role === "ADMIN";
     const driverId = String(req.params.driverId);
-    const profile = await getAdminDriverProfile(driverId, includeFinancial);
+    const profile = await getAdminDriverProfile(driverId, includeFinancial, driverRecordScope(req.user!));
     if (!profile) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver not found" } });
     await audit(req.user!.userId, "DRIVER_ANALYTICS_VIEWED", "USER", driverId, req.ip, { financialDataIncluded: includeFinancial });
     res.json(profile);

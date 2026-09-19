@@ -1,0 +1,2 @@
+# Keep the existing migration history on PostgreSQL.
+provider = "postgresql"

@@ -63,6 +63,19 @@ test('destination search deduplicates repeated provider identities', async () =>
   expect(results[0]?.id).toBe('provider-id');
 });
 
+test('explicit distant locality remains in the provider query even when a nearby center exists', async () => {
+  const fetcher = transport();
+  const service = new SearchService('pk.fixture.public', fetcher);
+  await service.search('Walmart Monterrey Nuevo Leon', {
+    lat: 39.5296,
+    lng: -119.8138,
+  });
+  const url = new URL(String(fetcher.mock.calls[0]![0]));
+  expect(url.searchParams.get('q')).toBe('Walmart Monterrey Nuevo Leon');
+  expect(url.searchParams.get('proximity')).toBe('-119.8138,39.5296');
+  expect(url.searchParams.get('country')).toBe('us,ca,mx');
+});
+
 test('reverse geocodes exact selected map coordinate, no fabricated address on empty response', async () => {
   const fetcher = transport({ features: [] });
   const service = new SearchService('pk.fixture.public', fetcher);
@@ -138,6 +151,31 @@ test('debounces typing and cancels when text is cleared', async () => {
   expect(search.search).toHaveBeenCalledTimes(1);
   expect(store.getSnapshot().results).toEqual([]);
 });
+test('a new address query starts even while the canceled prior request has not settled', async () => {
+  const { store, search } = setup();
+  const old = deferred<Stop[]>();
+  search.search
+    .mockReturnValueOnce(old.promise)
+    .mockResolvedValueOnce([{ ...place, id: 'new-place', name: 'New address' }]);
+
+  store.schedule('Old address');
+  const first = store.searchNow();
+  const firstSignal = search.search.mock.calls[0]![2];
+
+  store.schedule('New address');
+  const second = store.searchNow();
+  await second;
+
+  expect(firstSignal.aborted).toBe(true);
+  expect(search.search).toHaveBeenCalledTimes(2);
+  expect(search.search.mock.calls[1]![0]).toBe('New address');
+  expect(store.getSnapshot().results[0]?.id).toBe('new-place');
+
+  old.resolve([place]);
+  await first;
+  expect(store.getSnapshot().results[0]?.id).toBe('new-place');
+});
+
 test('old address result cannot replace a newer POI request even if transport ignores abort', async () => {
   const { store, search, poi } = setup();
   const old = deferred<Stop[]>();

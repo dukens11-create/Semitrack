@@ -42,6 +42,8 @@ services:
         value: "false"
       - key: TRIMBLE_API_KEY
         sync: false
+      - key: HERE_API_KEY
+        sync: false
 
 databases:
   - name: semitrax-db

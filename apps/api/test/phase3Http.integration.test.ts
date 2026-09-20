@@ -129,7 +129,7 @@ test(
       for(const path of ['/routing/compare','/routing/traffic-preview'])assert.equal((await request('POST',path,routeInput,access)).status,410);
       for(const category of ['cat_scale','truck_repair','truck_stop']){const pois=await request('GET','/places/search?category='+category+'&lat=40&lng=-120&limit=30',undefined,access);assert.equal(pois.status,503);assert.equal(pois.body.error.code,'POI_PROVIDER_NOT_CONFIGURED');}
       const corridor={route:[routeInput.origin,routeInput.destination],currentLocation:{lat:40,lng:-120,accuracy:4,timestamp:Date.now()}};
-      const poiCorridor=await request('POST','/places/corridor',{category:'truck_stop',...corridor},access);assert.equal(poiCorridor.status,503);assert.equal(poiCorridor.body.error.code,'POI_PROVIDER_NOT_CONFIGURED');
+      const poiCorridor=await request('POST','/places/corridor',{category:'truck_stop',...corridor},access);assert.equal(poiCorridor.status,503);assert.equal(poiCorridor.body.error.code,'POI_CORRIDOR_PROVIDER_NOT_CONFIGURED');
       for(const kind of ['restrictions','road-events','cameras','parking','fuel','weigh-stations']){const response=await request('POST','/safety/'+kind+'/corridor',corridor,access);assert.equal(response.status,200);assert(Array.isArray(response.body.items));}
       const weather=await request('POST','/weather/route',corridor,access);assert.equal(weather.status,200);assert(weather.body.items.every(item=>item.status==='UNAVAILABLE'));
       const hos=await request('GET','/eld/hos/current',undefined,access);assert.equal(hos.status,200);assert.equal(hos.body.status,'UNKNOWN');assert.equal(typeof hos.body.reason,'string');

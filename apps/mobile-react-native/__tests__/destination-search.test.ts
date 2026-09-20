@@ -51,6 +51,18 @@ test('destination search includes Mexico in provider country scope', async () =>
   expect(url.searchParams.get('country')).toBe('us,ca,mx');
 });
 
+test('destination search deduplicates repeated provider identities', async () => {
+  const duplicate = {
+    ...feature,
+    properties: { ...feature.properties, full_address: 'Duplicate rendering' },
+  };
+  const fetcher = transport({ features: [feature, duplicate] });
+  const service = new SearchService('pk.fixture.public', fetcher);
+  const results = await service.search('address');
+  expect(results).toHaveLength(1);
+  expect(results[0]?.id).toBe('provider-id');
+});
+
 test('reverse geocodes exact selected map coordinate, no fabricated address on empty response', async () => {
   const fetcher = transport({ features: [] });
   const service = new SearchService('pk.fixture.public', fetcher);

@@ -41,6 +41,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check supported release source hygiene
+        run: node tools/check-release-source-hygiene.mjs
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

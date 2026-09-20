@@ -9,6 +9,7 @@ const valid = {
   JWT_SECRET: "a-secure-production-secret-with-32-characters",
   ACCESS_TOKEN_MINUTES: "15",
   REFRESH_TOKEN_DAYS: "30",
+  TRUST_PROXY_HOPS: "1",
   PUBLIC_API_URL: "https://api.semitrax.com",
   CORS_ORIGINS: "https://www.semitrax.com,https://admin.semitrax.com",
   RESEND_API_KEY: 're_unit_test_not_a_credential',
@@ -20,7 +21,7 @@ test("development configuration retains local defaults", () => {
   assert.doesNotThrow(() => validateProductionConfiguration({ NODE_ENV: "development" }));
 });
 
-for (const name of ["DATABASE_URL", "JWT_SECRET", "ACCESS_TOKEN_MINUTES", "REFRESH_TOKEN_DAYS", "PUBLIC_API_URL", "CORS_ORIGINS"]) {
+for (const name of ["DATABASE_URL", "JWT_SECRET", "ACCESS_TOKEN_MINUTES", "REFRESH_TOKEN_DAYS", "TRUST_PROXY_HOPS", "PUBLIC_API_URL", "CORS_ORIGINS"]) {
   test(`production rejects missing ${name}`, () => {
     assert.throws(() => validateProductionConfiguration({ ...valid, [name]: "" }), new RegExp(name));
   });
@@ -71,6 +72,15 @@ test("production URL and CORS origins reject ambiguous or non-public destination
     assert.throws(() => validateProductionConfiguration({ ...valid, CORS_ORIGINS: origin }), /CORS_ORIGINS/);
   }
   assert.throws(() => validateProductionConfiguration({ ...valid, CORS_ORIGINS: "https://www.semitrax.com," }), /CORS_ORIGINS/);
+});
+
+test("production requires a narrow explicit proxy hop count", () => {
+  for (const value of ["", "0", "-1", "1.5", "6", "NaN", "Infinity"]) {
+    assert.throws(() => validateProductionConfiguration({ ...valid, TRUST_PROXY_HOPS: value }), /TRUST_PROXY_HOPS/);
+  }
+  for (const value of ["1", "2", "5"]) {
+    assert.doesNotThrow(() => validateProductionConfiguration({ ...valid, TRUST_PROXY_HOPS: value }));
+  }
 });
 
 test("production token lifetimes and listen port must be usable integers", () => {

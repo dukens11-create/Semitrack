@@ -50,7 +50,7 @@ export class SearchService {
       q: text,
       autocomplete: 'true',
       limit: '6',
-      country: 'us,ca',
+      country: 'us,ca,mx',
     });
     if (center) {
       const point = coordinateSchema.parse(center);
@@ -95,14 +95,19 @@ export class SearchService {
         { signal: controller.signal },
       );
       if (!response.ok) throw new Error('Provider unavailable');
-      return responseSchema
-        .parse(await response.json())
-        .features.map(item => ({
-          id: item.id ?? item.properties.mapbox_id!,
+      const parsed = responseSchema.parse(await response.json());
+      const unique = new Map<string, Stop>();
+      for (const item of parsed.features) {
+        const id = item.id ?? item.properties.mapbox_id!;
+        if (unique.has(id)) continue;
+        unique.set(id, {
+          id,
           name: item.properties.full_address ?? item.properties.name,
           lng: item.geometry.coordinates[0],
           lat: item.geometry.coordinates[1],
-        }));
+        });
+      }
+      return [...unique.values()];
     } catch {
       // Fetch exceptions may contain the credential-bearing request URL. Never forward them to UI/logs.
       throw new Error(

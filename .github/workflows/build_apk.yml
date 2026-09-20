@@ -1,48 +1,90 @@
-name: Build Release APK
+name: SemiTraX Validation
 
 on:
   push:
   pull_request:
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 30
     env:
-      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
-      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
-      TOMTOM_API_KEY: ${{ secrets.TOMTOM_API_KEY }}
-      TOMTOM_REPOSITORY_USERNAME: ${{ secrets.TOMTOM_REPOSITORY_USERNAME }}
-      TOMTOM_REPOSITORY_PASSWORD: ${{ secrets.TOMTOM_REPOSITORY_PASSWORD }}
+      NODE_ENV: test
+      DATABASE_URL: postgresql://semitrax_test:fixture-only@127.0.0.1:55432/semitrax_test_0123456789abcdef
+      SUBSCRIPTION_TEST_DATABASE_URL: postgresql://semitrax_test:fixture-only@127.0.0.1:55432/semitrax_test_0123456789abcdef
+      SEMITRAX_ISOLATED_DATABASE: semitrax_test_0123456789abcdef
+      JWT_SECRET: fixture-only-jwt-secret-not-for-production-0123456789
+      ROUTING_PROVIDER: trimble
+      TRIMBLE_API_KEY: ""
+      HERE_API_KEY: ""
+      OPENWEATHER_API_KEY: ""
+      MAPBOX_TOKEN: ""
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: semitrax_test
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: semitrax_test_0123456789abcdef
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U semitrax_test -d semitrax_test_0123456789abcdef"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter (stable)
-        uses: subosito/flutter-action@v2
+      - name: Check supported release source hygiene
+        run: node tools/check-release-source-hygiene.mjs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          channel: stable
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: |
+            apps/api/package-lock.json
+            apps/mobile-react-native/package-lock.json
+            apps/admin/package-lock.json
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: npm ci
 
-      - name: Check build credentials
-        shell: bash
+      - name: Validate and migrate disposable API database
+        working-directory: apps/api
         run: |
-          test -n "$MAPBOX_DOWNLOADS_TOKEN" || { echo "MAPBOX_DOWNLOADS_TOKEN is not configured"; exit 1; }
-          test -n "$MAPBOX_ACCESS_TOKEN" || { echo "MAPBOX_ACCESS_TOKEN is not configured"; exit 1; }
-          test -n "$TOMTOM_API_KEY" || { echo "TOMTOM_API_KEY is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_USERNAME" || { echo "TOMTOM_REPOSITORY_USERNAME is not configured"; exit 1; }
-          test -n "$TOMTOM_REPOSITORY_PASSWORD" || { echo "TOMTOM_REPOSITORY_PASSWORD is not configured"; exit 1; }
+          npm run prisma:generate
+          npm run prisma:validate
+          npm run prisma:deploy
 
-      - name: Build release APK
-        run: flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN"
+      - name: Validate API
+        working-directory: apps/api
+        run: |
+          npm run typecheck
+          npm test
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+      - name: Install React Native dependencies
+        working-directory: apps/mobile-react-native
+        run: npm ci
+
+      - name: Validate React Native
+        working-directory: apps/mobile-react-native
+        run: npm run check
+
+      - name: Install admin dependencies
+        working-directory: apps/admin
+        run: npm ci
+
+      - name: Validate admin
+        working-directory: apps/admin
+        run: |
+          npm run typecheck
+          npm run build

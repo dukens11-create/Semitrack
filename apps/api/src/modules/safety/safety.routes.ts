@@ -149,7 +149,9 @@ safetyRouter.get("/restrictions/:id", requireAuth, asyncRoute(async (req, res, n
   try {
     const id = z.string().min(1).parse(req.params.id);
     const item = await prisma.truckRestriction.findUnique({ where: { id } });
-    if (!item || !item.active) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Restriction not found" } });
+    if (!item || !item.active || (item.endsAt && item.endsAt <= new Date())) {
+      return res.status(404).json({ error: { code: "NOT_FOUND", message: "Restriction not found" } });
+    }
     res.json(item);
   } catch (error) { next(error); }
 }));
@@ -190,7 +192,7 @@ safetyRouter.get("/weigh-stations/nearby", requireAuth, asyncRoute(async (req, r
       limit: z.coerce.number().int().min(1).max(100).default(30),
     }).parse(req.query);
     const box = bounds([{ lat: input.lat, lng: input.lng }], input.radiusMeters);
-    const items = (await prisma.weighStation.findMany({
+    const matched = (await prisma.weighStation.findMany({
       where: { isActive: true, latitude: { gte: box.minLat, lte: box.maxLat }, longitude: { gte: box.minLng, lte: box.maxLng } },
       take: 500,
     }))
@@ -198,6 +200,16 @@ safetyRouter.get("/weigh-stations/nearby", requireAuth, asyncRoute(async (req, r
       .filter((station) => station.distanceMeters <= input.radiusMeters)
       .sort((a, b) => a.distanceMeters - b.distanceMeters)
       .slice(0, input.limit);
+    const items = await Promise.all(matched.map(async (station) => ({
+      ...station,
+      currentStatus: await communityAggregate(
+        "WEIGH_STATION_STATUS",
+        station.id,
+        station.officialStatus !== "UNKNOWN" && station.lastStatusUpdate
+          ? { value: station.officialStatus, updatedAt: station.lastStatusUpdate, maxAgeMinutes: 15 }
+          : null,
+      ),
+    })));
     res.json({ items });
   } catch (error) { next(error); }
 }));

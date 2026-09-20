@@ -102,6 +102,13 @@ assert(read('ios/'+privacyRefs[0][1].path).length > 0, 'Privacy manifest file is
 for(const file of ['GuidanceBoundary.swift','SemiTraxLocation.swift','SemiTraxPlatform.mm']){assert(pbx.includes(file+' in Sources'),'Missing iOS source '+file);}
 assert(pbx.includes('Configure SemiTraX')&&pbx.includes('com.semitrax.app.migration.debug'),'Missing iOS configuration or identity');
 assert(read('ios/SemiTrax/Info.plist').includes('<string>location</string>'),'Missing iOS location capability');
+const appDelegate=read('ios/SemiTrax/AppDelegate.swift');
+assert(
+ appDelegate.includes('RCTLinkingManager.application(app, open: url, options: options)') &&
+ appDelegate.includes('continue userActivity: NSUserActivity') &&
+ appDelegate.includes('RCTLinkingManager.application('),
+ 'Missing iOS React Native recovery-link forwarding'
+);
 // Catch drift between the profile assessment and the actual installed bridge.
 const profileSource = read('src/services/copilot/CopilotTruckProfile.ts');
 const truckConstant = profileSource.match(/vehicleTypeConstantName: '([A-Z_]+)'/)?.[1];

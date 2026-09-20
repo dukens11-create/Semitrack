@@ -1,120 +1,83 @@
-# Semitrack Phase 5 Backend Pack
+# SemiTraX
 
-## Firebase Setup
+SemiTraX is a commercial-truck routing and driver application.
 
-This project uses [FlutterFire](https://firebase.flutter.dev/) for Firebase integration.
+## Supported production source roots
 
-The files `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` are currently populated with **placeholder values**. Before running the app you must replace them with real credentials from your Firebase project.
+The supported application stack is:
 
-### Regenerate configs with the FlutterFire CLI
+- **React Native mobile:** `apps/mobile-react-native`
+- **API/backend:** `apps/api`
+- **Admin portal:** `apps/admin`
 
-```bash
-# Install the CLI (one-time)
-dart pub global activate flutterfire_cli
+The root-level Flutter application and older Flutter/HERE/TomTom scaffolding are **legacy reference code only**. They are not the supported SemiTraX release path and must not be used to build or deploy the current application.
 
-# From the project root, configure all platforms
-flutterfire configure --project=semitrack
-```
+Do not use root-level `flutter build`, legacy TomTom/HERE workflows, or old Flutter artifacts as release evidence for the current React Native application.
 
-This will overwrite `lib/firebase_options.dart`, `android/app/google-services.json`, and `ios/Runner/GoogleService-Info.plist` with real values tied to your `semitrack` Firebase project.
+## Validation
 
-After regenerating, run:
+The repository validation workflow is:
 
-```bash
-flutter clean
-flutter pub get
-flutter run
-```
+`.github/workflows/build_apk.yml`
 
-## Mapbox setup
+Despite the historical filename, the workflow is now **SemiTraX Validation**. It validates the current API, React Native application, native wiring/tooling, Admin portal, Prisma schema/migrations, and guarded PostgreSQL integration tests.
 
-Map rendering uses two different Mapbox credentials. Never commit either
-credential to this repository.
+A successful source-validation workflow is not by itself store or device acceptance. Release acceptance separately requires the exact Android/iOS artifacts and physical-device checks.
 
-- `MAPBOX_ACCESS_TOKEN` is the public `pk.` token supplied to Flutter with
-  `--dart-define`.
-- `MAPBOX_DOWNLOADS_TOKEN` is a secret `sk.` token with `Downloads:Read`, kept
-  in the user's Gradle properties or CI secrets so Gradle can download the
-  native Mapbox Maps SDK.
+## React Native mobile
 
-For a local Windows build, save the secret token in
-`C:\Users\<username>\.gradle\gradle.properties`:
-
-```properties
-MAPBOX_DOWNLOADS_TOKEN=YOUR_PRIVATE_SK_TOKEN
-```
-
-For local HERE-enabled builds, copy the public-token template and fill only the
-`pk.` value. The real file is ignored by Git:
-
-```powershell
-Copy-Item config\mapbox\credentials.properties.example config\mapbox\credentials.properties
-notepad config\mapbox\credentials.properties
-```
-
-`tools\here_flutter.ps1 build-android` and `run` load that file automatically.
-You can alternatively build with the public token in the environment:
-
-```powershell
-flutter build apk --debug --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
-```
-
-GitHub Actions requires repository secrets named `MAPBOX_ACCESS_TOKEN` and
-`MAPBOX_DOWNLOADS_TOKEN`.
-
-## Downloading the Android APK
-
-Every push and pull request automatically triggers a GitHub Actions workflow that builds a release APK.
-
-**To download the APK after a successful run:**
-
-1. Go to the **Actions** tab in this repository on GitHub.
-2. Click on the latest **Build Release APK** workflow run.
-3. Scroll down to the **Artifacts** section at the bottom of the run summary.
-4. Click **app-release** to download the `app-release.apk` file.
-
-The APK is built from `build/app/outputs/flutter-apk/app-release.apk` and is available for download for 90 days after the workflow run.
-
-## Kotlin / AGP / flutter_tts Compatibility Note
-
-The Android build is currently configured with:
-
-| Component | Version | File |
-|---|---|---|
-| Kotlin Gradle Plugin | **2.2.20** | `android/build.gradle` (`ext.kotlin_version`) and `android/settings.gradle` (plugins DSL) |
-| Android Gradle Plugin (AGP) | **8.6.0** | `android/build.gradle` (classpath) and `android/settings.gradle` (plugins DSL) |
-| Gradle wrapper | **8.11.1** | `android/gradle/wrapper/gradle-wrapper.properties` |
-| flutter_tts | **^4.0.2** | `pubspec.yaml` |
-
-### Compatibility constraints
-
-- AGP 8.6.0 requires **Gradle 8.7 or higher** (the wrapper is set to 8.11.1 — no change needed).
-- **AGP 8.6.0 requires JDK 17.** Codemagic is configured with `java: 17`. If building locally, make sure your `JAVA_HOME` points to a JDK 17 installation.
-- Kotlin 2.2.20 resolves the `compilerOptions {}` DSL incompatibility that affected `flutter_tts` and `shared_preferences_android` 2.4.1+ with older KGP versions.
-- Flutter 3.x will emit a build warning and eventually drop support for AGP < 8.6.0; this upgrade resolves that warning.
-
-### After merging
-
-Run the following commands locally to clean build artifacts and verify the app builds successfully:
+From `apps/mobile-react-native`:
 
 ```bash
-flutter clean
-flutter pub get
-flutter build apk --release
+npm ci
+npm run check
 ```
 
-> **Reminder:** After merging any change to `android/build.gradle`, `android/settings.gradle`, or `pubspec.yaml`, always run
-> `flutter clean && flutter pub get && flutter build apk --release` locally (or let CI confirm a green build) before releasing.
+`npm run check` runs TypeScript, lint, Jest, native-wiring checks, and page-size tooling tests.
 
-Includes:
-- Prisma schema
-- ELD integrations
-- Samsara adapter
-- Motive scaffold
-- Fuel-card scoring
-- Messaging routes
-- Maintenance routes
-- Compliance routes
-- S3 upload service
-- Stripe webhook route
-- Background job scaffold
+Release configuration must be generated from approved environment values. Do not commit secret Mapbox download credentials, provider keys, CoPilot/AMS credentials, signing keys, or production tokens.
+
+## API
+
+From `apps/api`:
+
+```bash
+npm ci
+npm run prisma:generate
+npm run prisma:validate
+npm run typecheck
+npm test
+```
+
+Database integration tests require the repository's guarded disposable PostgreSQL test configuration. Never point those tests at production.
+
+Truck routing remains **Trimble-only**. Do not add a passenger-car routing fallback or disable commercial restrictions to make a route succeed.
+
+## Admin portal
+
+From `apps/admin`:
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+```
+
+## CoPilot
+
+The pinned CoPilot React Native package remains fail-closed until all required native startup, licensing/provisioning, map entitlement, truck-profile parity, route transfer, guidance, and physical-device acceptance gates pass.
+
+Do not bypass CoPilot licensing, patch vendor binaries beyond separately reviewed build fixes, or report guidance as available from source presence alone.
+
+## Release safety
+
+Before any release or production deployment:
+
+1. Run the full current-tree validation.
+2. Review the exact diff against the approved deployment parent.
+3. Rehearse required migrations against an isolated PostgreSQL database.
+4. Build and inspect the exact Android/iOS release artifact.
+5. Verify truck routing and restrictions on a physical device.
+6. Confirm provider, privacy, signing, store, and rollback requirements separately.
+
+Production deploys, migrations, provider billing, and store submissions are deliberately separate from source reconciliation.

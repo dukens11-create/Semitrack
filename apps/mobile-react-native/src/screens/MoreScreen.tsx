@@ -37,11 +37,13 @@ export function MoreScreen({
   onTrucks,
   onSettings,
   onServices,
+  onOffline,
 }: {
   services: Services;
   onTrucks: () => void;
   onSettings: () => void;
   onServices: () => void;
+  onOffline: () => void;
 }) {
   const palette = useDriverPalette();
   const iconColors = featureIconColors[palette.dark ? 'night' : 'day'];
@@ -162,9 +164,10 @@ export function MoreScreen({
       <DriverTile
         icon="map"
         iconColors={iconColors.offline}
-        title="Offline maps"
-        caption="Map region downloads — not available in this version"
-        disabled
+        title="Offline display maps"
+        caption="Download display-map regions for offline viewing — truck routing still requires an accepted routing provider"
+        disabled={busy}
+        onPress={onOffline}
       />
       <DriverTile
         icon="settings_rounded"

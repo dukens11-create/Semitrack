@@ -6,6 +6,8 @@ import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
 import { documentRouter } from './modules/documents/document.routes.js';
 import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
 import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
+import { searchHerePlaces } from "./services/providers/herePlacesProvider.js";
+import { resolveHereTimeZone } from "./services/providers/hereTimeZoneProvider.js";
 import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
 import { operationalRouter } from './modules/admin/operational.routes.js';
 import { auditTruck, isVerifiedTruck, publicTruck, saveTruck, verifyTruck } from "./modules/trucks/profileRevision.js";
@@ -63,6 +65,9 @@ import {
 
 const app = express();
 app.disable("x-powered-by");
+// Production requires an explicit reviewed proxy hop count. Development/test
+// default to zero, so caller-supplied forwarding headers are not trusted.
+app.set("trust proxy", env.trustProxyHops);
 const allowedCorsOrigins = new Set([...env.corsOrigins, ...env.stripeAllowedWebOrigins]);
 app.use(cors({
   origin(origin, callback) {
@@ -304,7 +309,15 @@ app.get("/location/timezone", requireAuth, asyncRoute(async (req, res) => {
     lat: z.coerce.number().min(-90).max(90),
     lng: z.coerce.number().min(-180).max(180),
   }).parse(req.query);
-  res.status(503).json({error:{code:'TIMEZONE_PROVIDER_NOT_CONFIGURED',message:'An approved timezone provider is not configured.',retryable:false}});
+  if (!env.hereApiKey) {
+    return res.status(503).json({error:{code:'TIMEZONE_PROVIDER_NOT_CONFIGURED',message:'The approved timezone provider is not configured.',retryable:false}});
+  }
+  try {
+    return res.json(await resolveHereTimeZone(input.lat, input.lng));
+  } catch {
+    logServerEvent("PROVIDER_FAILURE");
+    return res.status(503).json({error:{code:'TIMEZONE_PROVIDER_UNAVAILABLE',message:'Timezone lookup is temporarily unavailable.',retryable:true}});
+  }
 }));
 
 app.post("/weather/route", requireAuth, asyncRoute(async (req, res) => {
@@ -330,7 +343,25 @@ app.get("/places/search", requireAuth, asyncRoute(async (req, res) => {
     radiusMeters: z.coerce.number().int().min(100).max(100_000).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
   }).parse(req.query);
-  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
+  if (!env.hereApiKey) {
+    return res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'The approved places provider is not configured.',retryable:false}});
+  }
+  try {
+    const items = await searchHerePlaces({
+      category: input.category,
+      center: { lat: input.lat, lng: input.lng },
+      radiusMeters: input.radiusMeters,
+      limit: input.limit,
+    });
+    return res.json({
+      items,
+      provider: "HERE",
+      advisory: "Place results do not prove legal truck access, parking permission, or a verified truck entrance.",
+    });
+  } catch {
+    logServerEvent("PROVIDER_FAILURE");
+    return res.status(503).json({error:{code:'POI_PROVIDER_UNAVAILABLE',message:'Place search is temporarily unavailable.',retryable:true}});
+  }
 }));
 app.post("/places/corridor", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
@@ -340,8 +371,8 @@ app.post("/places/corridor", requireAuth, asyncRoute(async (req, res) => {
     radiusMeters: z.number().int().min(100).max(100_000).optional(),
     maxResults: z.number().int().min(1).max(250).optional(),
   }).parse(req.body);
-  const offset = corridorRouteOffset(input.route, input.currentLocation);
-  res.status(503).json({error:{code:'POI_PROVIDER_NOT_CONFIGURED',message:'An approved places provider is not configured.',retryable:false}});
+  corridorRouteOffset(input.route, input.currentLocation);
+  res.status(503).json({error:{code:'POI_CORRIDOR_PROVIDER_NOT_CONFIGURED',message:'Verified route-corridor place search is not configured.',retryable:false}});
 }));
 
 app.get("/favorites", requireAuth, asyncRoute(async (req, res) => {
@@ -748,6 +779,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     CREATE_OPERATION_REQUIRED:[400,'A create operation identifier is required.'], CREATE_OPERATION_CONFLICT:[409,'This save operation already has different values. Review the saved record.'],
     CURRENT_PASSWORD_INVALID:[400,'Your current password was not accepted.'], PASSWORD_TOO_LONG:[400,'Use a password of at most 72 UTF-8 bytes.'],
     ACCOUNT_CHANGED:[409,'Your account changed. Sign in and review it again.'],
+    ACCOUNT_DELETION_REVIEW_REQUIRED:[409,'This account requires support review before deletion can continue.'],
   };
   const workflowError=safe?.safeCode?workflowErrors[safe.safeCode]:undefined;
   if (workflowError) return res.status(workflowError[0]).json({error:{code:safe!.safeCode,message:workflowError[1]}});
@@ -815,12 +847,25 @@ const dotSyncTimer = setInterval(() => {
 }, 60_000);
 dotSyncTimer.unref();
 
+let shutdownStarted = false;
 const shutdown = async () => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   clearInterval(dotSyncTimer);
-  server.close();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+  });
+  await enqueueRecovery.closeAndDrain();
   await disconnectDatabase();
 };
-process.once("SIGTERM", () => void shutdown());
-process.once("SIGINT", () => void shutdown());
+const handleShutdown = () => {
+  void shutdown().catch(() => {
+    logServerEvent("INTERNAL_ERROR");
+    process.exitCode = 1;
+  });
+};
+process.once("SIGTERM", handleShutdown);
+process.once("SIGINT", handleShutdown);
 
 export { app };

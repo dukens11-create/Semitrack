@@ -19,3 +19,21 @@ test('recovery admission happens before account/provider work; bounded queue dra
   assert.equal(enqueue(async () => {calls++;}),true);
   await nextTurn(); assert.equal(calls,3);
 });
+
+test('graceful close rejects new recovery work and waits for accepted jobs', async () => {
+  let release: () => void = () => {};
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let completed = 0;
+  const queue = createRecoveryQueue(() => assert.fail('no failure expected'), 2, 1);
+  assert.equal(queue(async () => { await blocked; completed++; }), true);
+  assert.equal(queue(async () => { completed++; }), true);
+  await nextTurn();
+
+  const drained = queue.closeAndDrain();
+  assert.equal(queue(async () => { assert.fail('closed queue must reject new work'); }), false);
+  assert.equal(completed, 0);
+  release();
+  await drained;
+  assert.equal(completed, 2);
+});
+

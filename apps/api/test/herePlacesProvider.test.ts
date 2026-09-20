@@ -34,6 +34,7 @@ test("parseHerePlaces keeps real provider coordinates and address metadata", () 
     country: "USA",
     distanceMeters: 814,
     provider: "HERE",
+    truckAccessVerified: false,
   });
 });
 
@@ -44,6 +45,20 @@ test("parseHerePlaces rejects malformed entries instead of inventing coordinates
     parseHerePlaces({ items: [{ id: "cat", title: "CAT SCALE", position: { lat: 1, lng: 2 } }] }, "weigh_station"),
     [],
   );
+});
+
+test("parseHerePlaces requires explicit CAT Scale and truck-repair evidence", () => {
+  const payload = {
+    items: [
+      { id: "cat", title: "CAT Scale", position: { lat: 39.1, lng: -119.1 } },
+      { id: "not-cat", title: "Public Scale", position: { lat: 39.2, lng: -119.2 } },
+      { id: "repair", title: "Fleet Diesel Truck Repair", position: { lat: 39.3, lng: -119.3 } },
+      { id: "car", title: "Quick Auto Repair", position: { lat: 39.4, lng: -119.4 } },
+    ],
+  };
+  assert.deepEqual(parseHerePlaces(payload, "cat_scale").map(item => item.id), ["here:cat"]);
+  assert.deepEqual(parseHerePlaces(payload, "truck_repair").map(item => item.id), ["here:repair"]);
+  assert.equal(parseHerePlaces(payload, "cat_scale")[0]?.truckAccessVerified, false);
 });
 
 test("parseHerePlaces excludes ordinary gas stations from truck-stop results", () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAnalyticsRange } from "../src/modules/analytics/analyticsRange.ts";
+import { requireIsolatedDatabase } from "./isolatedDatabaseGuard.ts";
 
 const now = new Date("2026-08-22T12:00:00.000Z");
 
@@ -23,3 +24,36 @@ test("rejects invalid and overlong analytics ranges", () => {
   assert.throws(() => parseAnalyticsRange({ range: "custom", from: "2020-01-01", to: "2026-08-22" }, now));
   assert.throws(() => parseAnalyticsRange({ range: "lifetime" }, now));
 });
+
+test("dashboard labels navigation telemetry as client-reported until native provenance exists", {
+  skip: !process.env.SUBSCRIPTION_TEST_DATABASE_URL,
+}, async () => {
+  process.env.DATABASE_URL = requireIsolatedDatabase(
+    process.env.SUBSCRIPTION_TEST_DATABASE_URL,
+  );
+  const { getAdminDashboard } = await import(
+    "../dist/modules/analytics/adminAnalytics.service.js"
+  );
+  const { disconnectDatabase } = await import("../dist/lib/prisma.js");
+  try {
+    const range = parseAnalyticsRange({ range: "7d" }, now);
+    const dashboard = await getAdminDashboard(range, false);
+    assert.equal(
+      dashboard.coverage.navigationProvenance,
+      "CLIENT_REPORTED_UNVERIFIED",
+    );
+    assert.match(
+      dashboard.coverage.note,
+      /client-reported/i,
+    );
+    if (dashboard.kpis.activeTrips.available) {
+      assert.match(
+        String(dashboard.kpis.activeTrips.reason),
+        /client-reported/i,
+      );
+    }
+  } finally {
+    await disconnectDatabase();
+  }
+});
+

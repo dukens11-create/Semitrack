@@ -4,8 +4,20 @@ export function resetToken(input: string): string | null {
   if (token.startsWith('https://')) {
     try {
       const link = new URL(token);
-      if (link.username || link.password) return null;
-      token = link.searchParams.get('token') ?? '';
+      if (
+        link.origin !== 'https://www.semitrax.com' ||
+        link.username ||
+        link.password ||
+        link.search
+      )
+        return null;
+      const fragment = new URLSearchParams(link.hash.slice(1));
+      if (
+        fragment.getAll('token').length !== 1 ||
+        [...fragment.keys()].some(key => key !== 'token')
+      )
+        return null;
+      token = fragment.get('token') ?? '';
     } catch {
       return null;
     }

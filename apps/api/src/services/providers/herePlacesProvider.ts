@@ -17,6 +17,8 @@ const queryByCategory: Record<HerePlaceCategory, string> = {
   fuel_stop: "truck diesel fuel",
   truck_parking: "truck parking",
   truck_wash: "truck wash",
+  cat_scale: "CAT Scale",
+  truck_repair: "truck repair",
 };
 export async function searchHerePlaces(input: {
   category: HerePlaceCategory;

@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Image,
   Keyboard,
+  Linking,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -25,6 +26,7 @@ import {
   type AuthFieldErrors,
 } from '../features/auth/authValidation';
 import { errorMessage } from '../components/ui';
+import { resetToken } from '../features/auth/resetLink';
 
 const orange = '#FF6B2C';
 type BusyAction = 'authenticate' | 'recovery' | null;
@@ -94,6 +96,7 @@ function AuthField({
 export function AuthScreen({ services }: { services: Services }) {
   const p = useDriverPalette();
   const [resetOpen, setResetOpen] = useState(false);
+  const [recoveryLink, setRecoveryLink] = useState('');
   const [register, setRegister] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -132,6 +135,25 @@ export function AuthScreen({ services }: { services: Services }) {
       mounted.current = false;
       show.remove();
       hide.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const handleRecoveryLink = (url: string | null) => {
+      if (!active || !url || !resetToken(url)) return;
+      setRecoveryLink(url);
+      setResetOpen(true);
+    };
+    void Linking.getInitialURL()
+      .then(handleRecoveryLink)
+      .catch(() => {});
+    const subscription = Linking.addEventListener('url', event =>
+      handleRecoveryLink(event.url),
+    );
+    return () => {
+      active = false;
+      subscription.remove();
     };
   }, []);
 
@@ -223,7 +245,11 @@ export function AuthScreen({ services }: { services: Services }) {
       {resetOpen && (
         <PasswordRecoveryPanel
           auth={services.auth}
-          onClose={() => setResetOpen(false)}
+          initialLink={recoveryLink}
+          onClose={() => {
+            setRecoveryLink('');
+            setResetOpen(false);
+          }}
         />
       )}
       <Image

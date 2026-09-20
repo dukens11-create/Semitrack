@@ -124,6 +124,7 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
                 onSettings={() => open('Settings')}
                 onServices={() => open('Services')}
+                onOffline={() => open('Offline')}
               />
             )}
           </View>

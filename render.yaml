@@ -28,6 +28,8 @@ services:
         value: "15"
       - key: REFRESH_TOKEN_DAYS
         value: "30"
+      - key: TRUST_PROXY_HOPS
+        sync: false
       - key: PUBLIC_API_URL
         sync: false
       - key: CORS_ORIGINS
@@ -39,6 +41,8 @@ services:
       - key: ROUTING_COMPARE_ENABLED
         value: "false"
       - key: TRIMBLE_API_KEY
+        sync: false
+      - key: HERE_API_KEY
         sync: false
 
 databases:

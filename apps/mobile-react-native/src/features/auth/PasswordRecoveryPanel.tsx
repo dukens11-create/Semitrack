@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { AuthStore } from './AuthStore';
 import { resetToken, resetPasswordError } from './resetLink';
 import { DriverSheet } from '../../components/DriverSheet';
@@ -11,17 +11,22 @@ import { ErrorText } from '../../components/ui';
 export function PasswordRecoveryPanel({
   auth,
   onClose,
+  initialLink = '',
 }: {
   auth: AuthStore;
   onClose: () => void;
+  initialLink?: string;
 }) {
-  const [link, setLink] = useState(''),
+  const [link, setLink] = useState(initialLink),
     [password, setPassword] = useState(''),
     [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState<string>(),
     [complete, setComplete] = useState(false),
     [busy, setBusy] = useState(false);
   const pending = useRef(false);
+  useEffect(() => {
+    if (initialLink && !pending.current && !complete) setLink(initialLink);
+  }, [initialLink, complete]);
   async function submit() {
     if (pending.current) return;
     const token = resetToken(link),

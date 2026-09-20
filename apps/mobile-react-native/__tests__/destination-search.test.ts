@@ -35,12 +35,22 @@ test('v6 response accepts documented mapbox_id and sends lon/lat proximity only 
   const first = new URL(String(fetcher.mock.calls[0]![0]));
   expect(first.searchParams.has('proximity')).toBe(false);
   expect(first.searchParams.get('autocomplete')).toBe('true');
+  expect(first.searchParams.get('country')).toBe('us,ca,mx');
   expect(first.searchParams.has('permanent')).toBe(false);
   await service.search('address', { lat: 40, lng: -100 });
   expect(
     new URL(String(fetcher.mock.calls[1]![0])).searchParams.get('proximity'),
   ).toBe('-100,40');
 });
+
+test('destination search includes Mexico in provider country scope', async () => {
+  const fetcher = transport();
+  const service = new SearchService('pk.fixture.public', fetcher);
+  await service.search('Walmart Monterrey Nuevo Leon');
+  const url = new URL(String(fetcher.mock.calls[0]![0]));
+  expect(url.searchParams.get('country')).toBe('us,ca,mx');
+});
+
 test('reverse geocodes exact selected map coordinate, no fabricated address on empty response', async () => {
   const fetcher = transport({ features: [] });
   const service = new SearchService('pk.fixture.public', fetcher);

@@ -146,15 +146,15 @@ function Dashboard({ user }: { user: AdminUser }) {
         <ChartPanel title="Subscription status" subtitle="Current database state"><DonutChart data={data.charts.subscriptionStatus} /></ChartPanel>
         <ChartPanel title="Monthly subscription growth" subtitle="Started versus canceled"><MultiBarChart data={data.charts.monthlySubscriptionGrowth} /></ChartPanel>
         <ChartPanel title="Driver activity" subtitle="Unique authenticated app opens"><LineChart data={data.charts.driverActivity} valueKey="value" empty="Awaiting app activity telemetry" /></ChartPanel>
-        <ChartPanel title="Trips and miles" subtitle="Completed navigation sessions"><TripChart data={data.charts.tripsCompleted} /></ChartPanel>
+        <ChartPanel title="Reported trips and miles" subtitle="Client-reported; native CoPilot provenance not yet verified"><TripChart data={data.charts.tripsCompleted} /></ChartPanel>
         <ChartPanel title="Most active states / regions" subtitle="Aggregated; no precise coordinates"><HorizontalBars data={data.charts.mostActiveRegions} empty="Awaiting region-level navigation telemetry" /></ChartPanel>
         <ChartPanel title="Most-used truck stops" subtitle="Commercial stops selected"><HorizontalBars data={data.charts.mostUsedTruckStops} empty="Awaiting truck-stop selection events" /></ChartPanel>
         <ChartPanel title="11-hour HOS warnings" subtitle="Planning warnings displayed"><BarChart data={data.charts.hosWarnings} valueKey="value" empty="No HOS warning events recorded" /></ChartPanel>
       </section>
 
       <section className="activity-strip">
-        <ActivityMetric label="Trips completed" value={data.activity.tripsCompleted} />
-        <ActivityMetric label="Miles through SemiTraX" value={data.activity.milesDriven} decimals={1} />
+        <ActivityMetric label="Reported trips completed" value={data.activity.tripsCompleted} />
+        <ActivityMetric label="Reported miles" value={data.activity.milesDriven} decimals={1} />
         <ActivityMetric label="Average trip distance" value={data.activity.averageTripDistance} suffix=" mi" decimals={1} />
         <ActivityMetric label="Average navigation time" value={data.activity.averageNavigationSeconds} duration />
         <ActivityMetric label="Fuel-stop searches" value={data.activity.fuelStopSearches} />
@@ -180,8 +180,8 @@ function LiveOperations({ data, healthUnavailable = false }: { data: DashboardDa
   return <section className="section-block"><div className="section-heading"><div><span className="eyebrow">LIVE OPERATIONS</span><h2>Current operational pulse</h2></div><span className="live-badge"><i /> Live</span></div>
     <div className="operations-grid">
       <Operation label="Drivers online" value={live.driversOnline} status="ok" />
-      <Operation label="Navigating now" value={live.driversNavigating} status="info" />
-      <Operation label="Active trips" value={live.activeTrips} status="info" />
+      <Operation label="Reported navigating now" value={live.driversNavigating} status="info" />
+      <Operation label="Reported active sessions" value={live.activeTrips} status="info" />
       <Operation label="Over drive threshold" value={live.routesOverDrivingThreshold} status="warn" />
       <Operation label="API errors · 24h" value={live.apiErrors24Hours} status={live.apiErrors24Hours ? "danger" : "ok"} />
       <Operation label="Payment problems" value={live.paymentProblems} status={live.paymentProblems ? "danger" : "muted"} />

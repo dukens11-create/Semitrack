@@ -57,6 +57,15 @@ export function validateProductionConfiguration(source: ProductionEnvironment) {
     throw new Error("PORT must be an integer between 1 and 65535");
   }
 
+  const trustProxyHopsRaw = required(source, "TRUST_PROXY_HOPS");
+  if (!/^\d+$/.test(trustProxyHopsRaw)) {
+    throw new Error("TRUST_PROXY_HOPS must be a positive safe integer in production");
+  }
+  const trustProxyHops = Number(trustProxyHopsRaw);
+  if (!Number.isSafeInteger(trustProxyHops) || trustProxyHops < 1 || trustProxyHops > 5) {
+    throw new Error("TRUST_PROXY_HOPS must be between 1 and 5 in production");
+  }
+
   httpsOrigin(required(source, "PUBLIC_API_URL"), "PUBLIC_API_URL");
   const origins = required(source, "CORS_ORIGINS").split(",").map((value) => value.trim());
   if (origins.some((origin) => !origin)) throw new Error("CORS_ORIGINS must list explicit HTTPS origins without empty entries");

@@ -50,6 +50,7 @@ export const env = {
   analyticsNavigationStaleMinutes: Number(process.env.ANALYTICS_NAVIGATION_STALE_MINUTES ?? 2),
   analyticsDrivingThresholdMinutes: Number(process.env.ANALYTICS_DRIVING_THRESHOLD_MINUTES ?? 660),
   port: Number(process.env.PORT ?? 4000),
+  trustProxyHops: Number(process.env.TRUST_PROXY_HOPS ?? 0),
   databaseUrl: process.env.DATABASE_URL ?? "",
   jwtSecret: jwtSecret || "development-only-change-before-production",
   accessTokenMinutes: Number(process.env.ACCESS_TOKEN_MINUTES ?? 15),

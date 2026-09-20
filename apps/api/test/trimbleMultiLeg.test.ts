@@ -58,8 +58,14 @@ function payload(options?: {
   baselineTime?: string;
   baselineDistance?: string;
   omitSecondLegBaseline?: boolean;
-  secondLegWarning?: string;
+  secondLegWarning?: unknown;
+  secondLegDetailedWarnings?: unknown;
+  destinationDistance?: string;
   destinationTime?: string;
+  finalLegMiles?: string;
+  finalTotalMiles?: string;
+  finalLegHours?: string;
+  finalTotalHours?: string;
 }) {
   const secondLegLines: any[] = [];
   if (!options?.omitSecondLegBaseline) {
@@ -74,10 +80,11 @@ function payload(options?: {
   }
   secondLegLines.push({
     Direction: "Destination",
-    Dist: "3.000",
+    Dist: options?.destinationDistance ?? "3.000",
     Time: options?.destinationTime ?? "0:04",
     TurnInstruction: null,
     Warn: options?.secondLegWarning ?? null,
+    DetailedWarnings: options?.secondLegDetailedWarnings ?? null,
     Begin: { Lat: via.lat, Lon: via.lng },
     End: { Lat: destination.lat, Lon: destination.lng },
   });
@@ -139,10 +146,10 @@ function payload(options?: {
         },
         {
           Stop: stop(destination),
-          LMiles: "2.000",
-          TMiles: "3.000",
-          LHours: "0:02:40",
-          THours: "0:04:20",
+          LMiles: options?.finalLegMiles ?? "2.000",
+          TMiles: options?.finalTotalMiles ?? "3.000",
+          LHours: options?.finalLegHours ?? "0:02:40",
+          THours: options?.finalTotalHours ?? "0:04:20",
         },
       ],
     },
@@ -225,3 +232,80 @@ test("multi-stop parser still fails closed on provider restriction warnings", ()
       error.code === "TRIMBLE_RESTRICTION_WARNING",
   );
 });
+
+test("multi-stop parser rejects a malformed Warn wire shape", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ secondLegWarning: { code: "Truck Restricted" } }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_WARNING_DATA_INVALID",
+  );
+});
+
+test("multi-stop parser rejects a malformed DetailedWarnings wire shape", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ secondLegDetailedWarnings: { Type: 1 } }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_WARNING_DATA_INVALID",
+  );
+});
+
+test("multi-stop parser still fails closed on detailed provider restriction warnings", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ secondLegDetailedWarnings: [{ Type: 1 }] }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_RESTRICTION_WARNING",
+  );
+});
+
+test("multi-stop parser rejects a final Directions distance that conflicts with Mileage totals", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ destinationDistance: "2.500" }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_MANEUVER_DATA_REQUIRED",
+  );
+});
+
+test("multi-stop parser rejects Mileage leg distance that conflicts with cumulative totals", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ finalLegMiles: "1.500" }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_MANEUVER_DATA_REQUIRED",
+  );
+});
+
+test("multi-stop parser rejects Mileage leg duration that conflicts with cumulative totals", () => {
+  assert.throws(
+    () => parseTrimbleRouteResponse(payload({ finalLegHours: "0:02:30" }), input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_MANEUVER_DATA_REQUIRED",
+  );
+});
+
+test("multi-stop parser rejects duplicate Directions reports as ambiguous", () => {
+  const reports = payload();
+  reports.push(JSON.parse(JSON.stringify(reports[0])));
+  assert.throws(
+    () => parseTrimbleRouteResponse(reports, input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_AMBIGUOUS_REPORT",
+  );
+});
+
+test("multi-stop parser rejects duplicate Mileage reports as ambiguous", () => {
+  const reports = payload();
+  reports.push(JSON.parse(JSON.stringify(reports[1])));
+  assert.throws(
+    () => parseTrimbleRouteResponse(reports, input, config),
+    (error: unknown) =>
+      error instanceof RoutingProviderError &&
+      error.code === "TRIMBLE_AMBIGUOUS_REPORT",
+  );
+});
+

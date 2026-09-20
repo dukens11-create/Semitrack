@@ -856,6 +856,7 @@ const shutdown = async () => {
     server.close(() => resolve());
     server.closeIdleConnections?.();
   });
+  await enqueueRecovery.closeAndDrain();
   await disconnectDatabase();
 };
 const handleShutdown = () => {

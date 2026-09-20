@@ -476,15 +476,22 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
             "Intermediate-stop ordering could not be established.",
           );
         }
-        previous.maneuvers.push({
-          step: ++maneuverStep,
-          instruction,
-          distanceMiles: 0,
-          durationSeconds: 0,
-          action: "arrive",
-          direction: "straight",
-          coordinate: { lat, lng },
-        });
+        const existingArrival = previous.maneuvers.at(-1);
+        if (!(
+          existingArrival?.action === "arrive" &&
+          existingArrival.coordinate &&
+          distanceMeters(existingArrival.coordinate, { lat, lng }) <= 1
+        )) {
+          previous.maneuvers.push({
+            step: ++maneuverStep,
+            instruction,
+            distanceMiles: 0,
+            durationSeconds: 0,
+            action: "arrive",
+            direction: "straight",
+            coordinate: { lat, lng },
+          });
+        }
       }
     } else if (legIndex > 0) {
       throw new RoutingProviderError(
@@ -503,6 +510,7 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       || /^stop\s+\d+\b/i.test(String(line?.Direction ?? "").trim()));
     let lastDistance = startingDistance;
     let lastDuration = startingDuration;
+    let lastDirectionTimeRaw: unknown;
 
     for (let index = 0; index < lines.length; index++) {
       if (index === baselineIndex) continue;
@@ -571,7 +579,7 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
 
       // Remember the precision of the last Directions counter so the end-of-leg
       // Mileage comparison uses only the provider's documented rounding gap.
-      if (timeRaw !== undefined) (leg as any).__semitraxLastDirectionTime = timeRaw;
+      if (timeRaw !== undefined) lastDirectionTimeRaw = timeRaw;
     }
 
     const legMiles = finiteNumber(mileageEnd.LMiles);
@@ -593,11 +601,9 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       );
     }
 
-    const lastDirectionTime = (leg as any).__semitraxLastDirectionTime;
-    delete (leg as any).__semitraxLastDirectionTime;
     if (
       !sameMileageValue(lastDistance, mileageEndDistance) ||
-      !sameClockValue(lastDirectionTime, lastDuration, mileageEndDuration)
+      !sameClockValue(lastDirectionTimeRaw, lastDuration, mileageEndDuration)
     ) {
       throw new RoutingProviderError(
         "Trimble",

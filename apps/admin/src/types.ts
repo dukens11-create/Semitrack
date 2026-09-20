@@ -43,7 +43,7 @@ export type DashboardData = {
     trimbleRouting?: { configured: boolean; status: 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE' | 'NOT_CONFIGURED'; reason: string; validUntil: string | null };
     providerStates: Array<{ provider: string; jurisdiction: string; dataType: string; status: string; lastSuccessAt: string | null; lastErrorCode: string | null }>;
   };
-  coverage: { payments: boolean; appEvents: boolean; navigationSessions: boolean; note: string };
+  coverage: { payments: boolean; appEvents: boolean; navigationSessions: boolean; navigationProvenance?: "CLIENT_REPORTED_UNVERIFIED"; note: string };
   financial: null | Record<string, Metric | SeriesPoint[] | number | null>;
 };
 

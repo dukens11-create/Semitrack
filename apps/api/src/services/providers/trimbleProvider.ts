@@ -231,7 +231,18 @@ function reportsFrom(payload: unknown): any[] {
 }
 
 function reportOfType(reports: any[], type: string) {
-  return reports.find((report) => String(report?.__type ?? "").toLowerCase().includes(type.toLowerCase()));
+  const normalized = type.toLowerCase();
+  const matches = reports.filter((report) =>
+    String(report?.__type ?? "").toLowerCase().includes(normalized),
+  );
+  if (matches.length > 1) {
+    throw new RoutingProviderError(
+      "Trimble",
+      "TRIMBLE_AMBIGUOUS_REPORT",
+      `Trimble returned multiple ${type} reports for one route.`,
+    );
+  }
+  return matches[0];
 }
 
 function coordinate(value: any): number[] | null {
@@ -385,8 +396,24 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
   let maneuverStep = 0;
 
   const providerWarning = (line: any, legIndex: number, lineIndex: number) => {
-    const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
-    if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) {
+    const warnRaw = line?.Warn;
+    const detailedWarningsRaw = line?.DetailedWarnings;
+    if (
+      (warnRaw != null && typeof warnRaw !== "string") ||
+      (detailedWarningsRaw != null && !Array.isArray(detailedWarningsRaw))
+    ) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_WARNING_DATA_INVALID",
+        "The provider returned malformed route-warning evidence.",
+      );
+    }
+
+    const warning = typeof warnRaw === "string" ? warnRaw.trim() : "";
+    if (
+      warning ||
+      (Array.isArray(detailedWarningsRaw) && detailedWarningsRaw.some((w: any) => w?.Type !== 0))
+    ) {
       const failure = new RoutingProviderError(
         "Trimble",
         "TRIMBLE_RESTRICTION_WARNING",

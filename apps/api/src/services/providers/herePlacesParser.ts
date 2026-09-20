@@ -5,7 +5,9 @@ export type HerePlaceCategory =
   | "rest_area"
   | "fuel_stop"
   | "truck_parking"
-  | "truck_wash";
+  | "truck_wash"
+  | "cat_scale"
+  | "truck_repair";
 
 export type HerePlace = {
   id: string;
@@ -58,6 +60,11 @@ export function parseHerePlaces(payload: unknown, category: HerePlaceCategory): 
     if (
       category === "weigh_station" &&
       !/(weigh station|inspection station|port of entry)/i.test(name)
+    ) continue;
+    if (category === "cat_scale" && !/\bcat\s+scale\b/i.test(name)) continue;
+    if (
+      category === "truck_repair" &&
+      !/(truck|semi|diesel|fleet).*(repair|service)|(?:repair|service).*(truck|semi|diesel|fleet)/i.test(name)
     ) continue;
     results.push({
       id: `here:${id}`,

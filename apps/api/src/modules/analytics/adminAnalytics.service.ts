@@ -153,7 +153,7 @@ export async function getAdminDashboard(range: AnalyticsRange, includeFinancial:
       arr: financial?.arr ?? { value: null, available: false, reason: "Financial analytics require ADMIN access" },
       revenueToday: financial?.revenueToday ?? { value: null, available: false, reason: "Financial analytics require ADMIN access" },
       revenueThisMonth: financial?.revenueThisMonth ?? { value: null, available: false, reason: "Financial analytics require ADMIN access" },
-      activeTrips: { value: navigationCoverage ? asNumber(live.navigating) : null, available: navigationCoverage, reason: navigationCoverage ? undefined : "No navigation-session telemetry has been received" },
+      activeTrips: { value: navigationCoverage ? asNumber(live.navigating) : null, available: navigationCoverage, reason: navigationCoverage ? "Client-reported navigation session; native CoPilot provenance is not yet verified." : "No navigation-session telemetry has been received", definition: "Client-reported active navigation sessions" },
     },
     charts: {
       revenueOverTime: financial?.revenueOverTime ?? [],
@@ -189,7 +189,8 @@ export async function getAdminDashboard(range: AnalyticsRange, includeFinancial:
       payments: hasPayments,
       appEvents: eventCoverage,
       navigationSessions: navigationCoverage,
-      note: "Unavailable metrics are returned as null and must never be replaced with sample values.",
+      navigationProvenance: "CLIENT_REPORTED_UNVERIFIED",
+      note: "Navigation session distance, duration and completion are client-reported until native CoPilot provenance is verified. Unavailable metrics are returned as null and must never be replaced with sample values.",
     },
     financial,
   };

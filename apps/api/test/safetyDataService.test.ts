@@ -78,3 +78,17 @@ test("expired, rejected, and conflicting reports are handled safely", () => {
   assert.equal(aggregate.source, "COMMUNITY");
   assert.ok(aggregate.confidence > 0.5 && aggregate.confidence < 1);
 });
+
+test('future, invalid and expired official observations cannot appear live',()=>{
+ const now=new Date('2026-09-19T12:00:00Z');
+ for(const updatedAt of [new Date('invalid'),new Date(now.getTime()+1),new Date(now.getTime()-16*60000)])assert.equal(aggregateCommunityStatus([],now,{value:'OPEN',updatedAt,maxAgeMinutes:15}).source,'UNKNOWN');
+ assert.equal(aggregateCommunityStatus([],now,{value:'OPEN',updatedAt:new Date(now.getTime()-14*60000),maxAgeMinutes:15}).source,'OFFICIAL_LIVE');
+});
+test('restriction availability honors both effective and expiration dates',async()=>{
+ const {restrictionActiveAt}=await import('../src/services/safetyDataService.ts'),now=new Date('2026-09-19T12:00:00Z');
+ const active={active:true,startsAt:null,endsAt:null};assert.equal(restrictionActiveAt(active,now),true);
+ assert.equal(restrictionActiveAt({...active,active:false},now),false);
+ assert.equal(restrictionActiveAt({...active,startsAt:new Date(now.getTime()+1)},now),false);
+ assert.equal(restrictionActiveAt({...active,endsAt:now},now),false);
+ assert.equal(restrictionActiveAt({...active,startsAt:now,endsAt:new Date(now.getTime()+1)},now),true);
+});

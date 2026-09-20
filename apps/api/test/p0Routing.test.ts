@@ -76,7 +76,7 @@ test('production cannot enable the legacy comparison route through a flag', asyn
 });
 
 function multistop(points){
- return [{__type:'DirectionsReport',Origin:location(points[0]),Destination:location(points.at(-1)),ReportLegs:points.slice(1).map((p,i)=>({Origin:location(points[i]),Dest:location(p),ReportLines:[{Direction:'Destination',Dist:String(i+1),Time:'0:0'+(i+1)+':00',End:{Lat:p.lat,Lon:p.lng}}]}))},
+ return [{__type:'DirectionsReport',Origin:location(points[0]),Destination:location(points.at(-1)),ReportLegs:points.slice(1).map((p,i)=>({Origin:location(points[i]),Dest:location(p),ReportLines:[{Direction:'Destination',Dist:'1',Time:'0:01:00',End:{Lat:p.lat,Lon:p.lng}}]}))},
  {__type:'MileageReport',ReportLines:points.map((p,i)=>({Stop:location(p),TMiles:String(i),LMiles:i?'1':'0',THours:'0:0'+i+':00',LHours:i?'0:01:00':'0:00:00'}))},
  {__type:'RoutePathReport',geometry:{type:'LineString',coordinates:points.map(p=>[p.lng,p.lat])}}];
 }
@@ -357,7 +357,7 @@ test('three-stop provider path preserves truck restrictions and records rejectio
 });
 
 // Synthetic Trimble-style Directions/Mileage/RoutePath fixture, not a live
-// response: driving rows have null TurnInstruction and provider cumulative
+// response: driving rows have null TurnInstruction and provider per-line
 // Dist/Time plus Begin/End. The straight leg ends at leg.Dest without an arrival
 // row. ReportLines[].Stop is the explicit ordered Mileage stop evidence.
 function straightLegFixture(points = acceptancePoints) {
@@ -368,10 +368,10 @@ function straightLegFixture(points = acceptancePoints) {
   data[2].geometry.coordinates.splice(index + 1, 0, [middle.lng, middle.lat]);
   data[0].ReportLegs[index].ReportLines = [
     {Direction: 'Continue on Industrial Road', TurnInstruction: null,
-      Dist: String(index + 0.5), Time: '0:0' + index + ':30',
+      Dist: '0.5', Time: '0:00:30',
       Begin: {Lat: begin.lat, Lon: begin.lng}, End: {Lat: middle.lat, Lon: middle.lng}},
     {Direction: 'Proceed along Industrial Road', TurnInstruction: null,
-      Dist: String(index + 1), Time: '0:0' + (index + 1) + ':00',
+      Dist: '0.5', Time: '0:00:30',
       Begin: {Lat: middle.lat, Lon: middle.lng}, End: {Lat: end.lat, Lon: end.lng}},
   ];
   return data;
@@ -417,7 +417,7 @@ test('straight-leg safety: malformed/missing time, distance, or instruction fail
   }
 });
 
-test('straight-leg safety: cumulative distance/time cannot regress below start or preceding row', () => {
+test('straight-leg safety: independent line sums cannot contradict leg distance/time', () => {
   for (const [index, patch] of [[0, {Dist: '0.9'}], [1, {Dist: '1.4'}],
     [0, {Time: '0:00:59'}], [1, {Time: '0:01:29'}]]) {
     const data = straightLegFixture();
@@ -475,9 +475,9 @@ test('straight-leg regression: explicit turn rows retain their existing mapping 
   const data = multistop(acceptancePoints);
   data[0].ReportLegs[1].ReportLines = [
     {Direction: 'Turn right onto Industrial Road', TurnInstruction: 'TC_Right',
-      Dist: '1.5', Time: '0:01:30', Begin: {Lat: acceptancePoints[1].lat, Lon: acceptancePoints[1].lng}},
+      Dist: '0.5', Time: '0:00:30', Begin: {Lat: acceptancePoints[1].lat, Lon: acceptancePoints[1].lng}},
     {Direction: 'Destination', TurnInstruction: null,
-      Dist: '2', Time: '0:02:00', End: {Lat: input.destination.lat, Lon: input.destination.lng}},
+      Dist: '0.5', Time: '0:00:30', End: {Lat: input.destination.lat, Lon: input.destination.lng}},
   ];
   const route = parseTrimbleRouteResponse(data, acceptanceInput, config);
   assert.deepEqual(route.legs[1].maneuvers.map(m => [m.action, m.direction, m.distanceMiles, m.durationSeconds]), [
@@ -497,7 +497,7 @@ test('restriction diagnostics retain numeric provider evidence without raw locat
     assert.deepEqual(e.restrictionDiagnostic,{
       source:'TRIMBLE_DIRECTIONS_REPORT',category:'UNCLASSIFIED_PROVIDER_WARNING',
       message:'Trimble reported a warning. The route remains blocked pending review.',
-      providerWarningTypes:[4],providerTextPresent:true,legNumber:1,lineNumber:1,
+      providerWarningTypes:[4],providerTextPresent:true,malformedWarningEvidencePresent:true,legNumber:1,lineNumber:1,
     });
     assert(!/secret-fixture|Personal Street|private-address|40,-120/.test(JSON.stringify(e)));
     return true;
@@ -509,6 +509,7 @@ test('malformed detailed warning still fails closed without inventing a warning 
     assert.throws(()=>parseTrimbleRouteResponse(data,input,config),e=>{
       assert.equal(e.code,'TRIMBLE_RESTRICTION_WARNING');
       assert.deepEqual(e.restrictionDiagnostic.providerWarningTypes,[]);
+      assert.equal(e.restrictionDiagnostic.malformedWarningEvidencePresent,true);
       return true;
     });
   }
@@ -521,7 +522,7 @@ test('provider restriction rejection records attempted transport while retaining
   const data=payload();data[0].ReportLegs[0].ReportLines[0].DetailedWarnings=[{Type:5}];
   let count=0;
   const provider=new TrimbleRouteProvider(config,async()=>{count++;return {ok:true,status:200,text:async()=>JSON.stringify(data)};});
-  await assert.rejects(()=>provider.buildRoute(input),e=>e.providerAttempted===true && e.code==='TRIMBLE_RESTRICTION_WARNING' && e.restrictionDiagnostic.providerWarningTypes[0]===5);
+  await assert.rejects(()=>provider.buildRoute(input),e=>e.providerAttempted===true && e.code==='TRIMBLE_RESTRICTION_WARNING' && e.restrictionDiagnostic.providerWarningTypes[0]===5 && e.restrictionDiagnostic.malformedWarningEvidencePresent===false);
   assert.equal(count,1);
 });
 

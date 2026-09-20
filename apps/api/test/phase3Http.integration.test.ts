@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../dist/contracts/routeLimits.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -123,6 +124,11 @@ test(
       const verified=await request('POST','/trucks/'+saved.body.id+'/verify',{expectedRevision:saved.body.revision},access);assert.equal(verified.status,200);assert.equal(verified.body.verifiedRevision,verified.body.revision);assert.equal(verified.body.verificationState,'VERIFIED');assert(verified.body.verifiedAt);assert(verified.body.isDefault);
       const routeInput={origin:{lat:40,lng:-120},destination:{lat:40,lng:-119.999},viaStops:[],truck:truckBody,truckProfileId:saved.body.id,truckRevision:verified.body.revision,routeMode:'fastest',alternatives:0};
       const route=await request('POST','/routing/truck-route',routeInput,access);assert.equal(route.status,503);assert.equal(route.body.error.code,'TRIMBLE_API_KEY_MISSING');assert.equal(route.body.truckSafe,false);
+      const viaStops=Array.from({length:MAX_INTERMEDIATE_STOPS},(_,i)=>({lat:40,lng:-119.98+i*.02}));
+      const largest=await request('POST','/routing/truck-route',{...routeInput,viaStops},access);
+      assert.equal(largest.status,503);assert.equal(largest.body.error.code,'TRIMBLE_API_KEY_MISSING');
+      const overflow=await request('POST','/routing/truck-route',{...routeInput,viaStops:[...viaStops,{lat:41,lng:-119}]},access);
+      assert.equal(overflow.status,400);
       const edited=await request('PATCH','/trucks/'+saved.body.id,{...truckBody,name:'Edited',expectedRevision:verified.body.revision},access);assert.equal(edited.status,200);assert.equal(edited.body.revision,verified.body.revision+1);assert.equal(edited.body.verifiedRevision,null);assert.equal(edited.body.verifiedAt,null);assert.equal(edited.body.isDefault,false);
       const stale=await request('POST','/routing/truck-route',routeInput,access);assert.equal(stale.status,409);assert.equal(stale.body.error.code,'TRUCK_PROFILE_CHANGED');
       assert.equal((await request('POST','/routing/truck-route',{},access)).status,400);
@@ -131,6 +137,15 @@ test(
       const corridor={route:[routeInput.origin,routeInput.destination],currentLocation:{lat:40,lng:-120,accuracy:4,timestamp:Date.now()}};
       const poiCorridor=await request('POST','/places/corridor',{category:'truck_stop',...corridor},access);assert.equal(poiCorridor.status,503);assert.equal(poiCorridor.body.error.code,'POI_PROVIDER_NOT_CONFIGURED');
       for(const kind of ['restrictions','road-events','cameras','parking','fuel','weigh-stations']){const response=await request('POST','/safety/'+kind+'/corridor',corridor,access);assert.equal(response.status,200);assert(Array.isArray(response.body.items));}
+      const now=new Date(),past=new Date(now.getTime()-3600000),future=new Date(now.getTime()+3600000);
+      const restrictionBase={restrictionType:'ROAD_CLOSURE',latitude:40,longitude:-120,hazmatTypes:[],source:'LOCAL_TEST_ONLY',lastUpdated:now,active:true};
+      const expired=await db.truckRestriction.create({data:{...restrictionBase,endsAt:past}}),scheduled=await db.truckRestriction.create({data:{...restrictionBase,startsAt:future}}),current=await db.truckRestriction.create({data:restrictionBase});
+      for(const r of [expired,scheduled])assert.equal((await request('GET','/safety/restrictions/'+r.id,undefined,access)).status,404);
+      assert.equal((await request('GET','/safety/restrictions/'+current.id,undefined,access)).status,200);
+      const activeRestrictions=await request('POST','/safety/restrictions/corridor',corridor,access);assert(activeRestrictions.body.items.some(x=>x.id===current.id));assert(!activeRestrictions.body.items.some(x=>[expired.id,scheduled.id].includes(x.id)));
+      const station=await db.weighStation.create({data:{id:crypto.randomUUID(),name:'Synthetic stale station',state:'NV',latitude:40,longitude:-120,type:'FIXED_WEIGH_STATION',officialSourceName:'LOCAL_TEST_ONLY',officialSourceUrl:'https://fixture.invalid',officialStatus:'OPEN',lastStatusUpdate:past}});
+      const nearby=await request('GET','/safety/weigh-stations/nearby?lat=40&lng=-120',undefined,access),displayed=nearby.body.items.find(x=>x.id===station.id);assert.equal(displayed.officialStatus,'UNKNOWN');assert.equal(displayed.currentStatus.source,'UNKNOWN');
+      const stationCorridor=await request('POST','/safety/weigh-stations/corridor',corridor,access),along=stationCorridor.body.items.find(x=>x.id===station.id);assert.equal(along.officialStatus,'UNKNOWN');assert.equal(along.currentStatus.source,'UNKNOWN');
       const weather=await request('POST','/weather/route',corridor,access);assert.equal(weather.status,200);assert(weather.body.items.every(item=>item.status==='UNAVAILABLE'));
       const hos=await request('GET','/eld/hos/current',undefined,access);assert.equal(hos.status,200);assert.equal(hos.body.status,'UNKNOWN');assert.equal(typeof hos.body.reason,'string');
       const plan = {
@@ -140,6 +155,10 @@ test(
         destination: { id: 'd', name: 'Destination', lat: 41, lng: -120 },
         stops: [],
       };
+      const largestPlan={...plan,createOperationId:crypto.randomUUID(),stops:Array.from({length:MAX_INTERMEDIATE_STOPS},(_,i)=>({id:'stop-'+i,name:'Test '+i,lat:40+i*.01,lng:-120}))};
+      const savedLargest=await request('POST','/trips',largestPlan,access);assert.equal(savedLargest.status,201);assert.deepEqual(savedLargest.body.stops,largestPlan.stops);
+      const listed=await request('GET','/trips',undefined,access);assert.deepEqual(listed.body.items.find(t=>t.id===savedLargest.body.id).stops,largestPlan.stops);
+      assert.equal((await request('POST','/trips',{...largestPlan,createOperationId:crypto.randomUUID(),stops:[...largestPlan.stops,{id:'overflow',name:'Overflow',lat:41,lng:-120}]},access)).status,400);
       const trip = await request('POST', '/trips', plan, access);
       assert.equal(trip.status, 201);
       assert.equal(

@@ -16,10 +16,12 @@ const java=read(output+'/android/java/com/semitrax/nativebridge/NativeSemiTraxPl
 const kotlin=read('android/app/src/main/java/com/semitrax/nativebridge/SemiTraxPlatformModule.kt');
 const header=read(output+'/ios/SemiTraxPlatformSpec/SemiTraxPlatformSpec.h');
 const objc=read('ios/SemiTrax/SemiTraxPlatform.mm');
-for(const method of ['createOperationId','locationPermissionStatus','guidanceCommand','requestLocationPermission','startLocation','stopLocation']){
+for(const method of ['documentCommand','createOperationId','locationPermissionStatus','guidanceCommand','requestLocationPermission','startLocation','stopLocation']){
  assert(java.includes(method)&&kotlin.includes('override fun '+method),'Missing Kotlin method '+method);
  assert(header.includes(method)&&objc.includes(method),'Missing iOS method '+method);
 }
+const appDelegate=read('ios/SemiTrax/AppDelegate.swift');
+assert(appDelegate.includes('RCTLinkingManager.application(app, open: url, options: options)') && appDelegate.includes('RCTLinkingManager.application(application, continue: userActivity, restorationHandler: restorationHandler)'), 'Missing iOS recovery link forwarding');
 const manifest=read('android/app/src/main/AndroidManifest.xml');
 assert(manifest.includes('FOREGROUND_SERVICE_LOCATION')&&manifest.includes('foregroundServiceType="location"'),'Missing Android location FGS contract');
 const gradle=read('android/app/build.gradle');

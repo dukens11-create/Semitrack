@@ -37,11 +37,15 @@ export function MoreScreen({
   onTrucks,
   onSettings,
   onServices,
+  onOffline,
+  onPlans,
 }: {
   services: Services;
   onTrucks: () => void;
   onSettings: () => void;
   onServices: () => void;
+  onOffline?: () => void;
+  onPlans?: () => void;
 }) {
   const palette = useDriverPalette();
   const iconColors = featureIconColors[palette.dark ? 'night' : 'day'];
@@ -145,8 +149,9 @@ export function MoreScreen({
           Trial, monthly, annual, and fleet plans
         </Text>
         <Text style={[styles.premiumCopy, { color: palette.muted }]}>
-          Subscription management is not available in this version.
+          Monthly, annual and fleet pricing. Store activation pending.
         </Text>
+        <DriverButton title="Plans & Subscription" secondary disabled={!onPlans} onPress={() => onPlans?.()} />
       </View>
       <DriverTile
         icon="cable_rounded"
@@ -163,8 +168,9 @@ export function MoreScreen({
         icon="map"
         iconColors={iconColors.offline}
         title="Offline maps"
-        caption="Map region downloads — not available in this version"
-        disabled
+        caption="Downloaded display maps. Offline truck routing requires CoPilot."
+        onPress={onOffline}
+        disabled={!onOffline}
       />
       <DriverTile
         icon="settings_rounded"

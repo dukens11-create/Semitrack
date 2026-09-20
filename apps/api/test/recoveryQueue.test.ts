@@ -19,3 +19,23 @@ test('recovery admission happens before account/provider work; bounded queue dra
   assert.equal(enqueue(async () => {calls++;}),true);
   await nextTurn(); assert.equal(calls,3);
 });
+test('shutdown waits for admitted recovery work and rejects new admission', async () => {
+  let release: () => void = () => {};
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const enqueue = createRecoveryQueue(() => {}, 2, 1);
+  enqueue(async () => { await blocked; });
+  let stopped = false;
+  const stopping = enqueue.stop().then(() => { stopped = true; });
+  assert.equal(enqueue(async () => {}), false);
+  await nextTurn(); assert.equal(stopped, false);
+  release(); await stopping; assert.equal(stopped, true);
+});
+
+test('a failed diagnostic reporter cannot interrupt recovery queue drain or shutdown', async () => {
+  const enqueue = createRecoveryQueue(() => { throw Error('private logging error'); }, 2, 1);
+  let completed = false;
+  enqueue(async () => { throw Error('private delivery error'); });
+  enqueue(async () => { completed = true; });
+  await enqueue.stop();
+  assert.equal(completed, true);
+});

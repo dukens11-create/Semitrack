@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../src/models/routeLimits';
 import {
   parseTruckRoute,
   serializeTruck,
@@ -31,10 +32,26 @@ const destination = {
   a = { id: 'a', name: 'Pickup A', lat: 40, lng: -100.01 },
   b = { id: 'b', name: 'Pickup B', lat: 40, lng: -100 };
 const plan = addStop(addStop(createStopPlan(destination), a), b);
-function responseFor(points: {lat:number;lng:number}[]) {
- const turns=points.slice(1).map((_,i)=>({...routeRaw.turnByTurn[0]!,step:i+1,offset:i+1}));
- return {...routeRaw,validatedStops:points,routeGeometry:points.map(p=>[p.lng,p.lat]),turnByTurn:turns,
- legs:turns.map(m=>({distanceMiles:1,durationSeconds:60,geometry:[],maneuvers:[m]}))};
+function responseFor(points: { lat: number; lng: number }[]) {
+  const turns = points
+    .slice(1)
+    .map((_, i) => ({
+      ...routeRaw.turnByTurn[0]!,
+      step: i + 1,
+      offset: i + 1,
+    }));
+  return {
+    ...routeRaw,
+    validatedStops: points,
+    routeGeometry: points.map(p => [p.lng, p.lat]),
+    turnByTurn: turns,
+    legs: turns.map(m => ({
+      distanceMiles: 1,
+      durationSeconds: 60,
+      geometry: [],
+      maneuvers: [m],
+    })),
+  };
 }
 test('complete routing profile retains units, hazmat, trailer and restrictions', () => {
   const value = serializeTruck(truck, true);
@@ -103,7 +120,9 @@ test('only the next intermediate arrival can consume a stop', () => {
   expect(() => intermediateArrival(plan, 'b')).toThrow();
 });
 test('one authoritative request contains every remaining stop and current origin', async () => {
-  const transport = jest.fn(async () => reply(responseFor([{lat:39,lng:-99},b,destination])));
+  const transport = jest.fn(async () =>
+    reply(responseFor([{ lat: 39, lng: -99 }, b, destination])),
+  );
   const routing = new TruckRoutingService(
     new ApiClient('https://api.example.test', new MemoryVault(), transport),
   );
@@ -145,7 +164,7 @@ test('failed reroute keeps previous route and exact stop plan', async () => {
   const pending = deferred<Response>();
   const transport = jest
     .fn()
-    .mockResolvedValueOnce(reply(responseFor([a,a,b,destination])))
+    .mockResolvedValueOnce(reply(responseFor([a, a, b, destination])))
     .mockImplementationOnce(() => pending.promise);
   const store = new RouteStore(
     new TruckRoutingService(
@@ -181,50 +200,118 @@ test('late response cannot replace the latest plan', async () => {
   expect(store.getSnapshot().plan).toBe(next);
 });
 
-
 test('alternative request preserves exact truck revision, canonical units and ordered stops', async () => {
-  const request = jest.fn(async () => responseFor([a,a,b,destination]));
-  const service = new TruckRoutingService({request} as unknown as ApiClient);
+  const request = jest.fn(async () => responseFor([a, a, b, destination]));
+  const service = new TruckRoutingService({ request } as unknown as ApiClient);
   await service.calculate(a, plan, truck, undefined, 2);
-  const payload = request.mock.calls as unknown as [string, string, Record<string, unknown>][];
-  expect(payload[0]?.[2]).toMatchObject({alternatives:2,truckProfileId:truck.id,truckRevision:truck.revision,
-    viaStops:[{lat:a.lat,lng:a.lng},{lat:b.lat,lng:b.lng}],truck:{heightFt:13.5,widthFt:8.5,lengthFt:72,weightLbs:80000,axleCount:5,trailerCount:1}});
+  const payload = request.mock.calls as unknown as [
+    string,
+    string,
+    Record<string, unknown>,
+  ][];
+  expect(payload[0]?.[2]).toMatchObject({
+    alternatives: 2,
+    truckProfileId: truck.id,
+    truckRevision: truck.revision,
+    viaStops: [
+      { lat: a.lat, lng: a.lng },
+      { lat: b.lat, lng: b.lng },
+    ],
+    truck: {
+      heightFt: 13.5,
+      widthFt: 8.5,
+      lengthFt: 72,
+      weightLbs: 80000,
+      axleCount: 5,
+      trailerCount: 1,
+    },
+  });
 });
 test('malformed stop lists and alternative counts fail before HTTP', async () => {
-  const request = jest.fn(); const service = new TruckRoutingService({request} as unknown as ApiClient);
-  for (const stops of [[a,a],[destination],Array.from({length:21},(_,i)=>({...a,id:String(i)}))])
-    await expect(service.calculate(a,{destination,stops},truck)).rejects.toThrow();
-  for (const count of [-1,1.5,4]) await expect(service.calculate(a,plan,truck,undefined,count)).rejects.toThrow();
+  const request = jest.fn();
+  const service = new TruckRoutingService({ request } as unknown as ApiClient);
+  for (const stops of [
+    [a, a],
+    [destination],
+    Array.from({ length: MAX_INTERMEDIATE_STOPS + 1 }, (_, i) => ({
+      ...a,
+      id: String(i),
+    })),
+  ])
+    await expect(
+      service.calculate(a, { destination, stops }, truck),
+    ).rejects.toThrow();
+  for (const count of [-1, 1.5, 4])
+    await expect(
+      service.calculate(a, plan, truck, undefined, count),
+    ).rejects.toThrow();
   expect(request).not.toHaveBeenCalled();
 });
-test.each([401,403])('authorization failure %s discards old preview', async status => {
-  const calculate = jest.fn().mockResolvedValueOnce(route()).mockRejectedValueOnce({status});
-  const store = new RouteStore({calculate} as unknown as TruckRoutingService);
-  await store.calculate(a,plan,truck); await store.calculate(a,plan,truck);
-  expect(store.getSnapshot().route).toBeNull();
-});
+test.each([401, 403])(
+  'authorization failure %s discards old preview',
+  async status => {
+    const calculate = jest
+      .fn()
+      .mockResolvedValueOnce(route())
+      .mockRejectedValueOnce({ status });
+    const store = new RouteStore({
+      calculate,
+    } as unknown as TruckRoutingService);
+    await store.calculate(a, plan, truck);
+    await store.calculate(a, plan, truck);
+    expect(store.getSnapshot().route).toBeNull();
+  },
+);
 test('provider failure cannot retain a route belonging to another profile or revision', async () => {
-  for (const next of [{...truck,id:'different'},{...truck,revision:2,verifiedRevision:2},{...truck,heightFt:14}]) {
-    const calculate = jest.fn().mockResolvedValueOnce(route()).mockRejectedValueOnce({status:503});
-    const store = new RouteStore({calculate} as unknown as TruckRoutingService);
-    await store.calculate(a,plan,truck); await store.calculate(a,plan,next);
-    expect(store.getSnapshot().route).toBeNull(); expect(store.getSnapshot().plan).toBeNull();
+  for (const next of [
+    { ...truck, id: 'different' },
+    { ...truck, revision: 2, verifiedRevision: 2 },
+    { ...truck, heightFt: 14 },
+  ]) {
+    const calculate = jest
+      .fn()
+      .mockResolvedValueOnce(route())
+      .mockRejectedValueOnce({ status: 503 });
+    const store = new RouteStore({
+      calculate,
+    } as unknown as TruckRoutingService);
+    await store.calculate(a, plan, truck);
+    await store.calculate(a, plan, next);
+    expect(store.getSnapshot().route).toBeNull();
+    expect(store.getSnapshot().plan).toBeNull();
   }
 });
 
 test('invalid local truck data clears prior preview before any provider call', async () => {
-  const calculate=jest.fn().mockResolvedValue(route());const invalidate=jest.fn();
-  const store=new RouteStore({calculate} as unknown as TruckRoutingService,invalidate);
-  await store.calculate(a,plan,truck);
-  expect(await store.calculate(a,plan,{...truck,heightFt:NaN})).toBe(false);
-  expect(store.getSnapshot().route).toBeNull();expect(invalidate).toHaveBeenCalledTimes(1);expect(calculate).toHaveBeenCalledTimes(1);
+  const calculate = jest.fn().mockResolvedValue(route());
+  const invalidate = jest.fn();
+  const store = new RouteStore(
+    { calculate } as unknown as TruckRoutingService,
+    invalidate,
+  );
+  await store.calculate(a, plan, truck);
+  expect(await store.calculate(a, plan, { ...truck, heightFt: NaN })).toBe(
+    false,
+  );
+  expect(store.getSnapshot().route).toBeNull();
+  expect(invalidate).toHaveBeenCalledTimes(1);
+  expect(calculate).toHaveBeenCalledTimes(1);
 });
 
-test('response must prove the same complete ordered stop plan', async()=>{
- const expected=[a,a,b,destination],complete=responseFor(expected);
- const request=jest.fn();const service=new TruckRoutingService({request} as unknown as ApiClient);
- request.mockResolvedValue(complete);await expect(service.calculate(a,plan,truck)).resolves.toBeDefined();
- for(const invalid of [{...complete,validatedStops:undefined},{...complete,legs:complete.legs.slice(1)},
- {...complete,validatedStops:[a,b,a,destination]},{...complete,validatedStops:[a,a,b,{lat:41,lng:-101}]}]){
- request.mockResolvedValue(invalid);await expect(service.calculate(a,plan,truck)).rejects.toThrow();}
+test('response must prove the same complete ordered stop plan', async () => {
+  const expected = [a, a, b, destination],
+    complete = responseFor(expected);
+  const request = jest.fn();
+  const service = new TruckRoutingService({ request } as unknown as ApiClient);
+  request.mockResolvedValue(complete);
+  await expect(service.calculate(a, plan, truck)).resolves.toBeDefined();
+  for (const invalid of [
+    { ...complete, validatedStops: undefined },
+    { ...complete, legs: complete.legs.slice(1) },
+    { ...complete, validatedStops: [a, b, a, destination] },
+    { ...complete, validatedStops: [a, a, b, { lat: 41, lng: -101 }] },
+  ]) {
+    request.mockResolvedValue(invalid);
+    await expect(service.calculate(a, plan, truck)).rejects.toThrow();
+  }
 });

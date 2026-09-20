@@ -1,5 +1,22 @@
-import { createEnvironment, validateApiUrl } from '../src/config/environment';
+import {
+  createEnvironment,
+  validateApiUrl,
+  validateReleaseMapToken,
+} from '../src/config/environment';
 describe('release backend safety', () => {
+  test.each(['', 'pk.', 'sk.private', 'pk.public value', 'pk.public\n'])(
+    'missing or invalid release display token fails without echoing it: case %#',
+    token => {
+      expect(() => validateReleaseMapToken(token)).toThrow(
+        'MAPBOX_PUBLIC_TOKEN',
+      );
+    },
+  );
+  test('public display token shape passes without a provider request', () => {
+    expect(() =>
+      validateReleaseMapToken('pk.synthetic_local_fixture'),
+    ).not.toThrow();
+  });
   test.each([
     '',
     'garbage',

@@ -33,6 +33,8 @@ import { DriverIcon } from '../components/DriverIcon';
 import { ErrorText, errorMessage } from '../components/ui';
 import { useStore } from '../hooks/useStore';
 import { DiagnosticsScreen } from './DiagnosticsScreen';
+import { DriverSetup } from '../features/onboarding/DriverSetup';
+import { DeleteAccountPanel } from '../features/auth/DeleteAccountPanel';
 type Page =
   | 'hub'
   | 'profile'
@@ -42,6 +44,8 @@ type Page =
   | 'navigation'
   | 'privacy'
   | 'diagnostics'
+  | 'setup'
+  | 'delete'
   | 'about';
 const titles: Record<Page, string> = {
   hub: 'Account & Settings',
@@ -52,15 +56,19 @@ const titles: Record<Page, string> = {
   navigation: 'Navigation',
   privacy: 'Privacy & location',
   diagnostics: 'Diagnostics',
+  setup: 'Driver setup',
+  delete: 'Delete account',
   about: 'About SemiTraX',
 };
 
 export function SettingsScreen({
   services,
   onBack,
+  onPlans,
 }: {
   services: Services;
   onBack?: () => void;
+  onPlans?: () => void;
 }) {
   const auth = useStore(services.auth),
     state = useStore(services.settings),
@@ -301,6 +309,7 @@ export function SettingsScreen({
             </SettingsSurface>
           </View>
           <View style={ss.group}>
+            {onPlans && <SettingsSurface><SettingsRow title="Plans & Subscription" caption="Pricing and verified account billing details" icon="workspace_premium_rounded" color="blue" onPress={onPlans} /></SettingsSurface>}
             <DriverTitle small>Preferences</DriverTitle>
             <SettingsSurface>
               <SettingsRow
@@ -343,6 +352,8 @@ export function SettingsScreen({
           <View style={ss.group}>
             <DriverTitle small>Support</DriverTitle>
             <SettingsSurface>
+              <SettingsRow title="Driver setup" caption="Truck, location and guidance setup"
+                icon="description_outlined" color="blue" onPress={() => go('setup')} />
               <SettingsRow
                 title="Diagnostics"
                 caption="View, copy or share sanitized route checks"
@@ -387,6 +398,8 @@ export function SettingsScreen({
         <DriverPage>
           {header(titles[page], () => go('hub'))}
           {page === 'diagnostics' && <DiagnosticsScreen />}
+          {page === 'setup' && <DriverSetup settings={services.settings} onContinue={() => go('hub')} />}
+          {page === 'delete' && <DeleteAccountPanel auth={services.auth} />}
           {page === 'profile' && (
             <DriverCard>
               <DriverField
@@ -404,6 +417,7 @@ export function SettingsScreen({
                 autoCapitalize="none"
               />
               <DriverCopy>Email cannot be changed from the app.</DriverCopy>
+              <DriverButton title="Delete account" secondary disabled={pending} onPress={() => go('delete')} />
               <DriverField
                 label="Phone"
                 value={phone}
@@ -655,6 +669,18 @@ export function SettingsScreen({
                 Account access uses secure device token storage and the
                 configured HTTPS SemiTraX API. Signing out removes the local
                 session.
+              </DriverCopy>
+              <DriverCopy>
+                A device-protected, read-only copy of distance, temperature and
+                appearance preferences may remain available for up to 24 hours
+                after an online account check. It contains no saved locations,
+                documents or routing permissions. Signing out removes this copy.
+              </DriverCopy>
+              <DriverCopy>
+                Push notifications and account reminders are not available in
+                this version. No notification enrollment or consent is implied.
+                Account deletion is available under Account & profile; retained
+                business records and backups require policy review.
               </DriverCopy>
               <DriverCopy>
                 This summary is not a published privacy policy. A published

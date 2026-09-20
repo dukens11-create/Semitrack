@@ -19,7 +19,10 @@ export async function recomputeEntitlementSnapshot(
     where: { userId, entitlementCode },
     orderBy: [{ startsAt: "desc" }, { createdAt: "desc" }],
   });
-  const effective = selectEffectiveEntitlementSource(sources, now);
+  const held = await db.$queryRawUnsafe<Array<{subscriptionId:string}>>(
+    'SELECT h."subscriptionId" FROM "SubscriptionAccessHold" h JOIN "Subscription" s ON s.id=h."subscriptionId" WHERE s."userId"=$1 AND h.suspended=true',userId);
+  const heldIds=new Set(held.map(h=>h.subscriptionId));
+  const effective = selectEffectiveEntitlementSource(sources.filter(s=>!s.subscriptionId || !heldIds.has(s.subscriptionId)), now);
   const effectiveUntil = effective ? entitlementSourceEnd(effective) : null;
   const cacheValidUntil = entitlementCacheDeadline(
     now,

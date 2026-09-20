@@ -1,3 +1,9 @@
+import {
+  DocumentAttachmentEditor,
+  DocumentPendingUploads,
+  SavedDocumentFiles,
+} from '../features/documents/DocumentAttachments';
+import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import NativePlatform from '../native/navigation/NativeSemiTraxPlatform';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -62,7 +68,7 @@ export const savedTripSchema = z.object({
   revision: z.number().int().positive(),
   origin: point,
   destination: point,
-  stops: z.array(point).max(20),
+  stops: z.array(point).max(MAX_INTERMEDIATE_STOPS),
   assigned: z.boolean(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
@@ -200,11 +206,16 @@ export function TripsScreen({
     }
   }, [services, getAccount, isCurrent]);
   useEffect(() => {
-    void run(load);
+    void run(async () => {
+      await load();
+    });
   }, [load, run, routes.route]); // Automatic reads only; never writes.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active') void run(load);
+      if (state === 'active')
+        void run(async () => {
+          await load();
+        });
     });
     return () => subscription.remove();
   }, [load, run]);
@@ -346,7 +357,9 @@ export function TripsScreen({
         <RefreshControl
           refreshing={loaded && refreshing}
           onRefresh={() => {
-            void run(load);
+            void run(async () => {
+              await load();
+            });
           }}
           tintColor={p.muted}
           colors={['#A63D0B']}
@@ -408,7 +421,9 @@ export function TripsScreen({
             icon="replay"
             disabled={request.busy}
             onPress={() => {
-              void run(load);
+              void run(async () => {
+                await load();
+              });
             }}
           />
         </DriverCard>
@@ -650,9 +665,11 @@ const docSchema = z.object({
   expiresOn: z.string().nullable(),
   verificationState: z.string(),
   expired: z.boolean(),
-  fileAvailable: z.literal(false),
+  fileAvailable: z.boolean(),
+  attachmentCount: z.number().int().nonnegative().optional(),
 });
 export function DocumentsScreen({ services }: { services: Services }) {
+  const [hasFiles, setHasFiles] = useState(false);
   const p = useDriverPalette();
   const [formOpen, setFormOpen] = useState(false);
   const [changingType, setChangingType] = useState(false);
@@ -679,6 +696,7 @@ export function DocumentsScreen({ services }: { services: Services }) {
   function resetForm() {
     setFormOpen(false);
     setChangingType(false);
+    setHasFiles(false);
     setType('CDL');
     setName('');
     setIssued('');
@@ -812,7 +830,7 @@ export function DocumentsScreen({ services }: { services: Services }) {
         );
       if (isCurrent(account)) {
         resetForm();
-        setNotice('Document saved.');
+        setNotice('Document record saved.');
         await load();
       }
     } catch (e) {
@@ -902,6 +920,14 @@ export function DocumentsScreen({ services }: { services: Services }) {
           Keep your driver, truck and trip records organized.
         </DriverCopy>
       </View>
+      <DocumentPendingUploads
+        services={services}
+        onChanged={() => {
+          void run(async () => {
+            await load();
+          });
+        }}
+      />
       {!!notice && <DriverCopy>{notice}</DriverCopy>}
       {!!request.error && !formOpen && (
         <DriverCard>
@@ -972,8 +998,8 @@ export function DocumentsScreen({ services }: { services: Services }) {
         )}
       </DriverCard>
       <DriverCopy>
-        Labels and dates only. Photos, file storage and document verification
-        are not available yet. Do not enter document numbers or contents.
+        Store document records and private attachments. Uploads require
+        configured private storage. Dates are your records, not verification.
       </DriverCopy>
       {formOpen && (
         <DriverSheet
@@ -983,8 +1009,8 @@ export function DocumentsScreen({ services }: { services: Services }) {
           }}
         >
           <DriverCopy>
-            Save a label and dates for your records. A document photo or file is
-            not stored.
+            Take a photo or upload a document. Files are saved on this device
+            first; secure server storage is confirmed only after upload.
           </DriverCopy>
           <ErrorText message={request.error} />
           {conflict && (
@@ -1064,10 +1090,45 @@ export function DocumentsScreen({ services }: { services: Services }) {
             onChange={setExpires}
             disabled={request.busy || submitted.current}
           />
+          <DocumentAttachmentEditor
+            services={services}
+            body={{
+              type,
+              fileName: name,
+              issuedOn: issued || null,
+              expiresOn: expires || null,
+              truckId: editing?.truckId ?? null,
+            }}
+            documentId={editing?.id}
+            disabled={request.busy || !!dateError || conflict}
+            onHasFiles={setHasFiles}
+            onChanged={() => {
+              void run(async () => {
+                await load();
+              });
+            }}
+          />
+          {editing && (
+            <SavedDocumentFiles
+              services={services}
+              documentId={editing.id}
+              onDeleted={() => {
+                resetForm();
+                void run(async () => {
+                  await load();
+                });
+              }}
+            />
+          )}
           <ErrorText message={dateError} />
           <DriverButton
-            title="Save document"
+            title={
+              hasFiles
+                ? 'Use Save document and attachments above'
+                : 'Save document'
+            }
             disabled={
+              hasFiles ||
               !ready ||
               request.busy ||
               !name.trim() ||

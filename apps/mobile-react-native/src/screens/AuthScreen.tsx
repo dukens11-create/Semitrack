@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Services } from '../app/services';
 import { PasswordRecoveryPanel } from '../features/auth/PasswordRecoveryPanel';
+import { RecoveryLinkEntry } from '../features/auth/RecoveryLinkEntry';
 import { AuthIcon } from '../components/AuthIcon';
 import {
   emailError,
@@ -220,6 +221,10 @@ export function AuthScreen({ services }: { services: Services }) {
       style={[styles.screen, { backgroundColor: p.canvas }]}
       onLayout={event => setViewportHeight(event.nativeEvent.layout.height)}
     >
+      <RecoveryLinkEntry
+        auth={services.auth}
+        onOpen={() => setResetOpen(false)}
+      />
       {resetOpen && (
         <PasswordRecoveryPanel
           auth={services.auth}

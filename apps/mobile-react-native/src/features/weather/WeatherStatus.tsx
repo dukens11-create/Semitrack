@@ -20,10 +20,14 @@ export function WeatherStatus({
   services,
   route,
   fix,
+  driving = false,
+  detailsRequest = 0,
 }: {
   services: Services;
   route: TruckRoute | null;
   fix: LocationFix | null;
+  driving?: boolean;
+  detailsRequest?: number;
 }) {
   const p = useDriverPalette(),
     { settings } = useStore(services.settings);
@@ -32,6 +36,9 @@ export function WeatherStatus({
     [busy, setBusy] = useState(false),
     [now, setNow] = useState(Date.now());
   const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (detailsRequest > 0) setOpen(true);
+  }, [detailsRequest]);
   useEffect(() => {
     request.current?.abort();
     request.current = null;
@@ -82,23 +89,25 @@ export function WeatherStatus({
   }
   return (
     <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Weather details"
-        onPress={() => setOpen(true)}
-        style={[
-          styles.status,
-          { backgroundColor: p.card, borderColor: p.border },
-        ]}
-      >
-        <Text style={[styles.statusText, { color: p.text }]}>
-          {data.status === 'CURRENT'
-            ? temperatureText(data.tempF, unit) + ' · ' + data.condition
-            : data.status === 'STALE'
-            ? 'Weather · stale'
-            : 'Weather · unavailable'}
-        </Text>
-      </Pressable>
+      {!driving && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Weather details"
+          onPress={() => setOpen(true)}
+          style={[
+            styles.status,
+            { backgroundColor: p.card, borderColor: p.border },
+          ]}
+        >
+          <Text style={[styles.statusText, { color: p.text }]}>
+            {data.status === 'CURRENT'
+              ? temperatureText(data.tempF, unit) + ' · ' + data.condition
+              : data.status === 'STALE'
+              ? 'Weather · stale'
+              : 'Weather · unavailable'}
+          </Text>
+        </Pressable>
+      )}
       {alerts.map(alert => (
         <Pressable
           key={alert.title}

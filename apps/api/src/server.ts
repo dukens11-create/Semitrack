@@ -1,9 +1,12 @@
+import { subscriptionControlsRouter } from './modules/billing/subscriptionControls.routes.js';
+import { subscriptionOffersRouter } from './modules/subscriptions/subscriptionOffers.routes.js';
+import { MAX_INTERMEDIATE_STOPS } from './contracts/routeLimits.js';
 import { dispatchRouter } from './modules/dispatch/dispatch.routes.js';
 import { routingCapabilities } from './services/routingCapabilities.js';
 import { currentHosStatus } from './services/eldNormalization.js';
 import { isCurrentAdminProvider } from './modules/analytics/providerHealth.js';
 import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
-import { documentRouter } from './modules/documents/document.routes.js';
+import { documentRouter, documentFiles } from './modules/documents/document.routes.js';
 import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
 import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
 import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
@@ -27,6 +30,8 @@ import { hashPassword } from "./utils/password.js";
 import { authenticatePassword } from './services/loginAuthentication.js';
 import { requestPasswordRecovery, confirmPasswordRecovery, changeUserPassword } from './services/passwordRecovery.js';
 import { createRecoveryQueue } from './services/recoveryQueue.js';
+import { RecoveryOutbox, recoveryOutboxKey } from './services/recoveryOutbox.js';
+import { deleteOwnAccount } from './services/accountDeletion.js';
 import {
   buildTrafficPreview,
   buildTruckRoute,
@@ -188,13 +193,23 @@ app.post("/auth/logout", asyncRoute(async (req, res) => {
 }));
 
 const enqueueRecovery = createRecoveryQueue(() => logServerEvent('RECOVERY_DELIVERY_FAILED'));
+// Opt-in migration: retain existing email behavior until the additive migration
+// and dedicated server key have been approved/configured. Never use JWT/provider keys.
+const recoveryKey = recoveryOutboxKey(process.env.PASSWORD_RECOVERY_OUTBOX_KEY, env.nodeEnv === 'production');
+const recoveryOutbox = recoveryKey && env.recoveryEmail
+  ? new RecoveryOutbox(prisma, recoveryKey, env.recoveryEmail, () => logServerEvent('RECOVERY_DELIVERY_FAILED'))
+  : null;
+recoveryOutbox?.start();
 app.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
   const { email } = z.object({ email: z.string().trim().email() }).parse(req.body);
   if (!env.recoveryEmail) {
     return res.status(503).json({ error: { code: 'RECOVERY_UNAVAILABLE', message: 'Password recovery is temporarily unavailable.' } });
   }
   const config = env.recoveryEmail;
-  if (!enqueueRecovery(() => requestPasswordRecovery(prisma, config, email, () => logServerEvent('RECOVERY_DELIVERY_FAILED')))) {
+  const admitted = recoveryOutbox
+    ? await recoveryOutbox.enqueue(email)
+    : enqueueRecovery(() => requestPasswordRecovery(prisma, config, email, () => logServerEvent('RECOVERY_DELIVERY_FAILED')));
+  if (!admitted) {
     return res.status(503).json({ error: { code: 'RECOVERY_UNAVAILABLE', message: 'Password recovery is temporarily unavailable.' } });
   }
   res.status(202).json({ accepted: true });
@@ -211,6 +226,10 @@ app.post('/auth/password/change',requireAuth,asyncRoute(async(req,res)=>{
  const input=z.object({currentPassword:z.string().min(1).max(128),password:z.string().min(10).max(128)}).strict().parse(req.body);
  await changeUserPassword(prisma,req.user!.userId,input.currentPassword,input.password);
  res.status(204).end();
+}));
+
+app.delete("/me", requireAuth, asyncRoute(async (req, res) => {
+  res.json(await deleteOwnAccount(prisma, req.user!.userId, req.body));
 }));
 
 app.get("/me", requireAuth, asyncRoute(async (req, res) => {
@@ -274,7 +293,7 @@ const coordinate = z.object({ lat: z.number().min(-90).max(90), lng: z.number().
 const routeSchema = z.object({
   origin: coordinate,
   destination: coordinate,
-  viaStops: z.array(coordinate).max(20).optional(),
+  viaStops: z.array(coordinate).max(MAX_INTERMEDIATE_STOPS).optional(),
   truck: routingTruckSchema,
   routeMode: z.enum(["fastest", "fuel_optimized", "shortest"]).optional(),
   alternatives: z.number().int().min(0).max(5).optional(),
@@ -719,6 +738,8 @@ app.use("/analytics", telemetryRouter);
 app.use("/admin/operations", operationalRouter);
 app.use("/admin/analytics", adminAnalyticsRouter);
 app.use("/admin/account", adminAccountRouter);
+app.use("/admin/subscription-controls", subscriptionControlsRouter);
+app.use("/subscription-offers", subscriptionOffersRouter);
 app.use("/subscription-plans", requireBillingEnabled, publicSubscriptionPlansRouter);
 app.use("/admin/subscription-plans", requireBillingEnabled, adminSubscriptionPlansRouter);
 app.use("/entitlements", requireBillingEnabled, entitlementRouter);
@@ -747,6 +768,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     VERIFIED_TRUCK_REQUIRED:[409,'Review and verify the current truck profile before recording trip progress.'],
     CREATE_OPERATION_REQUIRED:[400,'A create operation identifier is required.'], CREATE_OPERATION_CONFLICT:[409,'This save operation already has different values. Review the saved record.'],
     CURRENT_PASSWORD_INVALID:[400,'Your current password was not accepted.'], PASSWORD_TOO_LONG:[400,'Use a password of at most 72 UTF-8 bytes.'],
+    ACCOUNT_DELETION_REVIEW_REQUIRED:[409,'This account requires review before deletion. Contact support to preserve fleet and retained records.'],
     ACCOUNT_CHANGED:[409,'Your account changed. Sign in and review it again.'],
   };
   const workflowError=safe?.safeCode?workflowErrors[safe.safeCode]:undefined;
@@ -814,13 +836,27 @@ const dotSyncTimer = setInterval(() => {
   );
 }, 60_000);
 dotSyncTimer.unref();
+let documentCleanupFlight: Promise<void> | undefined;
+const documentCleanupTimer = documentFiles.capabilities().storageAvailable
+  ? setInterval(() => {
+      if (!documentCleanupFlight) documentCleanupFlight = documentFiles.cleanup()
+        .catch(() => undefined).finally(() => { documentCleanupFlight = undefined; });
+    }, 60_000) : undefined;
+documentCleanupTimer?.unref();
 
-const shutdown = async () => {
+let shutdownFlight: Promise<void> | undefined;
+const shutdown = () => shutdownFlight ??= (async () => {
   clearInterval(dotSyncTimer);
-  server.close();
-  await disconnectDatabase();
-};
-process.once("SIGTERM", () => void shutdown());
-process.once("SIGINT", () => void shutdown());
+  if(documentCleanupTimer)clearInterval(documentCleanupTimer);
+  // Finish admitted HTTP and recovery work before disconnecting their database.
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  try {
+    await Promise.all([enqueueRecovery.stop(), recoveryOutbox?.stop(), documentCleanupFlight]);
+  } finally {
+    await disconnectDatabase();
+  }
+})();
+process.once("SIGTERM", () => void shutdown().catch(() => logServerEvent("INTERNAL_ERROR")));
+process.once("SIGINT", () => void shutdown().catch(() => logServerEvent("INTERNAL_ERROR")));
 
 export { app };

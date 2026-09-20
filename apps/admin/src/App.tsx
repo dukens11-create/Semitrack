@@ -1,9 +1,10 @@
+import { SubscriptionAdmin } from './SubscriptionAdmin';
 import { Operations } from './Operations';
 import { routingHealthDisplay } from './providerHealth';
 import { truckDetails } from "./truckDetails";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, session, signOut, type AdminUser } from "./api";
-import type { DashboardData, DriverListItem, DriverProfile, LabelValue, Metric, SeriesPoint, SubscriptionPlanCatalog } from "./types";
+import type { DashboardData, DriverListItem, DriverProfile, LabelValue, Metric, SeriesPoint } from "./types";
 
 type View = "operations" | "dashboard" | "drivers" | "pricing" | "account" | "audit";
 type RangePreset = "today" | "7d" | "30d" | "3m" | "1y" | "custom";
@@ -86,7 +87,7 @@ function AdminShell({ user, onUserUpdated, onSignOut }: { user: AdminUser; onUse
       {view === "operations" && user.operationalPermissions && <Operations permissions={user.operationalPermissions}/> }
       {view === "dashboard" && user.role !== "FLEET_ADMIN" && <Dashboard user={user} />}
       {view === "drivers" && <Drivers user={user} />}
-      {view === "pricing" && user.role === "ADMIN" && <PricingSettings />}
+      {view === "pricing" && user.role === "ADMIN" && <SubscriptionAdmin />}
       {view === "account" && user.role === "ADMIN" && <AccountSecurity user={user} onUserUpdated={onUserUpdated} onPasswordChanged={onSignOut} />}
       {view === "audit" && <AuditLogs />}
     </main>
@@ -250,97 +251,6 @@ function Drivers({ user }: { user: AdminUser }) {
 function DriverDrawer({ profile, onClose }: { profile: DriverProfile; onClose: () => void }) {
   const user = profile.user;
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(e) => e.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button><span className="eyebrow">AUDIT-LOGGED VIEW</span><h2>{user.fullName}</h2><p>{user.email}</p><div className="profile-meta"><span>Plan<strong>{user.plan}</strong></span><span>Joined<strong>{formatDate(String(user.createdAt))}</strong></span><span>Last activity<strong>{user.lastActivityAt ? formatDate(user.lastActivityAt) : "Not recorded"}</strong></span></div><h3>Driving activity</h3><div className="profile-stats">{Object.entries(profile.statistics).map(([key, value]) => <div key={key}><strong>{formatNumber(value)}</strong><span>{humanize(key)}</span></div>)}</div><h3>Truck profiles</h3>{user.trucks.length ? user.trucks.map(truck => <div className="record-card" key={String(truck.id)}><dl className="truck-details">{truckDetails(truck).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}<div><dt>Last modified</dt><dd>{typeof truck.updatedAt === "string" ? formatDate(truck.updatedAt) : "Not recorded"}</dd></div></dl></div>) : <Empty text="No truck profile records" />}<h3>Subscription history</h3>{profile.financialAccess ? user.subscriptions.map((subscription) => <div className="record-card" key={String(subscription.id)}><strong>{String(subscription.plan)} · {String(subscription.status)}</strong><span>{String(subscription.provider)} · {formatDate(String(subscription.createdAt))}</span></div>) : <div className="restricted-note">Financial history requires ADMIN access.</div>}<h3>Support history</h3>{profile.supportHistory.length ? profile.supportHistory.map((ticket) => <div className="record-card" key={String(ticket.id)}><strong>{String(ticket.subject || "Subject restricted")}</strong><span>{String(ticket.status)} · {formatDate(String(ticket.createdAt))}</span></div>) : <Empty text="No support ticket records" />}</aside></div>;
-}
-
-function PricingSettings() {
-  const [plans, setPlans] = useState<SubscriptionPlanCatalog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true); setError("");
-    try { setPlans((await api.get<{ plans: SubscriptionPlanCatalog[] }>("/admin/subscription-plans")).plans); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load subscription plans"); }
-    finally { setLoading(false); }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
-
-  function replacePlan(updated: SubscriptionPlanCatalog) {
-    setPlans((current) => current.map((plan) => plan.code === updated.code ? updated : plan).sort((a, b) => a.sortOrder - b.sortOrder));
-  }
-
-  return <section className="pricing-page">
-    <div className="pricing-intro">
-      <div><span className="eyebrow orange">ADMIN ONLY · AUDIT LOGGED</span><h2>Subscription catalog</h2><p>These are the live prices shown in the SemiTraX app. Changes take effect after a driver refreshes the Premium screen.</p></div>
-      <button className="refresh" onClick={() => void load()} disabled={loading}>↻ Reload</button>
-    </div>
-    <div className="pricing-warning"><strong>Pricing safety</strong><span>Changing a catalog price does not silently alter an existing provider subscription. Existing billing remains governed by its verified payment-provider record.</span></div>
-    {error && <div className="error-banner">{error}</div>}
-    {loading && !plans.length ? <div className="center-state panel-height"><Spinner /><p>Loading live pricing…</p></div> : <div className="plan-editor-grid">{plans.map((plan) => <PlanEditor key={`${plan.code}-${plan.version}`} plan={plan} onSaved={replacePlan} />)}</div>}
-  </section>;
-}
-
-function PlanEditor({ plan, onSaved }: { plan: SubscriptionPlanCatalog; onSaved: (plan: SubscriptionPlanCatalog) => void }) {
-  const [draft, setDraft] = useState(plan);
-  const [price, setPrice] = useState(plan.priceAmountCents === null ? "" : (plan.priceAmountCents / 100).toFixed(2));
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const isTrial = draft.billingInterval === "TRIAL";
-
-  function change<K extends keyof SubscriptionPlanCatalog>(key: K, value: SubscriptionPlanCatalog[K]) {
-    setDraft((current) => ({ ...current, [key]: value })); setMessage("");
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError(""); setMessage("");
-    const parsedPrice = isTrial ? 0 : price.trim() === "" ? null : Math.round(Number(price) * 100);
-    if (parsedPrice !== null && (!Number.isFinite(parsedPrice) || parsedPrice < 0)) {
-      setError("Enter a valid non-negative price."); setBusy(false); return;
-    }
-    try {
-      const response = await api.patch<{ plan: SubscriptionPlanCatalog }>(`/admin/subscription-plans/${encodeURIComponent(plan.code)}`, {
-        expectedVersion: draft.version,
-        displayName: draft.displayName,
-        purpose: draft.purpose,
-        description: draft.description?.trim() || null,
-        priceAmountCents: parsedPrice,
-        currency: draft.currency,
-        billingInterval: draft.billingInterval,
-        trialDays: isTrial ? draft.trialDays : 0,
-        isActive: draft.isActive,
-        isPublic: draft.isPublic,
-        isFeatured: draft.isFeatured,
-        badge: draft.badge?.trim() || null,
-        sortOrder: draft.sortOrder,
-      });
-      setDraft(response.plan); setPrice(response.plan.priceAmountCents === null ? "" : (response.plan.priceAmountCents / 100).toFixed(2));
-      onSaved(response.plan); setMessage("Saved and audit logged.");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save plan"); }
-    finally { setBusy(false); }
-  }
-
-  return <form className={`plan-editor ${draft.isFeatured ? "featured" : ""}`} onSubmit={save}>
-    <header><div><span className="plan-code">{draft.code}</span><h3>{draft.displayName}</h3></div><Status value={draft.isActive ? "ACTIVE" : "INACTIVE"} /></header>
-    <label>Customer-facing name<input value={draft.displayName} onChange={(event) => change("displayName", event.target.value)} maxLength={80} required /></label>
-    <label>Purpose<input value={draft.purpose} onChange={(event) => change("purpose", event.target.value)} maxLength={160} required /></label>
-    <label>Description<textarea value={draft.description ?? ""} onChange={(event) => change("description", event.target.value || null)} maxLength={500} rows={3} /></label>
-    <div className="plan-fields">
-      <label>Price ({draft.currency})<input type="number" min="0" max="1000000" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={isTrial} placeholder={draft.billingInterval === "CUSTOM" ? "Set later" : "0.00"} required={draft.isActive && ["MONTH", "YEAR"].includes(draft.billingInterval)} /></label>
-      <label>Billing<select value={draft.billingInterval} onChange={(event) => change("billingInterval", event.target.value as SubscriptionPlanCatalog["billingInterval"])}><option value="TRIAL">Trial</option><option value="MONTH">Monthly</option><option value="YEAR">Annual</option><option value="CUSTOM">Custom</option></select></label>
-      <label>Trial days<input type="number" min="1" max="365" value={draft.trialDays} onChange={(event) => change("trialDays", Number(event.target.value))} disabled={!isTrial} /></label>
-      <label>Currency<input value={draft.currency} onChange={(event) => change("currency", event.target.value.toUpperCase())} minLength={3} maxLength={3} required /></label>
-      <label>Badge<input value={draft.badge ?? ""} onChange={(event) => change("badge", event.target.value || null)} maxLength={40} placeholder="Optional" /></label>
-      <label>Display order<input type="number" min="0" max="10000" value={draft.sortOrder} onChange={(event) => change("sortOrder", Number(event.target.value))} /></label>
-    </div>
-    <div className="plan-switches">
-      <label><input type="checkbox" checked={draft.isActive} onChange={(event) => change("isActive", event.target.checked)} /> Available for selection</label>
-      <label><input type="checkbox" checked={draft.isPublic} onChange={(event) => change("isPublic", event.target.checked)} /> Visible in app</label>
-      <label><input type="checkbox" checked={draft.isFeatured} onChange={(event) => change("isFeatured", event.target.checked)} /> Featured plan</label>
-    </div>
-    {error && <div className="inline-message error">{error}</div>}{message && <div className="inline-message success">{message}</div>}
-    <footer><small>Version {draft.version} · Updated {formatDate(draft.updatedAt)}</small><button className="primary-small" disabled={busy}>{busy ? "Saving…" : "Save plan"}</button></footer>
-  </form>;
 }
 
 function AccountSecurity({ user, onUserUpdated, onPasswordChanged }: { user: AdminUser; onUserUpdated: (user: AdminUser) => void; onPasswordChanged: () => void }) {

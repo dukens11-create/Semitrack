@@ -30,6 +30,10 @@ import { Store } from '../src/state/Store';
 import type { Services } from '../src/app/services';
 import type { ApiClient } from '../src/services/api/ApiClient';
 import { deferred } from './fixtures';
+import {
+  createSolarAppearanceSchedule,
+  scheduledAppearance,
+} from '../src/features/settings/automaticAppearance';
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: require('react-native').View,
 }));
@@ -49,6 +53,138 @@ const initial: Settings = {
   trafficReroute: false,
   settingsJson: null,
 };
+test('appearance-only schedule is bounded, contains no coordinates and rejects stale evidence', () => {
+  const now = Date.parse('2026-09-20T19:00:00Z'),
+    fix = {
+      latitude: 39.53,
+      longitude: -119.81,
+      accuracy: 10,
+      heading: null,
+      speed: null,
+      timestamp: now,
+    };
+  const schedule = createSolarAppearanceSchedule(fix, now)!;
+  expect(scheduledAppearance(schedule, now + 600000)).toBe('day');
+  expect(scheduledAppearance(schedule, now + 86400000)).toBeNull();
+  expect(scheduledAppearance(schedule, now - 1)).toBeNull();
+  expect(JSON.stringify(schedule)).not.toMatch(/latitude|longitude|119\.81/);
+  expect(
+    createSolarAppearanceSchedule({ ...fix, timestamp: now - 300001 }, now),
+  ).toBeNull();
+  expect(
+    createSolarAppearanceSchedule({ ...fix, accuracy: 1001 }, now),
+  ).toBeNull();
+});
+test('Automatic startup has a bounded fallback if an enabled receiver never supplies GPS', async () => {
+  jest.useFakeTimers();
+  try {
+    const { services } = setup('system');
+    services.location = Object.assign(
+      new Store({ fix: null, tracking: true }),
+      { startIfPermitted: jest.fn(async () => {}) },
+    ) as unknown as Services['location'];
+    jest.mocked(readAppearance).mockResolvedValue('system');
+    jest.mocked(useColorScheme).mockReturnValue('light');
+    const seen: boolean[] = [];
+    await act(async () => {
+      screen = create(
+        <ApplicationAppearance services={services}>
+          <Probe seen={seen} />
+        </ApplicationAppearance>,
+      );
+    });
+    expect(seen).toEqual([]);
+    await act(async () => jest.advanceTimersByTime(5000));
+    expect(seen.at(-1)).toBe(false);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+test('Automatic retains daylight across GPS expiry and foreground, then changes at actual night', async () => {
+  jest.useFakeTimers();
+  try {
+    const noon = Date.parse('2026-09-20T19:00:00Z');
+    jest.setSystemTime(noon);
+    const { services } = setup('system');
+    class Location extends Store<{
+      fix: {
+        latitude: number;
+        longitude: number;
+        accuracy: number;
+        timestamp: number;
+      } | null;
+      tracking: boolean;
+    }> {
+      expire() {
+        this.publish({ fix: null, tracking: true });
+      }
+    }
+    const location = new Location({
+      fix: {
+        latitude: 39.53,
+        longitude: -119.81,
+        accuracy: 10,
+        timestamp: noon,
+      },
+      tracking: true,
+    });
+    services.location = Object.assign(location, {
+      startIfPermitted: jest.fn(async () => {}),
+    }) as unknown as Services['location'];
+    jest.mocked(readAppearance).mockResolvedValue('system');
+    jest.mocked(useColorScheme).mockReturnValue('dark');
+    let foreground: ((state: AppStateStatus) => void) | undefined;
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_name, cb) => {
+      foreground = cb;
+      return { remove: jest.fn() };
+    });
+    const seen: boolean[] = [];
+    await act(async () => {
+      screen = create(
+        <ApplicationAppearance services={services}>
+          <Probe seen={seen} />
+        </ApplicationAppearance>,
+      );
+    });
+    await act(async () => {
+      location.expire();
+      jest.advanceTimersByTime(360000);
+      foreground?.('active');
+    });
+    expect(new Set(seen)).toEqual(new Set([false]));
+    await act(async () => {
+      jest.setSystemTime(Date.parse('2026-09-21T06:00:00Z'));
+      foreground?.('active');
+    });
+    expect(seen.at(-1)).toBe(true);
+    expect(location.getSnapshot().fix).toBeNull();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+test.each(['day', 'night', 'system'] as const)(
+  'saved device %s survives stale remote settings and a failed synchronization',
+  async mode => {
+    const request = jest.fn(async () => ({
+      ...initial,
+      dayNightMode: mode === 'day' ? 'night' : 'day',
+    }));
+    const retain = jest.fn(async () => {});
+    const settings = new SettingsService(
+      { request } as unknown as ApiClient,
+      retain,
+    );
+    settings.setDeviceAppearance(mode);
+    await settings.load();
+    expect(settings.getSnapshot().settings?.dayNightMode).toBe(mode);
+    request.mockRejectedValueOnce(new Error('offline'));
+    await expect(
+      settings.save({ ...initial, dayNightMode: mode }),
+    ).rejects.toThrow('offline');
+    expect(settings.getSnapshot().settings?.dayNightMode).toBe(mode);
+    expect(retain).toHaveBeenLastCalledWith(mode);
+  },
+);
 class Account extends Store<{ status: string }> {
   restore = jest.fn(async () => {});
   set(status: string) {
@@ -367,3 +503,82 @@ test.each([
     expect(new Set(seen)).toEqual(new Set([dark]));
   },
 );
+
+test('Automatic startup does not publish system night before a late daytime location fix', async () => {
+  jest.useFakeTimers();
+  try {
+    const now = Date.parse('2026-09-17T19:00:00Z');
+    jest.spyOn(Date, 'now').mockReturnValue(now);
+
+    const { services } = setup('system');
+    class TestLocationStore extends Store<{
+      fix: {
+        latitude: number;
+        longitude: number;
+        accuracy: number;
+        timestamp: number;
+      } | null;
+      tracking: boolean;
+    }> {
+      update(next: {
+        fix: {
+          latitude: number;
+          longitude: number;
+          accuracy: number;
+          timestamp: number;
+        } | null;
+        tracking: boolean;
+      }) {
+        this.publish(next);
+      }
+    }
+
+    const location = new TestLocationStore({
+      fix: null,
+      tracking: true,
+    });
+
+    services.location = Object.assign(location, {
+      startIfPermitted: jest.fn(async () => {}),
+    }) as unknown as Services['location'];
+
+    jest.mocked(readAppearance).mockResolvedValue('system');
+    jest.mocked(useColorScheme).mockReturnValue('dark');
+
+    const seen: boolean[] = [];
+
+    await act(async () => {
+      screen = create(
+        <ApplicationAppearance services={services}>
+          <Probe seen={seen} />
+        </ApplicationAppearance>,
+      );
+    });
+
+    expect(seen).toEqual([]);
+
+    await act(async () => {
+      jest.advanceTimersByTime(1200);
+    });
+
+    // While location is actively resolving, Automatic must not expose a
+    // temporary system-dark application frame.
+    expect(seen).toEqual([]);
+
+    await act(async () => {
+      location.update({
+        fix: {
+          latitude: 39.53,
+          longitude: -119.81,
+          accuracy: 10,
+          timestamp: now,
+        },
+        tracking: true,
+      });
+    });
+
+    expect(seen).toEqual([false]);
+  } finally {
+    jest.useRealTimers();
+  }
+});

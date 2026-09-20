@@ -1,5 +1,7 @@
 # Semi-Trax subscription Phase 2 foundation
 
+> Historical foundation/setup reference. New-customer pricing and readiness are superseded by [SUBSCRIPTION_PRICING.md](SUBSCRIPTION_PRICING.md). Do not create new offers from the older trial, pilot or fleet prices below. Preserve existing contractual records.
+
 Phase 2 adds the backend and database foundation only. Google Play Billing, Apple In-App Purchase, Stripe Checkout, real charges, and provider webhook endpoints are not activated.
 
 ## Safety mode

@@ -1,3 +1,4 @@
+import { MAX_ROUTE_LOCATIONS, MAX_ROUTE_LEGS } from './routeLimits';
 import { stopDistanceMeters } from './stopCoverage';
 import { DriverError } from '../errors/driverErrors';
 import { z } from 'zod';
@@ -152,7 +153,7 @@ const alternativeSchema = z.object({
   etaMinutes: z.number().finite().nonnegative(),
   durationSeconds: z.number().int().positive(),
   routeGeometry: z.array(routePosition).min(2).max(200000),
-  legs: z.array(legSchema).max(22),
+  legs: z.array(legSchema).max(MAX_ROUTE_LEGS),
   turnByTurn: z.array(maneuverSchema).max(50000),
   notices: z
     .array(
@@ -182,7 +183,11 @@ export const routeSchema = z.object({
     )
     .max(3)
     .optional(),
-  validatedStops: z.array(coordinateSchema).min(2).max(22).optional(),
+  validatedStops: z
+    .array(coordinateSchema)
+    .min(2)
+    .max(MAX_ROUTE_LOCATIONS)
+    .optional(),
   provider: z.literal('Trimble'),
   truckSafe: z.literal(true),
   navigationAllowed: z.literal(true),
@@ -203,7 +208,7 @@ export const routeSchema = z.object({
     .max(200000),
   turnByTurn: z.array(maneuverSchema).min(1).max(50000),
   alerts: z.array(z.string()),
-  legs: z.array(legSchema).max(22).default([]),
+  legs: z.array(legSchema).max(MAX_ROUTE_LEGS).default([]),
   alternatives: z.array(alternativeSchema).max(5).default([]),
 });
 export type TruckRoute = z.infer<typeof routeSchema>;

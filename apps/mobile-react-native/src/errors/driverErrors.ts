@@ -1,5 +1,23 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  PLACE_SEARCH_CONFIGURATION:
+    'Address search is unavailable until a public map token is configured. Contact support with code PLACE_SEARCH_CONFIGURATION.',
+  PLACE_SEARCH_UNAUTHORIZED:
+    'Mapbox place search could not authorize this app. Contact support with code PLACE_SEARCH_UNAUTHORIZED (HTTP 401).',
+  PLACE_SEARCH_FORBIDDEN:
+    'Mapbox denied access to place search. Contact support with code PLACE_SEARCH_FORBIDDEN (HTTP 403).',
+  PLACE_SEARCH_RATE_LIMITED:
+    'Place search is receiving too many requests. Wait before retrying. Code PLACE_SEARCH_RATE_LIMITED (HTTP 429).',
+  PLACE_SEARCH_REQUEST_INVALID:
+    'The place search request was rejected. Contact support with code PLACE_SEARCH_REQUEST_INVALID.',
+  PLACE_SEARCH_UNAVAILABLE:
+    'The place search provider is temporarily unavailable. Retry later. Code PLACE_SEARCH_UNAVAILABLE.',
+  PLACE_SEARCH_NETWORK:
+    'Place search could not reach Mapbox. Check your connection and retry. Code PLACE_SEARCH_NETWORK.',
+  PLACE_SEARCH_TIMEOUT:
+    'Place search timed out. Try again. Code PLACE_SEARCH_TIMEOUT.',
+  PLACE_SEARCH_INVALID_RESPONSE:
+    'Destination search is unavailable because the returned place data could not be validated. Retry later. Code PLACE_SEARCH_INVALID_RESPONSE.',
   ELD_PROVIDER_NOT_CONFIGURED:
     'This ELD provider is not configured. Connection setup is required before use.',
   ELD_NOT_CONNECTED: 'Connect this ELD provider before syncing.',
@@ -78,6 +96,8 @@ const messages: Record<string, string> = {
     'A fresh precise GPS fix was not received. Move to an open area, check precise location access, and retry.',
   FRESH_LOCATION_REQUIRED:
     'A fresh precise GPS fix is required. Enable location and retry.',
+  ROUTE_APP_NOT_ACTIVE:
+    'Route request paused before sending. Keep SemiTraX open and tap Set final destination again.',
   ROUTE_CONTRACT_INVALID:
     'Unable to prepare this truck route. Please try again or choose another destination.',
   TRIP_CHANGED:

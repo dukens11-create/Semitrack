@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../dist/contracts/routeLimits.js';
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -670,7 +671,7 @@ test('dispatch pickup completion is explicit ordered revisioned state, survives 
  assert.equal(await db.adminAuditLog.count({where:{targetId:assigned.id,action:'TRIP_STOP_COMPLETED'}}),2);
  await db.operationalFleetDriver.update({where:{fleetId_userId:{fleetId:fleet.id,userId:driver.id}},data:{active:false}});
  await assert.rejects(()=>transitionTrip(db,driver.id,assigned.id,{expectedRevision:saved.revision,status:'IN_PROGRESS',completedStopId:'b'}),(e:any)=>e.safeCode==='DISPATCH_MEMBERSHIP_REQUIRED');
- for(const stops of [[{...body.plan.origin}],Array.from({length:20},(_,i)=>({...body.plan.origin,id:'s'+i}))])await assert.rejects(()=>assignTripToDriver(db,actor.id,{...body,plan:{...plan(),stops}}));
+ for(const stops of [[{...body.plan.origin}],Array.from({length:MAX_INTERMEDIATE_STOPS},(_,i)=>({...body.plan.origin,id:'s'+i}))])await assert.rejects(()=>assignTripToDriver(db,actor.id,{...body,plan:{...plan(),stops}}));
 });
 
 test('document committed response loss and reconstructed client identity replay exactly one row on real PostgreSQL', {skip:!enabled},async()=>{
@@ -681,4 +682,20 @@ test('document committed response loss and reconstructed client identity replay 
  const retry=await saveDocumentMetadata(db,owner.id,JSON.parse(durable));assert.equal(retry.id,originalId);assert.equal(await db.document.count({where:{userId:owner.id}}),1);
  const next=await saveDocumentMetadata(db,owner.id,{...body,createOperationId:crypto.randomUUID()});assert.notEqual(next.id,retry.id);assert.equal(await db.document.count({where:{userId:owner.id}}),2);
  const isolated=await saveDocumentMetadata(db,other.id,JSON.parse(durable));assert.notEqual(isolated.id,retry.id);assert.equal(isolated.userId,other.id);
+});
+
+test('25-stop saved trip round trips through PostgreSQL with the exact ordered plan and truck; 26 rejected atomically',{skip:!enabled},async()=>{
+  const db=await database(),owner=await user(db);
+  const {createTrip,publicTrip}=await import('../dist/modules/trips/trip-status.routes.js');
+  const {saveTruck}=await import('../dist/modules/trucks/profileRevision.js');
+  const truck=await saveTruck(db,owner.id,owner.id,fixture);
+  const body={...plan(),truckId:truck.id,expectedTruckRevision:truck.revision,stops:Array.from({length:MAX_INTERMEDIATE_STOPS},(_,i)=>({id:'ordered-'+i,name:'Synthetic stop '+i,lat:40+i*.01,lng:-120}))};
+  const saved=await db.$transaction(tx=>createTrip(tx,owner.id,body));
+  const restored=publicTrip(await db.trip.findUniqueOrThrow({where:{id:saved.id}}));
+  assert.deepEqual(restored.stops,body.stops);assert.deepEqual(restored.origin,body.origin);assert.deepEqual(restored.destination,body.destination);
+  assert.equal(restored.truckSnapshot.id,truck.id);assert.equal(restored.truckSnapshot.heightFt,13.5);assert.equal(restored.truckSnapshot.weightLbs,80000);
+  assert.equal(restored.navigationVerified,false);assert.equal(saved.distanceMiles,null);
+  assert.equal((await db.$transaction(tx=>createTrip(tx,owner.id,body))).id,saved.id);
+  await assert.rejects(db.$transaction(tx=>createTrip(tx,owner.id,{...body,createOperationId:crypto.randomUUID(),stops:[...body.stops,{id:'overflow',name:'Overflow',lat:41,lng:-120}]})));
+  assert.equal(await db.trip.count({where:{userId:owner.id}}),1);
 });

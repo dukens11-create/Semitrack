@@ -6,6 +6,7 @@ export function sanitizeRestrictionDiagnostic(value: unknown) {
     v.source !== 'TRIMBLE_DIRECTIONS_REPORT' ||
     v.category !== 'UNCLASSIFIED_PROVIDER_WARNING' ||
     typeof v.providerTextPresent !== 'boolean' ||
+    typeof v.malformedWarningEvidencePresent !== 'boolean' ||
     !Number.isInteger(v.legNumber) ||
     Number(v.legNumber) < 1 ||
     Number(v.legNumber) > 1000 ||
@@ -29,6 +30,7 @@ export function sanitizeRestrictionDiagnostic(value: unknown) {
       ),
     ].slice(0, 16),
     providerTextPresent: v.providerTextPresent,
+    malformedWarningEvidencePresent: v.malformedWarningEvidencePresent,
     legNumber: Number(v.legNumber),
     lineNumber: Number(v.lineNumber),
   };

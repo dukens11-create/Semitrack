@@ -4,6 +4,15 @@ export type Environment = Readonly<{
   release: boolean;
 }>;
 
+/** A release build must not silently replace working maps with an empty token. */
+export function validateReleaseMapToken(token: string): void {
+  if (/\s/.test(token) || !/^pk\.[A-Za-z0-9._-]+$/.test(token)) {
+    throw new Error(
+      'MAPBOX_PUBLIC_TOKEN must contain the approved public display token before a release build.',
+    );
+  }
+}
+
 export function validateApiUrl(value: string, release: boolean): string {
   let url: URL;
   try {

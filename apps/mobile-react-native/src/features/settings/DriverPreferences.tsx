@@ -19,7 +19,13 @@ import {
 import type { LocationFix } from '../../services/location/LocationService';
 import type { Services } from '../../app/services';
 import { useStore } from '../../hooks/useStore';
-import { resolveAppearance, type AppearanceMode } from './automaticAppearance';
+import {
+  resolveAppearance,
+  createSolarAppearanceSchedule,
+  scheduledAppearance,
+  type SolarAppearanceSchedule,
+  type AppearanceMode,
+} from './automaticAppearance';
 // Consumers receive an effective theme only; system resolution belongs here.
 export const DriverAppearanceContext = createContext<'day' | 'night'>('day');
 export function DriverPreferences({
@@ -41,6 +47,7 @@ export function DriverPreferences({
   const [locationSettled, setLocationSettled] = useState(false);
   const lastFix = useRef<LocationFix | null>(null);
   const previous = useRef<'day' | 'night' | undefined>(undefined);
+  const solarSchedule = useRef<SolarAppearanceSchedule | null>(null);
   const presented = useRef(false);
   useEffect(() => {
     if (authenticated) void services?.settings.load().catch(() => {});
@@ -63,7 +70,16 @@ export function DriverPreferences({
     let mounted = true;
     // A short, bounded opportunity for an already-permitted fix. Never prompt
     // for location just to select colors, or hold the app behind a GPS splash.
-    const timer = setTimeout(() => setLocationSettled(true), 1200);
+    const timer = setTimeout(() => {
+      if (mounted && !services.location.getSnapshot().tracking) {
+        setLocationSettled(true);
+      }
+    }, 1200);
+    // Automatic may fall back to device appearance without solar evidence,
+    // but an enabled GPS receiver must not hold startup indefinitely.
+    const deadline = setTimeout(() => {
+      if (mounted) setLocationSettled(true);
+    }, 5000);
     void services.location
       .startIfPermitted()
       .then(() => {
@@ -76,6 +92,7 @@ export function DriverPreferences({
     return () => {
       mounted = false;
       clearTimeout(timer);
+      clearTimeout(deadline);
     };
   }, [services, mode, authenticated]);
   if (location.fix) lastFix.current = location.fix;
@@ -87,16 +104,35 @@ export function DriverPreferences({
     Math.max(now, Date.now()),
     previous.current,
   );
+  const clock = Math.max(now, Date.now());
+  if (
+    (mode ?? 'system') === 'system' &&
+    solar !== 'system' &&
+    (!solarSchedule.current ||
+      clock - solarSchedule.current.createdAt >= 300000)
+  )
+    solarSchedule.current = createSolarAppearanceSchedule(
+      location.fix ?? lastFix.current,
+      clock,
+    );
+  const effectiveSolar =
+    solar === 'system'
+      ? scheduledAppearance(solarSchedule.current, clock) ?? 'system'
+      : solar;
   const resolved =
-    solar === 'system' ? (scheme === 'dark' ? 'night' : 'day') : solar;
+    effectiveSolar === 'system'
+      ? scheme === 'dark'
+        ? 'night'
+        : 'day'
+      : effectiveSolar;
   useEffect(() => {
-    if (solar !== 'system') previous.current = solar;
-  }, [solar]);
+    if (effectiveSolar !== 'system') previous.current = effectiveSolar;
+  }, [effectiveSolar]);
   const waiting =
     (!mode && authenticated) ||
     (!presented.current &&
       (mode ?? 'system') === 'system' &&
-      solar === 'system' &&
+      effectiveSolar === 'system' &&
       !locationSettled);
   if (waiting)
     return (

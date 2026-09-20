@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../../contracts/routeLimits.js';
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import type { Prisma, PrismaClient, Trip } from '@prisma/client';
@@ -20,7 +21,7 @@ export const tripPlanSchema = z
     name: z.string().trim().min(1).max(120),
     origin: tripPoint,
     destination: tripPoint,
-    stops: z.array(tripPoint).max(20),
+    stops: z.array(tripPoint).max(MAX_INTERMEDIATE_STOPS),
     truckId: z.string().min(1).max(128).optional(),
     expectedTruckRevision: z.number().int().positive().optional(),
   })
@@ -45,7 +46,7 @@ export const tripTransitions: Record<string, readonly string[]> = {
 /** Driver-reported completion is an ordered prefix, never inferred from GPS/status. */
 function tripStopProgress(t: Trip) {
   const options = (t.routeOptionsJson ?? {}) as Record<string, unknown>;
-  const stops = z.array(tripPoint).parse(t.viaStopsJson ?? []);
+  const stops = z.array(tripPoint).max(MAX_INTERMEDIATE_STOPS).parse(t.viaStopsJson ?? []);
   const assigned = !!(t.dispatchFleetId || t.dispatchActorId);
   const ids = [...(assigned ? [String(options.originId ?? 'origin')] : []), ...stops.map(s => s.id)];
   const completed = z.array(z.string()).parse(options.completedStopIds ?? []);

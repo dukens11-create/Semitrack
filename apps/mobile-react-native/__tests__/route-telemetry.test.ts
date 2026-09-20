@@ -25,6 +25,7 @@ const warning = {
   category: 'UNCLASSIFIED_PROVIDER_WARNING',
   providerWarningTypes: [4],
   providerTextPresent: true,
+  malformedWarningEvidencePresent: false,
   legNumber: 2,
   lineNumber: 3,
 };
@@ -100,6 +101,32 @@ test('backend warning remains rejected and identifies the allowlisted Directions
   );
   expect(events().some(e => e.result === 'ACCEPTED')).toBe(false);
 });
+test('malformed provider warning evidence remains sanitized and identifiable', async () => {
+  const { service } = setup(
+    {
+      error: {
+        code: 'TRIMBLE_RESTRICTION_WARNING',
+        restrictionDiagnostic: {
+          ...warning,
+          providerWarningTypes: [],
+          malformedWarningEvidencePresent: true,
+        },
+      },
+    },
+    422,
+  );
+  await expect(service.calculate(origin, plan, truck)).rejects.toBeDefined();
+  expect(events()).toContainEqual(
+    expect.objectContaining({
+      stage: 'WARNING_ORIGIN',
+      source: 'PROVIDER_RESTRICTION',
+      warningEvidence: 'PRESENT',
+      providerWarningTypes: [],
+      malformedWarningEvidencePresent: true,
+    }),
+  );
+});
+
 test.each([
   undefined,
   { ...warning, source: 'SECRET' },

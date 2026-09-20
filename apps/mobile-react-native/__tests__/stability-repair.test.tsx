@@ -159,7 +159,9 @@ test('Automatic has bounded neutral startup when GPS never arrives', async () =>
   await act(async () => jest.advanceTimersByTime(1199));
   expect(seen).toEqual([]);
   await act(async () => jest.advanceTimersByTime(1));
-  expect(seen).toEqual(['night']);
+  // If location is still actively resolving, remain on the neutral startup
+  // frame instead of publishing a temporary system theme that can flash.
+  expect(seen).toEqual([]);
 });
 test('denied/unavailable location immediately uses system fallback without a permission prompt', async () => {
   const { request, services, location } = setup();

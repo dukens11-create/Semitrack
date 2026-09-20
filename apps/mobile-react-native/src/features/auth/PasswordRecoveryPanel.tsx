@@ -11,11 +11,13 @@ import { ErrorText } from '../../components/ui';
 export function PasswordRecoveryPanel({
   auth,
   onClose,
+  initialToken = '',
 }: {
   auth: AuthStore;
   onClose: () => void;
+  initialToken?: string;
 }) {
-  const [link, setLink] = useState(''),
+  const [link, setLink] = useState(initialToken),
     [password, setPassword] = useState(''),
     [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState<string>(),

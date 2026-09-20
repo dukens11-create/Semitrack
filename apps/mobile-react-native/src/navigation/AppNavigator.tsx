@@ -1,3 +1,4 @@
+import { SubscriptionScreen } from '../screens/SubscriptionScreen';
 import { Alert } from '../components/ThemedAlert';
 import { isNavigationSession } from '../features/navigation/navigationPresentation';
 import { EldScreen } from '../screens/EldScreen';
@@ -28,6 +29,7 @@ type Routes = {
   Settings: undefined;
   Eld: undefined;
   Offline: undefined;
+  Plans: undefined;
 };
 const Stack = createNativeStackNavigator<Routes>();
 const tabs: { label: string; icon: DriverIconName; active: DriverIconName }[] =
@@ -45,7 +47,7 @@ export function DriverShell({
 }: {
   services: Services;
   open: (
-    screen: 'Trucks' | 'Settings' | 'Services' | 'Eld' | 'Offline',
+    screen: 'Trucks' | 'Settings' | 'Services' | 'Eld' | 'Offline' | 'Plans',
   ) => void;
 }) {
   const p = useDriverPalette();
@@ -124,6 +126,8 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
                 onSettings={() => open('Settings')}
                 onServices={() => open('Services')}
+                onOffline={() => open('Offline')}
+                onPlans={() => open('Plans')}
               />
             )}
           </View>
@@ -226,8 +230,12 @@ export function AppNavigator({ services }: { services: Services }) {
             <SettingsScreen
               services={services}
               onBack={() => navigation.goBack()}
+              onPlans={() => navigation.navigate('Plans')}
             />
           )}
+        </Stack.Screen>
+        <Stack.Screen name="Plans" options={{ title: 'Plans & Subscription' }}>
+          {() => <SubscriptionScreen services={services} />}
         </Stack.Screen>
         <Stack.Screen name="Eld" options={{ title: 'ELD connections' }}>
           {() => <EldScreen services={services} />}

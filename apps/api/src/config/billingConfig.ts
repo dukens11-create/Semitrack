@@ -107,7 +107,7 @@ export function parseBillingConfiguration(source: NodeJS.ProcessEnv = process.en
     );
   }
   const mode = rawMode as BillingMode;
-  const stripeTrialDays = parseInteger(source, "STRIPE_TRIAL_DAYS", 7, 0);
+  const stripeTrialDays = parseInteger(source, "STRIPE_TRIAL_DAYS", 14, 0);
   const stripeGracePeriodDays = parseInteger(source, "STRIPE_GRACE_PERIOD_DAYS", 3, 0);
   const pilotMaxRedemptions = parseInteger(source, "PILOT_MAX_REDEMPTIONS", 100, 1);
   if (pilotMaxRedemptions > 100) {

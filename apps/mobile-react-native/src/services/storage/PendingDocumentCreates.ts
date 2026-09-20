@@ -43,6 +43,7 @@ const secureStorage: DocumentOperationStorage = {
 /** One unresolved create per owner; persisted before HTTP. Never stores credentials. */
 export class PendingDocumentCreates {
   private tail: Promise<unknown> = Promise.resolve();
+  private deletedOwners = new Set<string>();
   constructor(private storage: DocumentOperationStorage = secureStorage) {}
   private enqueue<T>(action: () => Promise<T>): Promise<T> {
     const result = this.tail.then(action, action);
@@ -51,6 +52,7 @@ export class PendingDocumentCreates {
   }
   private async readStored(owner: string) {
     if (!owner) throw new Error('Sign in before recovering a document save.');
+    if (this.deletedOwners.has(owner)) return null;
     const value = await this.storage.read(owner);
     if (value === null) return null;
     const record = z
@@ -64,8 +66,10 @@ export class PendingDocumentCreates {
   }
   begin(owner: string, input: PendingDocumentBody) {
     return this.enqueue(async () => {
+      if (this.deletedOwners.has(owner)) throw new Error('Account access removed.');
       const pending = await this.readStored(owner);
       if (pending) return pending;
+      if (this.deletedOwners.has(owner)) throw new Error('Account access removed.');
       const body = bodySchema.parse(input);
       await this.storage.write(owner, JSON.stringify({ owner, body }));
       return body;
@@ -77,6 +81,12 @@ export class PendingDocumentCreates {
       if (pending?.createOperationId === operation)
         await this.storage.clear(owner);
     });
+  }
+  /** Confirmed account deletion only; never erases another owner's recovery data. */
+  discardOwner(owner: string) {
+    if (!owner) return Promise.reject(new Error('Account owner required.'));
+    this.deletedOwners.add(owner);
+    return this.enqueue(() => this.storage.clear(owner));
   }
 }
 export const pendingDocumentCreates = new PendingDocumentCreates();

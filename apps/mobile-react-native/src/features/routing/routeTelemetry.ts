@@ -1,3 +1,4 @@
+import { MAX_ROUTE_LOCATIONS } from '../../models/routeLimits';
 import { z } from 'zod';
 import { routeDiagnostic } from './routeDiagnostic';
 
@@ -42,7 +43,13 @@ const schema = z.object({
   axles: presence.optional(),
   trailers: presence.optional(),
   hazmat: z.enum(['ENABLED', 'DISABLED', 'UNKNOWN']).optional(),
-  stopCount: z.number().int().min(0).max(22).nullable().optional(),
+  stopCount: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_ROUTE_LOCATIONS)
+    .nullable()
+    .optional(),
   backendHttpStatus: z.number().int().min(100).max(599).nullable().optional(),
   responseReceived: z.boolean().optional(),
   warningEvidence: z.enum(['PRESENT', 'ABSENT_OR_INVALID']).optional(),
@@ -51,6 +58,7 @@ const schema = z.object({
     .max(16)
     .optional(),
   providerTextPresent: z.boolean().optional(),
+  malformedWarningEvidencePresent: z.boolean().optional(),
   legNumber: z.number().int().min(1).max(1000).optional(),
   lineNumber: z.number().int().min(1).max(100000).optional(),
   // Never accept arbitrary reason/message strings from a request or response.
@@ -144,7 +152,9 @@ export function beginRouteDiagnostic(truck: unknown, stopCount: number) {
         ? 'DISABLED'
         : 'UNKNOWN',
     stopCount:
-      Number.isInteger(stopCount) && stopCount >= 0 && stopCount <= 22
+      Number.isInteger(stopCount) &&
+      stopCount >= 0 &&
+      stopCount <= MAX_ROUTE_LOCATIONS
         ? stopCount
         : null,
   });
@@ -191,6 +201,8 @@ export function recordRouteFailure(
           ? {
               providerWarningTypes: evidence.providerWarningTypes,
               providerTextPresent: evidence.providerTextPresent,
+              malformedWarningEvidencePresent:
+                evidence.malformedWarningEvidencePresent,
               legNumber: evidence.legNumber,
               lineNumber: evidence.lineNumber,
             }

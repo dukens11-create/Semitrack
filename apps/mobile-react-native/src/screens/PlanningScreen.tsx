@@ -1,4 +1,10 @@
-import { routeDiagnosticHistory } from '../features/routing/routeTelemetry';
+import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
+import {
+  beginRouteDiagnostic,
+  recordRouteFailure,
+  routeDiagnosticHistory,
+} from '../features/routing/routeTelemetry';
+import { waitForRouteForeground } from '../features/routing/routeForeground';
 import { Alert } from '../components/ThemedAlert';
 import { WeatherStatus } from '../features/weather/WeatherStatus';
 import {
@@ -54,13 +60,14 @@ import { DriverSheet } from '../components/DriverSheet';
 import { DriverIcon } from '../components/DriverIcon';
 import { useStore } from '../hooks/useStore';
 import {
-  addStop,
+  appendDestination,
   createStopPlan,
-  removeStop,
-  reorderStop,
+  removeRouteStop,
+  reorderRouteStop,
   type Stop,
   type StopPlan,
 } from '../features/stops/StopPlan';
+import { RouteStops } from '../features/stops/RouteStops';
 import { type PlaceCategory } from '../features/poi/PoiService';
 import {
   PoiArtwork,
@@ -103,6 +110,8 @@ export function PlanningScreen({
   const [sheet, setSheet] = useState<
     | 'search'
     | 'route'
+    | 'stops'
+    | 'stop-detail'
     | 'location'
     | 'navigation'
     | 'places'
@@ -114,9 +123,11 @@ export function PlanningScreen({
     type: 'overview' | 'recenter';
     id: number;
   }>();
+  const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [satelliteOverride, setSatelliteOverride] = useState<boolean>();
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
+  const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
   const [bottomHeight, setBottomHeight] = useState(164);
@@ -221,6 +232,7 @@ export function PlanningScreen({
     if (!active) {
       gpsRequest.current?.abort();
       searchStore.cancel();
+      setAppendPlan(null);
       setSheet(null);
     }
     return () => {
@@ -232,11 +244,46 @@ export function PlanningScreen({
     // Route/profile/session changes invalidate in-flight route-relative search results.
     searchStore.cancel();
     setDetail(null);
+    setAppendPlan(null);
+    setSheet(current => (current === 'search' ? null : current));
   }, [routes.route, searchStore]);
   function closeSheet() {
     gpsRequest.current?.abort();
     searchStore.cancel();
+    setAppendPlan(null);
     setSheet(null);
+  }
+  function openAddStop() {
+    const current = services.routes.getSnapshot();
+    if (
+      !current.route ||
+      !current.plan ||
+      busyRef.current ||
+      navigationSession ||
+      startingNavigation
+    )
+      return;
+    if (current.plan.stops.length >= MAX_INTERMEDIATE_STOPS) {
+      setError(
+        `Maximum ${MAX_INTERMEDIATE_STOPS} intermediate stops reached. Remove a stop to add another.`,
+      );
+      return;
+    }
+    searchStore.clear();
+    setDetail(null);
+    setError(undefined);
+    setAppendPlan(current.plan);
+    setSheet('search');
+  }
+  async function appendSelectedStop(stop: Stop) {
+    const current = services.routes.getSnapshot();
+    if (!appendPlan || current.plan !== appendPlan || !current.route) {
+      setError(
+        'The route changed. Open Add Stop again to review the current route.',
+      );
+      return;
+    }
+    await calculate(appendDestination(appendPlan, stop));
   }
   function searchCenter() {
     const fix = services.location.getSnapshot().fix;
@@ -385,6 +432,9 @@ export function PlanningScreen({
     );
   }
   async function calculate(plan: StopPlan, alternatives = 0) {
+    // The confirmed Stop is already resolved. Retire obsolete place lookups so
+    // their errors cannot hide the outcome of this independent route request.
+    searchStore.cancel();
     if (navigationSession || startingNavigation) {
       setError('End navigation before changing the planned route.');
       return;
@@ -398,14 +448,18 @@ export function PlanningScreen({
     setAcquiringGps(true);
     try {
       await services.location.requestFreshFix(controller.signal);
-      if (controller.signal.aborted || AppState.currentState !== 'active')
-        return;
+      await waitForRouteForeground(controller.signal);
       // A driver may edit/sign out while GPS is being acquired. Never send the old profile.
       const selected = services.trucks.getSnapshot().selected;
       if (!selected || selected !== truck)
         throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     } catch (e) {
       if (controller.signal.aborted) return;
+      recordRouteFailure(
+        beginRouteDiagnostic(truck, plan.stops.length + 2),
+        'REQUEST_VALIDATION',
+        e,
+      );
       throw e;
     } finally {
       if (gpsRequest.current === controller) gpsRequest.current = null;
@@ -430,6 +484,29 @@ export function PlanningScreen({
   const pending =
     busy || routes.phase === 'calculating' || routes.phase === 'rerouting';
   const searchPending = searchState.phase === 'loading';
+  const stopEditingDisabled =
+    pending || startingNavigation || navigationSession;
+  const stopLimitReached =
+    (routes.plan?.stops.length ?? 0) >= MAX_INTERMEDIATE_STOPS;
+  function stopList() {
+    if (!routes.plan) return null;
+    return (
+      <RouteStops
+        plan={routes.plan}
+        disabled={stopEditingDisabled}
+        onView={stop => {
+          setDetail(stop);
+          setSheet('stop-detail');
+        }}
+        onRemove={stop => {
+          void run(() => calculate(removeRouteStop(routes.plan!, stop.id)));
+        }}
+        onReorder={(from, to) => {
+          void run(() => calculate(reorderRouteStop(routes.plan!, from, to)));
+        }}
+      />
+    );
+  }
 
   function search() {
     Keyboard.dismiss();
@@ -453,6 +530,16 @@ export function PlanningScreen({
     }
   }
   function menuAction(action: NavigationMenuAction) {
+    if (action === 'weather') {
+      closeSheet();
+      setWeatherDetailsRequest(v => v + 1);
+      return;
+    }
+    if (action === 'satellite') {
+      setSatelliteOverride(v => !(v ?? mapPreferences(settings).satellite));
+      closeSheet();
+      return;
+    }
     if (action === 'overview' || action === 'recenter') {
       setMapCommand(previous => ({
         type: action,
@@ -804,6 +891,8 @@ export function PlanningScreen({
         }
       >
         <WeatherStatus
+          driving={navigationSession}
+          detailsRequest={weatherDetailsRequest}
           services={services}
           route={routes.route}
           fix={location.fix}
@@ -815,23 +904,25 @@ export function PlanningScreen({
             >
               {feedback}
             </View>
-            <RoutePoiBadges
-              pois={pois.filter(
-                poi =>
-                  !hiddenCategories.includes(poi.category as PlaceCategory),
-              )}
-              fix={location.fix}
-              metric={settings?.units === 'metric'}
-              onSelect={poi => {
-                setDetail({
-                  id: poi.id,
-                  name: poi.name,
-                  lat: poi.latitude,
-                  lng: poi.longitude,
-                });
-                setSheet('search');
-              }}
-            />
+            {!navigationSession && (
+              <RoutePoiBadges
+                pois={pois.filter(
+                  poi =>
+                    !hiddenCategories.includes(poi.category as PlaceCategory),
+                )}
+                fix={location.fix}
+                metric={settings?.units === 'metric'}
+                onSelect={poi => {
+                  setDetail({
+                    id: poi.id,
+                    name: poi.name,
+                    lat: poi.latitude,
+                    lng: poi.longitude,
+                  });
+                  setSheet('search');
+                }}
+              />
+            )}
             <NavigationHud
               route={routes.route}
               destination={routes.plan?.destination.name}
@@ -844,35 +935,56 @@ export function PlanningScreen({
                 !navigationSession ? () => setSheet('route') : undefined
               }
             />
-            <View style={styles.routeActions}>
-              {!navigationSession && (
+            {!navigationSession && routes.plan && (
+              <View style={styles.routeActions}>
+                <View style={ds.grow}>
+                  <DriverButton
+                    title="+ Add Stop"
+                    secondary
+                    disabled={stopEditingDisabled || stopLimitReached}
+                    onPress={openAddStop}
+                  />
+                </View>
+                <View style={ds.grow}>
+                  <DriverButton
+                    title="Stops"
+                    secondary
+                    onPress={() => setSheet('stops')}
+                  />
+                </View>
+              </View>
+            )}
+            {!navigationSession && (
+              <View style={styles.routeActions}>
+                {!navigationSession && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start Navigation"
+                    accessibilityState={{ disabled: pending }}
+                    disabled={pending}
+                    onPress={() => {
+                      void run(startNavigation);
+                    }}
+                    style={[styles.startAction, pending && styles.disabled]}
+                  >
+                    <Text style={styles.startText}>Start Navigation</Text>
+                  </Pressable>
+                )}
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Start Navigation"
-                  accessibilityState={{ disabled: pending }}
-                  disabled={pending}
-                  onPress={() => {
-                    void run(startNavigation);
-                  }}
-                  style={[styles.startAction, pending && styles.disabled]}
+                  accessibilityLabel="Cancel Route"
+                  onPress={confirmCancelRoute}
+                  style={[
+                    styles.cancelAction,
+                    { backgroundColor: palette.input },
+                  ]}
                 >
-                  <Text style={styles.startText}>Start Navigation</Text>
+                  <Text style={[styles.cancelText, { color: palette.text }]}>
+                    Cancel Route
+                  </Text>
                 </Pressable>
-              )}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Cancel Route"
-                onPress={confirmCancelRoute}
-                style={[
-                  styles.cancelAction,
-                  { backgroundColor: palette.input },
-                ]}
-              >
-                <Text style={[styles.cancelText, { color: palette.text }]}>
-                  Cancel Route
-                </Text>
-              </Pressable>
-            </View>
+              </View>
+            )}
             <RouteAdvisories
               key={
                 routes.route.selectedRouteId +
@@ -1005,28 +1117,39 @@ export function PlanningScreen({
           <DriverCopy>{'Code: ' + routes.diagnostic.code}</DriverCopy>
           <DriverCopy>{'Category: ' + routes.diagnostic.category}</DriverCopy>
           <DriverCopy>
-            {'Backend HTTP: ' + (routes.diagnostic.httpStatus ?? 'not available')}
+            {'Backend HTTP: ' +
+              (routes.diagnostic.httpStatus ?? 'not available')}
           </DriverCopy>
           <DriverCopy>{routes.diagnostic.message}</DriverCopy>
           {routes.diagnostic.providerDetail && (
             <DriverCopy>
               {'Provider warning types: ' +
-                (routes.diagnostic.providerDetail.providerWarningTypes.join(', ') || 'not supplied') +
-                ' · Leg ' + routes.diagnostic.providerDetail.legNumber +
-                ' · Report line ' + routes.diagnostic.providerDetail.lineNumber}
+                (routes.diagnostic.providerDetail.providerWarningTypes.join(
+                  ', ',
+                ) || 'not supplied') +
+                ' · Leg ' +
+                routes.diagnostic.providerDetail.legNumber +
+                ' · Report line ' +
+                routes.diagnostic.providerDetail.lineNumber}
             </DriverCopy>
           )}
           <DriverCopy>
             {routes.diagnostic.providerDetailAvailable
               ? 'Provider warning identifiers are available. Their specific road restriction is not yet classified.'
               : 'The backend did not supply detailed provider warning evidence.'}
-            {' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'}
+            {
+              ' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'
+            }
           </DriverCopy>
           <DriverButton
             title="Share sanitized diagnostic"
             onPress={() => {
               void Share.share({
-                message: JSON.stringify({ ...routes.diagnostic, events: routeDiagnosticHistory() }, null, 2),
+                message: JSON.stringify(
+                  { ...routes.diagnostic, events: routeDiagnosticHistory() },
+                  null,
+                  2,
+                ),
               }).catch(() => setError('The share sheet could not be opened.'));
             }}
           />
@@ -1081,7 +1204,16 @@ export function PlanningScreen({
         </DriverSheet>
       )}
       {active && sheet === 'search' && (
-        <DriverSheet title="Set destination" onClose={() => closeSheet()}>
+        <DriverSheet
+          title={appendPlan ? 'Add Stop' : 'Set destination'}
+          onClose={() => closeSheet()}
+        >
+          {appendPlan && (
+            <DriverCopy>
+              Choose the next stop after {appendPlan.destination.name}. Your
+              existing stops will be kept.
+            </DriverCopy>
+          )}
           {routes.route && (
             <DriverButton
               title="Cancel Route"
@@ -1219,7 +1351,7 @@ export function PlanningScreen({
           {searchState.phase === 'waiting' && (
             <DriverCopy>Waiting for your address…</DriverCopy>
           )}
-          {feedback}
+          {!detail && feedback}
           {!pending &&
             !searchPending &&
             searchState.phase !== 'waiting' &&
@@ -1291,11 +1423,20 @@ export function PlanningScreen({
               <DriverCopy>
                 Confirm the destination and truck access before departure.
               </DriverCopy>
+              {feedback}
               <DriverButton
-                title="Set final destination"
-                disabled={pending || !trucks.selected}
+                title={
+                  appendPlan
+                    ? 'Add Stop & recalculate'
+                    : 'Set final destination'
+                }
+                disabled={stopEditingDisabled || !trucks.selected}
                 onPress={() => {
-                  void run(() => calculate(createStopPlan(detail)));
+                  void run(() =>
+                    appendPlan
+                      ? appendSelectedStop(detail)
+                      : calculate(createStopPlan(detail)),
+                  );
                 }}
               />
               {!trucks.selected && (
@@ -1308,18 +1449,55 @@ export function PlanningScreen({
                   }}
                 />
               )}
-              {routes.plan && (
+              {routes.plan && !appendPlan && (
                 <DriverButton
                   title="Add stop to current route"
                   secondary
-                  disabled={pending}
+                  disabled={stopEditingDisabled}
                   onPress={() => {
-                    void run(() => calculate(addStop(routes.plan!, detail)));
+                    void run(() =>
+                      calculate(appendDestination(routes.plan!, detail)),
+                    );
                   }}
                 />
               )}
             </DriverCard>
           )}
+        </DriverSheet>
+      )}
+      {active && sheet === 'stops' && routes.route && routes.plan && (
+        <DriverSheet title="Route Stops" onClose={closeSheet}>
+          {feedback}
+          <DriverButton
+            title="+ Add Stop"
+            secondary
+            disabled={stopEditingDisabled || stopLimitReached}
+            onPress={openAddStop}
+          />
+          {stopList()}
+        </DriverSheet>
+      )}
+      {active && sheet === 'stop-detail' && detail && routes.route && (
+        <DriverSheet
+          title="Stop details"
+          onClose={() => {
+            setDetail(null);
+            setSheet('stops');
+          }}
+        >
+          <DriverTitle small>{detail.name}</DriverTitle>
+          <DriverCopy>
+            This is a stop on your planned route. A destination result does not
+            verify a truck entrance. Review access before departure.
+          </DriverCopy>
+          <DriverButton
+            title="Back to stops"
+            secondary
+            onPress={() => {
+              setDetail(null);
+              setSheet('stops');
+            }}
+          />
         </DriverSheet>
       )}
       {active && sheet === 'route' && routes.route && (
@@ -1337,40 +1515,13 @@ export function PlanningScreen({
           {routes.plan && (
             <DriverCard>
               <DriverTitle small>Ordered stops</DriverTitle>
-              {routes.plan.stops.map((stop, index) => (
-                <View key={stop.id}>
-                  <DriverCopy>
-                    {index + 1}. {stop.name}
-                  </DriverCopy>
-                  <DriverButton
-                    title={'Remove stop ' + (index + 1)}
-                    secondary
-                    disabled={pending}
-                    onPress={() => {
-                      void run(() =>
-                        calculate(removeStop(routes.plan!, stop.id)),
-                      );
-                    }}
-                  />
-                  {index > 0 && (
-                    <DriverButton
-                      title={'Move stop ' + (index + 1) + ' earlier'}
-                      secondary
-                      disabled={pending}
-                      onPress={() => {
-                        void run(() =>
-                          calculate(
-                            reorderStop(routes.plan!, index, index - 1),
-                          ),
-                        );
-                      }}
-                    />
-                  )}
-                </View>
-              ))}
-              <DriverCopy>
-                Final destination: {routes.plan.destination.name}
-              </DriverCopy>
+              <DriverButton
+                title="+ Add Stop"
+                secondary
+                disabled={stopEditingDisabled || stopLimitReached}
+                onPress={openAddStop}
+              />
+              {stopList()}
               <DriverButton
                 title="Compare alternatives"
                 disabled={pending}

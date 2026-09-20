@@ -11,6 +11,8 @@ import { DriverIcon, type DriverIconName } from '../../components/DriverIcon';
 import type { NavigationState } from '../../services/guidance/NavigationEngine';
 export type NavigationMenuAction =
   | 'overview'
+  | 'weather'
+  | 'satellite'
   | 'recenter'
   | 'places'
   | 'filter'
@@ -83,6 +85,20 @@ const quick: Action[] = [
   },
 ];
 const setup: Action[] = [
+  {
+    action: 'weather',
+    title: 'Weather',
+    caption: 'Review current weather and available alerts',
+    icon: 'warning_amber_rounded',
+    color: '#62B3FF',
+  },
+  {
+    action: 'satellite',
+    title: 'Satellite map',
+    caption: 'Switch map imagery',
+    icon: 'satellite',
+    color: '#42BFDA',
+  },
   {
     action: 'warnings',
     title: 'Road Warnings',
@@ -189,6 +205,10 @@ export function NavigationMenu({
         Driving setup
       </Text>
       {grid(setup)}
+      <Text style={[styles.notice, { color: p.muted }]}>
+        Park safely before managing documents or account settings. These remain
+        available outside the driving map.
+      </Text>
       <Text style={[styles.notice, { color: p.muted }]}>
         Live guidance and rerouting require licensed CoPilot maps and runtime.
         POIs and road reports require available provider data. Sharing sends a

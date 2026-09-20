@@ -19,12 +19,24 @@ export type SettingsState = {
 /** One account-scoped observable source for retained screens and map preferences. */
 export class SettingsService extends Store<SettingsState> {
   private generation = 0;
+  private deviceAppearance: Settings['dayNightMode'] | null = null;
+  /** Explicit device selection is authoritative; remote defaults cannot overwrite it. */
+  setDeviceAppearance(mode: Settings['dayNightMode'] | null) {
+    if (!mode) return;
+    this.deviceAppearance = mode;
+    if (this.value.settings)
+      this.publish({
+        ...this.value,
+        settings: { ...this.value.settings, dayNightMode: mode },
+      });
+  }
   private loadFlight: Promise<Settings | null> | null = null;
   constructor(
     private api: ApiClient,
     private retainAppearance?: (
       mode: Settings['dayNightMode'],
     ) => Promise<void>,
+    private retainOffline?: (settings: Settings) => Promise<void>,
   ) {
     super({ settings: null, phase: 'idle' });
   }
@@ -49,11 +61,19 @@ export class SettingsService extends Store<SettingsState> {
   }
   private async fetchSettings(generation: number) {
     try {
-      const settings = settingsSchema.parse(
+      const remote = settingsSchema.parse(
         await this.api.request('GET', '/navigation-settings'),
       );
+      const settings = {
+        ...remote,
+        dayNightMode: this.deviceAppearance ?? remote.dayNightMode,
+      };
       if (generation !== this.generation) return null;
       await this.retainAppearance?.(settings.dayNightMode);
+      if (generation === this.generation)
+        this.deviceAppearance = settings.dayNightMode;
+      if (generation !== this.generation) return null;
+      await this.retainOffline?.(settings).catch(() => {});
       if (generation !== this.generation) return null;
       this.publish({ settings, phase: 'ready' });
       return settings;
@@ -75,11 +95,16 @@ export class SettingsService extends Store<SettingsState> {
     this.loadFlight = null;
     this.publish({ ...this.value, phase: 'saving', error: undefined });
     try {
-      const settings = settingsSchema.parse(
+      await this.retainAppearance?.(body.dayNightMode);
+      if (generation !== this.generation) return null;
+      if (this.retainAppearance) this.setDeviceAppearance(body.dayNightMode);
+      const remote = settingsSchema.parse(
         await this.api.request('PUT', '/navigation-settings', body),
       );
+      const settings = { ...remote, dayNightMode: body.dayNightMode };
       if (generation !== this.generation) return null;
-      await this.retainAppearance?.(settings.dayNightMode);
+      this.setDeviceAppearance(settings.dayNightMode);
+      await this.retainOffline?.(settings).catch(() => {});
       if (generation !== this.generation) return null;
       this.publish({ settings, phase: 'ready' });
       return settings;
@@ -88,8 +113,9 @@ export class SettingsService extends Store<SettingsState> {
       this.publish({
         ...this.value,
         phase: 'error',
-        error:
-          'Preferences were not saved. Your last saved preferences remain active.',
+        error: this.retainAppearance
+          ? 'Some preferences could not sync. A successfully saved appearance choice stays active on this device.'
+          : 'Preferences were not saved. Retry when connected.',
       });
       throw error;
     }

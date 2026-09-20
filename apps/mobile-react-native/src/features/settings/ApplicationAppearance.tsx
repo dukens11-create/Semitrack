@@ -1,6 +1,6 @@
 import { Store } from '../../state/Store';
 const noSession = new Store({ status: 'signedOut' });
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -20,18 +20,20 @@ export function ApplicationAppearance({
   const auth = useStore(services?.auth ?? noSession);
   const [snapshot, setSnapshot] = useState<{ mode: AppearanceMode | null }>();
   const [failed, setFailed] = useState(false);
-  async function hydrate() {
+  const hydrate = useCallback(async () => {
     try {
-      setSnapshot({ mode: await readAppearance() });
+      const mode = await readAppearance();
+      services?.settings.setDeviceAppearance(mode);
+      setSnapshot({ mode });
       setFailed(false);
     } catch {
       setFailed(true);
     }
-  }
+  }, [services]);
   useEffect(() => {
     void hydrate();
     void services?.auth.restore();
-  }, [services]);
+  }, [services, hydrate]);
   // A neutral frame, never an incorrect Day/Night application frame.
   if (!snapshot || (auth.status === 'loading' && !snapshot.mode))
     return (

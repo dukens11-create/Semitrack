@@ -1,3 +1,4 @@
+import { mayContinueWelcomeOffer } from './approvedOffers.js';
 import type {
   BillingEnvironment,
   BillingProvider,
@@ -236,7 +237,7 @@ export async function applyVerifiedSubscriptionUpdate(update: VerifiedSubscripti
       const existingOffer = await tx.subscriptionOfferRedemption.findUnique({
         where: { userId_eligibilityGroup: { userId: update.userId, eligibilityGroup: "WELCOME_OFFER" } },
       });
-      if (existingOffer && existingOffer.offerKind !== update.offerKind) {
+      if (existingOffer && !mayContinueWelcomeOffer(existingOffer, { offerKind: update.offerKind, subscriptionId: subscription.id, provider: update.provider })) {
         throw new BillingFoundationError(
           "WELCOME_OFFER_ALREADY_USED",
           "A different non-stackable welcome offer was already used by this account",
@@ -246,7 +247,7 @@ export async function applyVerifiedSubscriptionUpdate(update: VerifiedSubscripti
       if (existingOffer) {
         await tx.subscriptionOfferRedemption.update({
           where: { id: existingOffer.id },
-          data: { subscriptionId: subscription.id, externalOfferId: update.offerExternalId ?? existingOffer.externalOfferId },
+          data: { subscriptionId: subscription.id, provider: update.provider, externalOfferId: update.offerExternalId ?? existingOffer.externalOfferId },
         });
       } else {
         await tx.subscriptionOfferRedemption.create({

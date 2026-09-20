@@ -207,6 +207,8 @@ export function DocumentRow({
     type: string;
     fileName: string;
     expiresOn: string | null;
+    attachmentCount?: number;
+    fileAvailable?: boolean;
   };
   onPress: () => void;
   disabled: boolean;
@@ -248,6 +250,11 @@ export function DocumentRow({
             : 'Expiration not recorded'}
         </Text>
         <Text style={[ds.status, { color }]}>{expiry.label}</Text>
+        <Text style={[ds.copy, { color: p.muted }]}>
+          {document.fileAvailable
+            ? (document.attachmentCount ?? '') + ' saved attachment(s)'
+            : 'Document record · no saved attachment'}
+        </Text>
       </View>
       <DriverIcon name="chevron_right_rounded" color={p.muted} />
     </Pressable>

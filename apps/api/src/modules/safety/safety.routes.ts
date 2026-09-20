@@ -1,9 +1,12 @@
+import { admitCommunityReport } from '../../services/communityReportAdmission.js';
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import {
   aggregateCommunityStatus,
+  isFreshSafetyEvidence,
+  restrictionActiveAt,
   directionMatches,
   distanceMeters,
   expiresAtForReport,
@@ -137,7 +140,7 @@ safetyRouter.post("/restrictions/corridor", requireAuth, asyncRoute(async (req, 
         active: true,
         latitude: { gte: box.minLat, lte: box.maxLat },
         longitude: { gte: box.minLng, lte: box.maxLng },
-        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+        AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }] }, { OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }] }],
       },
       take: 1_000,
     });
@@ -149,7 +152,7 @@ safetyRouter.get("/restrictions/:id", requireAuth, asyncRoute(async (req, res, n
   try {
     const id = z.string().min(1).parse(req.params.id);
     const item = await prisma.truckRestriction.findUnique({ where: { id } });
-    if (!item || !item.active) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Restriction not found" } });
+    if (!item || !restrictionActiveAt(item, new Date())) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Restriction not found" } });
     res.json(item);
   } catch (error) { next(error); }
 }));
@@ -167,8 +170,15 @@ safetyRouter.post("/weigh-stations/corridor", requireAuth, asyncRoute(async (req
       take: 1_000,
     });
     const matched = corridorResponse(input, stations);
-    const withStatus = await Promise.all(matched.map(async (station) => ({
+    const withStatus = await Promise.all(matched.map(withStationStatus));
+    res.json({ items: withStatus });
+  } catch (error) { next(error); }
+}));
+
+async function withStationStatus<T extends {id: string; officialStatus: string; lastStatusUpdate: Date | null}>(station: T) {
+  return {
       ...station,
+      officialStatus: isFreshSafetyEvidence(station.lastStatusUpdate, new Date(), 15) ? station.officialStatus : "UNKNOWN",
       currentStatus: await communityAggregate(
         "WEIGH_STATION_STATUS",
         station.id,
@@ -176,10 +186,8 @@ safetyRouter.post("/weigh-stations/corridor", requireAuth, asyncRoute(async (req
           ? { value: station.officialStatus, updatedAt: station.lastStatusUpdate, maxAgeMinutes: 15 }
           : null,
       ),
-    })));
-    res.json({ items: withStatus });
-  } catch (error) { next(error); }
-}));
+    };
+}
 
 safetyRouter.get("/weigh-stations/nearby", requireAuth, asyncRoute(async (req, res, next) => {
   try {
@@ -198,7 +206,7 @@ safetyRouter.get("/weigh-stations/nearby", requireAuth, asyncRoute(async (req, r
       .filter((station) => station.distanceMeters <= input.radiusMeters)
       .sort((a, b) => a.distanceMeters - b.distanceMeters)
       .slice(0, input.limit);
-    res.json({ items });
+    res.json({ items: await Promise.all(items.map(withStationStatus)) });
   } catch (error) { next(error); }
 }));
 
@@ -340,34 +348,18 @@ safetyRouter.post("/community-reports", requireAuth, asyncRoute(async (req, res,
     if (input.note && (/https?:\/\//i.test(input.note) || /(.)\1{12,}/.test(input.note))) {
       return res.status(400).json({ error: { code: "SPAM_REJECTED", message: "The report note was rejected" } });
     }
-    const duplicate = await prisma.communityDataReport.findFirst({
-      where: {
-        userId: req.user!.userId,
-        type: input.type,
-        entityId: input.entityId,
-        createdAt: { gt: new Date(Date.now() - 2 * 60_000) },
-      },
+    const report = await admitCommunityReport(prisma, req.user!.userId, {
+      type: input.type,
+      entityId: input.entityId,
+      value: input.value,
+      numericValue: input.numericValue,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      note: input.note,
+      sourceContextJson: input.sourceContext as object | undefined,
+      expiresAt: expiresAtForReport(input.type, input.value),
     });
-    if (duplicate) return res.status(409).json({ error: { code: "DUPLICATE_REPORT", message: "Wait before reporting this location again" } });
-    const reporter = await prisma.user.findUniqueOrThrow({
-      where: { id: req.user!.userId },
-      select: { reportTrustScore: true },
-    });
-    const report = await prisma.communityDataReport.create({
-      data: {
-        userId: req.user!.userId,
-        type: input.type,
-        entityId: input.entityId,
-        value: input.value,
-        numericValue: input.numericValue,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        note: input.note,
-        sourceContextJson: input.sourceContext as object | undefined,
-        confidence: reporter.reportTrustScore,
-        expiresAt: expiresAtForReport(input.type, input.value),
-      },
-    });
+    if (!report) return res.status(409).json({ error: { code: "DUPLICATE_REPORT", message: "Wait before reporting this location again" } });
     res.status(201).json(report);
   } catch (error) { next(error); }
 }));

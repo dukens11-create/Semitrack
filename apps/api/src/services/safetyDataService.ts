@@ -127,7 +127,7 @@ export function aggregateCommunityStatus(
   now = new Date(),
   official?: { value: string; updatedAt: Date; maxAgeMinutes: number } | null,
 ): AggregatedCommunityStatus {
-  if (official && now.getTime() - official.updatedAt.getTime() <= official.maxAgeMinutes * 60_000) {
+  if (official && isFreshSafetyEvidence(official.updatedAt, now, official.maxAgeMinutes)) {
     return {
       value: official.value,
       source: "OFFICIAL_LIVE",
@@ -138,7 +138,7 @@ export function aggregateCommunityStatus(
       stale: false,
     };
   }
-  const active = reports.filter((report) => report.expiresAt > now && report.moderated);
+  const active = reports.filter((report) => report.createdAt <= now && report.expiresAt > now && report.moderated);
   if (!active.length) {
     return { value: "UNKNOWN", source: "UNKNOWN", confidence: 0, lastReportedAt: null, confirmations: 0, disagreements: 0, stale: true };
   }
@@ -233,4 +233,13 @@ export function corridorRouteOffset(route: unknown, location: unknown, now = Dat
     throw new CorridorCorrelationError(reason === "ROUTE_LOCATION_AMBIGUOUS" ? "CORRIDOR_LOCATION_AMBIGUOUS" :
       reason === "ROUTE_LOCATION_UNCORRELATED" ? "CORRIDOR_LOCATION_OFF_ROUTE" : "CORRIDOR_CORRELATION_FAILED");
   }
+}
+
+/** Invalid, future-dated and expired provider observations are not live evidence. */
+export function isFreshSafetyEvidence(updatedAt: Date | null, now: Date, maxAgeMinutes: number): boolean {
+  const age = updatedAt ? now.getTime() - updatedAt.getTime() : NaN;
+  return Number.isFinite(age) && age >= 0 && Number.isFinite(maxAgeMinutes) && maxAgeMinutes > 0 && age <= maxAgeMinutes * 60000;
+}
+export function restrictionActiveAt(item: {active: boolean; startsAt: Date | null; endsAt: Date | null}, now: Date): boolean {
+ return item.active && (!item.startsAt || item.startsAt <= now) && (!item.endsAt || item.endsAt > now);
 }

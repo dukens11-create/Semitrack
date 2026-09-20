@@ -1,5 +1,7 @@
 # Stripe Phase 3 test-mode setup checklist
 
+> Historical foundation/setup reference. New-customer pricing and readiness are superseded by [SUBSCRIPTION_PRICING.md](SUBSCRIPTION_PRICING.md). Do not create new offers from the older trial, pilot or fleet prices below. Preserve existing contractual records.
+
 This is a preparation checklist only. Phase 2 does not create Stripe products, prices, customers, subscriptions, Checkout sessions, portal sessions, charges, or webhooks.
 
 ## Hard prerequisites

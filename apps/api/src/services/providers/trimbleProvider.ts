@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../../contracts/routeLimits.js';
 import { restrictionDiagnostic } from "./restrictionDiagnostic.js";
 import { optionalPreferenceWarnings } from '../routingCapabilities.js';
 import { z } from "zod";
@@ -111,7 +112,7 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
     );
   }
 
-  const checked = z.object({ origin: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), destination: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), viaStops: z.array(z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)})).max(20).optional(), truck: routingTruckSchema, routeMode: z.enum(['fastest','fuel_optimized','shortest']).optional(), alternatives: z.number().int().min(0).max(5).optional() }).safeParse(input);
+  const checked = z.object({ origin: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), destination: z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)}), viaStops: z.array(z.object({lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180)})).max(MAX_INTERMEDIATE_STOPS).optional(), truck: routingTruckSchema, routeMode: z.enum(['fastest','fuel_optimized','shortest']).optional(), alternatives: z.number().int().min(0).max(5).optional() }).safeParse(input);
   if (!checked.success) throw new RoutingProviderError('Trimble','TRIMBLE_REQUEST_INVALID','Truck routing inputs are incomplete or invalid.',422);
   const truck = checked.data.truck;
   const bodyType=truck.trailerType?.trim().toLowerCase();
@@ -231,7 +232,9 @@ function reportsFrom(payload: unknown): any[] {
 }
 
 function reportOfType(reports: any[], type: string) {
-  return reports.find((report) => String(report?.__type ?? "").toLowerCase().includes(type.toLowerCase()));
+  const matches = reports.filter((report) => String(report?.__type ?? "").split(':')[0]!.toLowerCase() === type.toLowerCase());
+  if (matches.length > 1) throw new RoutingProviderError('Trimble','TRIMBLE_INCOMPLETE_ROUTE','Duplicate provider reports are ambiguous.');
+  return matches[0];
 }
 
 function coordinate(value: any): number[] | null {
@@ -356,54 +359,105 @@ function validateStopCoverage(directions:any,mileage:any,geometry:number[][],inp
   return validatedStops;
 }
 
+/** A provider-labelled stop row must also identify that stop spatially. */
+function isDirectionStopLine(line: any, stop: any): boolean {
+  const label = typeof stop?.Label === 'string' ? stop.Label.trim() : '';
+  const instruction = typeof line?.Direction === 'string' ? line.Direction.trim() : '';
+  if (!label || line?.TurnInstruction || !(instruction === label || instruction.startsWith(`${label},`))) return false;
+  const lat = finiteNumber(stop?.Coords?.Lat), lng = finiteNumber(stop?.Coords?.Lon);
+  return lat != null && lng != null && [line?.Begin, line?.End].every(raw => {
+    const pointLat = finiteNumber(raw?.Lat), pointLng = finiteNumber(raw?.Lon);
+    return pointLat != null && pointLng != null && Math.abs(pointLat) <= 90 && Math.abs(pointLng) <= 180
+      && distanceMeters({lat, lng}, {lat: pointLat, lng: pointLng}) <= TRIMBLE_STOP_SNAP_TOLERANCE_METERS;
+  });
+}
+
 function parseDirectionLegs(report: any, geometry: number[][], mileageReport: any) {
   const mileageLines = Array.isArray(mileageReport?.ReportLines) ? mileageReport.ReportLines : [];
   const reportLegs = Array.isArray(report?.ReportLegs) ? report.ReportLegs : [];
   const warnings: string[] = [];
   let maneuverStep = 0;
 
+  // Mileage alone carries cumulative counters. Directions Dist/Time describe
+  // individual report lines, including on later legs. Never subtract Mileage
+  // totals from them or require successive independent lines to increase.
+  // https://developer.trimblemaps.com/restful-apis/routing/route-reports/directions/
+  const failMetrics = (): never => { throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','Provider line and leg metrics are missing or inconsistent.'); };
+  const timePrecision = (value: unknown) => typeof value === 'string' && value.trim().split(':').length === 2 ? 60 : 1;
+  let priorMiles = 0, priorSeconds = 0;
+  mileageLines.forEach((row: any, index: number) => {
+    const miles = finiteNumber(row?.LMiles), total = finiteNumber(row?.TMiles);
+    const seconds = clockToSeconds(row?.LHours), totalSeconds = clockToSeconds(row?.THours);
+    if (miles == null || miles < 0 || total == null || total < 0 || !Number.isFinite(seconds) || !Number.isFinite(totalSeconds)) {
+      throw new RoutingProviderError('Trimble','TRIMBLE_INCOMPLETE_ROUTE','Mileage leg or cumulative evidence is missing.');
+    }
+    if (index === 0) {
+      if (miles !== 0 || total !== 0 || seconds !== 0 || totalSeconds !== 0) failMetrics();
+    } else if (total < priorMiles || totalSeconds < priorSeconds
+      || Math.abs(total - priorMiles - miles) > 0.003 + 1e-9
+      || Math.abs(totalSeconds - priorSeconds - seconds) > timePrecision(row.LHours) + timePrecision(row.THours) + timePrecision(mileageLines[index-1].THours)) failMetrics();
+    priorMiles = total; priorSeconds = totalSeconds;
+  });
+
+  // Inspect every row before consuming metric companions. Unexpected warning
+  // shapes are unproven warning evidence, never an implicit "no restrictions".
+  reportLegs.forEach((leg: any, legIndex: number) => leg.ReportLines.forEach((line: any, index: number) => {
+    if ((line?.Warn != null && (typeof line.Warn !== 'string' || line.Warn.trim()))
+      || (line?.DetailedWarnings != null && (!Array.isArray(line.DetailedWarnings)
+        || line.DetailedWarnings.some((w: any) => w?.Type !== 0)))) {
+      const failure = new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
+      failure.restrictionDiagnostic = restrictionDiagnostic(line, legIndex, index);
+      throw failure;
+    }
+  }));
+
   const legs: RouteLeg[] = reportLegs.map((leg: any, legIndex: number) => {
     const lines = Array.isArray(leg?.ReportLines) ? leg.ReportLines : [];
     const maneuvers: RouteManeuver[] = [];
-    // A straight leg may end at leg.Dest without a turn or arrival report row.
-    // Only in that case use provider driving rows as continue maneuvers.
-    const straightLeg = !lines.some((line: any) => line?.TurnInstruction
-      || /^destination\b/i.test(String(line?.Direction ?? '').trim()));
-    const startingDistance = finiteNumber(mileageLines[legIndex]?.TMiles);
-    const startingDuration = clockToSeconds(mileageLines[legIndex]?.THours);
-    if (startingDistance == null || startingDistance < 0 || !Number.isFinite(startingDuration)) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','The provider did not supply valid cumulative leg starting totals.');
-    let lastDistance = startingDistance;
-    let lastDuration = startingDuration;
+    let lineMiles = 0, lineSeconds = 0, timeTolerance = 0;
+    if (!lines.some((line: any) => line?.TurnInstruction || line?.Dist != null || line?.Time != null)) {
+      throw new RoutingProviderError('Trimble','TRIMBLE_INCOMPLETE_ROUTE','Route leg data is incomplete.');
+    }
+
+    const originMarker = isDirectionStopLine(lines[0], leg.Origin);
+    if (originMarker && (lines[0].Dist != null || lines[0].Time != null)
+      && (finiteNumber(lines[0].Dist) !== 0 || clockToSeconds(lines[0].Time) !== 0)) failMetrics();
+    const companions = new Set<number>();
+    const arrivalAt = (line: any, index: number) => /^destination\b/i.test(String(line?.Direction ?? '').trim())
+      || (index === 0 && originMarker) || isDirectionStopLine(line, leg.Dest);
+    const drivingHeading = (line: any) => /^(?:go|continue|proceed)\b/i.test(String(line?.Direction ?? '').trim());
 
     for (let index = 0; index < lines.length; index++) {
+      if (companions.has(index)) continue;
       const line = lines[index];
-      const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
-      if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) {
-        const failure = new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
-        failure.restrictionDiagnostic = restrictionDiagnostic(line, legIndex, index);
-        throw failure;
-      }
+      if (index === 0 && originMarker && line.Dist == null && line.Time == null) continue;
       const instruction = typeof line?.Direction === "string" ? line.Direction.trim() : "";
-      const isArrival = /^destination\b/i.test(instruction);
-      if (!straightLeg && !line?.TurnInstruction && !isArrival) continue;
-      // Descriptive-only rows supply no distance/time evidence. Never borrow
-      // another row's totals to manufacture a straight-leg instruction.
-      if (straightLeg && line?.Dist == null && line?.Time == null) continue;
+      const isArrival = arrivalAt(line, index);
+      const heading = !!line?.TurnInstruction || drivingHeading(line);
+      if (!heading && !isArrival && line?.Dist == null && line?.Time == null) continue;
 
-      let cumulativeDistance = finiteNumber(line?.Dist);
-      let cumulativeDuration = clockToSeconds(line?.Time);
-      if (!straightLeg && cumulativeDistance == null && !isArrival) {
+      let lineDistance = finiteNumber(line?.Dist);
+      let lineDuration = clockToSeconds(line?.Time);
+      let metricTime = line?.Time;
+      // Uncondensed Directions pairs a heading with a subsequent metric row.
+      // A malformed supplied value is never replaced with another row's value.
+      if (heading && line?.Dist == null && line?.Time == null && !isArrival) {
         for (let next = index + 1; next < lines.length; next++) {
-          if (lines[next]?.TurnInstruction || /^destination\b/i.test(String(lines[next]?.Direction ?? ''))) break;
-          cumulativeDistance = finiteNumber(lines[next]?.Dist);
-          cumulativeDuration = clockToSeconds(lines[next]?.Time);
-          if (cumulativeDistance != null) break;
+          if (lines[next]?.TurnInstruction || drivingHeading(lines[next]) || arrivalAt(lines[next], next)) break;
+          if (lines[next]?.Dist == null && lines[next]?.Time == null) continue;
+            lineDistance = finiteNumber(lines[next]?.Dist);
+            lineDuration = clockToSeconds(lines[next]?.Time);
+            metricTime = lines[next]?.Time;
+          companions.add(next);
+          break;
         }
       }
-      if (!instruction || cumulativeDistance == null || cumulativeDistance < lastDistance || !Number.isFinite(cumulativeDuration) || cumulativeDuration < lastDuration) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','Maneuver distance, time or instruction is missing or inconsistent.');
-      const action = maneuverAction(line?.TurnInstruction, instruction);
-      const candidates = straightLeg ? [line?.Begin, line?.End]
-        : [isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End];
+      if (!instruction || lineDistance == null || lineDistance < 0 || !Number.isFinite(lineDuration)) failMetrics();
+      const action = isArrival ? {action: 'arrive' as const, direction: 'straight' as const}
+        : maneuverAction(line?.TurnInstruction, instruction);
+      const candidates = isArrival || line?.TurnInstruction
+        ? [isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End]
+        : [line?.Begin, line?.End];
       const providerCoordinate = candidates.map(raw => ({
         lat: finiteNumber(raw?.Lat ?? raw?.lat),
         lng: finiteNumber(raw?.Lon ?? raw?.lon ?? raw?.Lng ?? raw?.lng),
@@ -412,21 +466,27 @@ function parseDirectionLegs(report: any, geometry: number[][], mileageReport: an
       maneuvers.push({
         step: ++maneuverStep,
         instruction,
-        distanceMiles: Number((cumulativeDistance - lastDistance).toFixed(3)),
-        durationSeconds: cumulativeDuration - lastDuration,
-        action: action.action ?? (straightLeg ? "continue" : undefined),
-        direction: action.direction ?? (straightLeg ? "straight" : undefined),
+        distanceMiles: lineDistance!,
+        durationSeconds: lineDuration,
+        action: action.action ?? (line?.TurnInstruction ? undefined : "continue"),
+        direction: action.direction ?? (line?.TurnInstruction ? undefined : "straight"),
         roadName: roadNameFrom(instruction),
         nextRoadName: roadNameFrom(instruction),
         exitNumber: exitNumberFrom(instruction, line?.InterCh),
         ...(providerCoordinate ? { coordinate: providerCoordinate } : {}),
       });
-      if (cumulativeDistance != null) lastDistance = cumulativeDistance;
-      if (cumulativeDuration > 0) lastDuration = cumulativeDuration;
+      lineMiles += lineDistance!;
+      lineSeconds += lineDuration;
+      timeTolerance += timePrecision(metricTime);
     }
 
     const mileage = mileageLines[legIndex + 1] ?? {};
-    if (!maneuvers.length || finiteNumber(mileage.LMiles) == null || finiteNumber(mileage.LMiles)! < 0 || !Number.isFinite(clockToSeconds(mileage.LHours))) throw new RoutingProviderError("Trimble","TRIMBLE_INCOMPLETE_ROUTE","Route leg data is incomplete.");
+    if (!maneuvers.length || (originMarker && lines[0].Dist != null && maneuvers.length === 1) || finiteNumber(mileage.LMiles) == null || finiteNumber(mileage.LMiles)! < 0 || !Number.isFinite(clockToSeconds(mileage.LHours))) throw new RoutingProviderError("Trimble","TRIMBLE_INCOMPLETE_ROUTE","Route leg data is incomplete.");
+    // Reports round mileage to thousandths and clocks to their displayed unit.
+    // Budget only per-field quantization; do not alter provider maneuver values
+    // to force a match. No percentage-of-route or cross-leg tolerance is used.
+    if (Math.abs(lineMiles - finiteNumber(mileage.LMiles)!) > (maneuvers.length + 1) * 0.001 + 1e-9
+      || Math.abs(lineSeconds - clockToSeconds(mileage.LHours)) > timeTolerance + timePrecision(mileage.LHours)) failMetrics();
     return {
       distanceMiles: finiteNumber(mileage.LMiles)!,
       durationSeconds: clockToSeconds(mileage.LHours),

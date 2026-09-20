@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../src/models/routeLimits';
 import React from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Text, TextInput } from 'react-native';
@@ -164,7 +165,7 @@ test('documents render actual stored expiration and no public storage action', a
     .flat()
     .join(' ');
   expect(text).toContain('Expired');
-  expect(text).toContain('Labels and dates only.');
+  expect(text).toContain('Uploads require configured private storage.');
   expect(text).not.toContain('metadata');
   expect(request).toHaveBeenCalledTimes(1);
 });
@@ -343,7 +344,7 @@ test('GPS pickup/delivery, multiple business stops, malformed completion and rou
   expect(() =>
     planFromTrip({
       ...trip,
-      stops: Array.from({ length: 20 }, (_, i) => ({
+      stops: Array.from({ length: MAX_INTERMEDIATE_STOPS }, (_, i) => ({
         ...trip.stops[0],
         id: 'stop' + i,
       })),

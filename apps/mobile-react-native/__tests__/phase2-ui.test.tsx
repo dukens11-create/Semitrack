@@ -33,10 +33,19 @@ import Mapbox from '@rnmapbox/maps';
 import { AppNavigator, DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
 import { TruckMap } from '../src/features/map/TruckMap';
+import { WeatherStatus } from '../src/features/weather/WeatherStatus';
+import { RoutePoiBadges } from '../src/features/navigation/RoutePoiBadges';
 import type { Services } from '../src/app/services';
 import { Store } from '../src/state/Store';
 import { SettingsService } from '../src/features/settings/SettingsService';
-import type { ApiClient } from '../src/services/api/ApiClient';
+import { ApiClient } from '../src/services/api/ApiClient';
+import { TruckRoutingService } from '../src/services/routing/TruckRoutingService';
+import { SearchService } from '../src/features/search/SearchService';
+import { MemoryVault, tokens, reply } from './fixtures';
+import {
+  clearRouteDiagnostics,
+  routeDiagnosticHistory,
+} from '../src/features/routing/routeTelemetry';
 import { RouteStore } from '../src/features/routing/RouteStore';
 import { truck, user, route, deferred } from './fixtures';
 jest.mock('@react-navigation/native', () => ({
@@ -888,6 +897,10 @@ function cancellableRoute(services: Services) {
 }
 async function confirmCancellation() {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  if (!button('Cancel Route')) {
+    expect(button('Navigation Controls')).toBeDefined();
+    await press('Navigation Controls');
+  }
   const before = screen.root.findAll(
     n => n.props.testID === 'navigation-hud',
   ).length;
@@ -906,6 +919,39 @@ async function confirmCancellation() {
   );
   alert.mockRestore();
 }
+test('active driving keeps optional weather, POI badges, satellite and duplicate cancel out of the map; More retains access', async () => {
+  const { services } = setup();
+  cancellableRoute(services);
+  services.environment = {
+    ...services.environment,
+    mapboxToken: 'pk.local-fixture',
+  };
+  services.guidance.getNavigationState = () => ({
+    phase: 'navigating',
+    routeId: 'test-route',
+  });
+  await act(async () => {
+    screen = create(<PlanningScreen services={services} />);
+  });
+  expect(button('Cancel Route')).toBeUndefined();
+  expect(button('Weather details')).toBeUndefined();
+  expect(button('Toggle satellite map')).toBeUndefined();
+  expect(screen.root.findAllByType(RoutePoiBadges)).toHaveLength(0);
+  expect(screen.root.findByType(WeatherStatus).props.driving).toBe(true);
+  expect(button('Recenter / follow truck')).toBeDefined();
+  expect(button('Compass / north up')).toBeDefined();
+  await press('Navigation Controls');
+  expect(button('Cancel Route')).toBeDefined();
+  expect(button('Road Warnings')).toBeDefined();
+  expect(button('Places Filter')).toBeDefined();
+  await press('Weather');
+  expect(button('Close Weather')).toBeDefined();
+  await press('Close Weather');
+  await press('Navigation Controls');
+  await press('Satellite map');
+  expect(screen.root.findByType(TruckMap).props.satellite).toBe(true);
+  expect(services.guidance.startNavigation).not.toHaveBeenCalled();
+});
 test.each(['preview', 'unavailable', 'failure'] as const)(
   'cancel from %s clears route but preserves truck, login and GPS',
   async mode => {
@@ -1622,3 +1668,281 @@ test.each(['day', 'night'] as const)(
     expect(options.contentStyle.backgroundColor).toBe(theme.colors.background);
   },
 );
+
+test('More opens the existing offline display-map screen without implying offline truck guidance', async () => {
+  const { services } = setup(),
+    open = jest.fn();
+  await act(async () => {
+    screen = create(<DriverShell services={services} open={open} />);
+  });
+  await press('More');
+  expect(content()).toContain('Offline truck routing requires CoPilot');
+  await press('Offline maps');
+  expect(open).toHaveBeenCalledWith('Offline');
+});
+
+// Real route-store/service/client chain; injected transport never reaches a provider.
+test.each(['active', 'unknown', 'inactive'] as const)(
+  'destination confirmation from %s dispatches exactly one truck POST once foreground is confirmed',
+  async initial => {
+    const previous = AppState.currentState;
+    AppState.currentState = initial;
+    const listeners = new Set<(state: string) => void>();
+    const originalListener = AppState.addEventListener;
+    AppState.addEventListener = (_type, callback) => {
+      const listener = callback as (state: string) => void;
+      listeners.add(listener);
+      return { remove: () => listeners.delete(listener) };
+    };
+    const transport = jest.fn(
+      async (_url: RequestInfo, _options?: RequestInit) =>
+        reply({ error: { code: 'TRIMBLE_RESTRICTION_WARNING' } }, 422),
+    );
+    const { services } = setup(truck, {
+      latitude: 40,
+      longitude: -100,
+      timestamp: Date.now(),
+      accuracy: 4,
+      heading: null,
+      speed: 0,
+    });
+    services.routes = new RouteStore(
+      new TruckRoutingService(
+        new ApiClient(
+          'https://local-test.invalid',
+          new MemoryVault(tokens),
+          transport,
+        ),
+      ),
+    );
+    services.search = new SearchService(
+      'pk.synthetic-search-test',
+      async input => {
+        const url = String(input);
+        const properties = {
+          mapbox_id: 'dest',
+          feature_type: 'poi',
+          name: 'Real provider destination',
+        };
+        const data = url.includes('/suggest?')
+          ? { suggestions: [properties] }
+          : url.includes('/retrieve/dest?')
+          ? {
+              features: [
+                {
+                  type: 'Feature',
+                  geometry: { type: 'Point', coordinates: [-100, 41] },
+                  properties,
+                },
+              ],
+            }
+          : null;
+        if (!data) throw new Error('Unexpected local search transport request');
+        return { ok: true, json: async () => data } as Response;
+      },
+    );
+    try {
+      await act(async () => {
+        screen = create(<PlanningScreen services={services} />);
+      });
+      await selectRouteDestination();
+      expect(transport).not.toHaveBeenCalled();
+      expect(button('Set final destination').props.disabled).toBe(false);
+      await act(async () => {
+        const confirm = button('Set final destination').props.onPress;
+        confirm();
+        confirm();
+      });
+      if (initial !== 'active') {
+        expect(transport).not.toHaveBeenCalled();
+        await act(async () => {
+          AppState.currentState = 'active';
+          listeners.forEach(listener => listener('active'));
+        });
+      }
+      expect(transport).toHaveBeenCalledTimes(1);
+      const [url, options] = transport.mock.calls[0]!;
+      expect(url).toBe('https://local-test.invalid/routing/truck-route');
+      expect(options?.method).toBe('POST');
+      expect(JSON.parse(options!.body as string)).toMatchObject({
+        origin: { lat: 40, lng: -100 },
+        destination: { lat: 41, lng: -100 },
+        viaStops: [],
+        truckProfileId: truck.id,
+        truckRevision: truck.revision,
+        truck: {
+          heightFt: truck.heightFt,
+          widthFt: truck.widthFt,
+          lengthFt: truck.lengthFt,
+          weightLbs: truck.weightLbs,
+          axleCount: truck.axleCount,
+          trailerCount: truck.trailerCount,
+          hazmatEnabled: truck.hazmatEnabled,
+          hazardousGoods: truck.hazardousGoods,
+        },
+      });
+      expect(services.routes.getSnapshot().route).toBeNull();
+      expect(services.routes.getSnapshot().errorCode).toBe(
+        'TRIMBLE_RESTRICTION_WARNING',
+      );
+    } finally {
+      AppState.addEventListener = originalListener;
+      AppState.currentState = previous;
+    }
+  },
+  30000,
+);
+
+test.each(['before confirmation', 'after confirmation'])(
+  'a search failure %s cannot obscure the selected destination route result',
+  async timing => {
+    const previous = AppState.currentState;
+    AppState.currentState = 'active';
+    const { services } = setup(truck, {
+      latitude: 40,
+      longitude: -100,
+      timestamp: Date.now(),
+      accuracy: 4,
+      heading: null,
+      speed: 0,
+    });
+    const pendingSearch = deferred<never>();
+    let searchSignal: AbortSignal | undefined;
+    services.search.reverse = jest.fn((_point, signal) => {
+      searchSignal = signal;
+      return pendingSearch.promise;
+    });
+    const transport = jest.fn(async () =>
+      reply({ error: { code: 'TRIMBLE_RESTRICTION_WARNING' } }, 422),
+    );
+    services.routes = new RouteStore(
+      new TruckRoutingService(
+        new ApiClient(
+          'https://local-test.invalid',
+          new MemoryVault(tokens),
+          transport,
+        ),
+      ),
+    );
+    try {
+      await act(async () => {
+        screen = create(<PlanningScreen services={services} />);
+      });
+      await act(async () => {
+        screen.root
+          .findByType(TruckMap)
+          .props.onCoordinate({ lat: 41, lng: -100 });
+      });
+      // A marker can be selected while a previous map-place lookup is pending.
+      await act(async () => {
+        screen.root
+          .findByType(TruckMap)
+          .props.onPoi({
+            id: 'dest',
+            name: 'Selected place',
+            latitude: 41,
+            longitude: -100,
+          });
+      });
+      if (timing === 'before confirmation') {
+        await act(async () => {
+          pendingSearch.reject(new Error('private provider error'));
+        });
+      }
+      await press('Set final destination');
+      if (timing === 'after confirmation') {
+        expect(searchSignal?.aborted).toBe(true);
+        await act(async () => {
+          pendingSearch.reject(new Error('private provider error'));
+        });
+      }
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(content()).not.toContain('Places could not be loaded');
+      expect(content()).not.toContain('private provider error');
+      expect(content()).toContain('TRIMBLE_RESTRICTION_WARNING');
+      expect(services.routes.getSnapshot().route).toBeNull();
+    } finally {
+      AppState.currentState = previous;
+    }
+  },
+);
+
+test('incomplete selected destination never invokes routing or POST', async () => {
+  const previous = AppState.currentState;
+  AppState.currentState = 'active';
+  const { services } = setup(truck, {
+    latitude: 40,
+    longitude: -100,
+    timestamp: Date.now(),
+    accuracy: 4,
+    heading: null,
+    speed: 0,
+  });
+  const transport = jest.fn();
+  services.routes = new RouteStore(
+    new TruckRoutingService(
+      new ApiClient(
+        'https://local-test.invalid',
+        new MemoryVault(tokens),
+        transport,
+      ),
+    ),
+  );
+  const calculate = jest.spyOn(services.routes, 'calculate');
+  jest
+    .mocked(services.search.search)
+    .mockResolvedValue([
+      { id: 'dest', name: 'Real provider destination', lat: NaN, lng: -100 },
+    ]);
+  try {
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(calculate).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(services.routes.getSnapshot().route).toBeNull();
+  } finally {
+    AppState.currentState = previous;
+  }
+});
+
+test('background destination confirmation shows a safe pre-dispatch error and diagnostics without a POST', async () => {
+  const previous = AppState.currentState;
+  AppState.currentState = 'background';
+  clearRouteDiagnostics();
+  const { services, calculate } = setup(truck, {
+    latitude: 40,
+    longitude: -100,
+    timestamp: Date.now(),
+    accuracy: 4,
+    heading: null,
+    speed: 0,
+  });
+  try {
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(calculate).not.toHaveBeenCalled();
+    expect(content()).toContain('Keep SemiTraX open');
+    expect(button('Set final destination').props.disabled).toBe(false);
+    const history = routeDiagnosticHistory();
+    expect(history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'ROUTE_APP_NOT_ACTIVE',
+          source: 'LOCAL_VALIDATION',
+          result: 'FAIL',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(history)).not.toMatch(
+      /Real provider destination|latitude|longitude|truck-test/,
+    );
+  } finally {
+    AppState.currentState = previous;
+  }
+});

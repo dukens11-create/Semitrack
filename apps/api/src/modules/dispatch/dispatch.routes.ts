@@ -1,3 +1,4 @@
+import { MAX_INTERMEDIATE_STOPS } from '../../contracts/routeLimits.js';
 import { Router } from 'express';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -28,7 +29,7 @@ export async function assignTripToDriver(
       reason: z.string().trim().min(5).max(500),
     })
     .strict()
-    .refine(b => b.plan.stops.length <= 19 && ![...b.plan.stops,b.plan.destination].some(s => s.id === b.plan.origin.id), 'The pickup and ordered stops must fit the truck route and have distinct identities.')
+    .refine(b => b.plan.stops.length + 1 <= MAX_INTERMEDIATE_STOPS && ![...b.plan.stops,b.plan.destination].some(s => s.id === b.plan.origin.id), 'The pickup and ordered stops must fit the truck route and have distinct identities.')
     .parse(input);
   return db.$transaction(
     async (tx) => {

@@ -6,6 +6,9 @@ const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
  *
  * @type {import('@react-native/metro-config').MetroConfig}
  */
-const config = {};
+// The routing limit is one dependency-free contract shared with the API.
+const config = {
+  watchFolders: [require('path').resolve(__dirname, '../api/src/contracts')],
+};
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);

@@ -94,7 +94,7 @@ test('initial loading never claims an empty library; records use no verification
   await act(async () => waiting.resolve({ items: [document] }));
   expect(content()).toContain('My CDL');
   expect(content()).not.toMatch(/metadata|Valid|Verified/);
-  expect(content()).toContain('Labels and dates only');
+  expect(content()).toContain('Uploads require configured private storage');
   expect(screen.root.findAllByType(TextInput)).toHaveLength(0);
   expect(button('Refresh documents')).toBeUndefined();
 });
@@ -229,7 +229,7 @@ test('invalid date order blocks saving; valid selected dates use the unchanged A
     }),
   );
   expect(screen.root.findAllByType(TextInput)).toHaveLength(0);
-  expect(content()).toContain('Document saved.');
+  expect(content()).toContain('Document record saved.');
 });
 test('refresh failures retain saved records; initial failure offers compact retry', async () => {
   const request = jest

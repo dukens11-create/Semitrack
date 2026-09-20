@@ -463,7 +463,7 @@ export function TruckMap({
           >
             <NavigationCompass bearing={cameraHeading} />
           </Pressable>
-          {onToggleSatellite && (
+          {onToggleSatellite && !navigationActive && (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Toggle satellite map"

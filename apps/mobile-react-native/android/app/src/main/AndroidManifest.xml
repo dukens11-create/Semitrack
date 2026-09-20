@@ -21,6 +21,9 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+      <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.documents" android:exported="false" android:grantUriPermissions="true">
+        <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/document_paths" />
+      </provider>
       <!-- Vendor service is linked, but the application does not bind/start it
            until licensing, profile parity and native validation are resolved. -->
       <service android:name="com.alk.copilot.CopilotService"
@@ -40,6 +43,15 @@
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+        <!-- Domain association and exact release-certificate acceptance are
+             external gates; this declaration alone does not verify the domain. -->
+        <intent-filter android:autoVerify="true">
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" android:host="www.semitrax.com" android:path="/reset-password" />
+            <data android:scheme="https" android:host="www.semitrax.com" android:path="/reset-password.html" />
         </intent-filter>
       </activity>
     <service android:name=".nativebridge.LocationForegroundService" android:exported="false" android:stopWithTask="true" android:foregroundServiceType="location" />

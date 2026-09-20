@@ -85,18 +85,18 @@ async function setup(mode: 'day' | 'night' | 'system' = 'day') {
     auth = new Account(),
     guidance = new UnavailableNavigationEngine();
   const initialize = jest.spyOn(guidance, 'initialize'),
-    onBack = jest.fn();
+    onBack = jest.fn(), onPlans = jest.fn();
   const services = { settings, auth, guidance } as unknown as Services;
   await act(async () => {
     screen = create(
       <DriverAppearanceContext.Provider
         value={mode === 'system' ? 'night' : mode}
       >
-        <SettingsScreen services={services} onBack={onBack} />
+        <SettingsScreen services={services} onBack={onBack} onPlans={onPlans} />
       </DriverAppearanceContext.Provider>,
     );
   });
-  return { settings, request, auth, initialize, onBack };
+  return { settings, request, auth, initialize, onBack, onPlans };
 }
 afterEach(async () => {
   if (screen) await act(async () => screen.unmount());
@@ -319,6 +319,7 @@ test.each(['day', 'night', 'system'] as const)(
       'Navigation',
       'Privacy & location',
       'Diagnostics',
+      'Driver setup',
       'About SemiTraX',
     ]) {
       await press(page);
@@ -383,3 +384,5 @@ test('profile buttons distinguish invalid/unchanged, enabled and loading rather 
   expect(active.backgroundColor).toBe('#FF6B2C');
   expect(active.opacity).toBeUndefined();
 });
+
+test('Plans row opens the existing navigation destination', async () => { const {onPlans}=await setup(); await press('Plans & Subscription'); expect(onPlans).toHaveBeenCalledTimes(1); });

@@ -196,8 +196,8 @@ test("Trimble response normalizes mileage, geometry, maneuvers, warnings and tra
           },
           {
             Direction: "Destination, Portland, OR",
-            Dist: "583.500",
-            Time: "10:30:00",
+            Dist: "483.500",
+            Time: "8:30:00",
             TurnInstruction: null,
             Warn: null,
             Begin: { Lat: "45.52", Lon: "-122.68" },

@@ -1,3 +1,4 @@
+import { readPricing } from '../billing/subscriptionControls.js';
 import { Router } from "express";
 import { prisma } from "../../lib/prisma.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
@@ -43,7 +44,19 @@ async function listPlans(publicOnly: boolean) {
 publicSubscriptionPlansRouter.get("/", async (_req, res, next) => {
   try {
     res.setHeader("cache-control", "no-store");
-    res.json({ plans: await listPlans(true) });
+    // Versioned approved planning offers; legacy database rows remain for existing contracts and audit.
+    const p = (await readPricing()).catalog;
+    res.json({ revision: p.revision, purchaseAvailable: false, plans: [
+      { code: 'MONTHLY', displayName: 'SemiTraX Premium Monthly', priceAmountCents: p.monthly.regularCents,
+        currency: p.currency, billingInterval: 'MONTH', trialDays: p.trialDays, isActive: false, isPublic: true,
+        description: p.monthly.summary, introPriceAmountCents: p.monthly.introCents, introPaidPeriods: p.monthly.introPaidPeriods },
+      { code: 'ANNUAL', displayName: 'SemiTraX Premium Annual', priceAmountCents: p.annual.priceCents,
+        currency: p.currency, billingInterval: 'YEAR', trialDays: p.trialDays, isActive: false, isPublic: true,
+        description: p.annual.summary },
+      ...p.fleet.map(t => ({ code: 'FLEET_' + t.min + '_' + (t.max ?? 'PLUS'), displayName: 'Fleet ' + t.label,
+        priceAmountCents: t.cents, currency: p.currency, billingInterval: t.cents === null ? 'CUSTOM' : 'MONTH',
+        trialDays: 0, isActive: false, isPublic: true })),
+    ] });
   } catch (error) {
     next(error);
   }

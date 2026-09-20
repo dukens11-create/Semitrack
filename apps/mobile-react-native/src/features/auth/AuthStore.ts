@@ -2,17 +2,21 @@ import { Store } from '../../state/Store';
 import { tokensSchema, userSchema, type User } from '../../models/contracts';
 import { ApiClient, ApiError } from '../../services/api/ApiClient';
 import type { TokenVault } from '../../services/storage/TokenVault';
+import type { OfflineAccess, OfflineView } from '../offline/OfflineAccess';
 export type AuthState = {
-  status: 'loading' | 'signedOut' | 'signedIn' | 'unavailable';
+  status: 'loading' | 'signedOut' | 'signedIn' | 'unavailable' | 'offline';
   user: User | null;
   error?: string;
+  offline?: OfflineView;
 };
 export class AuthStore extends Store<AuthState> {
   private generation = 0;
-  constructor(readonly api: ApiClient, private vault: TokenVault) {
+  constructor(readonly api: ApiClient, private vault: TokenVault, private offlineAccess?: OfflineAccess,
+    private erasePersonalDeviceData?: (owner: string) => Promise<void>) {
     super({ status: 'loading', user: null });
     api.onUnauthorized = () => {
       this.generation++;
+      void this.offlineAccess?.clear().catch(() => {});
       this.publish({ status: 'signedOut', user: null });
     };
   }
@@ -21,16 +25,23 @@ export class AuthStore extends Store<AuthState> {
     this.publish({ status: 'loading', user: null });
     try {
       if (!(await this.vault.read())) {
+        await this.offlineAccess?.clear().catch(() => {});
         if (generation === this.generation) {
           this.publish({ status: 'signedOut', user: null });
         }
         return;
       }
       const user = userSchema.parse(await this.api.request('GET', '/me'));
+      if (generation === this.generation)
+        await this.offlineAccess?.confirm(user.id).catch(() => {});
       if (generation === this.generation) {
         this.publish({ status: 'signedIn', user });
       }
     } catch (error) {
+      const recoverable = error instanceof ApiError &&
+        ['NETWORK_UNAVAILABLE', 'REQUEST_TIMEOUT'].includes(error.code);
+      const offline = recoverable && generation === this.generation
+        ? await this.offlineAccess?.read() : null;
       if (generation === this.generation) {
         this.publish({
           status:
@@ -38,6 +49,7 @@ export class AuthStore extends Store<AuthState> {
               ? 'signedOut'
               : 'unavailable',
           user: null,
+          ...(offline ? { offline } : {}),
           error:
             'Account service unavailable. Your stored session is retained; retry when connected.',
         });
@@ -47,6 +59,7 @@ export class AuthStore extends Store<AuthState> {
   async authenticate(email: string, password: string, fullName?: string) {
     const generation = ++this.generation;
     this.api.invalidateSession();
+    await this.offlineAccess?.clear().catch(() => {});
     const response = await this.api.request<Record<string, unknown>>(
       'POST',
       fullName !== undefined ? '/auth/register' : '/auth/login',
@@ -64,6 +77,8 @@ export class AuthStore extends Store<AuthState> {
       return;
     }
     await this.vault.write(tokens);
+    if (generation === this.generation)
+      await this.offlineAccess?.confirm(user.id).catch(() => {});
     if (generation === this.generation) {
       this.publish({ status: 'signedIn', user });
     }
@@ -103,9 +118,25 @@ export class AuthStore extends Store<AuthState> {
       false,
     );
   }
+  async deleteAccount(currentPassword: string, confirmation: string) {
+    if (this.value.status !== 'signedIn' || !this.value.user || confirmation !== 'DELETE MY ACCOUNT')
+      throw new Error('Sign in and confirm account deletion.');
+    const generation = this.generation;
+    const owner = this.value.user.id;
+    const result = await this.api.request<{deleted?: boolean}>('DELETE', '/me', {
+      currentPassword, confirmation,
+    });
+    if (result?.deleted !== true) throw new Error('Account deletion was not confirmed.');
+    try {
+      await this.erasePersonalDeviceData?.(owner);
+    } finally {
+      if (generation === this.generation) await this.logout();
+    }
+  }
   async logout() {
     const generation = ++this.generation;
     this.api.invalidateSession();
+    await this.offlineAccess?.clear().catch(() => {});
     const tokens = await this.vault.read();
     if (generation !== this.generation) {
       return;
@@ -121,5 +152,26 @@ export class AuthStore extends Store<AuthState> {
         /* Offline local sign-out is still complete. */
       }
     }
+  }
+  async openOffline() {
+    if (this.value.status !== 'unavailable' || !this.value.offline) return;
+    const generation = this.generation;
+    const offline = await this.offlineAccess?.read();
+    if (offline && generation === this.generation && this.value.status === 'unavailable')
+      this.publish({ status: 'offline', user: null, offline });
+  }
+  closeOffline() {
+    if (this.value.status === 'offline')
+      this.publish({ status: 'unavailable', user: null, offline: this.value.offline,
+        error: 'Reconnect to verify your account before using online features.' });
+  }
+  async recheckOffline() {
+    if (this.value.status !== 'offline') return;
+    const generation = this.generation;
+    const offline = await this.offlineAccess?.read();
+    if (generation !== this.generation || this.value.status !== 'offline') return;
+    if (offline) this.publish({ status: 'offline', user: null, offline });
+    else this.publish({ status: 'unavailable', user: null,
+      error: 'Offline access expired or is unavailable. Reconnect to verify your account.' });
   }
 }

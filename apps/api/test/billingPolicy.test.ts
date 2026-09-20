@@ -11,7 +11,7 @@ import {
   selectEffectiveEntitlementSource,
   shouldApplyProviderEvent,
   stripeGracePeriodEnd,
-} from "../src/modules/billing/billingPolicy.ts";
+} from "../dist/modules/billing/billingPolicy.js";
 
 const now = new Date("2026-08-31T12:00:00.000Z");
 const future = new Date("2026-09-30T12:00:00.000Z");
@@ -85,11 +85,11 @@ test("Stripe failed-payment access is capped at the configured three-day grace p
   );
 });
 
-test("fleet pricing selects the approved tier and requires sales at 100 seats", () => {
+test("fleet pricing selects the approved tier and requires sales at 250 seats", () => {
   assert.deepEqual(fleetPricingTier(4), { code: "FLEET_1_4", unitPriceCents: 1999, requiresSalesContact: false });
   assert.deepEqual(fleetPricingTier(5), { code: "FLEET_5_24", unitPriceCents: 1799, requiresSalesContact: false });
   assert.deepEqual(fleetPricingTier(25), { code: "FLEET_25_99", unitPriceCents: 1599, requiresSalesContact: false });
-  assert.deepEqual(fleetPricingTier(100), { code: "FLEET_100_PLUS", unitPriceCents: null, requiresSalesContact: true });
+  assert.deepEqual(fleetPricingTier(100), { code: "FLEET_100_249", unitPriceCents: 1399, requiresSalesContact: false });
 });
 
 test("fleet increases await provider acceptance and decreases wait for renewal", () => {

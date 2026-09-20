@@ -315,6 +315,7 @@ model User {
 
   trucks                    Truck[]
   trips                     Trip[]
+  documentShares            DocumentShare[]
   documents                 Document[]
   favorites                 Favorite[]
   navigationSettings        NavigationSettings?
@@ -348,6 +349,22 @@ model User {
   reviewedBillingRefunds    BillingRefund[]               @relation("BillingRefundReviewer")
 }
 
+// Replay independently preserved deletion ledger before reopening a restored API.
+model AccountDeletionTombstone {
+  userId             String   @id
+  deletedAt          DateTime @default(now())
+  policyState        String   @default("POLICY_REQUIRED")
+  policyVersion      Int      @default(1)
+  retainedCategories String[] @default(["financial", "fleet", "safety", "audit", "disputes", "backups"])
+}
+
+model AccountRetentionPolicy {
+  category          String    @id
+  retentionDays     Int?
+  approvedReference String?
+  approvedAt        DateTime?
+}
+
 model AdminAuditLog {
   id           String   @id @default(cuid())
   actorUserId  String
@@ -374,6 +391,20 @@ model RefreshToken {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+// Encrypted recovery admission; no plaintext address or reset credential.
+model RecoveryDeliveryJob {
+  id          String   @id
+  payload     String
+  attempts    Int      @default(0)
+  createdAt   DateTime @default(now())
+  availableAt DateTime @default(now())
+  expiresAt   DateTime
+  leaseUntil  DateTime?
+  leaseToken  String?
+
+  @@index([availableAt, expiresAt])
 }
 
 model PasswordResetToken {
@@ -535,6 +566,7 @@ model CommunityReport {
 }
 
 model Subscription {
+  accessHold SubscriptionAccessHold?
   id                            String                        @id @default(cuid())
   userId                        String
   provider                      String
@@ -1059,6 +1091,9 @@ model Load {
 }
 
 model Document {
+  attachments DocumentAttachment[]
+  shares DocumentShare[]
+  deletedAt DateTime? @db.Timestamp(3)
   revision Int @default(1)
   truckId String?
   issuedOn DateTime? @db.Date
@@ -1362,4 +1397,65 @@ model Equipment {
   assignedDriver User? @relation(fields: [assignedDriverId], references: [id], onDelete: SetNull)
   @@unique([fleetId, kind, unitNumber])
   @@index([assignedDriverId, active])
+}
+
+model SubscriptionPricingConfig {
+  id String @id
+  prices Json
+  version Int @default(1)
+  updatedAt DateTime @default(now()) @db.Timestamp(3)
+}
+
+model SubscriptionAccessHold {
+  subscriptionId String @id
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  suspended Boolean
+  reason String
+  version Int
+  updatedAt DateTime @default(now()) @db.Timestamp(3)
+}
+
+model DocumentAttachment {
+ id String @id
+ documentId String
+ document Document @relation(fields:[documentId],references:[id],onDelete:Restrict)
+ operationId String
+ requestHash String
+ storageKey String @unique
+ originalFilename String
+ mimeType String
+ sizeBytes Int
+ checksum String
+ pageOrder Int
+ status String @default("PENDING")
+ replaceId String?
+ createdAt DateTime @default(now()) @db.Timestamp(3)
+ completedAt DateTime? @db.Timestamp(3)
+ @@unique([documentId,operationId])
+ @@index([documentId,status])
+}
+model DocumentObjectCleanup {
+ storageKey String @id
+ notBefore DateTime @default(now()) @db.Timestamp(3)
+ retentionHold Boolean @default(false)
+ createdAt DateTime @default(now()) @db.Timestamp(3)
+}
+model DocumentShare {
+ id String @id
+ documentId String
+ document Document @relation(fields:[documentId],references:[id],onDelete:Restrict)
+ sharedByUserId String
+ sharedBy User @relation(fields:[sharedByUserId],references:[id],onDelete:Restrict)
+ operationId String
+ requestHash String
+ recipientType String
+ recipientValue String?
+ deliveryProvider String
+ deliveryStatus String
+ providerMessageId String?
+ failureReason String?
+ createdAt DateTime @default(now()) @db.Timestamp(3)
+ deliveredAt DateTime? @db.Timestamp(3)
+ failedAt DateTime? @db.Timestamp(3)
+ @@unique([documentId,operationId])
 }

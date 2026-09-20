@@ -119,6 +119,7 @@ test.each(['day', 'night'] as const)(
       n => n.props.testID === 'station-logo-pemex',
     )[0];
     expect(image?.props.source).toEqual(stationBrandPictures.pemex);
+    expect(image?.props.resizeMethod).toBe('resize');
     await act(async () => {
       screen.update(
         <DriverAppearanceContext.Provider value={mode}>
@@ -137,6 +138,10 @@ test.each(['day', 'night'] as const)(
       screen.root.findAll(n => n.props.testID === 'poi-picture-fuel_stop')
         .length,
     ).toBeGreaterThan(0);
+    expect(
+      screen.root.findAll(n => n.props.testID === 'poi-picture-fuel_stop')[0]
+        ?.props.resizeMethod,
+    ).toBe('resize');
     await act(async () => screen.unmount());
   },
 );

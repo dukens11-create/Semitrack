@@ -107,6 +107,8 @@ export function PoiCategoryPicture({
         accessible={false}
         importantForAccessibility="no"
         resizeMode="cover"
+        // Ask Android to decode toward the rendered size, not the full artwork.
+        resizeMethod="resize"
         style={{ width: size, height: size }}
       />
     </View>
@@ -138,6 +140,7 @@ export function PoiArtwork({ poi, pin = false }: { poi: Poi; pin?: boolean }) {
             accessible={false}
             importantForAccessibility="no"
             resizeMode="contain"
+            resizeMethod="resize"
             style={styles.image}
           />
         </View>

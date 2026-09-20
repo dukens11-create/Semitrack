@@ -7,6 +7,7 @@ const evidence = {
   category: 'UNCLASSIFIED_PROVIDER_WARNING',
   providerWarningTypes: [4, 4, 'secret-fixture', 0, -1, 999999],
   providerTextPresent: true,
+  malformedWarningEvidencePresent: false,
   legNumber: 2,
   lineNumber: 3,
   message: 'private-address',

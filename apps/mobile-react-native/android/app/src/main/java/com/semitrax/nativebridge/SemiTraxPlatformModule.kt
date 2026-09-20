@@ -9,6 +9,8 @@ import com.facebook.react.modules.core.PermissionAwareActivity
 import com.facebook.react.modules.core.PermissionListener
 
 class SemiTraxPlatformModule(private val context: ReactApplicationContext) : NativeSemiTraxPlatformSpec(context), PermissionListener, LifecycleEventListener, LocationListener {
+  private val documents = DocumentFilesBridge(context)
+  override fun documentCommand(command: String, payload: String, promise: Promise) { documents.command(command, payload, promise) }
   private val handler = Handler(Looper.getMainLooper())
   private val manager = context.getSystemService(LocationManager::class.java)
   private val guidance: GuidanceBoundary = UnconfiguredGuidanceBoundary()
@@ -77,6 +79,7 @@ class SemiTraxPlatformModule(private val context: ReactApplicationContext) : Nat
   override fun onHostDestroy() { stopTracking() }
   override fun invalidate() {
     handler.post { pendingPermission?.reject("MODULE_CLOSED", "Location module closed."); pendingPermission = null; stopTracking(); context.removeLifecycleEventListener(this) }
+    documents.close()
     super.invalidate()
   }
 }

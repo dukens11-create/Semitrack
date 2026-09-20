@@ -15,6 +15,9 @@
   return self;
 }
 - (void)createOperationId:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject { resolve([[NSUUID UUID] UUIDString].lowercaseString); }
+- (void)documentCommand:(NSString *)command payload:(NSString *)payload resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject {
+  reject(@"DOCUMENT_NATIVE_UNAVAILABLE", @"Document capture requires the platform document adapter.", nil);
+}
 - (void)guidanceCommand:(NSString *)command payload:(NSString *)payload resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSString *result = [self->_location guidanceCommand:command payload:payload];

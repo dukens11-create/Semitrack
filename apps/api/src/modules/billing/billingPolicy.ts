@@ -1,3 +1,4 @@
+import { subscriptionPricing } from '../../contracts/subscriptionPricing.js';
 export const entitlementGrantingStatuses = [
   "TRIALING",
   "ACTIVE",
@@ -24,19 +25,20 @@ export function isAccessGrantingStatus(status: string): status is EntitlementGra
 
 export function entitlementSourceEnd(candidate: EntitlementSourceCandidate): Date | null {
   if (
-    (candidate.status === "GRACE_PERIOD" || candidate.status === "BILLING_RETRY") &&
+    (["GRACE_PERIOD", "BILLING_RETRY", "PAST_DUE"].includes(candidate.status)) &&
     candidate.gracePeriodEndsAt
   ) {
-    if (!candidate.accessEndsAt || candidate.gracePeriodEndsAt > candidate.accessEndsAt) {
-      return candidate.gracePeriodEndsAt;
-    }
+    return candidate.gracePeriodEndsAt;
   }
   return candidate.accessEndsAt;
 }
 
 export function isEntitlementSourceActive(candidate: EntitlementSourceCandidate, now = new Date()): boolean {
-  if (!isAccessGrantingStatus(candidate.status) || candidate.startsAt > now) return false;
+  if (candidate.startsAt > now) return false;
+  if (candidate.status === 'PAST_DUE') return Boolean(candidate.gracePeriodEndsAt && candidate.gracePeriodEndsAt > now);
+  if (!isAccessGrantingStatus(candidate.status)) return false;
   const end = entitlementSourceEnd(candidate);
+  if (['GRACE_PERIOD','BILLING_RETRY'].includes(candidate.status) && !end) return false;
   return end === null || end > now;
 }
 
@@ -104,7 +106,7 @@ export function stripeGracePeriodEnd(failedAt: Date, gracePeriodDays: number) {
 }
 
 export type FleetPricingTier = {
-  code: "FLEET_1_4" | "FLEET_5_24" | "FLEET_25_99" | "FLEET_100_PLUS";
+  code: "FLEET_1_4" | "FLEET_5_24" | "FLEET_25_99" | "FLEET_100_249" | "FLEET_250_PLUS";
   unitPriceCents: number | null;
   requiresSalesContact: boolean;
 };
@@ -113,10 +115,9 @@ export function fleetPricingTier(seatQuantity: number): FleetPricingTier {
   if (!Number.isSafeInteger(seatQuantity) || seatQuantity < 1) {
     throw new Error("Fleet seat quantity must be a positive integer");
   }
-  if (seatQuantity <= 4) return { code: "FLEET_1_4", unitPriceCents: 1999, requiresSalesContact: false };
-  if (seatQuantity <= 24) return { code: "FLEET_5_24", unitPriceCents: 1799, requiresSalesContact: false };
-  if (seatQuantity <= 99) return { code: "FLEET_25_99", unitPriceCents: 1599, requiresSalesContact: false };
-  return { code: "FLEET_100_PLUS", unitPriceCents: null, requiresSalesContact: true };
+  const tier = subscriptionPricing.fleet.find(t => seatQuantity >= t.min && (t.max === null || seatQuantity <= t.max))!;
+  const codes: FleetPricingTier['code'][] = ['FLEET_1_4', 'FLEET_5_24', 'FLEET_25_99', 'FLEET_100_249', 'FLEET_250_PLUS'];
+  return { code: codes[subscriptionPricing.fleet.indexOf(tier)]!, unitPriceCents: tier.cents, requiresSalesContact: tier.cents === null };
 }
 
 export function planFleetSeatChange(input: {

@@ -3,7 +3,7 @@ function compile(file,extra='',resolve=require){const exports={};vm.runInNewCont
 const health=compile('providerHealth.ts');
 const {LiveOperations}=compile('App.tsx','\nexport {LiveOperations};',name=>{
  if(name==='./providerHealth')return health;
- if(['./Operations','./truckDetails','./api'].includes(name))return {};
+ if(['./SubscriptionAdmin','./Operations','./truckDetails','./api'].includes(name))return {};
  return require(name);
 });
 const good={configured:true,status:'OPERATIONAL',validUntil:new Date(Date.now()+240_000).toISOString()};

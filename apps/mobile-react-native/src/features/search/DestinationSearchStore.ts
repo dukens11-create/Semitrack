@@ -21,11 +21,13 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private controller: AbortController | null = null;
+  private searchInFlight: object | null = null;
   constructor(private search: SearchService, private poi: PoiService) {
     super({ query: '', phase: 'idle', results: [], pois: [] });
   }
   cancel() {
     ++this.generation;
+    this.searchInFlight = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.controller?.abort();
@@ -64,10 +66,13 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
         void this.searchNow(center);
       }, 400);
   }
-  searchNow(center?: Coordinate) {
-    if (this.value.phase === 'loading') return Promise.resolve();
+  async searchNow(center?: Coordinate) {
+    if (this.searchInFlight) return;
+
     const query = this.value.query.trim();
-    return this.execute(async signal => ({
+    if (query.length < 3) return;
+
+    const pending = this.execute(async signal => ({
       results: await this.search.search(query, center, signal),
       pois: [],
       recentQueries: [
@@ -79,6 +84,13 @@ export class DestinationSearchStore extends Store<DestinationSearchState> {
         .filter(Boolean)
         .slice(0, 5),
     }));
+    const owner = {};
+    this.searchInFlight = owner;
+    try {
+      await pending;
+    } finally {
+      if (this.searchInFlight === owner) this.searchInFlight = null;
+    }
   }
   nearby(category: PlaceCategory, center: Coordinate) {
     return this.execute(async signal => ({

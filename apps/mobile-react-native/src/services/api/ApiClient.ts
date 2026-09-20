@@ -9,7 +9,9 @@ export class ApiError extends Error {
     readonly status = 0,
     readonly retryable = false,
     readonly validationFields: string[] = [],
-    readonly restrictionDiagnostic: ReturnType<typeof sanitizeRestrictionDiagnostic> = null,
+    readonly restrictionDiagnostic: ReturnType<
+      typeof sanitizeRestrictionDiagnostic
+    > = null,
   ) {
     super(message);
   }
@@ -28,6 +30,92 @@ export class ApiClient {
     this.sessionGeneration++;
     this.refreshFlight = null;
   }
+  /** App-private file bytes; authorization follows the same session/refresh boundary. */
+  async uploadDocument(
+    path: string,
+    uri: string,
+    onProgress: (percent: number) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (
+      !/^\/documents\/[^/]+\/attachments\/[a-f0-9-]+\/bytes$/.test(path) ||
+      !uri.startsWith('file://')
+    )
+      throw new ApiError('INVALID_PATH', 'Invalid document upload.');
+    const generation = this.sessionGeneration;
+    const send = async () => {
+      const tokens = await this.vault.read();
+      if (generation !== this.sessionGeneration || !tokens)
+        throw new ApiError('SESSION_CHANGED', 'Sign in again.');
+      return new Promise<number>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const abort = () => xhr.abort();
+        const finish = (action: () => void) => {
+          signal?.removeEventListener('abort', abort);
+          action();
+        };
+        xhr.open('PUT', this.baseUrl + path);
+        xhr.timeout = 90000;
+        xhr.setRequestHeader('Authorization', 'Bearer ' + tokens.accessToken);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.upload.onprogress = event => {
+          if (generation === this.sessionGeneration && event.lengthComputable)
+            onProgress(
+              Math.min(100, Math.floor((event.loaded / event.total) * 100)),
+            );
+        };
+        xhr.onload = () => finish(() => resolve(xhr.status));
+        xhr.onerror = () =>
+          finish(() =>
+            reject(
+              new ApiError(
+                'NETWORK_UNAVAILABLE',
+                'Upload failed. Retry when connected.',
+              ),
+            ),
+          );
+        xhr.ontimeout = () =>
+          finish(() =>
+            reject(
+              new ApiError(
+                'REQUEST_TIMEOUT',
+                'Upload timed out. Retry when connected.',
+              ),
+            ),
+          );
+        xhr.onabort = () =>
+          finish(() =>
+            reject(new ApiError('REQUEST_CANCELLED', 'Upload cancelled.')),
+          );
+        signal?.addEventListener('abort', abort);
+        if (signal?.aborted) {
+          finish(() =>
+            reject(new ApiError('REQUEST_CANCELLED', 'Upload cancelled.')),
+          );
+          return;
+        }
+        // React Native's native networking accepts URI bodies without base64 in JS.
+        xhr.send({ uri } as unknown as Parameters<XMLHttpRequest['send']>[0]);
+      });
+    };
+    let status = await send();
+    if (generation !== this.sessionGeneration)
+      throw new ApiError('SESSION_CHANGED', 'Session changed.');
+    if (status === 401 && (await this.refresh())) status = await send();
+    if (generation !== this.sessionGeneration)
+      throw new ApiError('SESSION_CHANGED', 'Session changed.');
+    if (status === 401) {
+      this.invalidateSession();
+      await this.vault.clear();
+      this.onUnauthorized();
+    }
+    if (status < 200 || status >= 300)
+      throw new ApiError(
+        'DOCUMENT_UPLOAD_FAILED',
+        'Upload could not be confirmed. Retry.',
+        status,
+      );
+  }
   async request<T = unknown>(
     method: string,
     path: string,
@@ -41,7 +129,11 @@ export class ApiClient {
     }
     const observeRouteResponse = (status: number) => {
       if (method === 'POST' && path === '/routing/truck-route') {
-        try { onRouteResponse?.(status); } catch { /* Observability cannot change requests. */ }
+        try {
+          onRouteResponse?.(status);
+        } catch {
+          /* Observability cannot change requests. */
+        }
       }
     };
     const generation = this.sessionGeneration;
@@ -68,8 +160,15 @@ export class ApiClient {
           : await this.refresh();
       if (refreshed && generation === this.sessionGeneration) {
         const retryTokens = await this.vault.read();
-        if (generation !== this.sessionGeneration || !retryTokens) throw new ApiError('SESSION_CHANGED', 'Session changed.');
-        response = await this.send(method, path, body, retryTokens.accessToken, signal);
+        if (generation !== this.sessionGeneration || !retryTokens)
+          throw new ApiError('SESSION_CHANGED', 'Session changed.');
+        response = await this.send(
+          method,
+          path,
+          body,
+          retryTokens.accessToken,
+          signal,
+        );
         observeRouteResponse(response.status);
       }
     }
@@ -86,8 +185,18 @@ export class ApiClient {
       data = response.text ? JSON.parse(response.text) : null;
     } catch {
       if (!response.ok) {
-        const code = response.status === 401 ? 'AUTH_EXPIRED' : response.status === 502 ? 'PROVIDER_UNAVAILABLE' : 'REQUEST_FAILED';
-        throw new ApiError(code, safeDriverError({code,status:response.status}),response.status,response.status===429||response.status>=500);
+        const code =
+          response.status === 401
+            ? 'AUTH_EXPIRED'
+            : response.status === 502
+            ? 'PROVIDER_UNAVAILABLE'
+            : 'REQUEST_FAILED';
+        throw new ApiError(
+          code,
+          safeDriverError({ code, status: response.status }),
+          response.status,
+          response.status === 429 || response.status >= 500,
+        );
       }
       throw new ApiError(
         'INVALID_RESPONSE',
@@ -122,37 +231,103 @@ export class ApiClient {
         typeof detail.details.fieldErrors === 'object'
           ? Object.keys(detail.details.fieldErrors).slice(0, 50)
           : [],
-        detail.code === 'TRIMBLE_RESTRICTION_WARNING' ? sanitizeRestrictionDiagnostic(detail.restrictionDiagnostic) : null,
+        detail.code === 'TRIMBLE_RESTRICTION_WARNING'
+          ? sanitizeRestrictionDiagnostic(detail.restrictionDiagnostic)
+          : null,
       );
     }
     return data as T;
   }
   /** Revoke only the captured session; never refresh or read a newer login. */
   async revokeSession(tokens: { accessToken: string; refreshToken: string }) {
-    const response = await this.send('POST', '/auth/logout',
-      { refreshToken: tokens.refreshToken }, tokens.accessToken);
-    if (!response.ok) throw new ApiError('LOGOUT_REVOKE_FAILED', 'Remote sign-out could not be confirmed.', response.status);
+    const response = await this.send(
+      'POST',
+      '/auth/logout',
+      { refreshToken: tokens.refreshToken },
+      tokens.accessToken,
+    );
+    if (!response.ok)
+      throw new ApiError(
+        'LOGOUT_REVOKE_FAILED',
+        'Remote sign-out could not be confirmed.',
+        response.status,
+      );
   }
-  private async send(method: string, path: string, body?: unknown, access?: string, signal?: AbortSignal): Promise<Reply> {
-    if (signal?.aborted) throw new ApiError('REQUEST_CANCELLED','The request was cancelled.');
-    const controller=new AbortController();
+  private async send(
+    method: string,
+    path: string,
+    body?: unknown,
+    access?: string,
+    signal?: AbortSignal,
+  ): Promise<Reply> {
+    if (signal?.aborted)
+      throw new ApiError('REQUEST_CANCELLED', 'The request was cancelled.');
+    const controller = new AbortController();
     let rejectInterrupted!: (error: Error) => void;
-    const interrupted=new Promise<never>((_resolve,reject)=>{rejectInterrupted=reject;});
-    const abort=()=>{controller.abort();rejectInterrupted(new ApiError('REQUEST_CANCELLED','The request was cancelled.'));};
-    signal?.addEventListener('abort',abort);
-    if(signal?.aborted)abort();
-    const timer=setTimeout(()=>{controller.abort();rejectInterrupted(new ApiError('REQUEST_TIMEOUT','SemiTraX took too long to respond.',0,true));},20000);
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      rejectInterrupted = reject;
+    });
+    const abort = () => {
+      controller.abort();
+      rejectInterrupted(
+        new ApiError('REQUEST_CANCELLED', 'The request was cancelled.'),
+      );
+    };
+    signal?.addEventListener('abort', abort);
+    if (signal?.aborted) abort();
+    const timer = setTimeout(() => {
+      controller.abort();
+      rejectInterrupted(
+        new ApiError(
+          'REQUEST_TIMEOUT',
+          'SemiTraX took too long to respond.',
+          0,
+          true,
+        ),
+      );
+    }, 20000);
     try {
-      return await Promise.race([interrupted,(async()=>{
-        const response=await this.transport(this.baseUrl+path,{method,signal:controller.signal,headers:{Accept:'application/json',...(body!==undefined?{'Content-Type':'application/json'}:{}),...(access?{Authorization:'Bearer '+access}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
-        const text=await response.text();
-        if(text.length>20_000_000)throw new ApiError('INVALID_RESPONSE','SemiTraX returned an oversized response.',response.status);
-        return {status:response.status,ok:response.ok,text};
-      })()]);
-    }catch(error){
-      if(error instanceof ApiError)throw error;
-      throw new ApiError(signal?.aborted?'REQUEST_CANCELLED':controller.signal.aborted?'REQUEST_TIMEOUT':'NETWORK_UNAVAILABLE','Unable to reach SemiTraX. Check your connection and retry.',0,!signal?.aborted);
-    }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+      return await Promise.race([
+        interrupted,
+        (async () => {
+          const response = await this.transport(this.baseUrl + path, {
+            method,
+            signal: controller.signal,
+            headers: {
+              Accept: 'application/json',
+              ...(body !== undefined
+                ? { 'Content-Type': 'application/json' }
+                : {}),
+              ...(access ? { Authorization: 'Bearer ' + access } : {}),
+            },
+            ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+          });
+          const text = await response.text();
+          if (text.length > 20_000_000)
+            throw new ApiError(
+              'INVALID_RESPONSE',
+              'SemiTraX returned an oversized response.',
+              response.status,
+            );
+          return { status: response.status, ok: response.ok, text };
+        })(),
+      ]);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(
+        signal?.aborted
+          ? 'REQUEST_CANCELLED'
+          : controller.signal.aborted
+          ? 'REQUEST_TIMEOUT'
+          : 'NETWORK_UNAVAILABLE',
+        'Unable to reach SemiTraX. Check your connection and retry.',
+        0,
+        !signal?.aborted,
+      );
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
   }
   private refresh() {
     if (this.refreshFlight) {
@@ -196,7 +371,11 @@ export class ApiClient {
     try {
       next = tokensSchema.parse(JSON.parse(response.text));
     } catch {
-      throw new ApiError('INVALID_RESPONSE', 'The session response could not be validated.', response.status);
+      throw new ApiError(
+        'INVALID_RESPONSE',
+        'The session response could not be validated.',
+        response.status,
+      );
     }
     if (generation !== this.sessionGeneration) {
       return false;

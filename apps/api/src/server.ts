@@ -63,6 +63,9 @@ import {
 
 const app = express();
 app.disable("x-powered-by");
+// Production requires an explicit reviewed proxy hop count. Development/test
+// default to zero, so caller-supplied forwarding headers are not trusted.
+app.set("trust proxy", env.trustProxyHops);
 const allowedCorsOrigins = new Set([...env.corsOrigins, ...env.stripeAllowedWebOrigins]);
 app.use(cors({
   origin(origin, callback) {
@@ -748,6 +751,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     CREATE_OPERATION_REQUIRED:[400,'A create operation identifier is required.'], CREATE_OPERATION_CONFLICT:[409,'This save operation already has different values. Review the saved record.'],
     CURRENT_PASSWORD_INVALID:[400,'Your current password was not accepted.'], PASSWORD_TOO_LONG:[400,'Use a password of at most 72 UTF-8 bytes.'],
     ACCOUNT_CHANGED:[409,'Your account changed. Sign in and review it again.'],
+    ACCOUNT_DELETION_REVIEW_REQUIRED:[409,'This account requires support review before deletion can continue.'],
   };
   const workflowError=safe?.safeCode?workflowErrors[safe.safeCode]:undefined;
   if (workflowError) return res.status(workflowError[0]).json({error:{code:safe!.safeCode,message:workflowError[1]}});
@@ -815,12 +819,24 @@ const dotSyncTimer = setInterval(() => {
 }, 60_000);
 dotSyncTimer.unref();
 
+let shutdownStarted = false;
 const shutdown = async () => {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   clearInterval(dotSyncTimer);
-  server.close();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+  });
   await disconnectDatabase();
 };
-process.once("SIGTERM", () => void shutdown());
-process.once("SIGINT", () => void shutdown());
+const handleShutdown = () => {
+  void shutdown().catch(() => {
+    logServerEvent("INTERNAL_ERROR");
+    process.exitCode = 1;
+  });
+};
+process.once("SIGTERM", handleShutdown);
+process.once("SIGINT", handleShutdown);
 
 export { app };

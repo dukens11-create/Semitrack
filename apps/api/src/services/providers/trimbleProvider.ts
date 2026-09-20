@@ -356,84 +356,263 @@ function validateStopCoverage(directions:any,mileage:any,geometry:number[][],inp
   return validatedStops;
 }
 
+function directionMarker(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return /^(?:origin|stop\s+\d+)\b/i.test(text);
+}
+
+function clockToleranceSeconds(value: unknown) {
+  return typeof value === "string" && /^\d+:[0-5]\d$/.test(value.trim()) ? 59 : 1;
+}
+
+function sameMileageValue(directionValue: number, mileageValue: number, tolerance = 0.02) {
+  return Number.isFinite(directionValue)
+    && Number.isFinite(mileageValue)
+    && Math.abs(directionValue - mileageValue) <= tolerance;
+}
+
+function sameClockValue(directionRaw: unknown, directionSeconds: number, mileageSeconds: number) {
+  return Number.isFinite(directionSeconds)
+    && Number.isFinite(mileageSeconds)
+    && Math.abs(directionSeconds - mileageSeconds) <= clockToleranceSeconds(directionRaw);
+}
+
 function parseDirectionLegs(report: any, geometry: number[][], mileageReport: any) {
   const mileageLines = Array.isArray(mileageReport?.ReportLines) ? mileageReport.ReportLines : [];
   const reportLegs = Array.isArray(report?.ReportLegs) ? report.ReportLegs : [];
   const warnings: string[] = [];
+  const legs: RouteLeg[] = [];
   let maneuverStep = 0;
 
-  const legs: RouteLeg[] = reportLegs.map((leg: any, legIndex: number) => {
+  const providerWarning = (line: any, legIndex: number, lineIndex: number) => {
+    const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
+    if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) {
+      const failure = new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_RESTRICTION_WARNING",
+        "The provider reported a route warning that requires review before this route can be used.",
+        422,
+      );
+      failure.restrictionDiagnostic = restrictionDiagnostic(line, legIndex, lineIndex);
+      throw failure;
+    }
+  };
+
+  for (let legIndex = 0; legIndex < reportLegs.length; legIndex++) {
+    const leg = reportLegs[legIndex];
     const lines = Array.isArray(leg?.ReportLines) ? leg.ReportLines : [];
+    const mileageStart = mileageLines[legIndex] ?? {};
+    const mileageEnd = mileageLines[legIndex + 1] ?? {};
+    const mileageStartDistance = finiteNumber(mileageStart.TMiles);
+    const mileageStartDuration = clockToSeconds(mileageStart.THours);
+    const mileageEndDistance = finiteNumber(mileageEnd.TMiles);
+    const mileageEndDuration = clockToSeconds(mileageEnd.THours);
+
+    if (
+      mileageStartDistance == null || mileageStartDistance < 0 ||
+      !Number.isFinite(mileageStartDuration) ||
+      mileageEndDistance == null || mileageEndDistance < mileageStartDistance ||
+      !Number.isFinite(mileageEndDuration) || mileageEndDuration < mileageStartDuration
+    ) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_DATA_REQUIRED",
+        "The provider did not supply consistent cumulative mileage boundaries for this leg.",
+      );
+    }
+
+    lines.forEach((line: any, lineIndex: number) => providerWarning(line, legIndex, lineIndex));
+
+    // Trimble Directions values are cumulative across the trip. On later legs,
+    // the provider repeats the intermediate stop as the first Directions row.
+    // That explicit row is the only safe Directions baseline. Mileage can carry
+    // seconds while Directions is minute-precision, so cross-report validation
+    // allows only the precision gap, never a material counter mismatch.
+    const baselineIndex = lines.findIndex((line: any, index: number) =>
+      index <= 2 && directionMarker(line?.Direction)
+      && finiteNumber(line?.Dist) != null
+      && Number.isFinite(clockToSeconds(line?.Time)),
+    );
+
+    let startingDistance = mileageStartDistance;
+    let startingDuration = mileageStartDuration;
+    if (baselineIndex >= 0) {
+      const baseline = lines[baselineIndex];
+      const directionDistance = finiteNumber(baseline?.Dist)!;
+      const directionDuration = clockToSeconds(baseline?.Time);
+      if (
+        !sameMileageValue(directionDistance, mileageStartDistance) ||
+        !sameClockValue(baseline?.Time, directionDuration, mileageStartDuration)
+      ) {
+        throw new RoutingProviderError(
+          "Trimble",
+          "TRIMBLE_MANEUVER_DATA_REQUIRED",
+          "Directions and Mileage reports disagree at an intermediate-stop boundary.",
+        );
+      }
+      startingDistance = directionDistance;
+      startingDuration = directionDuration;
+
+      // A later-leg baseline is also the provider's explicit intermediate-arrival
+      // marker. Preserve it in global maneuver order by attaching it to the
+      // preceding leg, but never manufacture one when the marker is absent.
+      if (legIndex > 0) {
+        const instruction = String(baseline?.Direction ?? "").trim();
+        const raw = baseline?.End ?? baseline?.Begin;
+        const lat = finiteNumber(raw?.Lat ?? raw?.lat);
+        const lng = finiteNumber(raw?.Lon ?? raw?.lon ?? raw?.Lng ?? raw?.lng);
+        if (!instruction || lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+          throw new RoutingProviderError(
+            "Trimble",
+            "TRIMBLE_MANEUVER_DATA_REQUIRED",
+            "The provider did not supply a usable intermediate-stop arrival marker.",
+          );
+        }
+        const previous = legs.at(-1);
+        if (!previous) {
+          throw new RoutingProviderError(
+            "Trimble",
+            "TRIMBLE_MANEUVER_DATA_REQUIRED",
+            "Intermediate-stop ordering could not be established.",
+          );
+        }
+        previous.maneuvers.push({
+          step: ++maneuverStep,
+          instruction,
+          distanceMiles: 0,
+          durationSeconds: 0,
+          action: "arrive",
+          direction: "straight",
+          coordinate: { lat, lng },
+        });
+      }
+    } else if (legIndex > 0) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_DATA_REQUIRED",
+        "The provider did not supply the intermediate-stop marker required to align multi-stop directions safely.",
+      );
+    }
+
     const maneuvers: RouteManeuver[] = [];
-    // A straight leg may end at leg.Dest without a turn or arrival report row.
-    // Only in that case use provider driving rows as continue maneuvers.
-    const straightLeg = !lines.some((line: any) => line?.TurnInstruction
-      || /^destination\b/i.test(String(line?.Direction ?? '').trim()));
-    const startingDistance = finiteNumber(mileageLines[legIndex]?.TMiles);
-    const startingDuration = clockToSeconds(mileageLines[legIndex]?.THours);
-    if (startingDistance == null || startingDistance < 0 || !Number.isFinite(startingDuration)) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','The provider did not supply valid cumulative leg starting totals.');
+    const contentLines = baselineIndex >= 0
+      ? lines.filter((_: any, index: number) => index !== baselineIndex)
+      : lines;
+    const straightLeg = !contentLines.some((line: any) => line?.TurnInstruction
+      || /^destination\b/i.test(String(line?.Direction ?? "").trim())
+      || /^stop\s+\d+\b/i.test(String(line?.Direction ?? "").trim()));
     let lastDistance = startingDistance;
     let lastDuration = startingDuration;
 
     for (let index = 0; index < lines.length; index++) {
+      if (index === baselineIndex) continue;
       const line = lines[index];
-      const warning = typeof line?.Warn === "string" ? line.Warn.trim() : "";
-      if (warning || (Array.isArray(line?.DetailedWarnings) && line.DetailedWarnings.some((w: any) => w?.Type !== 0))) {
-        const failure = new RoutingProviderError('Trimble','TRIMBLE_RESTRICTION_WARNING','The provider reported a route warning that requires review before this route can be used.',422);
-        failure.restrictionDiagnostic = restrictionDiagnostic(line, legIndex, index);
-        throw failure;
-      }
       const instruction = typeof line?.Direction === "string" ? line.Direction.trim() : "";
-      const isArrival = /^destination\b/i.test(instruction);
+      const isArrival = /^(?:destination|stop\s+\d+)\b/i.test(instruction);
       if (!straightLeg && !line?.TurnInstruction && !isArrival) continue;
-      // Descriptive-only rows supply no distance/time evidence. Never borrow
-      // another row's totals to manufacture a straight-leg instruction.
       if (straightLeg && line?.Dist == null && line?.Time == null) continue;
 
       let cumulativeDistance = finiteNumber(line?.Dist);
       let cumulativeDuration = clockToSeconds(line?.Time);
+      let timeRaw: unknown = line?.Time;
       if (!straightLeg && cumulativeDistance == null && !isArrival) {
         for (let next = index + 1; next < lines.length; next++) {
-          if (lines[next]?.TurnInstruction || /^destination\b/i.test(String(lines[next]?.Direction ?? ''))) break;
+          if (next === baselineIndex) continue;
+          const nextInstruction = String(lines[next]?.Direction ?? "").trim();
+          if (lines[next]?.TurnInstruction || /^(?:destination|stop\s+\d+)\b/i.test(nextInstruction)) break;
           cumulativeDistance = finiteNumber(lines[next]?.Dist);
           cumulativeDuration = clockToSeconds(lines[next]?.Time);
-          if (cumulativeDistance != null) break;
+          timeRaw = lines[next]?.Time;
+          if (cumulativeDistance != null && Number.isFinite(cumulativeDuration)) break;
         }
       }
-      if (!instruction || cumulativeDistance == null || cumulativeDistance < lastDistance || !Number.isFinite(cumulativeDuration) || cumulativeDuration < lastDuration) throw new RoutingProviderError('Trimble','TRIMBLE_MANEUVER_DATA_REQUIRED','Maneuver distance, time or instruction is missing or inconsistent.');
+
+      if (
+        !instruction ||
+        cumulativeDistance == null ||
+        cumulativeDistance < lastDistance ||
+        !Number.isFinite(cumulativeDuration) ||
+        cumulativeDuration < lastDuration
+      ) {
+        throw new RoutingProviderError(
+          "Trimble",
+          "TRIMBLE_MANEUVER_DATA_REQUIRED",
+          "Maneuver distance, time or instruction is missing or inconsistent.",
+        );
+      }
+
       const action = maneuverAction(line?.TurnInstruction, instruction);
-      const candidates = straightLeg ? [line?.Begin, line?.End]
+      const candidates = straightLeg
+        ? [line?.Begin, line?.End]
         : [isArrival ? line?.End ?? line?.Begin : line?.Begin ?? line?.End];
-      const providerCoordinate = candidates.map(raw => ({
-        lat: finiteNumber(raw?.Lat ?? raw?.lat),
-        lng: finiteNumber(raw?.Lon ?? raw?.lon ?? raw?.Lng ?? raw?.lng),
-      })).find((point): point is {lat: number; lng: number} =>
-        point.lat != null && point.lng != null && Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180);
+      const providerCoordinate = candidates
+        .map(raw => ({
+          lat: finiteNumber(raw?.Lat ?? raw?.lat),
+          lng: finiteNumber(raw?.Lon ?? raw?.lon ?? raw?.Lng ?? raw?.lng),
+        }))
+        .find((point): point is { lat: number; lng: number } =>
+          point.lat != null && point.lng != null &&
+          Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180);
+
       maneuvers.push({
         step: ++maneuverStep,
         instruction,
         distanceMiles: Number((cumulativeDistance - lastDistance).toFixed(3)),
         durationSeconds: cumulativeDuration - lastDuration,
-        action: action.action ?? (straightLeg ? "continue" : undefined),
-        direction: action.direction ?? (straightLeg ? "straight" : undefined),
+        action: action.action ?? (isArrival ? "arrive" : straightLeg ? "continue" : undefined),
+        direction: action.direction ?? (isArrival || straightLeg ? "straight" : undefined),
         roadName: roadNameFrom(instruction),
         nextRoadName: roadNameFrom(instruction),
         exitNumber: exitNumberFrom(instruction, line?.InterCh),
         ...(providerCoordinate ? { coordinate: providerCoordinate } : {}),
       });
-      if (cumulativeDistance != null) lastDistance = cumulativeDistance;
-      if (cumulativeDuration > 0) lastDuration = cumulativeDuration;
+      lastDistance = cumulativeDistance;
+      lastDuration = cumulativeDuration;
+
+      // Remember the precision of the last Directions counter so the end-of-leg
+      // Mileage comparison uses only the provider's documented rounding gap.
+      if (timeRaw !== undefined) (leg as any).__semitraxLastDirectionTime = timeRaw;
     }
 
-    const mileage = mileageLines[legIndex + 1] ?? {};
-    if (!maneuvers.length || finiteNumber(mileage.LMiles) == null || finiteNumber(mileage.LMiles)! < 0 || !Number.isFinite(clockToSeconds(mileage.LHours))) throw new RoutingProviderError("Trimble","TRIMBLE_INCOMPLETE_ROUTE","Route leg data is incomplete.");
-    return {
-      distanceMiles: finiteNumber(mileage.LMiles)!,
-      durationSeconds: clockToSeconds(mileage.LHours),
+    const legMiles = finiteNumber(mileageEnd.LMiles);
+    const legHours = clockToSeconds(mileageEnd.LHours);
+    if (!maneuvers.length || legMiles == null || legMiles < 0 || !Number.isFinite(legHours)) {
+      throw new RoutingProviderError("Trimble", "TRIMBLE_INCOMPLETE_ROUTE", "Route leg data is incomplete.");
+    }
+
+    const expectedLegMiles = mileageEndDistance - mileageStartDistance;
+    const expectedLegSeconds = mileageEndDuration - mileageStartDuration;
+    if (
+      !sameMileageValue(expectedLegMiles, legMiles) ||
+      Math.abs(expectedLegSeconds - legHours) > 1
+    ) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_DATA_REQUIRED",
+        "Mileage leg totals conflict with cumulative trip totals.",
+      );
+    }
+
+    const lastDirectionTime = (leg as any).__semitraxLastDirectionTime;
+    delete (leg as any).__semitraxLastDirectionTime;
+    if (
+      !sameMileageValue(lastDistance, mileageEndDistance) ||
+      !sameClockValue(lastDirectionTime, lastDuration, mileageEndDuration)
+    ) {
+      throw new RoutingProviderError(
+        "Trimble",
+        "TRIMBLE_MANEUVER_DATA_REQUIRED",
+        "Directions and Mileage reports disagree at the end of a route leg.",
+      );
+    }
+
+    legs.push({
+      distanceMiles: legMiles,
+      durationSeconds: legHours,
       geometry: legIndex === 0 ? geometry : [],
       maneuvers,
-    };
-  });
+    });
+  }
 
   return { legs, warnings };
 }

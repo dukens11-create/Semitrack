@@ -1,33 +1,14 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { env } from "../config/env.js";
-
-const s3 = new S3Client({
-  region: env.awsRegion,
-  credentials: {
-    accessKeyId: env.awsAccessKeyId,
-    secretAccessKey: env.awsSecretAccessKey,
-  },
-});
-
+/**
+ * Legacy storage entry point retained only to prevent accidental imports from
+ * silently re-enabling the old public-S3 document path.
+ *
+ * The supported document API is metadata-only until a private, authenticated,
+ * retention-reviewed storage lifecycle is implemented and accepted.
+ */
 export async function uploadDocument(
-  fileName: string,
-  mimeType: string,
-  buffer: Buffer
-) {
-  const key = `documents/${Date.now()}-${fileName}`;
-
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: env.s3Bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: mimeType,
-    })
-  );
-
-  return {
-    fileName,
-    fileUrl: `https://${env.s3Bucket}.s3.${env.awsRegion}.amazonaws.com/${key}`,
-    key,
-  };
+  _fileName: string,
+  _mimeType: string,
+  _buffer: Buffer,
+): Promise<never> {
+  throw new Error("DOCUMENT_STORAGE_UNAVAILABLE");
 }

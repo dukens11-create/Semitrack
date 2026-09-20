@@ -50,7 +50,7 @@ export class SearchService {
       q: text,
       autocomplete: 'true',
       limit: '6',
-      country: 'us,ca',
+      country: 'us,ca,mx',
     });
     if (center) {
       const point = coordinateSchema.parse(center);

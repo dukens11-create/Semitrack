@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:semitrack_mobile/models/nav_settings_model.dart';
+import 'copilot_device_setup_screen.dart';
 
 /// Full-screen, scrollable navigation settings page opened when the user
 /// taps the **More** button on [TruckMapScreen].
@@ -83,6 +84,14 @@ class _NavSettingsScreenState extends State<NavSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
+          ListTile(
+            leading: const Icon(Icons.key, color: _accent),
+            title: const Text('CoPilot device setup', style: TextStyle(color: _textPrimary)),
+            subtitle: const Text('Activate your assigned truck navigation license', style: TextStyle(color: Colors.white70)),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => const CoPilotDeviceSetupScreen(),
+            )),
+          ),
           _buildShortcutSection(),
           const SizedBox(height: 14),
           _buildNavTruckAvatarSection(),

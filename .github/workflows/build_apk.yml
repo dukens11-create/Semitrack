@@ -2,7 +2,21 @@ name: Build Release APK
 
 on:
   push:
+    paths:
+      - 'lib/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'plugins/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
   pull_request:
+    paths:
+      - 'lib/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'plugins/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
 
 jobs:
   build:

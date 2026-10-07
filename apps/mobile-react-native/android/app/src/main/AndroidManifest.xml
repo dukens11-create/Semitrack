@@ -56,5 +56,11 @@
       </activity>
     <service android:name=".nativebridge.LocationForegroundService" android:exported="false" android:stopWithTask="true" android:foregroundServiceType="location" />
     </application>
+    <queries>
+      <intent>
+        <action android:name="android.intent.action.VIEW" />
+        <data android:scheme="copilot" />
+      </intent>
+    </queries>
 </manifest>
 

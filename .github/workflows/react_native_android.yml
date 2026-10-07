@@ -34,9 +34,9 @@ jobs:
           java-version: '17'
       - name: Install dependencies and apply native vendor patch
         run: npm ci --no-audit --no-fund
-      - name: Check public map configuration
+      - name: Report map configuration availability
         run: |
-          node --experimental-strip-types --input-type=module -e "import {validateReleaseMapToken} from './src/config/environment.ts'; validateReleaseMapToken(process.env.MAPBOX_PUBLIC_TOKEN || '');"
+          if [ -z "$MAPBOX_PUBLIC_TOKEN" ]; then echo "::warning::No public Mapbox display token configured; this debug APK will show configuration required for maps."; fi
       - name: Install Android SDK components
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
       - name: Build standalone arm64 debug APK

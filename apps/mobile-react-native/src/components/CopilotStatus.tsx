@@ -3,6 +3,8 @@ import { useDriverPalette } from './DriverUI';
 import React, { useEffect, useState } from 'react';
 import {
   Modal,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -98,16 +100,28 @@ export function CopilotStatus() {
         animationType="fade"
         onRequestClose={() => setDetails(false)}
       >
-        <View style={styles.scrim}>
-          <ScrollView
+        <KeyboardAvoidingView
+          style={styles.scrim}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View
             style={[styles.card, { backgroundColor: p.card }]}
-            keyboardShouldPersistTaps="handled"
+            accessibilityViewIsModal
           >
-            <Text style={[styles.title, { color: p.text }]}>
-              CoPilot navigation
-            </Text>
-            <Text style={[styles.message, { color: p.muted }]}>{message}</Text>
-            <CoPilotDeviceSetup />
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={styles.body}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            >
+              <Text style={[styles.title, { color: p.text }]}>
+                CoPilot navigation
+              </Text>
+              <Text style={[styles.message, { color: p.muted }]}>
+                {message}
+              </Text>
+              <CoPilotDeviceSetup />
+            </ScrollView>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close CoPilot status"
@@ -123,8 +137,8 @@ export function CopilotStatus() {
                 Close
               </Text>
             </Pressable>
-          </ScrollView>
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );
@@ -153,11 +167,11 @@ const styles = StyleSheet.create({
   },
   card: {
     maxHeight: '90%',
-    padding: 24,
     borderRadius: 20,
     backgroundColor: '#172534',
-    gap: 16,
   },
+  scroll: { flexGrow: 0, flexShrink: 1 },
+  body: { padding: 24, gap: 16 },
   title: { color: 'white', fontSize: 20, fontWeight: '700' },
   message: { color: '#C5CFD8', fontSize: 15, lineHeight: 22 },
   close: { alignSelf: 'flex-end', padding: 12 },

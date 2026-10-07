@@ -201,7 +201,7 @@ export function AuthScreen({ services }: { services: Services }) {
       await services.auth.requestPasswordReset(email);
       if (mounted.current) {
         setNotice(
-          'If an account exists for this email, we’ve sent password reset instructions.',
+          'Recovery request accepted. If this email belongs to an active SemiTraX account, check your inbox and spam folder for a reset link. Email delivery may take a few minutes.',
         );
       }
     } catch {

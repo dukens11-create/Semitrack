@@ -115,6 +115,8 @@ const messages: Record<string, string> = {
   CURRENT_PASSWORD_INVALID: 'Your current password could not be confirmed.',
   VALIDATION_ERROR: 'Please review the information you entered and try again.',
   INVALID_CREDENTIALS: 'The email or password is incorrect.',
+  EMAIL_EXISTS:
+    'An account already uses this email address. Sign in or use Forgot password to recover it.',
   EMAIL_IN_USE: 'An account already uses this email address. Try signing in.',
   NETWORK_UNAVAILABLE:
     'Unable to reach SemiTraX. Check your connection and retry.',

@@ -3,6 +3,26 @@ import { AuthStore } from '../src/features/auth/AuthStore';
 import { safeDriverError } from '../src/errors/driverErrors';
 import { MemoryVault, tokens, reply, deferred } from './fixtures';
 afterEach(() => jest.useRealTimers());
+test('existing account registration response provides sign-in and recovery guidance', async () => {
+  const api = new ApiClient(
+    'https://api.example.test',
+    new MemoryVault(),
+    jest.fn(async () =>
+      reply(
+        { error: { code: 'EMAIL_EXISTS', message: 'private server details' } },
+        409,
+      ),
+    ),
+  );
+  await expect(
+    api.request('POST', '/auth/register', {}, undefined, false),
+  ).rejects.toMatchObject({
+    code: 'EMAIL_EXISTS',
+    status: 409,
+    message:
+      'An account already uses this email address. Sign in or use Forgot password to recover it.',
+  });
+});
 test.each([400,401,403,404,409,429,500,503])('HTTP %i has a safe message and no automatic mutation retry', async status => {
   const transport = jest.fn(async()=>reply({error:{code:'UNKNOWN',message:'DATABASE_URL password stack secret'}},status));
   const api = new ApiClient('https://api.example.test',new MemoryVault(),transport);

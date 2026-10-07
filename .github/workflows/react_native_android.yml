@@ -33,6 +33,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Install dependencies and apply native vendor patch
         run: npm ci --no-audit --no-fund
       - name: Report map configuration availability

@@ -38,6 +38,7 @@ export class EmbeddedSession {
   private running: Promise<void> | null = null;
   private controller: AbortController | null = null;
   private mapRead: Promise<void> | null = null;
+  private mapReadRevision = 0;
   private foreground = true;
   private revision = 0;
   constructor(private readonly port: EmbeddedSessionPort) {}
@@ -54,7 +55,11 @@ export class EmbeddedSession {
   }
   ensure(value?: DeviceLicense): Promise<void> {
     if (!this.foreground) return Promise.resolve();
-    if (this.running) return this.running;
+    if (this.running) {
+      // A user-supplied identity must not disappear behind an automatic restore.
+      // Serialize it so only one native setup check can own startup at a time.
+      return value ? this.running.then(() => this.ensure(value)) : this.running;
+    }
     const controller = new AbortController();
     this.controller = controller;
     const revision = ++this.revision;
@@ -94,10 +99,16 @@ export class EmbeddedSession {
     return this.running;
   }
   refreshMaps(): Promise<void> {
-    if (this.mapRead) return this.mapRead;
+    if (this.mapRead) {
+      // A backgrounded read cannot satisfy a new foreground's inventory check.
+      return this.mapReadRevision === this.revision
+        ? this.mapRead
+        : this.mapRead.then(() => this.refreshMaps());
+    }
     if (!this.foreground || !this.state.report?.heavyTruckLicensed)
       return Promise.resolve();
     const revision = this.revision;
+    this.mapReadRevision = revision;
     this.mapRead = (async () => {
       try {
         const maps = await this.port.maps();

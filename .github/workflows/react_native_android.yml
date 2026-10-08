@@ -2,7 +2,7 @@ name: React Native Android test APK
 
 on:
   push:
-    branches: ['codex/rn-android-test-apk', 'codex/copilot-embedded-setup', 'codex/copilot-module-resolution', 'codex/copilot-map-downloads', 'codex/copilot-initial-map-readiness']
+    branches: ['codex/rn-android-test-apk', 'codex/copilot-embedded-setup', 'codex/copilot-module-resolution', 'codex/copilot-map-downloads', 'codex/copilot-initial-map-readiness', 'codex/finish-semitrax']
     paths:
       - 'apps/mobile-react-native/**'
       - '.github/workflows/react_native_android.yml'
@@ -38,9 +38,9 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Install dependencies and apply native vendor patch
         run: npm ci --no-audit --no-fund
-      - name: Report map configuration availability
+      - name: Validate map configuration for the device APK
         run: |
-          if [ -z "$MAPBOX_PUBLIC_TOKEN" ]; then echo "::warning::No public Mapbox display token configured; this debug APK will show configuration required for maps."; fi
+          node --experimental-strip-types --input-type=module -e 'import { validateReleaseMapToken } from "./src/config/environment.ts"; validateReleaseMapToken(process.env.MAPBOX_PUBLIC_TOKEN || "");'
       - name: Install Android SDK components
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
       - name: Build standalone arm64 debug APK
@@ -48,6 +48,14 @@ jobs:
           chmod +x android/gradlew
           cd android
           ./gradlew assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
+      - name: Verify packaged native libraries, alignment, and APK signature
+        run: |
+          semitrax_apk="android/app/build/outputs/apk/debug/app-debug.apk"
+          semitrax_native_dir="$(mktemp -d)"
+          unzip -q "$semitrax_apk" 'lib/*/*.so' -d "$semitrax_native_dir"
+          node scripts/check-android-page-size.cjs "$semitrax_native_dir"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$semitrax_apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$semitrax_apk"
       - name: Upload Android test APK
         uses: actions/upload-artifact@v4
         with:

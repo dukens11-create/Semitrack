@@ -10,6 +10,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  AppState,
   Image,
   Pressable,
   ScrollView,
@@ -101,11 +102,21 @@ export function TruckMap({
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ready, setReady] = useState(false);
   const [mapError, setMapError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const retryMap = useCallback(() => setRetry(value => value + 1), []);
+  useEffect(() => {
+    if (!mapError || !token) return;
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') retryMap();
+    });
+    return () => listener.remove();
+  }, [mapError, token, retryMap]);
   useEffect(() => {
     let active = true;
     setReady(false);
     setMapError(false);
     setMapLoaded(false);
+    lastCommand.current = undefined;
     if (token) {
       void Mapbox.setAccessToken(token)
         .then(() => {
@@ -122,7 +133,7 @@ export function TruckMap({
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [token, retry]);
   useEffect(() => {
     // A GPS fix may arrive before the native map/camera mounts. Replay it on load.
     if (mapLoaded && follow && fix) {
@@ -204,9 +215,22 @@ export function TruckMap({
           {!token
             ? 'Map display is unavailable until a public Mapbox token is configured.'
             : mapError
-            ? 'Map provider could not initialize. Verify the display configuration.'
+            ? 'The map could not load. Check your connection and try again.'
             : 'Connecting to Mapbox…'}
         </Text>
+        {!!token && mapError && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry map"
+            onPress={retryMap}
+            style={[
+              styles.retry,
+              { backgroundColor: palette.card, borderColor: palette.border },
+            ]}
+          >
+            <Text style={{ color: palette.text }}>Retry map</Text>
+          </Pressable>
+        )}
       </View>
     );
   }
@@ -530,6 +554,13 @@ export function TruckMap({
   );
 }
 const styles = StyleSheet.create({
+  retry: {
+    minHeight: 48,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: 'center',
+  },
   freePan: {
     backgroundColor: '#172433',
     color: 'white',

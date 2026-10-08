@@ -51,7 +51,7 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
         config.putString("environment", "development");
         config.putString("licensingMode", "ams-company");
         config.putString("credentialRef", "ams-debug-test-asset");
-        config.putString("mapRegionConstant", "NORTH_AMERICA");
+        config.putString("mapRegionConstant", "NORTH_AMERICA_North_America");
         config.putMap("mapVersion", version);
         promise.resolve(config);
     }

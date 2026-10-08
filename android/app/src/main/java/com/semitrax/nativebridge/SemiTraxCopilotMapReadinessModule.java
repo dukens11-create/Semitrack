@@ -46,9 +46,7 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         status.putBoolean("mapsReady", false);
         status.putString("reason", !locationGranted
             ? "LOCATION_PERMISSION_REQUIRED"
-            : !fragmentReady
-                ? "COPILOT_NATIVE_VIEW_NOT_INITIALIZED"
-                : "COPILOT_LICENSE_MAP_ATTESTATION_REQUIRED");
+            : "COPILOT_AMS_NATIVE_PROVISIONING_REQUIRED");
         promise.resolve(status);
     }
 }

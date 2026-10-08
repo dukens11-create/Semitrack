@@ -39,7 +39,7 @@ export function inspectInstalledMaps(
         map.set === region &&
         map.year === config.mapVersion.year &&
         map.quarter === config.mapVersion.quarter &&
-        map.versionString === config.mapVersion.version,
+        map.versionString.trim().length > 0,
     );
   return { licensed, installed, mapsReady, updateStatus: 'NOT_CHECKED' };
 }

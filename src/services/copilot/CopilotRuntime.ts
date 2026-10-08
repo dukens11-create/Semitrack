@@ -153,6 +153,22 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
           (await nativeProvisioning.configureAMSLogin()) !== true) {
         throw new Error('COPILOT_AMS_NATIVE_HOOK_REQUIRED');
       }
+      // The native gate must approve AMS setup before the SDK login call.
+      // Identity is retrieved only from an approved native provider.
+      const identityProvider = NativeModules.SemiTraxCopilotProvisioning as
+        | { readAMSIdentity?: () => Promise<{assetId: string; companyId: string}> }
+        | undefined;
+      const listener = NativeModules.LicenseListener as
+        | { setAMSLoginInfo?: (assetId: string, companyId: string) => Promise<void> | void }
+        | undefined;
+      if (!identityProvider?.readAMSIdentity || !listener?.setAMSLoginInfo) {
+        throw new Error('COPILOT_AMS_IDENTITY_REQUIRED');
+      }
+      const identity = await identityProvider.readAMSIdentity();
+      if (!identity?.assetId || !identity?.companyId) {
+        throw new Error('COPILOT_AMS_IDENTITY_REQUIRED');
+      }
+      await listener.setAMSLoginInfo(identity.assetId, identity.companyId);
       const startupModule = NativeModules.CopilotStartupMgr as
         | { bindCoPilotService?: () => Promise<void> | void }
         | undefined;

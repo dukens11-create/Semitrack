@@ -1,18 +1,23 @@
-allprojects {
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 36
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.1.20"
+    }
     repositories {
         google()
         mavenCentral()
     }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+    }
 }
 
-// CI/Codex can opt into a fresh build directory to avoid Windows file-locking
-// conflicts from a previously interrupted Gradle process. Normal local builds
-// continue to use Flutter's standard ../build directory.
-def isolatedBuildDir = System.getenv('SEMITRAX_GRADLE_BUILD_DIR')
-rootProject.buildDir = isolatedBuildDir ? file(isolatedBuildDir) : file('../build')
-subprojects {
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
-}
-tasks.register("clean", Delete) {
-    delete rootProject.buildDir
-}
+apply plugin: "com.facebook.react.rootproject"
+
+allprojects { repositories { maven { url "https://api.mapbox.com/downloads/v2/releases/maven" } } }

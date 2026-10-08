@@ -1,0 +1,13 @@
+diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotStartupModule.java b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotStartupModule.java
+index 0fd1158..c34d7e9 100644
+--- a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotStartupModule.java
++++ b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotStartupModule.java
+@@ -79,7 +79,7 @@ public class CopilotStartupModule extends ReactContextBaseJavaModule implements
+         notificationManager.createNotificationChannel(notificationChannel);
+         return new Notification.Builder(reactContext.getCurrentActivity(), channelId)
+                 .setContentTitle(notificationTitle)
+-                .setSmallIcon(null)
++                .setSmallIcon(reactContext.getApplicationInfo().icon)
+                 .setPriority(Notification.PRIORITY_DEFAULT)
+                 .build();
+     }

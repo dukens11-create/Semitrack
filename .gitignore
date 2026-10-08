@@ -1,100 +1,89 @@
-# Miscellaneous
-*.class
-*.log
-*.tsbuildinfo
-*.pyc
-*.swp
+# OSX
+#
 .DS_Store
-.atom/
-.buildlog/
-.history
-.svn/
-migrate_working_dir/
 
-# Node.js dependencies
-node_modules/
-**/node_modules/
-**/dist/
-.npm-cache-*/
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+**/.xcode.env.local
 
-# IntelliJ related
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+local.properties
 *.iml
-*.ipr
-*.iws
-.idea/
+*.hprof
+.cxx/
+*.keystore
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+.kotlin/
 
-# Flutter/Dart/Pub related
-# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
-/pubspec.lock
-**/doc/api/
-.dart_tool/
-/build/
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
 
-# Local Android recovery/build caches
-/.android-codex/
-/.gradle-codex*/
-/build-codex*/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
+# screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
 
-# Symbolication related
-app.*.symbols
+**/fastlane/report.xml
+**/fastlane/Preview.html
+**/fastlane/screenshots
+**/fastlane/test_output
 
-# Obfuscation related
-app.*.map.json
+# Bundle artifact
+*.jsbundle
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-/android/build
-/android/.gradle
-/android/local.properties
-/android/captures
-.externalNativeBuild
-.cxx
+# Ruby / CocoaPods
+**/Pods/
+/vendor/bundle/
 
-# Proprietary HERE SDK and local credentials (install per docs/HERE_EXPLORE_SETUP.md)
-/plugins/here_sdk/
-/heresdk-*.tar.gz
-/heresdk-*.zip
-/credentials.properties
-/here_credentials.env
-/config/here/credentials.properties
-/config/here/credentials.json
-/config/mapbox/credentials.properties
+# Temporary files created by Metro to check the health of the file watcher
+.metro-health-check*
 
-# Billing-provider credentials and app-store service configuration. These must
-# be supplied through encrypted deployment secrets, never source control.
-**/google-services.json
-**/GoogleService-Info.plist
-**/AuthKey_*.p8
-**/*service-account*.json
-**/*service_account*.json
-**/stripe-secrets*
-/config/billing/
+# testing
+/coverage
 
-# Local application/server environment files. Keep documented templates.
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
 .env
 .env.*
 !.env.example
-!**/.env.example
+*.jks
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+src/config/generated.ts
 
-# iOS related - generated build artifacts only (keep source files)
-**/ios/Flutter/Generated.xcconfig
-**/ios/Flutter/app.flx
-**/ios/Flutter/flutter_export_environment.sh
-**/ios/Pods/
-**/ios/.symlinks/
-
-# Generated plugin registrant files
-android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
-ios/Flutter/ephemeral/
-ios/Runner/GeneratedPluginRegistrant.h
-ios/Runner/GeneratedPluginRegistrant.m
+# Private Trimble SDK deliveries and local licensing configuration.
+/ios/copilot-vendor/
+/copilot.local.json

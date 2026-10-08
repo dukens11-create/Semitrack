@@ -1,87 +1,65 @@
-plugins {
-    id "com.android.application"
-    id "kotlin-android"
-    id "dev.flutter.flutter-gradle-plugin"
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+// Device-test APKs use their embedded bundle. Metro is an explicit development opt-in.
+def semitraxUseMetro = providers.gradleProperty("semitraxUseMetro").map { it.toBoolean() }.getOrElse(false)
+react {
+ autolinkLibrariesWithApp()
+ codegenJavaPackageName = "com.semitrax.nativebridge"
+ debuggableVariants = semitraxUseMetro ? ["debug", "debugOptimized"] : []
 }
-
-def localProperties = new Properties()
-def localPropertiesFile = rootProject.file('local.properties')
-if (localPropertiesFile.exists()) {
-    localPropertiesFile.withReader('UTF-8') { reader -> localProperties.load(reader) }
-}
-
-def flutterVersionCode = localProperties.getProperty('flutter.versionCode') ?: '1'
-def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '1.0'
-def tomtomApiKey = localProperties.getProperty('tomtomApiKey') ?: System.getenv('TOMTOM_API_KEY') ?: ''
-def productionApplicationId = project.findProperty('SEMITRACK_APPLICATION_ID')
-def releaseStoreFile = project.findProperty('SEMITRACK_RELEASE_STORE_FILE')
-def releaseStorePassword = project.findProperty('SEMITRACK_RELEASE_STORE_PASSWORD')
-def releaseKeyAlias = project.findProperty('SEMITRACK_RELEASE_KEY_ALIAS')
-def releaseKeyPassword = project.findProperty('SEMITRACK_RELEASE_KEY_PASSWORD')
-
 android {
-    namespace "com.example.semitrack_mobile"
-    compileSdkVersion 36
-    // Use the highest NDK required by the resolved native dependencies. NDKs
-    // are backward compatible, and HERE 4.27.2 supports 16 KB page sizes.
-    ndkVersion "28.2.13676358"
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-    kotlinOptions { jvmTarget = '1.8' }
-    buildFeatures { buildConfig true }
-    sourceSets { main.java.srcDirs += 'src/main/kotlin' }
-
-    defaultConfig {
-        applicationId productionApplicationId ?: "com.example.semitrack_mobile"
-        minSdkVersion 26
-        targetSdkVersion 36
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
-
-        ndk {
-            abiFilters "arm64-v8a", "x86_64"
-        }
-
-        // External Trimble/PC*Miler RoutePath reconstruction uses TomTom's
-        // Extended SDK flavor (supporting points / ReconstructionMode.Track).
-        missingDimensionStrategy "tomtom-sdk-version", "extended"
-        buildConfigField "String", "TOMTOM_API_KEY", "\"${tomtomApiKey}\""
-    }
-
-    signingConfigs {
-        if (releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword) {
-            release {
-                storeFile file(releaseStoreFile)
-                storePassword releaseStorePassword
-                keyAlias releaseKeyAlias
-                keyPassword releaseKeyPassword
-            }
-        }
-    }
-
-    buildTypes {
-        release {
-            // A release artifact is never signed with the shared debug key.
-            if (signingConfigs.findByName("release") != null) {
-                signingConfig signingConfigs.release
-            }
-        }
-    }
+ ndkVersion rootProject.ext.ndkVersion
+ buildToolsVersion rootProject.ext.buildToolsVersion
+ compileSdk rootProject.ext.compileSdkVersion
+ namespace "com.semitrax"
+ defaultConfig {
+  applicationId "com.semitrax.app"
+  minSdkVersion rootProject.ext.minSdkVersion
+  targetSdkVersion rootProject.ext.targetSdkVersion
+  versionCode 1
+  versionName "0.1.0"
+  // NDK r27 opt-in for source-built libraries. Prebuilt .so files still need
+  // independent inspection; this cannot repair a vendor's 4 KB binary.
+  externalNativeBuild {
+   cmake { arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" }
+  }
+ }
+ buildTypes {
+  debug {
+  applicationIdSuffix ".migration.debug"
+  manifestPlaceholders = [usesCleartextTraffic:"true"]
+  buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
+ }
+  release {
+   buildConfigField "boolean", "SEMITRAX_USE_METRO", "false"
+   // Unsigned until verified production signing is supplied outside this repository.
+   manifestPlaceholders = [usesCleartextTraffic:"false"]
+   minifyEnabled true
+   proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+  }
+ }
+ packaging { jniLibs { useLegacyPackaging = false } }
 }
-
-flutter { source '../..' }
-
+// Fail before native compilation/bundling if the build has no explicit API environment.
+tasks.register("configureSemiTraxDebug", Exec) {
+ workingDir rootProject.projectDir.parentFile
+ commandLine "node", "--experimental-strip-types", "scripts/configure.mts", "--require-api-url", "--diagnostics"
+}
+// Release configuration is regenerated from the environment, never a stale debug file.
+tasks.register("configureSemiTraxRelease", Exec) {
+ workingDir rootProject.projectDir.parentFile
+ commandLine "node", "--experimental-strip-types", "scripts/configure.mts", "--release"
+}
+tasks.configureEach { task ->
+ if (task.name == "preDebugBuild" || task.name == "createBundleDebugJsAndAssets") {
+  task.dependsOn "configureSemiTraxDebug"
+ }
+ if (task.name == "preReleaseBuild" || task.name == "createBundleReleaseJsAndAssets") {
+  task.dependsOn "configureSemiTraxRelease"
+ }
+}
 dependencies {
-    def tomtomSdkVersion = "2.5.3"
-
-    implementation "androidx.core:core-ktx:1.13.1"
-    implementation "com.google.android.gms:play-services-location:21.3.0"
-    implementation "com.tomtom.sdk:init:${tomtomSdkVersion}"
-    implementation "com.tomtom.sdk.telemetry:telemetry:${tomtomSdkVersion}"
-    implementation "com.tomtom.sdk.routing:route-planner:${tomtomSdkVersion}"
-    implementation "com.tomtom.sdk.navigation:navigation:${tomtomSdkVersion}"
-    testImplementation "junit:junit:4.13.2"
+ implementation("com.facebook.react:react-android")
+ implementation("com.facebook.react:hermes-android")
 }

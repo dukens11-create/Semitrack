@@ -205,8 +205,6 @@ export function TruckMap({
             </View>
           )}
         </View>
-          )}
-        </View>
       </View>
     );
   }

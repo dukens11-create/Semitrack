@@ -32,9 +32,19 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         boolean locationGranted =
             context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
-        // The vendor's CoPilotMgr is not exported to this app's Java compile classpath.
-        // Never claim a native view is ready until a supported SDK bridge proves it.
+        // The CPIK manager is accessible only from the vendor Android module.
+        // Query the vendor's read-only adapter reflectively; never call
+        // createViewInstance or equate an empty placeholder with a real map.
         boolean fragmentReady = false;
+        if (locationGranted) {
+            try {
+                Class<?> manager = Class.forName("com.alk.cpik.react.CopilotViewManager");
+                Object result = manager.getMethod("isNativeCoPilotViewAvailable").invoke(null);
+                fragmentReady = Boolean.TRUE.equals(result);
+            } catch (ReflectiveOperationException | LinkageError unavailable) {
+                fragmentReady = false;
+            }
+        }
         status.putBoolean("locationGranted", locationGranted);
         status.putBoolean("fragmentReady", fragmentReady);
         // These MUST be replaced only with verified SDK-native license,
@@ -46,7 +56,9 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         status.putBoolean("mapsReady", false);
         status.putString("reason", !locationGranted
             ? "LOCATION_PERMISSION_REQUIRED"
-            : "COPILOT_AMS_NATIVE_PROVISIONING_REQUIRED");
+            : !fragmentReady
+                ? "COPILOT_NATIVE_VIEW_NOT_INITIALIZED"
+                : "COPILOT_LICENSE_MAP_ATTESTATION_REQUIRED");
         promise.resolve(status);
     }
 }

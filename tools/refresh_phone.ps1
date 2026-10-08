@@ -30,6 +30,13 @@ $env:SEMITRAX_API_URL = $apiUri.AbsoluteUri.TrimEnd('/')
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 if (-not $InstallExistingApk) {
+    # CoPilot cannot display until native provisioning is implemented. Fail before
+    # bundling a debug APK that has neither a verified CoPilot map nor Mapbox.
+    $publicToken = [string]$env:MAPBOX_PUBLIC_TOKEN
+    if (-not $publicToken.StartsWith('pk.') -or $publicToken.Length -lt 20) {
+        throw 'Map display configuration missing: set MAPBOX_PUBLIC_TOKEN to a valid Mapbox public pk. token in THIS PowerShell session before building. CoPilot native map readiness is not yet available.'
+    }
+    Write-Host 'Mapbox public display token detected (value hidden).'
     $drive = Get-PSDrive -Name C
     $freeGb = [math]::Round($drive.Free / 1GB, 2)
     if ($freeGb -lt 15) {

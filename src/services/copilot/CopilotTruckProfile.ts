@@ -173,3 +173,44 @@ export function requireRepresentableCopilotTruckProfile(
     assessment.blockers,
   );
 }
+
+
+/**
+ * Read-only comparison with the observed CoPilot GPS Heavy Duty Semitrailer
+ * preset. These are app preset values, NOT measured vehicle dimensions or
+ * proof of CPIK route support. Never use this result to mark a truck verified.
+ *
+ * CoPilot distinguishes straight length (53 ft) from full bumper-to-bumper
+ * length (73.5 ft); SemiTraX has one lengthFt field. Do not silently substitute.
+ */
+export const observedCopilotGpsSemitrailerPreset = Object.freeze({
+  straightLengthFt: 53,
+  bumperToBumperLengthFt: 73.5,
+  heightFt: 13.5,
+  widthFt: 8.5,
+  grossWeightLbs: 80000,
+  axleGroupWeightLbs: 34000,
+  trailerCount: 1,
+});
+
+export function compareToObservedCopilotGpsPreset(profile: TruckProfile) {
+  const truck = truckSchema.parse(profile);
+  const preset = observedCopilotGpsSemitrailerPreset;
+  const mismatches: string[] = [];
+  // Deliberately do not compare the model's ambiguous lengthFt field to
+  // straight length or total length as if their semantics were interchangeable.
+  if (truck.heightFt !== preset.heightFt) mismatches.push('heightFt');
+  if (truck.widthFt !== preset.widthFt) mismatches.push('widthFt');
+  if (truck.weightLbs !== preset.grossWeightLbs) mismatches.push('weightLbs');
+  if (truck.weightPerAxleLbs !== preset.axleGroupWeightLbs)
+    mismatches.push('weightPerAxleLbs');
+  if (truck.trailerCount !== preset.trailerCount)
+    mismatches.push('trailerCount');
+  return {
+    presetMatchOnComparableFields: mismatches.length === 0,
+    mismatches,
+    lengthRequiresManualReview: true as const,
+    verifiedForDriving: false as const,
+    copilotNativeRouteSupported: false as const,
+  };
+}

@@ -200,9 +200,5 @@ export function embeddedSetupMessage(report: EmbeddedSetupReport): string {
     : !report.fullNavigationLicensed || !report.heavyTruckLicensed
     ? 'Full navigation and truck licenses were not both confirmed. Check this device’s assigned license with Trimble.'
     : 'Full navigation and truck licenses confirmed.';
-  return `Embedded CoPilot started. ${licensing} Licensed regions: ${
-    report.licensedRegions.join(', ') || 'none reported'
-  }. Installed map packages: ${
-    report.installedMapCount
-  }. Map coverage and compatibility still need verification. Turn-by-turn guidance is not enabled.`;
+  return `Embedded CoPilot started. ${licensing} Licensed regions: ${report.licensedRegions.length}. Installed map packages: ${report.installedMapCount}. Map coverage and compatibility still need verification. Turn-by-turn guidance is not enabled.`;
 }

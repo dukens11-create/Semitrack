@@ -137,7 +137,22 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
         return null;
       }
     },
-    async startNative() {
+    async startNative(config) {
+      // Trimble's React Native CPIK AMS flow configures the license hook
+      // BEFORE binding the CoPilot service. This is an AMS identity assignment,
+      // not evidence of successful activation or device entitlement.
+      if (config.platform !== 'android' || config.licensingMode !== 'ams-company') {
+        throw new Error('COPILOT_AMS_COMPANY_CONFIGURATION_REQUIRED');
+      }
+      const nativeProvisioning = NativeModules.SemiTraxCopilotProvisioning as
+        | { configureAMSLogin?: () => Promise<boolean> }
+        | undefined;
+      // Never send AMS identity through JS or attempt startup unless a trusted
+      // native boundary has provisioned it and confirmed hook configuration.
+      if (typeof nativeProvisioning?.configureAMSLogin !== 'function' ||
+          (await nativeProvisioning.configureAMSLogin()) !== true) {
+        throw new Error('COPILOT_AMS_NATIVE_HOOK_REQUIRED');
+      }
       const startupModule = NativeModules.CopilotStartupMgr as
         | { bindCoPilotService?: () => Promise<void> | void }
         | undefined;

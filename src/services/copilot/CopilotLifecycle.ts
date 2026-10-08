@@ -164,7 +164,8 @@ export class CopilotLifecycle {
     }
   }
   private fail(code: CopilotErrorCode, operation: string) {
-    const warning = this.state.warning ?? this.unsupportedSdkWarning(code);
+    // Show the current blocker, not a warning retained from a previous failure.
+    const warning = this.unsupportedSdkWarning(code);
     this.publish({
       phase: code === 'COPILOT_MAP_DATA_REQUIRED' ? 'MAPS_REQUIRED' : 'ERROR',
       error: code,

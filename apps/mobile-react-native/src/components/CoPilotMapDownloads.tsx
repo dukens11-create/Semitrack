@@ -13,6 +13,7 @@ import {
   MapDownloadError,
   mapCommand,
   mapProgress,
+  observeMapInventory,
   readMapCatalog,
   regionLabel,
   responseMessage,
@@ -31,6 +32,7 @@ export function CoPilotMapDownloads() {
   const mounted = useRef(true);
   const reading = useRef(false);
   const acting = useRef(false);
+  const requested = useRef<number | null>(null);
   async function refresh() {
     if (reading.current || acting.current || AppState.currentState !== 'active')
       return;
@@ -41,7 +43,8 @@ export function CoPilotMapDownloads() {
         setCatalog(result);
         if (result.selectedRegion !== undefined && result.selectedRegion >= 0)
           setSelected(previous => previous ?? result.selectedRegion!);
-        if (result.automationError)
+        if (result.selectedCoverageInstalled) setMessage('');
+        else if (result.automationError)
           setMessage(responseMessage(result.automationError));
         setMessage(previous =>
           previous === 'Loading licensed maps…' ? '' : previous,
@@ -65,6 +68,9 @@ export function CoPilotMapDownloads() {
   useEffect(() => {
     mounted.current = true;
     setMapPanelVisible(true);
+    const stopInventory = observeMapInventory(() => {
+      void refresh();
+    });
     void refresh();
     const timer = setInterval(() => {
       void refresh();
@@ -77,20 +83,21 @@ export function CoPilotMapDownloads() {
       setMapPanelVisible(false);
       clearInterval(timer);
       subscription.remove();
+      stopInventory();
     };
   }, []);
-  async function command(action: MapAction) {
+  async function command(action: MapAction, selection = selected) {
     if (
-      selected === null ||
+      selection === null ||
       acting.current ||
-      !catalog?.regions.some(region => region.id === selected)
+      !catalog?.regions.some(region => region.id === selection)
     )
       return;
     acting.current = true;
     setBusy(true);
     setMessage('Sending map request…');
     try {
-      const result = await mapCommand(selected, action);
+      const result = await mapCommand(selection, action);
       if (mounted.current) setMessage(responseMessage(result));
     } catch (error) {
       if (mounted.current)
@@ -109,14 +116,38 @@ export function CoPilotMapDownloads() {
       }
     }
   }
+  function chooseCoverage(id: number) {
+    setSelected(id);
+    const item = catalog?.regions.find(value => value.id === id);
+    if (
+      !item ||
+      acting.current ||
+      requested.current === id ||
+      catalog?.initialAccepted ||
+      catalog?.installed.some(value => value.id === id) ||
+      (catalog?.selectedRegion !== undefined &&
+        catalog.selectedRegion >= 0 &&
+        !catalog.automationError &&
+        !catalog.selectedCoverageInstalled) ||
+      !['NOT_REQUESTED', 'NOT_INITIATED', 'CANCELLED', 'FAILED'].includes(
+        item.status,
+      )
+    )
+      return;
+    requested.current = id;
+    // Persist the user's selection now. Native policy waits for verified identity,
+    // limits readiness time/retries, and never replaces an accepted transaction.
+    void command('download', id);
+  }
   const region = catalog?.regions.find(item => item.id === selected);
   const installed =
     catalog?.installed.some(item => item.id === selected) ?? false;
   const initialWaiting =
     !!catalog &&
-    !catalog.installed.length &&
-    !catalog.initialReady &&
-    catalog.readinessSource !== 'AMS_LICENSED';
+    (catalog.readinessSource === 'WAITING_FOR_LICENSE' ||
+      (!catalog.installed.length &&
+        !catalog.initialReady &&
+        catalog.readinessSource !== 'AMS_LICENSED'));
   const initialPending = !!catalog && catalog.initialAccepted;
   const downloadBlocked =
     initialWaiting || initialPending || !catalog?.downloadPolicyApplied;
@@ -194,11 +225,22 @@ export function CoPilotMapDownloads() {
         <Text accessibilityLiveRegion="polite" style={{ color: p.text }}>
           {!catalog.downloadPolicyApplied
             ? responseMessage('COPILOT_MAP_DOWNLOAD_POLICY_FAILED')
+            : catalog.automationError
+            ? responseMessage(catalog.automationError)
+            : catalog.selectedCoverageInstalled
+            ? 'Selected map verified in installed inventory.'
             : initialPending
             ? responseMessage('COPILOT_MAP_INITIAL_IN_PROGRESS')
             : initialWaiting
-            ? responseMessage('COPILOT_MAP_INITIAL_NOT_READY')
+            ? responseMessage(
+                catalog.readinessCode ?? 'COPILOT_MAP_INITIAL_NOT_READY',
+              )
             : 'Licensed coverage available. Choose a map to request.'}
+        </Text>
+      )}
+      {catalog?.readinessCode && catalog.readinessCode !== 'READY' && (
+        <Text style={{ color: p.muted }}>
+          Setup check: {catalog.readinessCode}
         </Text>
       )}
       <TextInput
@@ -223,7 +265,7 @@ export function CoPilotMapDownloads() {
             disabled: busy,
           }}
           disabled={busy}
-          onPress={() => setSelected(item.id)}
+          onPress={() => chooseCoverage(item.id)}
           style={[
             styles.option,
             {

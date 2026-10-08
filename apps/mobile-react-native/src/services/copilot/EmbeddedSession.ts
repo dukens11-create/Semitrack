@@ -5,7 +5,11 @@ import {
   EmbeddedSetupError,
   type EmbeddedSetupReport,
 } from './EmbeddedSetup';
-import { readMapCatalog, type MapCatalog } from './MapDownloads';
+import {
+  observeMapInventory,
+  readMapCatalog,
+  type MapCatalog,
+} from './MapDownloads';
 
 type State = {
   phase: 'idle' | 'restoring' | 'checked' | 'error';
@@ -130,6 +134,9 @@ export const embeddedSession = new EmbeddedSession({
   maps: readMapCatalog,
 });
 export function observeEmbeddedSession() {
+  const stopInventory = observeMapInventory(() => {
+    void embeddedSession.refreshMaps();
+  });
   void embeddedSession.setForeground(AppState.currentState === 'active');
   const listener = AppState.addEventListener('change', state => {
     void embeddedSession.setForeground(state === 'active');
@@ -139,6 +146,7 @@ export function observeEmbeddedSession() {
   }, 5000);
   return () => {
     listener.remove();
+    stopInventory();
     clearInterval(timer);
     void embeddedSession.setForeground(false);
   };

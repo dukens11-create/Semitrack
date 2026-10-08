@@ -45,8 +45,9 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   private volatile boolean connected;
   private final CoPilotMapsBridge maps;
   private boolean observing;
-  private String company;
-  private String asset;
+  private volatile String company;
+  private volatile String asset;
+  private String lastReadinessDiagnostic = "";
   private Promise pending;
   private Activity awakeActivity;
   private boolean ownsAwakeFlag;
@@ -99,20 +100,42 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   public CoPilotSetupModule(ReactApplicationContext context) {
     super(context);
     this.context = context;
-    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED, this::amsLicensed);
+    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED, this::readiness);
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return NAME; }
-  private boolean amsLicensed() {
+  private synchronized CoPilotReadiness readiness() {
+    CoPilotReadiness state = new CoPilotReadiness();
+    state.connected = connected;
+    state.started = started;
+    state.foreground = context.getLifecycleState() == LifecycleState.RESUMED;
+    state.credentialsPresent = valid(company) && valid(asset);
     try {
-      if (!connected || !started || company == null || !LicenseMgr.isLicensingReady()) return false;
-      LicenseMgtInfo user = LicenseMgr.GetActiveAMSUser();
-      if (user == null || !company.equals(user.getCompanyID()) || !asset.equals(user.getAssetID())) return false;
-      FeatureStatus full = LicenseMgr.getFeatureStatus(LicenseFeature.FULL_NAVIGATION);
-      FeatureStatus truck = LicenseMgr.getFeatureStatus(LicenseFeature.TRUCK_HEAVY_DUTY);
-      return (full == FeatureStatus.LICENSED || full == FeatureStatus.UNLIMITED) &&
-          (truck == FeatureStatus.LICENSED || truck == FeatureStatus.UNLIMITED);
-    } catch (Exception | LinkageError error) { return false; }
+      if (connected && started) {
+        state.licensingReady = LicenseMgr.isLicensingReady();
+        if (state.licensingReady) {
+          LicenseMgtInfo user = LicenseMgr.GetActiveAMSUser();
+          state.activeAmsPresent = user != null && valid(user.getAssetID());
+          state.companyMatches = user != null && company != null && company.equals(user.getCompanyID());
+          state.assetMatches = user != null && CoPilotReadiness.sameAsset(asset, user.getAssetID());
+          // Report formatting differences without exposing or changing either identifier.
+          if (user != null && asset != null && user.getAssetID() != null && !asset.equals(user.getAssetID())) {
+            state.assetCaseOnlyDifference = CoPilotReadiness.sameAsset(asset, user.getAssetID());
+            state.assetWhitespaceOnlyDifference = asset.trim().equals(user.getAssetID().trim());
+          }
+          FeatureStatus full = LicenseMgr.getFeatureStatus(LicenseFeature.FULL_NAVIGATION);
+          FeatureStatus truck = LicenseMgr.getFeatureStatus(LicenseFeature.TRUCK_HEAVY_DUTY);
+          state.fullNavigationLicensed = full == FeatureStatus.LICENSED || full == FeatureStatus.UNLIMITED;
+          state.heavyTruckLicensed = truck == FeatureStatus.LICENSED || truck == FeatureStatus.UNLIMITED;
+        }
+      }
+    } catch (Exception | LinkageError error) { state.queryFailed = true; }
+    String diagnostic = state.diagnostic();
+    if (!diagnostic.equals(lastReadinessDiagnostic)) {
+      android.util.Log.i("SemiTraxCoPilot", diagnostic);
+      lastReadinessDiagnostic = diagnostic;
+    }
+    return state;
   }
   private boolean valid(String value) {
     if (value == null || value.trim().isEmpty() || value.length() > 256) return false;
@@ -161,7 +184,9 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
       WritableNativeMap report = new WritableNativeMap();
       report.putBoolean("started", started);
       report.putBoolean("connected", connected);
-      report.putBoolean("amsIdentityVerified", amsLicensed());
+      CoPilotReadiness state = readiness();
+      report.putBoolean("amsIdentityVerified", state.verified());
+      report.putString("readinessCode", state.code());
       promise.resolve(report);
     });
   }

@@ -15,6 +15,8 @@ import com.alk.cpik.mapdata.MapRegion;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -25,14 +27,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /** Explicit, additive map downloads. Never starts guidance or deletes installed data. */
 final class CoPilotMapsBridge {
   private final Context context;
   private final BooleanSupplier ready;
-  private final BooleanSupplier amsLicensed;
+  private final Supplier<CoPilotReadiness> readiness;
   private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
   private final MapDownloadPolicy policy = new MapDownloadPolicy();
+  private final MapInventoryVerification verification = new MapInventoryVerification();
   private final SharedPreferences saved;
   private final ConcurrentHashMap<Integer, Progress> progress = new ConcurrentHashMap<>();
   private boolean observing;
@@ -48,11 +52,18 @@ final class CoPilotMapsBridge {
     @Override public void onReadyToDownloadInitialMapData() { initialReady = true; }
     @Override public void onMapdataUpdate(MapInfo info, DownloadStatus status) {
       if (info == null || info.getRegion() == null || status == null) return;
-      Progress previous = progress.put(info.getRegion().ordinal(), new Progress(status.name(), Math.max(0, info.getDownloadedCount()), Math.max(0, info.getMapFileSize())));
+      final int id = info.getRegion().ordinal();
+      final String stage = status.name();
+      final long bytes = Math.max(0, info.getDownloadedCount());
+      Progress previous = progress.put(id, new Progress(stage, bytes, Math.max(0, info.getMapFileSize())));
       callback(() -> {
-        if (policy.region == info.getRegion().ordinal() && (previous == null || !previous.status.equals(status.name()) || info.getDownloadedCount() > previous.bytes)) {
-          policy.progress(status.name(), System.currentTimeMillis()); persist();
+        if (policy.region != id) return;
+        if (previous == null || !previous.status.equals(stage) || bytes > previous.bytes) {
+          policy.progress(stage, System.currentTimeMillis()); persist();
         }
+        // Copy callback values before leaving the vendor callback; never retain MapInfo.
+        if (verification.signal(id, stage, System.currentTimeMillis()))
+          verifyInstallation(verification.generation);
       });
     }
     @Override public void onMapDownloadResponse(MapDownloadResponse response, List<MapRegion> regions, boolean overwrite) {
@@ -65,8 +76,8 @@ final class CoPilotMapsBridge {
       });
     }
   };
-  CoPilotMapsBridge(Context context, BooleanSupplier ready, BooleanSupplier amsLicensed) {
-    this.context = context; this.ready = ready; this.amsLicensed = amsLicensed;
+  CoPilotMapsBridge(Context context, BooleanSupplier ready, Supplier<CoPilotReadiness> readiness) {
+    this.context = context; this.ready = ready; this.readiness = readiness;
     saved = context.getSharedPreferences("semitrax_copilot_maps", Context.MODE_PRIVATE);
     policy.region = saved.getInt("region", -1);
     policy.attempts = saved.getInt("attempts", 0);
@@ -98,13 +109,56 @@ final class CoPilotMapsBridge {
         info.getVersion() != null && !info.getVersion().isEmpty()) matches++;
     return matches == 1;
   }
+  private void inventoryChanged() {
+    try {
+    if (context instanceof ReactApplicationContext) {
+      ReactApplicationContext react = (ReactApplicationContext) context;
+      if (react.hasActiveReactInstance())
+        react.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+            .emit("SemiTraxCoPilotInventoryChanged", null);
+    }
+    } catch (RuntimeException ignored) { /* JS may be shutting down; inventory remains authoritative. */ }
+  }
+  private void confirmInventory() {
+    boolean changed = !policy.completed || policy.pending || !policy.error.isEmpty();
+    verification.confirmed();
+    policy.shouldRequest(true, true, System.currentTimeMillis());
+    persist();
+    if (changed) inventoryChanged();
+  }
+  private void verifyInstallation(int token) {
+    long now = System.currentTimeMillis();
+    if (!verification.takeProbe(token, policy.region, now)) {
+      inventoryTimeout(token);
+      return;
+    }
+    try {
+      if (ready.getAsBoolean() && downloadPolicyApplied && readiness.get().verified()) {
+        List<MapInfo> inventory = MapDataMgr.getInstalledMaps();
+        if (verified(inventory, policy.region)) { confirmInventory(); return; }
+      }
+    } catch (Exception | LinkageError ignored) {
+      // Read failure is not evidence of installation. Retry reads only, never download.
+    }
+    long delay = verification.nextDelay(token, System.currentTimeMillis());
+    if (delay >= 0) worker.schedule(() -> verifyInstallation(token), delay, TimeUnit.MILLISECONDS);
+    else inventoryTimeout(token);
+  }
+  private void inventoryTimeout(int token) {
+    if (verification.finish(token, false)) {
+      policy.error = "COPILOT_MAP_INVENTORY_TIMEOUT";
+      persist();
+      inventoryChanged();
+    }
+  }
   private void tick() {
     if (!ready.getAsBoolean() || policy.region < 0) return;
     try {
       List<MapInfo> inventory = MapDataMgr.getInstalledMaps();
       if (inventory == null) throw new IllegalStateException("COPILOT_MAP_INVENTORY_UNAVAILABLE");
-      boolean eligible = downloadPolicyApplied && amsLicensed.getAsBoolean();
+      boolean eligible = downloadPolicyApplied && readiness.get().verified();
       boolean installed = eligible && verified(inventory, policy.region);
+      if (installed) { confirmInventory(); return; }
       if (policy.shouldRequest(eligible, installed, System.currentTimeMillis())) {
         MapRegion region = licensedRegion(policy.region);
         policy.requesting(System.currentTimeMillis()); persist();
@@ -121,6 +175,7 @@ final class CoPilotMapsBridge {
   }
   private MapDownloadResponse request(MapRegion region, List<MapInfo> inventory) {
     requireReady();
+    if (!readiness.get().verified()) throw new IllegalStateException("COPILOT_MAP_LICENSE_NOT_VERIFIED");
     List<MapRegion> requested = Collections.singletonList(region);
     List<MapDataComponent> disabled = new ArrayList<>();
     progress.put(region.ordinal(), new Progress("REQUESTING", 0, 0));
@@ -205,11 +260,14 @@ final class CoPilotMapsBridge {
         result.putBoolean("initialReady", initialReady);
         result.putBoolean("initialAccepted", policy.pending);
         result.putBoolean("downloadPolicyApplied", downloadPolicyApplied);
-        result.putString("readinessSource", amsLicensed.getAsBoolean() ? "AMS_LICENSED" : "WAITING_FOR_LICENSE");
+        CoPilotReadiness state = readiness.get();
+        result.putString("readinessSource", state.verified() ? "AMS_LICENSED" : "WAITING_FOR_LICENSE");
+        result.putString("readinessCode", state.code());
+        result.putString("readinessChecks", state.diagnostic());
         result.putInt("selectedRegion", policy.region);
         result.putInt("attempts", policy.attempts);
         result.putString("automationError", policy.error);
-        result.putBoolean("selectedCoverageInstalled", amsLicensed.getAsBoolean() && verified(inventory, policy.region));
+        result.putBoolean("selectedCoverageInstalled", state.verified() && verified(inventory, policy.region));
         requireReady();
         promise.resolve(result);
       } catch (Exception | LinkageError error) { reject(promise, error); }
@@ -223,7 +281,7 @@ final class CoPilotMapsBridge {
         MapDownloadResponse response;
         switch (action) {
           case "download": {
-            policy.select(id, System.currentTimeMillis()); persist(); tick();
+            policy.select(id, System.currentTimeMillis()); verification.reset(); persist(); tick();
             promise.resolve("SCHEDULED"); return;
           }
           case "pause": response = MapDataMgr.pauseMapDownload(region); break;
@@ -233,6 +291,7 @@ final class CoPilotMapsBridge {
         }
         if (response == null) throw new IllegalStateException("COPILOT_MAP_OPERATION_FAILED");
         if (id == policy.region && action.equals("cancel") && response == MapDownloadResponse.SUCCESS) {
+          verification.reset();
           policy.progress("CANCELLED", System.currentTimeMillis()); persist();
         }
         if (response == MapDownloadResponse.SUCCESS && !action.equals("download")) {

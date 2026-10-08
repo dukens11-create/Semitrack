@@ -2,6 +2,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import {
   AppState,
+  DeviceEventEmitter,
   NativeModules,
   Platform,
   Text,
@@ -166,9 +167,6 @@ test('shows only licensed regions and requires a user selection before download'
   expect(text()).toContain('Nevada');
   expect(button('Download selected map')).toBeUndefined();
   await select();
-  await act(async () => {
-    button('Download selected map').props.onPress();
-  });
   expect(command).toHaveBeenCalledTimes(1);
   expect(command).toHaveBeenCalledWith(40, 'download');
   expect(text()).toContain('Installation will be checked separately');
@@ -186,7 +184,6 @@ test('search finds the licensed region by readable name', async () => {
   expect(options.length).toBeGreaterThan(0);
   expect(text()).not.toContain('California');
   await act(async () => options[0]!.props.onPress());
-  await act(async () => button('Download selected map').props.onPress());
   expect(command).toHaveBeenCalledWith(41, 'download');
 });
 test('progress uses downloaded bytes and inventory is refreshed automatically', async () => {
@@ -261,13 +258,14 @@ test('no polling occurs while app is in background or after panel closes', async
   expect(read).toHaveBeenCalledTimes(calls);
 });
 
-it('blocks first downloads until the SDK readiness signal is observed', async () => {
+it('saves coverage while native identity verification is pending without claiming download success', async () => {
   catalog.initialReady = false;
   await render();
   await select();
   expect(button('Download selected map').props.disabled).toBe(true);
-  expect(text()).toContain('first-map readiness signal');
-  expect(command).not.toHaveBeenCalled();
+  expect(text()).toContain('Device license verification is incomplete');
+  expect(command).toHaveBeenCalledTimes(1);
+  expect(command).toHaveBeenCalledWith(40, 'download');
   catalog = { ...catalog, initialReady: true };
   await act(async () => {
     jest.advanceTimersByTime(3000);
@@ -348,4 +346,122 @@ test('pending restored transfer exposes cancellation without allowing replacemen
   expect(button('Download selected map').props.disabled).toBe(true);
   await act(async () => button('Cancel download').props.onPress());
   expect(command).toHaveBeenCalledWith(40, 'cancel');
+});
+
+test('identifies the failed AMS check without displaying raw native identifiers', async () => {
+  catalog.initialReady = false;
+  catalog.readinessSource = 'WAITING_FOR_LICENSE';
+  catalog.readinessCode = 'COPILOT_AMS_COMPANY_MISMATCH';
+  read.mockResolvedValue({
+    ...catalog,
+    readinessChecks: 'secret-company secret-device',
+  });
+  await render();
+  expect(text()).toContain('active AMS company does not match');
+  expect(text()).toContain('COPILOT_AMS_COMPANY_MISMATCH');
+  expect(text()).not.toContain('secret-company');
+  expect(text()).not.toContain('secret-device');
+  expect(command).not.toHaveBeenCalled();
+});
+
+test('choosing coverage starts automation once without needing a second button', async () => {
+  catalog.readinessSource = 'AMS_LICENSED';
+  catalog.readinessCode = 'READY';
+  await render();
+  await select();
+  await select();
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(9000);
+  });
+  expect(command).toHaveBeenCalledTimes(1);
+  expect(command).toHaveBeenCalledWith(40, 'download');
+});
+
+test('selecting installed coverage never starts a download', async () => {
+  catalog.installed = [
+    {
+      id: 40,
+      name: 'California',
+      label: 'California',
+      year: 2026,
+      quarter: 2,
+      version: 'verified',
+    },
+  ];
+  await render();
+  await select();
+  expect(command).not.toHaveBeenCalled();
+});
+
+test('a first-map callback never hides an AMS identity mismatch', async () => {
+  catalog.initialReady = true;
+  catalog.readinessSource = 'WAITING_FOR_LICENSE';
+  catalog.readinessCode = 'COPILOT_AMS_ASSET_MISMATCH';
+  await render();
+  expect(text()).toContain('active AMS device does not match');
+  await select();
+  expect(button('Download selected map').props.disabled).toBe(true);
+  expect(text()).not.toContain('Licensed coverage available');
+});
+
+test('installation notification refreshes inventory without reopening and never trusts event payload', async () => {
+  catalog.selectedRegion = 40;
+  catalog.initialAccepted = true;
+  catalog.automationError = 'COPILOT_MAP_INVENTORY_TIMEOUT';
+  catalog.regions[0] = { ...region, status: 'INSTALLATION_FINISHED' };
+  await render();
+  expect(text()).not.toContain('Installed ·');
+  await act(async () => {
+    DeviceEventEmitter.emit('SemiTraxCoPilotInventoryChanged', {
+      installed: true,
+      secret: 'untrusted-vendor-payload',
+    });
+  });
+  expect(text()).not.toContain('Installed ·');
+  expect(text()).not.toContain('untrusted-vendor-payload');
+  expect(text()).toContain('not confirmed installed map inventory');
+  catalog = {
+    ...catalog,
+    automationError: '',
+    initialAccepted: false,
+    selectedCoverageInstalled: true,
+    installed: [
+      {
+        id: 40,
+        name: 'California',
+        label: 'California',
+        year: 2026,
+        quarter: 3,
+        version: 'verified',
+      },
+    ],
+  };
+  await act(async () => {
+    DeviceEventEmitter.emit('SemiTraxCoPilotInventoryChanged');
+  });
+  expect(text()).toContain('Installed · 2026 Q3 · verified');
+  expect(text()).toContain('Selected map verified');
+  expect(text()).not.toContain('not confirmed installed map inventory');
+  expect(command).not.toHaveBeenCalled();
+});
+
+test('inventory notifications do not read after unmount or while backgrounded', async () => {
+  await render();
+  read.mockClear();
+  Object.defineProperty(AppState, 'currentState', {
+    value: 'background',
+    configurable: true,
+  });
+  await act(async () =>
+    DeviceEventEmitter.emit('SemiTraxCoPilotInventoryChanged'),
+  );
+  expect(read).not.toHaveBeenCalled();
+  await act(async () => tree?.unmount());
+  tree = undefined;
+  Object.defineProperty(AppState, 'currentState', {
+    value: 'active',
+    configurable: true,
+  });
+  DeviceEventEmitter.emit('SemiTraxCoPilotInventoryChanged');
+  expect(read).not.toHaveBeenCalled();
 });

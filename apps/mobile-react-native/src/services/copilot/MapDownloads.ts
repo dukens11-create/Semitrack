@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { DeviceEventEmitter, Platform } from 'react-native';
 import { z } from 'zod';
 import { nativeCopilotModule } from './NativeModuleLookup';
 
@@ -14,6 +14,22 @@ const regionSchema = z.object({
   totalBytes: z.number().finite().nonnegative(),
 });
 const catalogSchema = z.object({
+  readinessCode: z
+    .enum([
+      'READY',
+      'COPILOT_ENGINE_DISCONNECTED',
+      'COPILOT_ENGINE_NOT_STARTED',
+      'COPILOT_FOREGROUND_REQUIRED',
+      'COPILOT_SAVED_IDENTITY_MISSING',
+      'COPILOT_LICENSE_QUERY_FAILED',
+      'COPILOT_LICENSING_NOT_READY',
+      'COPILOT_AMS_IDENTITY_UNAVAILABLE',
+      'COPILOT_AMS_COMPANY_MISMATCH',
+      'COPILOT_AMS_ASSET_MISMATCH',
+      'COPILOT_FULL_LICENSE_REQUIRED',
+      'COPILOT_TRUCK_LICENSE_REQUIRED',
+    ])
+    .optional(),
   readinessSource: z.enum(['AMS_LICENSED', 'WAITING_FOR_LICENSE']).optional(),
   selectedRegion: z.number().int().min(-1).optional(),
   selectedCoverageInstalled: z.boolean().optional(),
@@ -44,6 +60,14 @@ const catalogSchema = z.object({
 export type MapCatalog = z.infer<typeof catalogSchema>;
 export type MapRegionOption = z.infer<typeof regionSchema>;
 export type MapAction = 'download' | 'pause' | 'resume' | 'cancel';
+/** An event requests a fresh validated read; its payload is never installation proof. */
+export function observeMapInventory(refresh: () => void): () => void {
+  const listener = DeviceEventEmitter.addListener(
+    'SemiTraxCoPilotInventoryChanged',
+    refresh,
+  );
+  return () => listener.remove();
+}
 export class MapDownloadError extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -163,6 +187,8 @@ export function mapProgress(
 }
 export function responseMessage(code: string): string {
   const messages: Record<string, string> = {
+    COPILOT_MAP_INVENTORY_TIMEOUT:
+      'CoPilot has not confirmed installed map inventory. Your download is preserved. Refresh status; if it remains unverified, reopen SemiTraX or contact support.',
     SCHEDULED:
       'Coverage saved. Download and installation will be managed automatically.',
     COPILOT_MAP_READINESS_TIMEOUT:
@@ -185,7 +211,29 @@ export function responseMessage(code: string): string {
     FAILURE_MANAGER_BUSY:
       'CoPilot map manager is busy. Up to 3 attempts are allowed; if still busy, restart SemiTraX and contact Trimble.',
     COPILOT_MAP_INITIAL_NOT_READY:
-      'Waiting for CoPilot’s first-map readiness signal. No download has started.',
+      'Device license verification is incomplete. Check embedded setup. No download has started.',
+    COPILOT_ENGINE_DISCONNECTED:
+      'The embedded engine is disconnected. Reopen SemiTraX.',
+    COPILOT_ENGINE_NOT_STARTED:
+      'The embedded engine has not finished starting. Recheck setup.',
+    COPILOT_FOREGROUND_REQUIRED:
+      'Keep SemiTraX open to verify the device license.',
+    COPILOT_SAVED_IDENTITY_MISSING:
+      'Saved device IDs are unavailable to the engine. Check embedded setup.',
+    COPILOT_LICENSE_QUERY_FAILED:
+      'The SDK could not report license identity. Recheck setup; contact Trimble if this persists.',
+    COPILOT_LICENSING_NOT_READY:
+      'The engine licensing check has not completed. Recheck setup and connectivity.',
+    COPILOT_AMS_IDENTITY_UNAVAILABLE:
+      'The SDK reports no active AMS device identity. Check the assigned device in Trimble Account Manager.',
+    COPILOT_AMS_COMPANY_MISMATCH:
+      'The active AMS company does not match the saved company. Verify the device assignment; no download was started.',
+    COPILOT_AMS_ASSET_MISMATCH:
+      'The active AMS device does not match the saved device ID. Verify the device assignment; no download was started.',
+    COPILOT_FULL_LICENSE_REQUIRED:
+      'Full navigation entitlement is not verified. Check the assigned license.',
+    COPILOT_TRUCK_LICENSE_REQUIRED:
+      'Heavy-truck entitlement is not verified. Check the assigned license.',
     COPILOT_MAP_INITIAL_IN_PROGRESS:
       'The first map request was accepted. Wait for installation before adding another region.',
     COPILOT_MAP_DOWNLOAD_POLICY_FAILED:

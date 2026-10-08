@@ -11,3 +11,7 @@ function run(exe, args) {
 }
 run('javac', ['-d', output, path.join(root, 'android/app/src/main/java/com/semitrax/nativebridge/MapDownloadPolicy.java'), path.join(__dirname, 'MapDownloadPolicyTest.java')]);
 run('java', ['-cp', output, 'com.semitrax.nativebridge.MapDownloadPolicyTest']);
+run('javac', ['-d', output, path.join(root, 'android/app/src/main/java/com/semitrax/nativebridge/CoPilotReadiness.java'), path.join(__dirname, 'CoPilotReadinessTest.java')]);
+run('java', ['-cp', output, 'com.semitrax.nativebridge.CoPilotReadinessTest']);
+run('javac', ['-d', output, path.join(root, 'android/app/src/main/java/com/semitrax/nativebridge/MapInventoryVerification.java'), path.join(__dirname, 'MapInventoryVerificationTest.java')]);
+run('java', ['-cp', output, 'com.semitrax.nativebridge.MapInventoryVerificationTest']);

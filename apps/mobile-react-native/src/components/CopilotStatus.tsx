@@ -66,13 +66,13 @@ export function CopilotStatus() {
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
     ? 'CoPilot maps required'
     : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
-    ? 'CoPilot provisioning required'
+    ? 'CoPilot navigation setup required'
     : 'CoPilot turn-by-turn unavailable';
   const message = state.copilotReady
     ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
     ? 'Navigation is unavailable until licensed CoPilot maps are installed and verified.'
-    : 'CoPilot turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
+    : 'Truck-route planning works independently. Use the in-app setup check below to inspect the embedded engine, license and maps. Turn-by-turn navigation still requires completed truck-profile integration and real-device verification.';
   return (
     <>
       <Pressable

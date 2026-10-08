@@ -85,6 +85,8 @@ export function TruckMap({
   const [mapHeight, setMapHeight] = useState(600);
   const [ready, setReady] = useState(false);
   const [mapError, setMapError] = useState(false);
+  const [nativeMapReady, setNativeMapReady] = useState(false);
+  const [nativeMapError, setNativeMapError] = useState(false);
   const nativeCopilotViewAvailable = useMemo(() => {
     if (Platform.OS !== 'android') return false;
     try {
@@ -95,39 +97,37 @@ export function TruckMap({
   }, []);
   useEffect(() => {
     if (!nativeCopilotViewAvailable) return;
+    let active = true;
+    setNativeMapReady(false);
+    setNativeMapError(false);
     const startup = NativeModules.CopilotStartupMgr as
       | { bindCoPilotService?: () => Promise<void> | void }
       | undefined;
     if (!startup || typeof startup.bindCoPilotService !== 'function') {
-      setMapError(true);
-      return;
+      setNativeMapError(true);
+      return () => { active = false; };
     }
-    Promise.resolve(startup.bindCoPilotService())
-      .then(() => setReady(true))
-      .catch(() => setMapError(true));
+    // Treat a synchronous throw and a rejected promise as startup failures.
+    Promise.resolve()
+      .then(() => startup.bindCoPilotService!())
+      .then(() => { if (active) setNativeMapReady(true); })
+      .catch(() => { if (active) setNativeMapError(true); });
+    return () => { active = false; };
   }, [nativeCopilotViewAvailable]);
   useEffect(() => {
+    // Mapbox token initialization must not mutate CoPilot startup state.
+    if (nativeCopilotViewAvailable) return;
     let active = true;
     setReady(false);
     setMapError(false);
     setMapLoaded(false);
     if (token) {
       void Mapbox.setAccessToken(token)
-        .then(() => {
-          if (active) {
-            setReady(true);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setMapError(true);
-          }
-        });
+        .then(() => { if (active) setReady(true); })
+        .catch(() => { if (active) setMapError(true); });
     }
-    return () => {
-      active = false;
-    };
-  }, [token]);
+    return () => { active = false; };
+  }, [token, nativeCopilotViewAvailable]);
   useEffect(() => {
     // A GPS fix may arrive before the native map/camera mounts. Replay it on load.
     if (mapLoaded && follow && fix) {
@@ -191,14 +191,20 @@ export function TruckMap({
     return (
       <View style={styles.fill} onLayout={event => setMapHeight(event.nativeEvent.layout.height)}>
         <View style={styles.frame}>
-          <CopilotMapView style={styles.map} />
-          {mapError && (
+          {nativeMapReady && <CopilotMapView style={styles.map} />}
+          {!nativeMapReady && (
             <View pointerEvents="none" style={styles.nativeOverlay}>
-              <Text style={[styles.stateTitle, { color: palette.text }]}>CoPilot map unavailable</Text>
+              <Text style={[styles.stateTitle, { color: palette.text }]}>
+                {nativeMapError ? 'CoPilot map unavailable' : 'Starting CoPilot map…'}
+              </Text>
               <Text style={[styles.stateText, { color: palette.muted }]}>
-                The native CoPilot runtime is present, but startup or licensing is still blocked. Guidance remains fail-closed until the device is provisioned.
+                {nativeMapError
+                  ? 'CoPilot native startup failed. Check license, maps, and device logs. Truck guidance remains blocked.'
+                  : 'Connecting to the native CoPilot service.'}
               </Text>
             </View>
+          )}
+        </View>
           )}
         </View>
       </View>

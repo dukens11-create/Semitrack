@@ -52,7 +52,7 @@ const moduleMethods: Record<string, readonly string[]> = {
   GuidanceMgr: ['getTurnInstruction', 'getETA', 'getDistanceToDestination'],
   SpeechMgr: ['getCurrentVoice', 'getCurrentLanguage', 'playSpeechSample'],
   CopilotListener: ['registerListener'],
-  LicenseListener: ['registerListener'],
+  LicenseListener: ['registerListener', 'setAMSLoginInfo'],
   MapDataListener: ['registerListener'],
   RouteListener: ['registerListener'],
   GuidanceListener: ['registerListener'],

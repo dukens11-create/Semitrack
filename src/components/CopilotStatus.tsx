@@ -33,7 +33,20 @@ export function CopilotStatus() {
         );
     });
     void lifecycle.start();
-    return () => lifecycle.dispose();
+    // A rejected first-launch permission or a corrected AMS setup can be
+    // retried when the user returns to the app; avoid concurrent restarts.
+    const appStateSubscription = AppState.addEventListener('change', next => {
+      if (next !== 'active') return;
+      const phase = lifecycle.snapshot().phase;
+      if (phase === 'ERROR' || phase === 'MAPS_REQUIRED') {
+        lifecycle.dispose();
+        void lifecycle.start();
+      }
+    });
+    return () => {
+      appStateSubscription.remove();
+      lifecycle.dispose();
+    };
   }, []);
   if (state.warning)
     return (

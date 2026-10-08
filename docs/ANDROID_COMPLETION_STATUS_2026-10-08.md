@@ -17,6 +17,9 @@ unresolved licensing and truck-restriction findings.
   actionable error instead of publishing a session that cannot survive restart.
 - The device APK workflow requires a valid public display-map token and checks
   every packaged native library, APK ZIP alignment, and APK signature.
+- Compatible backend dependency updates remove the eight npm advisories found
+  during this audit, including three high and one critical advisory. Direct
+  dependency ranges and application APIs remain unchanged.
 
 ## Verification
 
@@ -24,6 +27,25 @@ unresolved licensing and truck-restriction findings.
 bridge/codegen checks, and 9 native-alignment tooling tests. The new regressions
 cover actual recovery and concurrent-startup failures; test doubles do not prove
 CoPilot licensing, routing or guidance on a device.
+
+The backend compiles and its test run reports 317 passing tests, zero failures
+and 43 skipped isolated-database tests. The final backend npm audit reports zero
+advisories after updating the lockfile. These dependency changes are saved for
+review; deployment to the live backend has not been performed.
+
+GitHub Android build `37741945168`, for client commit
+`7b0462ea31615b663d1ee2022bd2f29150a54428`, passed compilation, every packaged
+native-library check, 16 KB ZIP alignment and APK signature verification. The
+standalone ARM64 APK has SHA-256
+`350d3e3cc2891b8d5a2f0117120128310c7aa597c62f51c06120e524dc3b059e`.
+GitHub's separate app checks also passed. No installation or driving-session
+test on a physical phone is claimed.
+
+The updated APK's debug signing certificate differs from the previous test APK.
+Android cannot update that earlier installation in place. A clean installation
+would remove that app's local settings/session and CoPilot data; do not uninstall
+an activated test device without first reviewing its saved setup and licensing.
+Stable test signing and verified production signing still need provisioning.
 
 The currently deployed `/health` endpoint reports a healthy database and
 configured Trimble routing. This is configuration evidence, not a successful

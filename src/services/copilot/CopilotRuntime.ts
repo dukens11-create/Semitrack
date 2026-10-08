@@ -83,6 +83,10 @@ async function call(
   return fn.apply(object, args);
 }
 export function createCopilotRuntime(): CopilotLifecyclePort {
+  // Serialize native snapshot writes: promises may otherwise complete out of
+  // order, potentially restoring a stale licensed/map-ready snapshot after a
+  // shutdown or permission loss.
+  let readinessQueue: Promise<unknown> = Promise.resolve();
   return {
     reportReadiness(state: CopilotState) {
       const module = NativeModules.SemiTraxCopilotMapReadiness as
@@ -91,13 +95,17 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       if (typeof module?.reportSdkReadiness !== 'function') return;
       // Send only booleans attested by the CoPilot lifecycle. Never include
       // AMS identity, credential references, map files or account secrets.
-      void Promise.resolve(module.reportSdkReadiness(
-        state.initialized,
-        state.licensingReady,
-        state.fullNavigationLicensed,
-        state.heavyTruckLicensed,
-        state.mapsReady,
-      )).catch(() => {});
+      const flags = [
+        state.initialized && state.error === null,
+        state.initialized && state.error === null && state.licensingReady,
+        state.initialized && state.error === null && state.fullNavigationLicensed,
+        state.initialized && state.error === null && state.heavyTruckLicensed,
+        state.initialized && state.error === null && state.mapsReady,
+      ] as const;
+      readinessQueue = readinessQueue
+        .catch(() => undefined)
+        .then(() => module.reportSdkReadiness!(...flags))
+        .catch(() => undefined);
     },
     modules() {
       const result: Record<string, boolean> = {

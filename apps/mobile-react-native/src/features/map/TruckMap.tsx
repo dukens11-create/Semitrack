@@ -401,6 +401,7 @@ export function TruckMap({
         <View style={styles.controlGroup}>
           {!follow && (
             <Text
+              numberOfLines={1}
               style={[
                 styles.freePan,
                 { backgroundColor: palette.card, color: palette.text },
@@ -533,7 +534,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#172433',
     color: 'white',
     padding: 5,
-    maxWidth: 96,
+    width: 82,
+    textAlign: 'center',
+    fontSize: 12,
     borderRadius: 8,
   },
   fill: { flex: 1 },
@@ -556,7 +559,7 @@ const styles = StyleSheet.create({
   controls: {
     position: 'absolute',
     right: 12,
-    width: 54,
+    width: 86,
   },
   controlContent: { alignItems: 'center', gap: 10, paddingVertical: 3 },
   controlGroup: { gap: 8, alignItems: 'center' },

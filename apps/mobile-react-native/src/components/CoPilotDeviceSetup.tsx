@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   deviceLicenseSchema,
+  DeviceActivationError,
   openDeviceActivation,
   readDeviceLicense,
 } from '../services/copilot/DeviceActivation';
@@ -44,9 +45,15 @@ export function CoPilotDeviceSetup() {
       setMessage(
         'CoPilot opened. Complete activation there, then verify Activated in Account Manager. Embedded navigation remains unverified.',
       );
-    } catch {
+    } catch (error) {
       setMessage(
-        'Could not save settings or open CoPilot. Install CoPilot GPS on this device and retry.',
+        error instanceof DeviceActivationError &&
+          error.code === 'COPILOT_APP_UNAVAILABLE'
+          ? 'No installed app can open CoPilot activation. Install the CoPilot app supplied for your Trimble license, then retry.'
+          : error instanceof DeviceActivationError &&
+            error.code === 'DEVICE_SETTINGS_SAVE_FAILED'
+          ? 'Could not save device settings securely. Restart SemiTraX and retry.'
+          : 'CoPilot activation could not open. Open CoPilot directly and check its setup, then retry.',
       );
     } finally {
       setBusy(false);
@@ -58,9 +65,9 @@ export function CoPilotDeviceSetup() {
         Device license activation
       </Text>
       <Text style={[styles.text, { color: p.text }]}>
-        Install CoPilot GPS first. Use the IDs assigned to this device in
-        Account Manager. Each device needs a separate license. This opens the
-        separate CoPilot app.
+        Install the CoPilot Truck app supplied for your Trimble license. Use the
+        IDs assigned to this device in Account Manager. Each device needs a
+        separate license. This opens the separate CoPilot app.
       </Text>
       <TextInput
         style={[styles.input, { color: p.text, backgroundColor: p.input }]}

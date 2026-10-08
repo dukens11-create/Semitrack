@@ -1720,6 +1720,7 @@ const styles = StyleSheet.create({
     left: 12,
     right: 12,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
   },
@@ -1736,6 +1737,8 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 12, fontWeight: '700', flexShrink: 1 },
   gpsChip: {
+    flex: 1,
+    minWidth: 100,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,

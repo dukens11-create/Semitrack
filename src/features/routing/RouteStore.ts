@@ -71,7 +71,9 @@ export class RouteStore extends Store<RouteState> {
       if (generation === this.generation) {
         const detail=error as {code?:unknown;status?:unknown}|null;
         const invalidProfile=detail?.code==='TRUCK_PROFILE_CHANGED'||detail?.code==='VERIFIED_TRUCK_REQUIRED';
-        const discard=invalidProfile||detail?.status===401||detail?.status===403;
+        // A rejected commercial route must never leave an old preview active.
+        const unsafeRoute = ['TRIMBLE_RESTRICTION_WARNING', 'TRIMBLE_RESTRICTION_UNSUPPORTED', 'TRIMBLE_STOP_COVERAGE_UNPROVEN', 'TRIMBLE_MANEUVER_DATA_REQUIRED', 'TRIMBLE_MANEUVER_GEOMETRY_MISMATCH', 'TRIMBLE_MANEUVER_COORDINATE_REQUIRED'].includes(String(detail?.code ?? ''));
+        const discard=invalidProfile||unsafeRoute||detail?.status===401||detail?.status===403;
         if(invalidProfile)this.onProfileInvalidated();
         if (discard || !sameProfile) this.routeProfile = null;
         this.publish({

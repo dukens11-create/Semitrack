@@ -69,3 +69,19 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
 +                unbindCopilotService();
              }
          }
+diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
+--- a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
++++ b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
+@@ -19,7 +19,12 @@
+     public View createViewInstance(ThemedReactContext context){
+       Log.e("CopilotViewManager","createViewInstance");
+       View copilotView = CopilotMgr.getView();
++      if (copilotView == null) {
++          // Fail closed without crashing React Native's UI thread.
++          // This placeholder is not a navigable map or evidence of CoPilot readiness.
++          Log.w("CopilotViewManager","Native CoPilot view not initialized; displaying empty placeholder");
++          return new View(context);
++      }
+       ViewGroup parentView = (ViewGroup)copilotView.getParent();
+       if(parentView!=null)
+           parentView.removeView(copilotView);

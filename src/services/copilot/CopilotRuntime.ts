@@ -5,7 +5,7 @@ import {
   UIManager,
 } from 'react-native';
 import { z } from 'zod';
-import type { CopilotConfiguration } from './CopilotConfiguration';
+import { parseCopilotConfiguration, type CopilotConfiguration } from './CopilotConfiguration';
 import type {
   CopilotLifecyclePort,
   CopilotMapInventory,
@@ -111,9 +111,31 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       return () => subscription.remove();
     },
     async prepareProvisioning() {
-      // Existing CopilotProvisioning is an interface only. No approved secure credential
-      // provider or map configuration is connected. Do not use the invalid example as config.
-      return null;
+      // The native boundary must return configuration metadata ONLY, never passwords,
+      // product keys, account identifiers, or other secret credential material.
+      // Absence of this approved bridge must never initiate CoPilot startup.
+      if (Platform.OS !== 'android') return null;
+      const bridge = NativeModules.SemiTraxCopilotProvisioning as
+        | {
+            readConfiguration?: () => Promise<unknown>;
+            hasNativeCredential?: (reference: string) => Promise<boolean>;
+          }
+        | undefined;
+      if (
+        typeof bridge?.readConfiguration !== 'function' ||
+        typeof bridge?.hasNativeCredential !== 'function'
+      ) return null;
+      try {
+        const config = parseCopilotConfiguration(await bridge.readConfiguration());
+        if (config.platform !== 'android') return null;
+        // A reference alone never proves a valid license or a provisioned secret.
+        if ((await bridge.hasNativeCredential(config.credentialRef)) !== true)
+          return null;
+        return config;
+      } catch {
+        // Invalid or missing provisioning fails closed without logging credentials.
+        return null;
+      }
     },
     async startNative() {
       const startupModule = NativeModules.CopilotStartupMgr as

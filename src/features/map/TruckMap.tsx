@@ -90,17 +90,21 @@ export function TruckMap({
   // Never infer readiness from ViewManager registration or a void bind call.
   const [nativeCopilotViewAvailable, setNativeCopilotViewAvailable] = useState(false);
   useEffect(() => {
-    let mounted = true;
     if (Platform.OS !== 'android') return;
+    let mounted = true;
+    let inFlight = false;
     const bridge = NativeModules.SemiTraxCopilotMapReadiness as
       | { getStatus?: () => Promise<unknown> }
       | undefined;
     if (typeof bridge?.getStatus !== 'function') return;
-    Promise.resolve()
-      .then(() => bridge.getStatus!())
-      .then(value => {
-        if (!mounted || !value || typeof value !== 'object') return;
-        const status = value as Record<string, unknown>;
+    const check = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const value = await bridge.getStatus!();
+        if (!mounted) return;
+        const status = value && typeof value === 'object'
+          ? value as Record<string, unknown> : {};
         const verified =
           status.initialized === true &&
           status.licensingReady === true &&
@@ -108,19 +112,29 @@ export function TruckMap({
           status.heavyTruckLicensed === true &&
           status.mapsReady === true &&
           status.fragmentReady === true;
-        if (!verified) return;
-        try {
-          setNativeCopilotViewAvailable(
-            !!UIManager.getViewManagerConfig?.('CopilotView'),
-          );
-        } catch {
-          setNativeCopilotViewAvailable(false);
+        let viewRegistered = false;
+        if (verified) {
+          try {
+            viewRegistered = !!UIManager.getViewManagerConfig?.('CopilotView');
+          } catch {
+            viewRegistered = false;
+          }
         }
-      })
-      .catch(() => {
+        setNativeCopilotViewAvailable(verified && viewRegistered);
+      } catch {
         if (mounted) setNativeCopilotViewAvailable(false);
-      });
-    return () => { mounted = false; };
+      } finally {
+        inFlight = false;
+      }
+    };
+    void check();
+    // A first render can precede async CoPilot service startup or map download.
+    // Recheck without requiring an app restart; revoke readiness on SDK failure.
+    const interval = setInterval(() => { void check(); }, 5000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, []);
   useEffect(() => {
     // Mapbox token initialization must not mutate CoPilot startup state.

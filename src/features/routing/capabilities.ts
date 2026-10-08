@@ -8,6 +8,9 @@ export type Capabilities=z.infer<typeof capabilitiesSchema>;
 export function planningStatus(input:{verified:boolean;phase:string;errorCode?:string;capabilities?:Capabilities;now?:number}) {
  if(input.errorCode==='TRUCK_PROFILE_CHANGED')return 'Truck profile changed — review and verify it again';
  if(!input.verified || input.errorCode==='VERIFIED_TRUCK_REQUIRED')return 'Truck profile verification required';
+ if(input.errorCode==='TRIMBLE_RESTRICTION_WARNING')return 'Truck route blocked by Trimble restriction — review your truck profile and stops';
+ if(input.errorCode==='TRIMBLE_RESTRICTION_UNSUPPORTED')return 'Truck restriction cannot be enforced by Trimble — route blocked';
+ if(input.errorCode==='TRIMBLE_STOP_COVERAGE_UNPROVEN')return 'Stop coverage could not be verified — route blocked';
  if(input.errorCode && ['TRIMBLE_API_KEY_MISSING','TRIMBLE_AUTHORIZATION_FAILED','TRIMBLE_CONFIGURATION_INVALID'].includes(input.errorCode))return 'Trimble routing configuration needs attention';
  if(input.errorCode && ['TRIMBLE_NETWORK_ERROR','TRIMBLE_REQUEST_TIMEOUT','TRIMBLE_HTTP_ERROR','TRIMBLE_QUOTA_EXCEEDED'].includes(input.errorCode))return 'Trimble routing temporarily unavailable';
  if(input.phase==='calculating'||input.phase==='rerouting')return 'Calculating a Trimble truck route';

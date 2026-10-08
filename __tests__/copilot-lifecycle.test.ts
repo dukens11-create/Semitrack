@@ -315,14 +315,11 @@ test('late query results cannot restore readiness after shutdown', async () => {
   expect(h.lifecycle.snapshot().copilotReady).toBe(false);
   h.lifecycle.dispose();
 });
-test('runtime attempts the supported native CoPilot bind when the service module is present', async () => {
+test('runtime reports missing native startup modules instead of claiming readiness', () => {
   const original = (NativeModules as any).CopilotStartupMgr;
-  const bind = jest.fn().mockResolvedValue(undefined);
-  (NativeModules as any).CopilotStartupMgr = { bindCoPilotService: bind };
-
+  (NativeModules as any).CopilotStartupMgr = undefined;
   try {
-    await createCopilotRuntime().startNative();
-    expect(bind).toHaveBeenCalledTimes(1);
+    expect(createCopilotRuntime().modules().CopilotStartupMgr).toBe(false);
   } finally {
     (NativeModules as any).CopilotStartupMgr = original;
   }

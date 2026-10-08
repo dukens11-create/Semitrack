@@ -46,7 +46,7 @@ export function inspectInstalledMaps(
 const moduleMethods: Record<string, readonly string[]> = {
   CopilotMgr: ['getVersionInfo'],
   CopilotStartupMgr: ['bindCoPilotService'],
-  LicenseMgr: ['isLicensingReady', 'getFeatureStatus'],
+  LicenseMgr: ['isLicensingReady', 'getFeatureStatus', 'getActiveAMSUser'],
   MapDataMgr: ['getLicensedMapList', 'getInstalledMaps', 'checkMapUpdate'],
   RouteMgr: ['isCopilotReadyToAddStops', 'calculateRoute'],
   GuidanceMgr: ['getTurnInstruction', 'getETA', 'getDistanceToDestination'],
@@ -178,6 +178,16 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       await startupModule.bindCoPilotService();
     },
     async licenseState() {
+      // A ready licensing subsystem does not prove that the assigned AMS
+      // account authenticated. Confirm the active account in this app first.
+      const activeUser = await call('LicenseMgr', 'getActiveAMSUser');
+      if (typeof activeUser !== 'string' || !activeUser.trim()) {
+        return {
+          licensingReady: false,
+          fullNavigationLicensed: false,
+          heavyTruckLicensed: false,
+        };
+      }
       const licensingReady =
         (await call('LicenseMgr', 'isLicensingReady')) === true;
       if (!licensingReady)

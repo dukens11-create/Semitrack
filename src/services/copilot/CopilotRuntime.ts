@@ -169,12 +169,23 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       if (Platform.OS !== 'android') {
         throw new Error('COPILOT_ANDROID_REQUIRED');
       }
-      const fineLocation = await PermissionsAndroid.check(
+      let fineLocation = await PermissionsAndroid.check(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       );
-      const coarseLocation = await PermissionsAndroid.check(
+      let coarseLocation = await PermissionsAndroid.check(
         PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
       );
+      if (!fineLocation && !coarseLocation) {
+        // First-launch SDK initialization used to fail without ever requesting
+        // the runtime permission required by the patched vendor service.
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        );
+        fineLocation = granted === PermissionsAndroid.RESULTS.GRANTED;
+        coarseLocation = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        );
+      }
       if (!fineLocation && !coarseLocation) {
         throw new Error('COPILOT_LOCATION_PERMISSION_REQUIRED');
       }

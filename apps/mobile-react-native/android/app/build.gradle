@@ -60,6 +60,9 @@ tasks.configureEach { task ->
  }
 }
 dependencies {
+ // Vendor JARs are packaged by the autolinked library. Expose their types to
+ // the guarded setup host without packaging duplicate copies.
+ compileOnly files("../../node_modules/trimble-maps-cpik-react-native-library/android/libs/copilot.jar", "../../node_modules/trimble-maps-cpik-react-native-library/android/libs/cpik.jar")
  implementation("com.facebook.react:react-android")
  implementation("com.facebook.react:hermes-android")
 }

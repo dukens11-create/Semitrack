@@ -72,7 +72,8 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
 diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
 --- a/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
 +++ b/node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
-@@ -19,6 +19,19 @@
+@@ -18,7 +18,19 @@
+-    @Override
 +    // Map-view existence is checked from the host through reflection.
 +    // Run only after the SDK startup callback.
 +    public static boolean isNativeCoPilotViewAvailable() {

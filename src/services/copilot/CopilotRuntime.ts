@@ -10,6 +10,7 @@ import { parseCopilotConfiguration, type CopilotConfiguration } from './CopilotC
 import type {
   CopilotLifecyclePort,
   CopilotMapInventory,
+  CopilotState,
 } from './CopilotLifecycle';
 
 const mapInfo = z.object({
@@ -83,6 +84,21 @@ async function call(
 }
 export function createCopilotRuntime(): CopilotLifecyclePort {
   return {
+    reportReadiness(state: CopilotState) {
+      const module = NativeModules.SemiTraxCopilotMapReadiness as
+        | { reportSdkReadiness?: (...flags: boolean[]) => Promise<unknown> }
+        | undefined;
+      if (typeof module?.reportSdkReadiness !== 'function') return;
+      // Send only booleans attested by the CoPilot lifecycle. Never include
+      // AMS identity, credential references, map files or account secrets.
+      void Promise.resolve(module.reportSdkReadiness(
+        state.initialized,
+        state.licensingReady,
+        state.fullNavigationLicensed,
+        state.heavyTruckLicensed,
+        state.mapsReady,
+      )).catch(() => {});
+    },
     modules() {
       const result: Record<string, boolean> = {
         Android: Platform.OS === 'android',

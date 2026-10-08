@@ -87,8 +87,15 @@ export function TruckMap({
   const [mapError, setMapError] = useState(false);
   const [nativeMapReady, setNativeMapReady] = useState(false);
   const [nativeMapError, setNativeMapError] = useState(false);
+  // The presence of a native ViewManager is not proof that the vendor map
+  // fragment exists. CoPilotViewManager.createViewInstance dereferences a null
+  // fragment and crashes Android when the map is mounted before provisioning.
+  // Keep CoPilot view creation disabled until native startup, entitlements,
+  // map inventory and fragment readiness are independently verified on-device.
+  // Mapbox is display-only; it never enables CoPilot truck guidance.
+  const copilotFragmentReadinessVerified = false;
   const nativeCopilotViewAvailable = useMemo(() => {
-    if (Platform.OS !== 'android') return false;
+    if (Platform.OS !== 'android' || !copilotFragmentReadinessVerified) return false;
     try {
       return !!UIManager.getViewManagerConfig?.('CopilotView');
     } catch {

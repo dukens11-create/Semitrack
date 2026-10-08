@@ -182,10 +182,11 @@ export class CopilotLifecycle {
     try {
       const modules = this.port.modules();
       this.publish({ modules });
-      if (
-        !Object.values(modules).length ||
-        Object.values(modules).some(value => !value)
-      ) {
+      // Report the first real blocker. Optional guidance/speech interfaces
+      // must not disguise missing AMS provisioning as startup failure.
+      if (!modules.Android || !modules.CopilotStartupMgr ||
+          !modules.LicenseListener || !modules.LicenseMgr ||
+          !modules.CopilotListener || !modules.CopilotView) {
         this.fail('COPILOT_NOT_INITIALIZED', 'native-modules');
         return;
       }

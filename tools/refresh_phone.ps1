@@ -39,10 +39,20 @@ if (-not $InstallExistingApk) {
     Push-Location $androidDir
     try {
         Write-Host 'Building SemiTraX React Native debug APK for ARM64...'
-        & $gradleWrapper ':app:assembleDebug' '-PreactNativeArchitectures=arm64-v8a' '--no-daemon' '--max-workers=1' '--console=plain' 2>&1 |
-            Tee-Object -FilePath $logPath
-        if ($LASTEXITCODE -ne 0) {
-            throw "Android Gradle build failed. See: $logPath"
+        # Windows PowerShell 5.1 promotes native stderr (including harmless Node
+        # warnings) to NativeCommandError when ErrorActionPreference is Stop.
+        # Keep warning output in the build log and check Gradle's exit code.
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $gradleWrapper ':app:assembleDebug' '-PreactNativeArchitectures=arm64-v8a' '--no-daemon' '--max-workers=1' '--console=plain' 2>&1 |
+                Tee-Object -FilePath $logPath
+            $gradleExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($gradleExitCode -ne 0) {
+            throw "Android Gradle build failed (exit code $gradleExitCode). See: $logPath"
         }
     } finally {
         Pop-Location

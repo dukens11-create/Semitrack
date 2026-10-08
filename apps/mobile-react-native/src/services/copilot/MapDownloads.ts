@@ -14,6 +14,9 @@ const regionSchema = z.object({
   totalBytes: z.number().finite().nonnegative(),
 });
 const catalogSchema = z.object({
+  initialReady: z.boolean(),
+  initialAccepted: z.boolean(),
+  downloadPolicyApplied: z.boolean(),
   freeBytes: z.number().finite().nonnegative(),
   regions: z.array(regionSchema),
   installed: z.array(
@@ -140,7 +143,14 @@ export function responseMessage(code: string): string {
     FAILURE_DOWNLOADING: 'This map is already downloading.',
     FAILURE_DOWNLOADED: 'This map is downloaded and awaiting installation.',
     FAILURE_PAUSED: 'This download is paused. Use Resume.',
-    FAILURE_MANAGER_BUSY: 'CoPilot is busy. Wait and refresh before retrying.',
+    FAILURE_MANAGER_BUSY:
+      'CoPilot rejected this request because its map manager is busy. This is not download progress. Keep this panel open; do not start other regions.',
+    COPILOT_MAP_INITIAL_NOT_READY:
+      'Waiting for CoPilot’s first-map readiness signal. No download has started.',
+    COPILOT_MAP_INITIAL_IN_PROGRESS:
+      'The first map request was accepted. Wait for installation before adding another region.',
+    COPILOT_MAP_DOWNLOAD_POLICY_FAILED:
+      'CoPilot’s download settings could not be applied. Close and reopen SemiTraX, then check setup again.',
     COPILOT_MAPS_SETUP_REQUIRED:
       'Keep SemiTraX open and run the setup check again.',
     COPILOT_MAPS_UPDATE_REQUIRED:

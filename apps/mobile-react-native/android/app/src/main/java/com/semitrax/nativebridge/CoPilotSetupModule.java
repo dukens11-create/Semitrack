@@ -46,8 +46,8 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   private Activity awakeActivity;
   private boolean ownsAwakeFlag;
   private final CopilotListener observer = new CopilotListener() {
-    @Override public void onCPStartup() { started = true; }
-    @Override public void onCPShutdown() { started = false; }
+    @Override public void onCPStartup() { started = true; maps.startup(); }
+    @Override public void onCPShutdown() { started = false; maps.shutdown(); }
   };
   private final Runnable timeout = () -> fail("COPILOT_BIND_TIMEOUT");
   private final ServiceConnection connection = new ServiceConnection() {

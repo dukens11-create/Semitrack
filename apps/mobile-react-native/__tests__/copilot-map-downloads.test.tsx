@@ -28,6 +28,9 @@ const region = {
   totalBytes: 0,
 };
 const initial: MapCatalog = {
+  initialReady: true,
+  initialAccepted: false,
+  downloadPolicyApplied: true,
   freeBytes: 10 * 1073741824,
   regions: [
     region,
@@ -256,4 +259,26 @@ test('no polling occurs while app is in background or after panel closes', async
   AppState.currentState = 'active';
   await jest.advanceTimersByTimeAsync(6000);
   expect(read).toHaveBeenCalledTimes(calls);
+});
+
+it('blocks first downloads until the SDK readiness signal is observed', async () => {
+  catalog.initialReady = false;
+  await render();
+  await select();
+  expect(button('Download selected map').props.disabled).toBe(true);
+  expect(text()).toContain('first-map readiness signal');
+  expect(command).not.toHaveBeenCalled();
+  catalog = { ...catalog, initialReady: true };
+  await act(async () => {
+    jest.advanceTimersByTime(3000);
+  });
+  expect(button('Download selected map').props.disabled).toBe(false);
+});
+it('does not replace an accepted first-map transaction with another download', async () => {
+  catalog.initialAccepted = true;
+  await render();
+  await select();
+  expect(button('Download selected map').props.disabled).toBe(true);
+  expect(text()).toContain('Wait for installation');
+  expect(command).not.toHaveBeenCalled();
 });

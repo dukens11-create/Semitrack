@@ -7,6 +7,9 @@ const vendor = path.join(root, 'node_modules/trimble-maps-cpik-react-native-libr
 const exists = relative => fs.existsSync(path.join(vendor, relative));
 const blockers = [];
 const report = {guidanceOperational: false, android: {}, ios: {}};
+const debugApk = path.join(root, 'android/app/build/outputs/apk/debug/app-debug.apk');
+report.android.debugApkPresent = fs.existsSync(debugApk);
+report.android.debugApkProvesRuntimeReadiness = false;
 if (!exists('package.json')) {
   blockers.push('Official Android package missing: run npm ci.');
 } else {
@@ -18,6 +21,8 @@ if (!exists('package.json')) {
   const rn = gradle.match(/react-android:([^"']+)/)?.[1];
   const libraries = inspectDirectory(path.join(vendor, 'android/src/jniLibs'));
   report.android = {
+    debugApkPresent: fs.existsSync(debugApk),
+    debugApkProvesRuntimeReadiness: false,
     packageVersion: pkg.version,
     appReactNative: app.dependencies['react-native'], vendorReactNative: rn,
     binaries: libraries,
@@ -57,11 +62,11 @@ if (iosRoot) {
   blockers.push('iOS framework/resource delivery not supplied (SEMITRAX_COPILOT_IOS_SDK_DIR).');
 }
 blockers.push(
-  'No verified truck/region/navigation license, AMS provisioning or map installation is connected.',
-  'Android native compilation, module startup and release shrinking have not been verified.',
+  'No on-device proof of truck/region/navigation entitlement, AMS provisioning and map coverage for the current app ID; inspect the SDK state on each separately installed debug variant.',
+  'Android debug build can be verified separately from Gradle output; CoPilot module startup and release shrinking still require device/release validation.',
   'iOS linking and native device compatibility have not been verified on macOS/Xcode.',
   'Truck restriction parity, including axle/trailer data and road avoidance, is unresolved.',
-  'Final Android APK/AAB dependency coverage, ZIP alignment and 16 KB device behavior are unverified.',
+  'Final Android APK/AAB ZIP alignment and 16 KB runtime behavior require packaged-artifact and device checks; vendor ELF inspection alone is insufficient.',
   'No real CoPilot route calculation or turn-by-turn start has been demonstrated.',
 );
 console.log(JSON.stringify({...report, blockers}, null, 2));

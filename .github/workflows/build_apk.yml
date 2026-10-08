@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# Only the newest revision on a branch needs an APK. Cancel obsolete builds.
+concurrency:
+  group: semitrax-android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest

@@ -39,12 +39,17 @@ export function CoPilotMapDownloads() {
       const result = await readMapCatalog();
       if (mounted.current) {
         setCatalog(result);
+        if (result.selectedRegion !== undefined && result.selectedRegion >= 0)
+          setSelected(previous => previous ?? result.selectedRegion!);
+        if (result.automationError)
+          setMessage(responseMessage(result.automationError));
         setMessage(previous =>
           previous === 'Loading licensed maps…' ? '' : previous,
         );
       }
     } catch (error) {
-      if (mounted.current)
+      if (mounted.current) {
+        setCatalog(null);
         setMessage(
           responseMessage(
             error instanceof MapDownloadError
@@ -52,6 +57,7 @@ export function CoPilotMapDownloads() {
               : 'COPILOT_MAP_OPERATION_FAILED',
           ),
         );
+      }
     } finally {
       reading.current = false;
     }
@@ -107,9 +113,11 @@ export function CoPilotMapDownloads() {
   const installed =
     catalog?.installed.some(item => item.id === selected) ?? false;
   const initialWaiting =
-    !!catalog && !catalog.installed.length && !catalog.initialReady;
-  const initialPending =
-    !!catalog && !catalog.installed.length && catalog.initialAccepted;
+    !!catalog &&
+    !catalog.installed.length &&
+    !catalog.initialReady &&
+    catalog.readinessSource !== 'AMS_LICENSED';
+  const initialPending = !!catalog && catalog.initialAccepted;
   const downloadBlocked =
     initialWaiting || initialPending || !catalog?.downloadPolicyApplied;
   const active =
@@ -129,16 +137,16 @@ export function CoPilotMapDownloads() {
       'FAILURE_INSTALLED',
     ].includes(region.status);
   const controllable =
-    !initialPending &&
     region &&
-    [
-      'QUEUED',
-      'DOWNLOADING',
-      'PAUSED',
-      'WAITING_ON_STORAGE_SPACE',
-      'FAILURE_DOWNLOADING',
-      'FAILURE_PAUSED',
-    ].includes(region.status);
+    ((initialPending && catalog?.selectedRegion === selected) ||
+      [
+        'QUEUED',
+        'DOWNLOADING',
+        'PAUSED',
+        'WAITING_ON_STORAGE_SPACE',
+        'FAILURE_DOWNLOADING',
+        'FAILURE_PAUSED',
+      ].includes(region.status));
   const paused =
     region &&
     ['PAUSED', 'FAILURE_PAUSED', 'WAITING_ON_STORAGE_SPACE'].includes(
@@ -172,9 +180,9 @@ export function CoPilotMapDownloads() {
         Download CoPilot maps
       </Text>
       <Text style={{ color: p.text }}>
-        Choose a licensed region. Use Wi-Fi and keep SemiTraX open while
-        downloading. This panel keeps the screen awake. Existing maps are kept.
-        Map installation does not enable turn-by-turn guidance.
+        Choose coverage once. SemiTraX remembers it and manages downloads on
+        Wi-Fi while the app is open. Existing maps are kept. Guidance still
+        requires verification.
       </Text>
       {catalog && (
         <Text style={{ color: p.muted }}>
@@ -190,7 +198,7 @@ export function CoPilotMapDownloads() {
             ? responseMessage('COPILOT_MAP_INITIAL_IN_PROGRESS')
             : initialWaiting
             ? responseMessage('COPILOT_MAP_INITIAL_NOT_READY')
-            : 'Map manager ready for a download request.'}
+            : 'Licensed coverage available. Choose a map to request.'}
         </Text>
       )}
       <TextInput

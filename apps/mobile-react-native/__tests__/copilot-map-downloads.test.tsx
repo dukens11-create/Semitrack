@@ -282,3 +282,70 @@ it('does not replace an accepted first-map transaction with another download', a
   expect(text()).toContain('Wait for installation');
   expect(command).not.toHaveBeenCalled();
 });
+
+test('AMS licensing evidence permits selection without a product-key-only readiness callback', async () => {
+  catalog.initialReady = false;
+  catalog.readinessSource = 'AMS_LICENSED';
+  await render();
+  await select();
+  expect(button('Download selected map').props.disabled).toBe(false);
+});
+
+test('persisted coverage is shown after reopening without another download request', async () => {
+  catalog.selectedRegion = 40;
+  catalog.initialAccepted = true;
+  await render();
+  expect(text()).toContain('California');
+  expect(button('Download selected map').props.disabled).toBe(true);
+  expect(command).not.toHaveBeenCalled();
+});
+
+test('bounded automation failure is displayed with no silent new request', async () => {
+  catalog.selectedRegion = 40;
+  catalog.automationError = 'COPILOT_MAP_PROGRESS_TIMEOUT';
+  await render();
+  expect(text()).toContain('No map progress received');
+  expect(command).not.toHaveBeenCalled();
+});
+
+test.each([{ year: 0 }, { quarter: 0 }, { quarter: 5 }, { version: '' }])(
+  'rejects malformed installed inventory %j',
+  async invalid => {
+    catalog.installed = [
+      {
+        id: 40,
+        name: 'California',
+        label: 'California',
+        year: 2026,
+        quarter: 2,
+        version: 'verified',
+        ...invalid,
+      },
+    ];
+    await expect(readMapCatalog()).rejects.toThrow(
+      'COPILOT_MAP_CATALOG_INVALID',
+    );
+    expect(mapProgress(region, catalog.installed)).not.toContain('Installed');
+  },
+);
+test('duplicate inventory cannot establish installed coverage', async () => {
+  const item = {
+    id: 40,
+    name: 'California',
+    label: 'California',
+    year: 2026,
+    quarter: 2,
+    version: 'verified',
+  };
+  catalog.installed = [item, item];
+  await expect(readMapCatalog()).rejects.toThrow('COPILOT_MAP_CATALOG_INVALID');
+  expect(mapProgress(region, catalog.installed)).not.toContain('Installed');
+});
+test('pending restored transfer exposes cancellation without allowing replacement', async () => {
+  catalog.initialAccepted = true;
+  catalog.selectedRegion = 40;
+  await render();
+  expect(button('Download selected map').props.disabled).toBe(true);
+  await act(async () => button('Cancel download').props.onPress());
+  expect(command).toHaveBeenCalledWith(40, 'cancel');
+});

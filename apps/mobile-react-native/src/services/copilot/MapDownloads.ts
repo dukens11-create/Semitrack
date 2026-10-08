@@ -14,6 +14,14 @@ const regionSchema = z.object({
   totalBytes: z.number().finite().nonnegative(),
 });
 const catalogSchema = z.object({
+  readinessSource: z.enum(['AMS_LICENSED', 'WAITING_FOR_LICENSE']).optional(),
+  selectedRegion: z.number().int().min(-1).optional(),
+  selectedCoverageInstalled: z.boolean().optional(),
+  attempts: z.number().int().min(0).max(3).optional(),
+  automationError: z
+    .string()
+    .regex(/^[A-Z_]*$/)
+    .optional(),
   initialReady: z.boolean(),
   initialAccepted: z.boolean(),
   downloadPolicyApplied: z.boolean(),
@@ -27,9 +35,9 @@ const catalogSchema = z.object({
         .string()
         .nullable()
         .transform(value => value ?? ''),
-      year: z.number().int(),
-      quarter: z.number().int(),
-      version: z.string(),
+      year: z.number().int().min(2000),
+      quarter: z.number().int().min(1).max(4),
+      version: z.string().trim().min(1),
     }),
   ),
 });
@@ -54,7 +62,20 @@ async function call(method: string, ...args: unknown[]): Promise<unknown> {
   if (typeof fn !== 'function')
     throw new MapDownloadError('COPILOT_MAPS_UPDATE_REQUIRED');
   try {
-    return await fn.apply(host, args);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve(fn.apply(host, args)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new MapDownloadError('COPILOT_MAP_RESPONSE_TIMEOUT')),
+            16000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (error) {
     const code = z
       .object({ code: z.string().regex(/^COPILOT_MAP[A-Z_]+$/) })
@@ -70,7 +91,9 @@ export async function readMapCatalog(): Promise<MapCatalog> {
     throw new MapDownloadError('COPILOT_MAP_CATALOG_INVALID');
   if (
     new Set(result.data.regions.map(region => region.id)).size !==
-    result.data.regions.length
+      result.data.regions.length ||
+    new Set(result.data.installed.map(map => map.id)).size !==
+      result.data.installed.length
   )
     throw new MapDownloadError('COPILOT_MAP_CATALOG_INVALID');
   return result.data;
@@ -100,7 +123,15 @@ export function mapProgress(
   region: MapRegionOption,
   installed: MapCatalog['installed'],
 ): string {
-  const inventory = installed.find(map => map.id === region.id);
+  const matching = installed.filter(map => map.id === region.id);
+  const inventory =
+    matching.length === 1 &&
+    matching[0]!.year >= 2000 &&
+    matching[0]!.quarter >= 1 &&
+    matching[0]!.quarter <= 4 &&
+    matching[0]!.version.trim()
+      ? matching[0]
+      : undefined;
   if (inventory)
     return `Installed · ${inventory.year} Q${inventory.quarter} · ${inventory.version}`;
   const labels: Record<string, string> = {
@@ -132,6 +163,14 @@ export function mapProgress(
 }
 export function responseMessage(code: string): string {
   const messages: Record<string, string> = {
+    SCHEDULED:
+      'Coverage saved. Download and installation will be managed automatically.',
+    COPILOT_MAP_READINESS_TIMEOUT:
+      'CoPilot did not become ready. Check Wi-Fi and device assignment, then retry.',
+    COPILOT_MAP_PROGRESS_TIMEOUT:
+      'No map progress received. The download was not replaced. Reopen SemiTraX and check status; contact Trimble if it remains stalled.',
+    COPILOT_MAP_RESPONSE_TIMEOUT:
+      'CoPilot did not respond. Check status before retrying.',
     SUCCESS: 'Request accepted. Installation will be checked separately.',
     FAILURE_UNLICENSED: 'This map is not licensed for this device.',
     FAILURE_INSUFFICIENT_DISK_SPACE: 'Free more storage and retry.',
@@ -144,7 +183,7 @@ export function responseMessage(code: string): string {
     FAILURE_DOWNLOADED: 'This map is downloaded and awaiting installation.',
     FAILURE_PAUSED: 'This download is paused. Use Resume.',
     FAILURE_MANAGER_BUSY:
-      'CoPilot rejected this request because its map manager is busy. This is not download progress. Keep this panel open; do not start other regions.',
+      'CoPilot map manager is busy. Up to 3 attempts are allowed; if still busy, restart SemiTraX and contact Trimble.',
     COPILOT_MAP_INITIAL_NOT_READY:
       'Waiting for CoPilot’s first-map readiness signal. No download has started.',
     COPILOT_MAP_INITIAL_IN_PROGRESS:

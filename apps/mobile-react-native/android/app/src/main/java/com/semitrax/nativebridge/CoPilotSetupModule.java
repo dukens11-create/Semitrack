@@ -17,6 +17,11 @@ import android.os.Looper;
 import android.view.WindowManager;
 import com.alk.copilot.CopilotService;
 import com.alk.cpik.CopilotListener;
+import com.alk.cpik.CopilotMgr;
+import com.alk.cpik.licensing.LicenseMgr;
+import com.alk.cpik.licensing.LicenseMgtInfo;
+import com.alk.cpik.licensing.FeatureStatus;
+import com.alk.cpik.licensing.LicenseFeature;
 import com.alk.cpik.react.licensing.LicenseListenerModule;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.NativeModule;
@@ -72,6 +77,8 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
             .setOngoing(true).build();
         ((CopilotService.CopilotBinder) binder).startForeground(919, notification);
         connected = true;
+        // Binding an already-running service does not replay onCPStartup.
+        if (CopilotMgr.isActive()) { started = true; maps.startup(); }
         main.removeCallbacks(timeout);
         Promise result = pending;
         pending = null;
@@ -83,7 +90,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     @Override public void onServiceDisconnected(ComponentName name) {
       connected = false;
       started = false;
-      if (pending != null) fail("COPILOT_SERVICE_DISCONNECTED");
+      main.post(() -> fail("COPILOT_SERVICE_DISCONNECTED"));
     }
     @Override public void onBindingDied(ComponentName name) { fail("COPILOT_SERVICE_DISCONNECTED"); }
     @Override public void onNullBinding(ComponentName name) { fail("COPILOT_SERVICE_FAILED"); }
@@ -92,10 +99,21 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   public CoPilotSetupModule(ReactApplicationContext context) {
     super(context);
     this.context = context;
-    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED);
+    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED, this::amsLicensed);
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return NAME; }
+  private boolean amsLicensed() {
+    try {
+      if (!connected || !started || company == null || !LicenseMgr.isLicensingReady()) return false;
+      LicenseMgtInfo user = LicenseMgr.GetActiveAMSUser();
+      if (user == null || !company.equals(user.getCompanyID()) || !asset.equals(user.getAssetID())) return false;
+      FeatureStatus full = LicenseMgr.getFeatureStatus(LicenseFeature.FULL_NAVIGATION);
+      FeatureStatus truck = LicenseMgr.getFeatureStatus(LicenseFeature.TRUCK_HEAVY_DUTY);
+      return (full == FeatureStatus.LICENSED || full == FeatureStatus.UNLIMITED) &&
+          (truck == FeatureStatus.LICENSED || truck == FeatureStatus.UNLIMITED);
+    } catch (Exception | LinkageError error) { return false; }
+  }
   private boolean valid(String value) {
     if (value == null || value.trim().isEmpty() || value.length() > 256) return false;
     for (int i = 0; i < value.length(); i++) if (value.charAt(i) < 32 || value.charAt(i) == 127) return false;
@@ -143,6 +161,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
       WritableNativeMap report = new WritableNativeMap();
       report.putBoolean("started", started);
       report.putBoolean("connected", connected);
+      report.putBoolean("amsIdentityVerified", amsLicensed());
       promise.resolve(report);
     });
   }
@@ -186,9 +205,13 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     if (observing) { CopilotListener.unregisterListener(observer); observing = false; }
     // Keep identity for this process: do not silently switch AMS and remove licenses.
   }
-  @Override public void onHostResume() {}
-  @Override public void onHostPause() { main.post(() -> fail("COPILOT_FOREGROUND_REQUIRED")); }
-  @Override public void onHostDestroy() { main.post(() -> fail("COPILOT_HOST_DESTROYED")); }
+  @Override public void onHostResume() {
+    main.post(() -> { if (connected && CopilotMgr.isActive()) { started = true; maps.startup(); } });
+  }
+  // Keep the service and callback observers alive across permissions, rotation and background.
+  // Downloads are polled only while resumed; the SDK retains ownership of active transfers.
+  @Override public void onHostPause() { main.post(this::releaseAwakeFlag); }
+  @Override public void onHostDestroy() { main.post(this::releaseAwakeFlag); }
   @Override public void invalidate() {
     maps.destroy();
     context.removeLifecycleEventListener(this);

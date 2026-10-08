@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { nativeCopilotModule } from './NativeModuleLookup';
 import {
   deviceLicenseSchema,
+  readDeviceLicense,
   saveDeviceLicense,
   type DeviceLicense,
 } from './DeviceActivation';
@@ -52,7 +53,21 @@ async function call(
   const fn = object[method];
   if (typeof fn !== 'function')
     throw new EmbeddedSetupError('COPILOT_MODULE_UNAVAILABLE');
-  return fn.apply(object, args);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(fn.apply(object, args)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new EmbeddedSetupError('COPILOT_NATIVE_RESPONSE_TIMEOUT')),
+          16000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function constant(name: string, key: string): number {
   return z.number().int().nonnegative().parse(module(name)[key]);
@@ -76,6 +91,7 @@ const nativeErrors = new Set([
 export async function checkEmbeddedSetup(
   value: DeviceLicense,
   signal: AbortSignal,
+  options = { requestPermission: true, save: true },
 ): Promise<EmbeddedSetupReport> {
   if (Platform.OS !== 'android')
     throw new EmbeddedSetupError('COPILOT_ANDROID_REQUIRED');
@@ -91,7 +107,7 @@ export async function checkEmbeddedSetup(
     let precise = await PermissionsAndroid.check(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     );
-    if (!precise) {
+    if (!precise && options.requestPermission) {
       const permissions = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
@@ -102,7 +118,16 @@ export async function checkEmbeddedSetup(
     }
     alive();
     if (!precise) throw new EmbeddedSetupError('COPILOT_LOCATION_REQUIRED');
-    await saveDeviceLicense(license);
+    if (options.save) {
+      const saved = await readDeviceLicense();
+      if (
+        saved &&
+        (saved.companyId !== license.companyId ||
+          saved.assetId !== license.assetId)
+      )
+        throw new EmbeddedSetupError('COPILOT_IDENTITY_CHANGE_BLOCKED');
+      if (!saved) await saveDeviceLicense(license);
+    }
     alive();
     await call(
       'SemiTraxCoPilotSetup',
@@ -200,5 +225,5 @@ export function embeddedSetupMessage(report: EmbeddedSetupReport): string {
     : !report.fullNavigationLicensed || !report.heavyTruckLicensed
     ? 'Full navigation and truck licenses were not both confirmed. Check this device’s assigned license with Trimble.'
     : 'Full navigation and truck licenses confirmed.';
-  return `Embedded CoPilot started. ${licensing} Licensed regions: ${report.licensedRegions.length}. Installed map packages: ${report.installedMapCount}. Map coverage and compatibility still need verification. Turn-by-turn guidance is not enabled.`;
+  return `${licensing} Installed map packages: ${report.installedMapCount}. Turn-by-turn guidance is not enabled.`;
 }

@@ -1,3 +1,4 @@
+import { observeEmbeddedSession } from '../services/copilot/EmbeddedSession';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { safeLog } from '../services/telemetry/safeLog';
 import React, { useEffect, useState } from 'react';
@@ -109,6 +110,7 @@ function ApplicationFrame({ children }: React.PropsWithChildren) {
   );
 }
 export function AppRoot() {
+  useEffect(observeEmbeddedSession, []);
   const [state] = useState(() => {
     try {
       return {

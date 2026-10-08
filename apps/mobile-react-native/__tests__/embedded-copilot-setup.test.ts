@@ -13,6 +13,7 @@ import {
 jest.mock('react-native-keychain', () => ({
   ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only' },
   setGenericPassword: jest.fn(),
+  getGenericPassword: jest.fn(),
 }));
 const ids = { companyId: 'assigned-company', assetId: 'Assigned-Device' };
 let start: jest.Mock;
@@ -20,6 +21,7 @@ let state: jest.Mock;
 beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue(false);
   Object.defineProperty(Platform, 'OS', {
     value: 'android',
     configurable: true,
@@ -189,4 +191,57 @@ test('native licensing bridge failure is distinct from a missing setup host', as
     checkEmbeddedSetup(ids, new AbortController().signal),
   ).rejects.toThrow('COPILOT_LICENSE_BRIDGE_UNAVAILABLE');
   expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+
+test('automatic restoration never prompts or rewrites saved identity', async () => {
+  await checkEmbeddedSetup(ids, new AbortController().signal, {
+    requestPermission: false,
+    save: false,
+  });
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(PermissionsAndroid.requestMultiple).not.toHaveBeenCalled();
+});
+
+test('denied permission during restoration requires user action without prompt loop', async () => {
+  jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(false);
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal, {
+      requestPermission: false,
+      save: false,
+    }),
+  ).rejects.toThrow('COPILOT_LOCATION_REQUIRED');
+  expect(PermissionsAndroid.requestMultiple).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+
+test('unresolved native callback has a bounded timeout', async () => {
+  state.mockReturnValue(new Promise(() => {}));
+  await Promise.all([
+    expect(
+      checkEmbeddedSetup(ids, new AbortController().signal),
+    ).rejects.toThrow('COPILOT_NATIVE_RESPONSE_TIMEOUT'),
+    jest.advanceTimersByTimeAsync(16001),
+  ]);
+});
+
+test('manual setup cannot replace another saved device identity', async () => {
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue({
+    password: JSON.stringify({
+      companyId: 'original-company',
+      assetId: 'original-device',
+    }),
+  });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_IDENTITY_CHANGE_BLOCKED');
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+test('manual recheck of the same identity preserves existing secure credentials', async () => {
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue({
+    password: JSON.stringify(ids),
+  });
+  await checkEmbeddedSetup(ids, new AbortController().signal);
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(start).toHaveBeenCalledTimes(1);
 });

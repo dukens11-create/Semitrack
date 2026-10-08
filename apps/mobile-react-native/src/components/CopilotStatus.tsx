@@ -1,6 +1,6 @@
 import { CoPilotDeviceSetup } from './CoPilotDeviceSetup';
 import { useDriverPalette } from './DriverUI';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Modal,
   KeyboardAvoidingView,
@@ -12,67 +12,22 @@ import {
   View,
 } from 'react-native';
 import {
-  CopilotLifecycle,
-  initialCopilotState,
-} from '../services/copilot/CopilotLifecycle';
-import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
+  embeddedSession,
+  embeddedStatus,
+} from '../services/copilot/EmbeddedSession';
+import { useSyncExternalStore } from 'react';
 
 /** Non-blocking status; backend setup/authentication remains independent. */
 export function CopilotStatus() {
   const p = useDriverPalette();
-  const [state, setState] = useState(initialCopilotState);
+  const state = useSyncExternalStore(
+    embeddedSession.subscribe,
+    embeddedSession.getSnapshot,
+  );
   const [details, setDetails] = useState(false);
-  useEffect(() => {
-    const lifecycle = new CopilotLifecycle(createCopilotRuntime(), next => {
-      setState(next);
-      if (__DEV__)
-        console.info(
-          '[SemiTraX CoPilot]',
-          JSON.stringify({
-            phase: next.phase,
-            error: next.error,
-            operation: next.operation,
-            modules: next.modules,
-            initialized: next.initialized,
-            licensingReady: next.licensingReady,
-            fullNavigationLicensed: next.fullNavigationLicensed,
-            heavyTruckLicensed: next.heavyTruckLicensed,
-            mapsReady: next.mapsReady,
-            readyToAddStops: next.readyToAddStops,
-            copilotReady: next.copilotReady,
-            lastEvent: next.lastEvent,
-          }),
-        );
-    });
-    void lifecycle.start();
-    return () => lifecycle.dispose();
-  }, []);
-  if (state.warning)
-    return (
-      <View
-        style={[styles.warning, { backgroundColor: p.warningSurface }]}
-        accessibilityRole="alert"
-        accessibilityLiveRegion="assertive"
-      >
-        <Text style={[styles.warningText, { color: p.warningText }]}>
-          {state.warning}
-        </Text>
-      </View>
-    );
-  const label = state.copilotReady
-    ? 'CoPilot setup checked · Navigation not started'
-    : state.phase === 'NOT_STARTED' || state.phase === 'STARTING'
-    ? 'CoPilot setup pending'
-    : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'CoPilot maps required'
-    : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
-    ? 'CoPilot navigation setup required'
-    : 'CoPilot turn-by-turn unavailable';
-  const message = state.copilotReady
-    ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
-    : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'Navigation is unavailable until licensed CoPilot maps are installed and verified.'
-    : 'Truck-route planning works independently. Use the in-app setup check below to inspect the embedded engine, license and maps. Turn-by-turn navigation still requires completed truck-profile integration and real-device verification.';
+  const label = embeddedStatus(state);
+  const message =
+    'Truck-route preview uses Trimble. Live guidance remains disabled until native truck-profile, route coverage and device verification pass.';
   return (
     <>
       <Pressable

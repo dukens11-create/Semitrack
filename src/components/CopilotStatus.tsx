@@ -129,8 +129,8 @@ export function CopilotStatus() {
             </Text>
             <Text style={styles.diagnostics} selectable>
               {'Android map check: ' + String(nativeMapStatus?.reason ?? 'checking') +
-                '\\nNative view created: ' + String(nativeMapStatus?.fragmentReady ?? false) +
-                '\\nLocation permission: ' + String(nativeMapStatus?.locationGranted ?? false)}
+                '\nNative view created: ' + String(nativeMapStatus?.fragmentReady ?? false) +
+                '\nLocation permission: ' + String(nativeMapStatus?.locationGranted ?? false)}
             </Text>
             {state.phase === 'ERROR' || state.phase === 'MAPS_REQUIRED' ? (
               <Pressable

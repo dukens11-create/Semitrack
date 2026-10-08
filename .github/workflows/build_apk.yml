@@ -24,6 +24,7 @@ jobs:
         run: |
           test -f node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
           grep -q 'isNativeCoPilotViewAvailable' node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java
+          node -e 'const fs=require("fs");const src=fs.readFileSync("node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/CopilotViewManager.java","utf8");if(/@Override\s+(?:public\s+)?static\s+boolean\s+isNativeCoPilotViewAvailable/.test(src)||!/@Override\s+public\s+View\s+createViewInstance/.test(src)){console.error("Invalid CoPilotViewManager override placement");process.exit(1)}'
           grep -q 'reportSdkReadiness' android/app/src/main/java/com/semitrax/nativebridge/SemiTraxCopilotMapReadinessModule.java
 
   android-debug:

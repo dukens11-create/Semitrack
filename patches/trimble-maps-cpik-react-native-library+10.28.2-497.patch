@@ -9,22 +9,25 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
 +import android.app.Activity;
  import android.util.Log;
  import android.app.PendingIntent;
-@@ -55,9 +58,25 @@ public class CopilotStartupModule extends ReactContextBaseJavaModule implements
+ import android.app.NotificationManager;
+@@ -55,8 +58,15 @@
      @ReactMethod
      public void bindCoPilotService() {
          Log.i("CopilotStartupModule", "bindCoPilotService");
 +        Activity activity = reactContext.getCurrentActivity();
 +        if (activity == null ||
-+                activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-+                activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-+            Log.w("CopilotStartupModule", "CoPilot service not bound: foreground activity and location permission required");
++                (activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
++                activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)) {
++            Log.w("CopilotStartupModule", "CoPilot service not bound: location permission or foreground activity missing");
 +            return;
 +        }
          Intent intent = new Intent(reactContext, CopilotService.class);
 -        reactContext.getCurrentActivity().bindService(intent, mCopilotServiceConnection, Context.BIND_AUTO_CREATE);
 +        activity.bindService(intent, mCopilotServiceConnection, Context.BIND_AUTO_CREATE);
      }
-@@ -79,7 +98,7 @@ public class CopilotStartupModule extends ReactContextBaseJavaModule implements
+ 
+     @ReactMethod
+@@ -79,7 +89,7 @@
          notificationManager.createNotificationChannel(notificationChannel);
          return new Notification.Builder(reactContext.getCurrentActivity(), channelId)
                  .setContentTitle(notificationTitle)
@@ -32,26 +35,27 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
 +                .setSmallIcon(reactContext.getApplicationInfo().icon)
                  .setPriority(Notification.PRIORITY_DEFAULT)
                  .build();
-@@ -90,14 +109,30 @@ public class CopilotStartupModule extends ReactContextBaseJavaModule implements
+     }
+@@ -88,14 +98,26 @@
          public void onServiceConnected(ComponentName className, IBinder service) {
              Log.i("CopilotStartupModule", "onServiceConnected");
              isCopilotServiceBound = true;
-+            Activity activity = reactContext.getCurrentActivity();
-+            if (activity == null ||
-+                    activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-+                    activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-+                Log.w("CopilotStartupModule", "CoPilot foreground promotion blocked: missing activity or location permission");
-+                unbindCopilotService();
-+                return;
-+            }
-             CopilotService.CopilotBinder m_copilotBinder = (CopilotService.CopilotBinder) service;
- 
+-            CopilotService.CopilotBinder m_copilotBinder = (CopilotService.CopilotBinder) service;
+-
 -            if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) {
 -                m_copilotBinder.startForeground(FOREGROUND_SERVICE_ID, getNotificationForService());
--            }
++            Activity activity = reactContext.getCurrentActivity();
++            if (activity == null ||
++                    (activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
++                    activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)) {
++                Log.w("CopilotStartupModule", "CoPilot foreground start blocked: location permission or activity missing");
++                unbindCopilotService();
++                return;
+             }
 -            else {
 -                NotificationCompat.Builder builder = new NotificationCompat.Builder(reactContext.getCurrentActivity());
 -                m_copilotBinder.startForeground(FOREGROUND_SERVICE_ID, builder.build());
++            CopilotService.CopilotBinder m_copilotBinder = (CopilotService.CopilotBinder) service;
 +            try {
 +                if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.O) {
 +                    m_copilotBinder.startForeground(FOREGROUND_SERVICE_ID, getNotificationForService());
@@ -61,7 +65,7 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
 +                    m_copilotBinder.startForeground(FOREGROUND_SERVICE_ID, builder.build());
 +                }
 +            } catch (SecurityException denied) {
-+                Log.e("CopilotStartupModule", "CoPilot foreground promotion denied by Android", denied);
++                Log.w("CopilotStartupModule", "CoPilot foreground start denied by Android: " + denied.getClass().getSimpleName());
 +                unbindCopilotService();
              }
          }

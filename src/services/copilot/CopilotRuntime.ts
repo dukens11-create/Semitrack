@@ -1,6 +1,7 @@
 import {
   DeviceEventEmitter,
   NativeModules,
+  PermissionsAndroid,
   Platform,
   UIManager,
 } from 'react-native';
@@ -138,6 +139,15 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       }
     },
     async startNative(config) {
+      // The patched vendor service silently returns without binding when
+      // location access is missing. Fail with an actionable diagnostic before
+      // attempting AMS login; don't wait 30 seconds for onCPStartup.
+      if (Platform.OS !== 'android' ||
+          (await PermissionsAndroid.check(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          )) !== true) {
+        throw new Error('COPILOT_LOCATION_PERMISSION_REQUIRED');
+      }
       // Trimble's React Native CPIK AMS flow configures the license hook
       // BEFORE binding the CoPilot service. This is an AMS identity assignment,
       // not evidence of successful activation or device entitlement.

@@ -181,12 +181,24 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       // A ready licensing subsystem does not prove that the assigned AMS
       // account authenticated. Confirm the active account in this app first.
       const activeUser = await call('LicenseMgr', 'getActiveAMSUser');
-      if (typeof activeUser !== 'string' || !activeUser.trim()) {
-        return {
-          licensingReady: false,
-          fullNavigationLicensed: false,
-          heavyTruckLicensed: false,
-        };
+      // Trimble returns a LicenseMgtInfo JSON OBJECT, not a string.
+      // Check the embedded account against the approved native test identity.
+      const actual = z.object({
+        assetID: z.string().min(1),
+        companyID: z.string().min(1),
+      }).safeParse(activeUser);
+      const provider = NativeModules.SemiTraxCopilotProvisioning as
+        | { readAMSIdentity?: () => Promise<{assetId: string; companyId: string}> }
+        | undefined;
+      if (!actual.success || !provider?.readAMSIdentity) {
+        return { licensingReady: false, fullNavigationLicensed: false, heavyTruckLicensed: false };
+      }
+      const expected = await provider.readAMSIdentity();
+      if (
+        actual.data.assetID.toLowerCase() !== expected.assetId.toLowerCase() ||
+        actual.data.companyID.toLowerCase() !== expected.companyId.toLowerCase()
+      ) {
+        return { licensingReady: false, fullNavigationLicensed: false, heavyTruckLicensed: false };
       }
       const licensingReady =
         (await call('LicenseMgr', 'isLicensingReady')) === true;

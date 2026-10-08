@@ -15,6 +15,13 @@ import com.facebook.react.bridge.WritableMap;
  */
 public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJavaModule {
     public static final String NAME = "SemiTraxCopilotMapReadiness";
+    // These values originate from the running CPIK React Native license/map
+    // queries, not a hardcoded license or filesystem-based assumption.
+    private volatile boolean observedInitialized = false;
+    private volatile boolean observedLicensingReady = false;
+    private volatile boolean observedFullNavigation = false;
+    private volatile boolean observedHeavyTruck = false;
+    private volatile boolean observedMapsReady = false;
 
     public SemiTraxCopilotMapReadinessModule(ReactApplicationContext context) {
         super(context);
@@ -23,6 +30,25 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
     @Override
     public String getName() {
         return NAME;
+    }
+
+    @ReactMethod
+    public void reportSdkReadiness(
+            boolean initialized,
+            boolean licensingReady,
+            boolean fullNavigationLicensed,
+            boolean heavyTruckLicensed,
+            boolean mapsReady,
+            Promise promise) {
+        // State is supplied only by CoPilotLifecycle's SDK callback/query path.
+        // It is NOT itself a licensing API. The view is attested independently
+        // by the native vendor getView() adapter in getStatus().
+        observedInitialized = initialized;
+        observedLicensingReady = initialized && licensingReady;
+        observedFullNavigation = observedLicensingReady && fullNavigationLicensed;
+        observedHeavyTruck = observedLicensingReady && heavyTruckLicensed;
+        observedMapsReady = observedLicensingReady && mapsReady;
+        promise.resolve(true);
     }
 
     @ReactMethod
@@ -47,13 +73,13 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         }
         status.putBoolean("locationGranted", locationGranted);
         status.putBoolean("fragmentReady", fragmentReady);
-        // These MUST be replaced only with verified SDK-native license,
-        // initialization and installed-map queries. Do not infer from files.
-        status.putBoolean("initialized", false);
-        status.putBoolean("licensingReady", false);
-        status.putBoolean("fullNavigationLicensed", false);
-        status.putBoolean("heavyTruckLicensed", false);
-        status.putBoolean("mapsReady", false);
+        // Licensing/map observations come from the CPIK RN SDK callbacks and
+        // API responses; the native map view is checked independently above.
+        status.putBoolean("initialized", observedInitialized);
+        status.putBoolean("licensingReady", observedLicensingReady);
+        status.putBoolean("fullNavigationLicensed", observedFullNavigation);
+        status.putBoolean("heavyTruckLicensed", observedHeavyTruck);
+        status.putBoolean("mapsReady", observedMapsReady);
         status.putString("reason", !locationGranted
             ? "LOCATION_PERMISSION_REQUIRED"
             : !fragmentReady

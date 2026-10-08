@@ -45,6 +45,14 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
     }
 
     @ReactMethod
+    public void readAMSIdentity(Promise promise) {
+        // This method must be implemented by the approved native AMS provider.
+        // Never fall back to hardcoded identifiers or credentials.
+        promise.reject("COPILOT_AMS_IDENTITY_NOT_PROVISIONED",
+                "No approved native AMS identity is configured for this installation.");
+    }
+
+    @ReactMethod
     public void hasNativeCredential(String reference, Promise promise) {
         // The bridge cannot attest to a credential until vendor integration
         // establishes its presence through an Android-private credential store.

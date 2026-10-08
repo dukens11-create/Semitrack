@@ -10,7 +10,11 @@ jest.mock('react-native-keychain', () => ({
   getGenericPassword: jest.fn(),
 }));
 
-beforeEach(() => jest.restoreAllMocks());
+beforeEach(() => {
+  jest.restoreAllMocks();
+  jest.clearAllMocks();
+  jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true);
+});
 test('encodes identifiers without allowing activation parameter injection', () => {
   const uri = new URL(
     activationUrl({ companyId: ' company ', assetId: 'device&ProductKey=bad' }),
@@ -38,5 +42,25 @@ test('propagates launch failure without reporting activation success', async () 
   jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('not installed'));
   await expect(
     openDeviceActivation({ companyId: 'company', assetId: 'device' }),
-  ).rejects.toThrow('not installed');
+  ).rejects.toThrow('COPILOT_LAUNCH_FAILED');
+});
+test('identifies an unavailable CoPilot app without saving or launching', async () => {
+  (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+  (Keychain.setGenericPassword as jest.Mock).mockClear();
+  const open = jest.spyOn(Linking, 'openURL');
+  await expect(
+    openDeviceActivation({ companyId: 'company', assetId: 'device' }),
+  ).rejects.toThrow('COPILOT_APP_UNAVAILABLE');
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+});
+test('classifies secure storage rejection independently of app launch', async () => {
+  (Keychain.setGenericPassword as jest.Mock).mockRejectedValue(
+    new Error('storage'),
+  );
+  const open = jest.spyOn(Linking, 'openURL');
+  await expect(
+    openDeviceActivation({ companyId: 'company', assetId: 'device' }),
+  ).rejects.toThrow('DEVICE_SETTINGS_SAVE_FAILED');
+  expect(open).not.toHaveBeenCalled();
 });

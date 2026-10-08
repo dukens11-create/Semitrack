@@ -24,7 +24,16 @@ function harness() {
   const callbacks = new Map<string, () => void>();
   const sequence: string[] = [];
   const port: CopilotLifecyclePort = {
-    modules: () => ({ CopilotMgr: true, LicenseMgr: true }),
+    modules: () => ({
+      Android: true,
+      CopilotMgr: true,
+      CopilotStartupMgr: true,
+      LicenseListener: true,
+      LicenseMgr: true,
+      CopilotListener: true,
+      MapDataMgr: true,
+      RouteMgr: true,
+    }),
     listen: (event, cb) => {
       sequence.push(event);
       callbacks.set(event, cb);
@@ -83,6 +92,39 @@ test('callbacks precede bind; bind completion cannot fabricate initialization', 
   });
   h.lifecycle.dispose();
 });
+test('native map readiness evidence is revoked when the SDK shuts down', async () => {
+  const h = harness();
+  const reportReadiness = jest.fn();
+  h.port.reportReadiness = reportReadiness;
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  await h.event('onCPShutdown');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    licensingReady: false,
+    fullNavigationLicensed: false,
+    heavyTruckLicensed: false,
+    mapsReady: false,
+    copilotReady: false,
+  });
+  expect(reportReadiness).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      initialized: false,
+      licensingReady: false,
+      mapsReady: false,
+    }),
+  );
+  h.lifecycle.dispose();
+  expect(reportReadiness).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      initialized: false,
+      licensingReady: false,
+      mapsReady: false,
+    }),
+  );
+});
+
 test('missing module stops before provisioning/binding', async () => {
   const h = harness();
   h.port.modules = () => ({ LicenseMgr: false });

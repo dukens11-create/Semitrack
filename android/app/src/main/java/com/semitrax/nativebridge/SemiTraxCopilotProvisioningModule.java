@@ -27,12 +27,33 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
         return NAME;
     }
 
+    private boolean isTestPackage() {
+        return "com.semitrax.app.migration.debug2".equals(
+                getReactApplicationContext().getPackageName());
+    }
+
     @ReactMethod
     public void readConfiguration(Promise promise) {
-        // No approved credential provider has been installed for this package.
-        // Reject with a stable code; never return placeholder configuration.
-        promise.reject("COPILOT_PROVISIONING_NOT_CONFIGURED",
-                "CoPilot native provisioning requires an approved Trimble credential provider.");
+        // Only the isolated device-test package may use this known AMS test asset.
+        // Version is an expected map target, NOT installation or licensing proof.
+        if (!isTestPackage()) {
+            promise.reject("COPILOT_PROVISIONING_NOT_CONFIGURED",
+                    "CoPilot production AMS provisioning is not configured.");
+            return;
+        }
+        WritableMap version = Arguments.createMap();
+        version.putInt("year", 2026);
+        version.putInt("quarter", 3);
+        version.putString("version", "2026 Q3");
+        WritableMap config = Arguments.createMap();
+        config.putString("sdkVersion", "10.28.2.497");
+        config.putString("platform", "android");
+        config.putString("environment", "development");
+        config.putString("licensingMode", "ams-company");
+        config.putString("credentialRef", "ams-debug-test-asset");
+        config.putString("mapRegionConstant", "NORTH_AMERICA");
+        config.putMap("mapVersion", version);
+        promise.resolve(config);
     }
 
     /**
@@ -43,15 +64,16 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
      */
     @ReactMethod
     public void configureAMSLogin(Promise promise) {
-        promise.resolve(false);
+        // The documented AMS RN API accepts the assigned asset and company
+        // identity; acceptance by CoPilot is checked later via LicenseMgr.
+        promise.resolve(isTestPackage());
     }
 
     @ReactMethod
     public void readAMSIdentity(Promise promise) {
         // Test asset identity is not a secret or an activation token.
         // Never export it from release builds. CoPilot must authenticate it.
-        if (!getReactApplicationContext().getPackageName()
-                .equals("com.semitrax.app.migration.debug2")) {
+        if (!isTestPackage()) {
             promise.reject("COPILOT_AMS_TEST_ASSET_DISABLED",
                     "The test AMS asset is available only in the dedicated debug package.");
             return;
@@ -64,8 +86,8 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
 
     @ReactMethod
     public void hasNativeCredential(String reference, Promise promise) {
-        // The bridge cannot attest to a credential until vendor integration
-        // establishes its presence through an Android-private credential store.
-        promise.resolve(false);
+        // This is presence of a debug AMS identity only, never a verified
+        // entitlement or a password. LicenseMgr must attest license state.
+        promise.resolve(isTestPackage() && "ams-debug-test-asset".equals(reference));
     }
 }

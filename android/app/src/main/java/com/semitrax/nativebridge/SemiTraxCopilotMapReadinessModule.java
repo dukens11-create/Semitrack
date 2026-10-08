@@ -2,7 +2,6 @@ package com.semitrax.nativebridge;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.view.View;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -33,14 +32,9 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         boolean locationGranted =
             context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
+        // The vendor's CoPilotMgr is not exported to this app's Java compile classpath.
+        // Never claim a native view is ready until a supported SDK bridge proves it.
         boolean fragmentReady = false;
-        try {
-            // getView() returns null until Trimble has created its map fragment.
-            View view = com.alk.cpik.CopilotMgr.getView();
-            fragmentReady = view != null;
-        } catch (RuntimeException | LinkageError unavailable) {
-            fragmentReady = false;
-        }
         status.putBoolean("locationGranted", locationGranted);
         status.putBoolean("fragmentReady", fragmentReady);
         // These MUST be replaced only with verified SDK-native license,

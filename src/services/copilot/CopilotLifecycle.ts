@@ -49,7 +49,7 @@ export interface CopilotLifecyclePort {
   modules(): Record<string, boolean>;
   listen(event: string, callback: () => void): () => void;
   prepareProvisioning(): Promise<CopilotConfiguration | null>;
-  startNative(): Promise<void>;
+  startNative(config: CopilotConfiguration): Promise<void>;
   licenseState(): Promise<{
     licensingReady: boolean;
     fullNavigationLicensed: boolean;
@@ -207,7 +207,7 @@ export class CopilotLifecycle {
         if (this.active && !this.state.initialized)
           this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout');
       }, 30000);
-      await this.port.startNative();
+      await this.port.startNative(this.config);
       // A void bind call is not initialization evidence. Await onCPStartup.
     } catch {
       if (this.active && generation === this.generation)

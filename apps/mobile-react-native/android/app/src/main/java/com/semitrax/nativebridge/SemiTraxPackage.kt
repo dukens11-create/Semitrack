@@ -7,13 +7,13 @@ import com.facebook.react.module.model.ReactModuleInfoProvider
 class SemiTraxPackage : BaseReactPackage() {
  override fun getModule(name: String, context: ReactApplicationContext): NativeModule? = when (name) {
    NativeSemiTraxPlatformSpec.NAME -> SemiTraxPlatformModule(context)
-   "SemiTraxCoPilotSetup" -> CoPilotSetupModule(context)
+   CoPilotSetupModule.NAME -> CoPilotSetupModule(context)
    else -> null
  }
  override fun getReactModuleInfoProvider() = ReactModuleInfoProvider {
    mapOf(
      NativeSemiTraxPlatformSpec.NAME to ReactModuleInfo(NativeSemiTraxPlatformSpec.NAME, SemiTraxPlatformModule::class.java.name, false, false, false, true),
-     "SemiTraxCoPilotSetup" to ReactModuleInfo("SemiTraxCoPilotSetup", CoPilotSetupModule::class.java.name, false, false, false, false)
+     CoPilotSetupModule.NAME to ReactModuleInfo(CoPilotSetupModule.NAME, CoPilotSetupModule::class.java.name, false, false, false, false)
    )
  }
 }

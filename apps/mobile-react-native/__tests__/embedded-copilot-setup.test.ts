@@ -1,4 +1,9 @@
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import {
+  NativeModules,
+  PermissionsAndroid,
+  Platform,
+  TurboModuleRegistry,
+} from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import {
   checkEmbeddedSetup,
@@ -92,7 +97,10 @@ test('never starts native setup after a secure-storage failure', async () => {
 test('binding alone cannot be reported as engine startup', async () => {
   state.mockResolvedValue({ connected: true, started: false });
   const promise = checkEmbeddedSetup(ids, new AbortController().signal);
-  const failure = promise.then(() => null, error => error as Error);
+  const failure = promise.then(
+    () => null,
+    error => error as Error,
+  );
   await jest.advanceTimersByTimeAsync(31000);
   expect((await failure)?.message).toBe('COPILOT_STARTUP_TIMEOUT');
   expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
@@ -132,4 +140,53 @@ test('vendor errors cannot leak identifiers into setup messages', async () => {
   await expect(
     checkEmbeddedSetup(ids, new AbortController().signal),
   ).rejects.toThrow('COPILOT_CHECK_FAILED');
+});
+
+test('setup works with registry-only modules in a bridgeless runtime', async () => {
+  const names = [
+    'SemiTraxCoPilotSetup',
+    'LicenseMgr',
+    'FeatureStatus',
+    'LicenseFeature',
+    'MapRegion',
+    'MapDataMgr',
+  ];
+  const modules = Object.fromEntries(
+    names.map(name => [name, NativeModules[name]]),
+  );
+  names.forEach(name => {
+    delete NativeModules[name];
+  });
+  jest
+    .spyOn(TurboModuleRegistry, 'get')
+    .mockImplementation(name => modules[name] ?? null);
+  try {
+    const report = await checkEmbeddedSetup(ids, new AbortController().signal);
+    expect(start).toHaveBeenCalledWith(ids.companyId, ids.assetId);
+    expect(report.heavyTruckLicensed).toBe(true);
+    expect(report.installedMapCount).toBe(0);
+  } finally {
+    Object.assign(NativeModules, modules);
+  }
+});
+
+test('missing setup host fails before saving settings or calling licensing', async () => {
+  delete NativeModules.SemiTraxCoPilotSetup;
+  jest.spyOn(TurboModuleRegistry, 'get').mockReturnValue(null);
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_SETUP_HOST_UNAVAILABLE');
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+
+test('native licensing bridge failure is distinct from a missing setup host', async () => {
+  start.mockRejectedValue({
+    code: 'COPILOT_LICENSE_BRIDGE_UNAVAILABLE',
+    message: 'private vendor detail',
+  });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_LICENSE_BRIDGE_UNAVAILABLE');
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
 });

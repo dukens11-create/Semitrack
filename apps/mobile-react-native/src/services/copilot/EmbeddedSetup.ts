@@ -1,5 +1,6 @@
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { z } from 'zod';
+import { nativeCopilotModule } from './NativeModuleLookup';
 import {
   deviceLicenseSchema,
   saveDeviceLicense,
@@ -33,10 +34,14 @@ export class EmbeddedSetupError extends Error {
   }
 }
 function module(name: string): Record<string, unknown> {
-  const value: unknown = NativeModules[name];
-  if (!value || typeof value !== 'object')
-    throw new EmbeddedSetupError('COPILOT_MODULE_UNAVAILABLE');
-  return value as Record<string, unknown>;
+  const value = nativeCopilotModule(name);
+  if (!value)
+    throw new EmbeddedSetupError(
+      name === 'SemiTraxCoPilotSetup'
+        ? 'COPILOT_SETUP_HOST_UNAVAILABLE'
+        : 'COPILOT_MODULE_UNAVAILABLE',
+    );
+  return value;
 }
 async function call(
   name: string,
@@ -58,6 +63,8 @@ const nativeErrors = new Set([
   'COPILOT_RESTART_REQUIRED',
   'COPILOT_SETUP_BUSY',
   'COPILOT_MODULE_UNAVAILABLE',
+  'COPILOT_SETUP_HOST_UNAVAILABLE',
+  'COPILOT_LICENSE_BRIDGE_UNAVAILABLE',
   'COPILOT_BIND_TIMEOUT',
   'COPILOT_BIND_FAILED',
   'COPILOT_SERVICE_FAILED',
@@ -80,7 +87,7 @@ export async function checkEmbeddedSetup(
     alive();
     // Fail early on old APKs before prompting for permissions or writing IDs.
     if (typeof module('SemiTraxCoPilotSetup').startSetup !== 'function')
-      throw new EmbeddedSetupError('COPILOT_MODULE_UNAVAILABLE');
+      throw new EmbeddedSetupError('COPILOT_SETUP_HOST_UNAVAILABLE');
     let precise = await PermissionsAndroid.check(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
     );

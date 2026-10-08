@@ -18,16 +18,20 @@ import com.alk.copilot.CopilotService;
 import com.alk.cpik.CopilotListener;
 import com.alk.cpik.react.licensing.LicenseListenerModule;
 import com.facebook.react.bridge.LifecycleEventListener;
+import com.facebook.react.bridge.NativeModule;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.common.LifecycleState;
+import com.facebook.react.module.annotations.ReactModule;
 import com.semitrax.R;
 
 /** Explicit setup only: no profile, route, guidance, or map-download mutations. */
+@ReactModule(name = CoPilotSetupModule.NAME)
 public final class CoPilotSetupModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
+  public static final String NAME = "SemiTraxCoPilotSetup";
   private final ReactApplicationContext context;
   private final Handler main = new Handler(Looper.getMainLooper());
   private volatile boolean started;
@@ -86,7 +90,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     this.context = context;
     context.addLifecycleEventListener(this);
   }
-  @Override public String getName() { return "SemiTraxCoPilotSetup"; }
+  @Override public String getName() { return NAME; }
   private boolean valid(String value) {
     if (value == null || value.trim().isEmpty() || value.length() > 256) return false;
     for (int i = 0; i < value.length(); i++) if (value.charAt(i) < 32 || value.charAt(i) == 127) return false;
@@ -113,8 +117,11 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
       pending = promise;
       try {
         // Supply the vendor's actual AMS hook synchronously before binding.
-        LicenseListenerModule listener = context.getNativeModule(LicenseListenerModule.class);
-        if (listener == null) { fail("COPILOT_MODULE_UNAVAILABLE"); return; }
+        // RN 0.85's Class lookup returns null for classes without @ReactModule.
+        // The pinned vendor bridge has no annotation; resolve its registered name.
+        NativeModule vendor = context.getNativeModule(LicenseListenerModule.REACT_CLASS);
+        if (!(vendor instanceof LicenseListenerModule)) { fail("COPILOT_LICENSE_BRIDGE_UNAVAILABLE"); return; }
+        LicenseListenerModule listener = (LicenseListenerModule) vendor;
         listener.setAMSLoginInfo(assetId, companyId);
         company = companyId;
         asset = assetId;

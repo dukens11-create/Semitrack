@@ -45,6 +45,45 @@ test('duplicate startup shares one in-flight check', async () => {
   ]);
   expect(port.check).toHaveBeenCalledTimes(1);
 });
+test('manual setup during cold restoration is processed after restoration finishes', async () => {
+  const { port, session } = harness();
+  let finish!: (value: typeof ids | null) => void;
+  port.read.mockReturnValue(
+    new Promise(resolve => {
+      finish = resolve;
+    }),
+  );
+  const restore = session.ensure();
+  const manual = session.ensure(ids);
+  finish(null);
+  await Promise.all([restore, manual]);
+  expect(port.check).toHaveBeenCalledWith(ids, expect.any(AbortSignal), {
+    requestPermission: true,
+    save: true,
+  });
+  expect(session.getSnapshot().phase).toBe('checked');
+});
+test('foreground restoration refreshes maps after an older inventory query resolves', async () => {
+  const { port, session } = harness();
+  await session.ensure();
+  let finish!: (value: unknown) => void;
+  port.maps.mockReturnValueOnce(
+    new Promise(resolve => {
+      finish = resolve;
+    }),
+  );
+  const old = session.refreshMaps();
+  await session.setForeground(false);
+  const restore = session.setForeground(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  finish({ selectedCoverageInstalled: true });
+  await Promise.all([old, restore]);
+  expect(port.maps).toHaveBeenCalledTimes(3);
+  expect(session.getSnapshot().maps).toEqual({
+    selectedCoverageInstalled: false,
+  });
+});
 test('foreground return rechecks actual engine state without repeating permission prompts', async () => {
   const { port, session } = harness();
   await session.ensure();

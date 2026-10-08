@@ -1,6 +1,7 @@
 import * as Keychain from 'react-native-keychain';
 import { tokensSchema, type Tokens } from '../../models/contracts';
 import type { TokenVault } from './TokenVault';
+import { DriverError } from '../../errors/driverErrors';
 const options = {
   service: 'com.semitrax.app.session',
   accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -11,11 +12,17 @@ export class SecureTokenVault implements TokenVault {
     return value ? tokensSchema.parse(JSON.parse(value.password)) : null;
   }
   async write(tokens: Tokens) {
-    await Keychain.setGenericPassword(
-      'session',
-      JSON.stringify(tokensSchema.parse(tokens)),
-      options,
-    );
+    const value = JSON.stringify(tokensSchema.parse(tokens));
+    try {
+      const saved = await Keychain.setGenericPassword(
+        'session',
+        value,
+        options,
+      );
+      if (!saved) throw new DriverError('SESSION_STORAGE_UNAVAILABLE');
+    } catch {
+      throw new DriverError('SESSION_STORAGE_UNAVAILABLE');
+    }
   }
   async clear() {
     await Keychain.resetGenericPassword(options);

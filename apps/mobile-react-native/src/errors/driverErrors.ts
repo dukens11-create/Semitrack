@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  SESSION_STORAGE_UNAVAILABLE:
+    'Your sign-in could not be saved securely on this device. Unlock your phone and try again.',
   PLACE_SEARCH_CONFIGURATION:
     'Address search is unavailable until a public map token is configured. Contact support with code PLACE_SEARCH_CONFIGURATION.',
   PLACE_SEARCH_UNAUTHORIZED:

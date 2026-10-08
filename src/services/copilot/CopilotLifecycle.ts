@@ -184,9 +184,12 @@ export class CopilotLifecycle {
       this.publish({ modules });
       // Report the first real blocker. Optional guidance/speech interfaces
       // must not disguise missing AMS provisioning as startup failure.
+      // Native map view readiness is a separate attestation gate. An absent
+      // view must not prevent AMS login and license/map diagnostics from running.
       if (!modules.Android || !modules.CopilotStartupMgr ||
           !modules.LicenseListener || !modules.LicenseMgr ||
-          !modules.CopilotListener || !modules.CopilotView) {
+          !modules.CopilotListener || !modules.MapDataMgr ||
+          !modules.RouteMgr) {
         this.fail('COPILOT_NOT_INITIALIZED', 'native-modules');
         return;
       }

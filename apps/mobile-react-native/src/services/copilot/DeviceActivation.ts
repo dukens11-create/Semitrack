@@ -44,19 +44,8 @@ export async function readDeviceLicense(): Promise<DeviceLicense | null> {
   return saved ? deviceLicenseSchema.parse(JSON.parse(saved.password)) : null;
 }
 
-/** Launch is not activation evidence and must not change embedded CPIK readiness. */
-export async function openDeviceActivation(
-  value: DeviceLicense,
-): Promise<void> {
+export async function saveDeviceLicense(value: DeviceLicense): Promise<void> {
   const license = deviceLicenseSchema.parse(value);
-  const url = activationUrl(license);
-  let available: boolean;
-  try {
-    available = await Linking.canOpenURL(url);
-  } catch {
-    throw new DeviceActivationError('COPILOT_LAUNCH_FAILED');
-  }
-  if (!available) throw new DeviceActivationError('COPILOT_APP_UNAVAILABLE');
   try {
     if (
       !(await Keychain.setGenericPassword(
@@ -70,6 +59,22 @@ export async function openDeviceActivation(
   } catch {
     throw new DeviceActivationError('DEVICE_SETTINGS_SAVE_FAILED');
   }
+}
+
+/** Launch is not activation evidence and must not change embedded CPIK readiness. */
+export async function openDeviceActivation(
+  value: DeviceLicense,
+): Promise<void> {
+  const license = deviceLicenseSchema.parse(value);
+  const url = activationUrl(license);
+  let available: boolean;
+  try {
+    available = await Linking.canOpenURL(url);
+  } catch {
+    throw new DeviceActivationError('COPILOT_LAUNCH_FAILED');
+  }
+  if (!available) throw new DeviceActivationError('COPILOT_APP_UNAVAILABLE');
+  await saveDeviceLicense(license);
   try {
     await Linking.openURL(url);
   } catch {

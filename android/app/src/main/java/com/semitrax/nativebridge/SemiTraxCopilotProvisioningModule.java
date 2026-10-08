@@ -33,6 +33,17 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
                 "CoPilot native provisioning requires an approved Trimble credential provider.");
     }
 
+    /**
+     * Called immediately before CoPilot service binding. Only return true
+     * after an approved native AMS provider has installed Trimble's credential
+     * hook for the active device. This build has no such provider, so fail
+     * closed and never pretend the standalone CoPilot GPS app is sufficient.
+     */
+    @ReactMethod
+    public void configureAMSLogin(Promise promise) {
+        promise.resolve(false);
+    }
+
     @ReactMethod
     public void hasNativeCredential(String reference, Promise promise) {
         // The bridge cannot attest to a credential until vendor integration

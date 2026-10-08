@@ -67,7 +67,7 @@ function Choices<T extends string>({
     </View>
   );
 }
-export function SettingsScreen({ services }: { services: Services }) {
+export function SettingsScreen({ services, onDiagnostics }: { services: Services; onDiagnostics?: () => void }) {
   const auth = useStore(services.auth);
   const state = useStore(services.settings);
   const [draft, setDraft] = useState<Settings | null>(state.settings);
@@ -348,6 +348,7 @@ export function SettingsScreen({ services }: { services: Services }) {
       )}
       <DriverCard>
         <DriverTitle small>Privacy and support</DriverTitle>
+        {onDiagnostics ? <DriverButton title="Diagnostics" secondary onPress={onDiagnostics} /> : null}
         <DriverButton
           title="Privacy and location"
           secondary

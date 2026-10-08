@@ -149,7 +149,7 @@ test('startup rejection is contained and does not expose supplied native error t
     throw new Error('unit-secret-canary');
   };
   await expect(h.lifecycle.start()).resolves.toBeUndefined();
-  expect(h.lifecycle.snapshot().error).toBe('COPILOT_NOT_INITIALIZED');
+  expect(h.lifecycle.snapshot().error).toBe('COPILOT_LICENSE_PROVISIONING_REQUIRED');
   expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
     'unit-secret-canary',
   );

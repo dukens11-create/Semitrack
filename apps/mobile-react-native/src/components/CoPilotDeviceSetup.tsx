@@ -12,6 +12,7 @@ import {
   embeddedSetupMessage,
   EmbeddedSetupError,
 } from '../services/copilot/EmbeddedSetup';
+import { CoPilotMapDownloads } from './CoPilotMapDownloads';
 
 export function CoPilotDeviceSetup() {
   const p = useDriverPalette();
@@ -19,6 +20,7 @@ export function CoPilotDeviceSetup() {
   const [assetId, setAssetId] = useState('');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
+  const [mapsAvailable, setMapsAvailable] = useState(false);
   const check = useRef<AbortController | null>(null);
   useEffect(() => {
     let alive = true;
@@ -51,12 +53,21 @@ export function CoPilotDeviceSetup() {
     const controller = new AbortController();
     check.current = controller;
     setBusy(true);
+    setMapsAvailable(false);
     setMessage(
       'Checking embedded CoPilot. Keep SemiTraX open; this can take up to 45 seconds.',
     );
     try {
       const report = await checkEmbeddedSetup(parsed.data, controller.signal);
-      if (!controller.signal.aborted) setMessage(embeddedSetupMessage(report));
+      if (!controller.signal.aborted) {
+        setMessage(embeddedSetupMessage(report));
+        setMapsAvailable(
+          report.started &&
+            report.licensingReady &&
+            report.fullNavigationLicensed &&
+            report.heavyTruckLicensed,
+        );
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
         const code =
@@ -122,7 +133,10 @@ export function CoPilotDeviceSetup() {
         placeholder="Company ID"
         placeholderTextColor={p.muted}
         value={companyId}
-        onChangeText={setCompanyId}
+        onChangeText={value => {
+          setCompanyId(value);
+          setMapsAvailable(false);
+        }}
         autoCapitalize="none"
         autoCorrect={false}
         editable={!busy}
@@ -133,7 +147,10 @@ export function CoPilotDeviceSetup() {
         placeholder="Device ID"
         placeholderTextColor={p.muted}
         value={assetId}
-        onChangeText={setAssetId}
+        onChangeText={value => {
+          setAssetId(value);
+          setMapsAvailable(false);
+        }}
         autoCapitalize="none"
         autoCorrect={false}
         editable={!busy}
@@ -151,6 +168,15 @@ export function CoPilotDeviceSetup() {
           {busy ? 'Please wait…' : 'Check setup inside SemiTraX'}
         </Text>
       </Pressable>
+      {!!message && (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[styles.text, { color: p.text }]}
+        >
+          {message}
+        </Text>
+      )}
+      {mapsAvailable && <CoPilotMapDownloads />}
       <Text style={[styles.text, { color: p.text }]}>
         Separate CoPilot app: if Trimble supplied a standalone Truck app for
         this license, you can open its activation here. Its activation does not
@@ -169,14 +195,6 @@ export function CoPilotDeviceSetup() {
           {busy ? 'Please wait…' : 'Open CoPilot to activate'}
         </Text>
       </Pressable>
-      {!!message && (
-        <Text
-          accessibilityLiveRegion="polite"
-          style={[styles.text, { color: p.text }]}
-        >
-          {message}
-        </Text>
-      )}
     </View>
   );
 }

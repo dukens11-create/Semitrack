@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   CopilotLifecycle,
@@ -10,6 +10,7 @@ import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
 export function CopilotStatus() {
   const [state, setState] = useState(initialCopilotState);
   const [details, setDetails] = useState(false);
+  const lifecycleRef = useRef<CopilotLifecycle | null>(null);
   useEffect(() => {
     const lifecycle = new CopilotLifecycle(createCopilotRuntime(), next => {
       setState(next);
@@ -32,6 +33,7 @@ export function CopilotStatus() {
           }),
         );
     });
+    lifecycleRef.current = lifecycle;
     void lifecycle.start();
     // A rejected first-launch permission or a corrected AMS setup can be
     // retried when the user returns to the app; avoid concurrent restarts.
@@ -45,6 +47,7 @@ export function CopilotStatus() {
     });
     return () => {
       appStateSubscription.remove();
+      lifecycleRef.current = null;
       lifecycle.dispose();
     };
   }, []);
@@ -100,6 +103,22 @@ export function CopilotStatus() {
                 '\nReady for stops: ' + (String(state.readyToAddStops)) +
                 '\nLast event: ' + (state.lastEvent ?? 'none')}
             </Text>
+            {state.phase === 'ERROR' || state.phase === 'MAPS_REQUIRED' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry CoPilot setup checks"
+                onPress={() => {
+                  const lifecycle = lifecycleRef.current;
+                  if (!lifecycle) return;
+                  lifecycle.dispose();
+                  setState(initialCopilotState());
+                  void lifecycle.start();
+                }}
+                style={styles.close}
+              >
+                <Text style={styles.closeText}>Retry CoPilot checks</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close CoPilot status"

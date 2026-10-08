@@ -48,16 +48,6 @@ export function CopilotStatus() {
       lifecycle.dispose();
     };
   }, []);
-  if (state.warning)
-    return (
-      <View
-        style={styles.warning}
-        accessibilityRole="alert"
-        accessibilityLiveRegion="assertive"
-      >
-        <Text style={styles.warningText}>{state.warning}</Text>
-      </View>
-    );
   const label = state.copilotReady ? 'CoPilot setup checked · Navigation not started'
     : state.phase === 'NOT_STARTED' || state.phase === 'STARTING' ? 'CoPilot setup pending'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED' ? 'CoPilot maps required'
@@ -70,6 +60,11 @@ export function CopilotStatus() {
     : 'CoPilot turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
   return (
     <>
+      {state.warning ? (
+        <View style={styles.warning} accessibilityRole="alert" accessibilityLiveRegion="polite">
+          <Text style={styles.warningText}>{state.warning}</Text>
+        </View>
+      ) : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label + ". View CoPilot status"}
@@ -92,6 +87,18 @@ export function CopilotStatus() {
           <View style={styles.card}>
             <Text style={styles.title}>CoPilot navigation</Text>
             <Text style={styles.message}>{message}</Text>
+            <Text style={styles.diagnostics} selectable>
+              {                'Phase: ' + (state.phase) +
+                '\nBlocker: ' + (state.error ?? 'none') +
+                '\nOperation: ' + (state.operation ?? 'none') +
+                '\nSDK started: ' + (String(state.initialized)) +
+                '\nLicense verified: ' + (String(state.licensingReady)) +
+                '\nFull navigation: ' + (String(state.fullNavigationLicensed)) +
+                '\nHeavy truck: ' + (String(state.heavyTruckLicensed)) +
+                '\nInstalled maps verified: ' + (String(state.mapsReady)) +
+                '\nReady for stops: ' + (String(state.readyToAddStops)) +
+                '\nLast event: ' + (state.lastEvent ?? 'none')}
+            </Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close CoPilot status"
@@ -129,6 +136,7 @@ const styles = StyleSheet.create({
   card: { padding: 24, borderRadius: 20, backgroundColor: '#172534', gap: 16 },
   title: { color: 'white', fontSize: 20, fontWeight: '700' },
   message: { color: '#C5CFD8', fontSize: 15, lineHeight: 22 },
+  diagnostics: { color: '#D7E4EF', fontSize: 12, lineHeight: 19 },
   close: { alignSelf: 'flex-end', padding: 12 },
   closeText: { color: '#FF8A50', fontSize: 16, fontWeight: '700' },
   warning: { padding: 16, backgroundColor: '#8B0000' },

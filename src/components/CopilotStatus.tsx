@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AppState, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   CopilotLifecycle,
   initialCopilotState,
@@ -85,6 +85,7 @@ export function CopilotStatus() {
       >
         <View style={styles.scrim}>
           <View style={styles.card}>
+            <ScrollView contentContainerStyle={styles.cardContent} showsVerticalScrollIndicator>
             <Text style={styles.title}>CoPilot navigation</Text>
             <Text style={styles.message}>{message}</Text>
             <Text style={styles.diagnostics} selectable>
@@ -107,6 +108,7 @@ export function CopilotStatus() {
             >
               <Text style={styles.closeText}>Close</Text>
             </Pressable>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -133,7 +135,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#00000088',
   },
-  card: { padding: 24, borderRadius: 20, backgroundColor: '#172534', gap: 16 },
+  card: { maxHeight: '85%', borderRadius: 20, backgroundColor: '#172534' },
+  cardContent: { padding: 24, gap: 16 },
   title: { color: 'white', fontSize: 20, fontWeight: '700' },
   message: { color: '#C5CFD8', fontSize: 15, lineHeight: 22 },
   diagnostics: { color: '#D7E4EF', fontSize: 12, lineHeight: 19 },

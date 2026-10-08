@@ -211,8 +211,18 @@ export class CopilotLifecycle {
       await this.port.startNative(this.config);
       // A void bind call is not initialization evidence. Await onCPStartup.
     } catch {
-      if (this.active && generation === this.generation)
-        this.fail('COPILOT_NOT_INITIALIZED', 'startup');
+      // If native AMS provisioning or login rejects, do not mislabel the
+      // failure as SDK initialization, nor leave the startup watchdog running.
+      clearTimeout(this.startupTimer);
+      this.startupTimer = undefined;
+      if (this.active && generation === this.generation) {
+        this.fail(
+          this.config
+            ? 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
+            : 'COPILOT_NOT_INITIALIZED',
+          this.config ? 'ams-native-startup' : 'startup',
+        );
+      }
     }
   }
   private event(event: string) {

@@ -1,3 +1,4 @@
+import { embeddedSession, embeddedStatus } from '../services/copilot/EmbeddedSession';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
   beginRouteDiagnostic,
@@ -347,7 +348,7 @@ export function PlanningScreen({
       refreshNavigationState();
       if (result === 'unavailable')
         setError(
-          'CoPilot provisioning required. Your truck route is ready, but turn-by-turn navigation cannot start until the licensed CoPilot runtime and maps are provisioned.',
+          embeddedStatus(embeddedSession.getSnapshot()) + '. Truck profile and route coverage must also be verified before guidance can start.',
         );
       if (result === 'stop-unconfirmed') {
         setStopUnconfirmed(true);
@@ -1720,6 +1721,7 @@ const styles = StyleSheet.create({
     left: 12,
     right: 12,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
   },
@@ -1736,6 +1738,8 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 12, fontWeight: '700', flexShrink: 1 },
   gpsChip: {
+    flex: 1,
+    minWidth: 100,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,

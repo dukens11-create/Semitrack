@@ -1,0 +1,246 @@
+package com.semitrax.nativebridge;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.view.WindowManager;
+import com.alk.copilot.CopilotService;
+import com.alk.cpik.CopilotListener;
+import com.alk.cpik.CopilotMgr;
+import com.alk.cpik.licensing.LicenseMgr;
+import com.alk.cpik.licensing.LicenseMgtInfo;
+import com.alk.cpik.licensing.FeatureStatus;
+import com.alk.cpik.licensing.LicenseFeature;
+import com.alk.cpik.react.licensing.LicenseListenerModule;
+import com.facebook.react.bridge.LifecycleEventListener;
+import com.facebook.react.bridge.NativeModule;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactContextBaseJavaModule;
+import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.common.LifecycleState;
+import com.facebook.react.module.annotations.ReactModule;
+import com.semitrax.R;
+
+/** Explicit setup and additive map management: no profile, route, or guidance mutation. */
+@ReactModule(name = CoPilotSetupModule.NAME)
+public final class CoPilotSetupModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
+  public static final String NAME = "SemiTraxCoPilotSetup";
+  private final ReactApplicationContext context;
+  private final Handler main = new Handler(Looper.getMainLooper());
+  private volatile boolean started;
+  private boolean bound;
+  private volatile boolean connected;
+  private final CoPilotMapsBridge maps;
+  private boolean observing;
+  private volatile String company;
+  private volatile String asset;
+  private String lastReadinessDiagnostic = "";
+  private Promise pending;
+  private Activity awakeActivity;
+  private boolean ownsAwakeFlag;
+  private final CopilotListener observer = new CopilotListener() {
+    @Override public void onCPStartup() { started = true; maps.startup(); }
+    @Override public void onCPShutdown() { started = false; maps.shutdown(); }
+  };
+  private final Runnable timeout = () -> fail("COPILOT_BIND_TIMEOUT");
+  private final ServiceConnection connection = new ServiceConnection() {
+    @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+      if (!bound) return;
+      try {
+        if (context.getLifecycleState() != LifecycleState.RESUMED) {
+          fail("COPILOT_FOREGROUND_REQUIRED");
+          return;
+        }
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= 26) {
+          manager.createNotificationChannel(new NotificationChannel("semitrax_copilot_setup", "CoPilot setup", NotificationManager.IMPORTANCE_LOW));
+          builder = new Notification.Builder(context, "semitrax_copilot_setup");
+        } else {
+          builder = new Notification.Builder(context);
+        }
+        Notification notification = builder.setSmallIcon(R.drawable.ic_copilot_setup)
+            .setContentTitle("SemiTraX CoPilot setup")
+            .setContentText("Checking navigation license and map data")
+            .setOngoing(true).build();
+        ((CopilotService.CopilotBinder) binder).startForeground(919, notification);
+        connected = true;
+        // Binding an already-running service does not replay onCPStartup.
+        if (CopilotMgr.isActive()) { started = true; maps.startup(); }
+        main.removeCallbacks(timeout);
+        Promise result = pending;
+        pending = null;
+        if (result != null) result.resolve(null); // Bound is not startup/license evidence.
+      } catch (Exception | LinkageError error) {
+        fail("COPILOT_SERVICE_FAILED"); // Never expose vendor exceptions or account IDs.
+      }
+    }
+    @Override public void onServiceDisconnected(ComponentName name) {
+      connected = false;
+      started = false;
+      main.post(() -> fail("COPILOT_SERVICE_DISCONNECTED"));
+    }
+    @Override public void onBindingDied(ComponentName name) { fail("COPILOT_SERVICE_DISCONNECTED"); }
+    @Override public void onNullBinding(ComponentName name) { fail("COPILOT_SERVICE_FAILED"); }
+  };
+
+  public CoPilotSetupModule(ReactApplicationContext context) {
+    super(context);
+    this.context = context;
+    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED, this::readiness);
+    context.addLifecycleEventListener(this);
+  }
+  @Override public String getName() { return NAME; }
+  private synchronized CoPilotReadiness readiness() {
+    CoPilotReadiness state = new CoPilotReadiness();
+    state.connected = connected;
+    state.started = started;
+    state.foreground = context.getLifecycleState() == LifecycleState.RESUMED;
+    state.credentialsPresent = valid(company) && valid(asset);
+    try {
+      if (connected && started) {
+        state.licensingReady = LicenseMgr.isLicensingReady();
+        if (state.licensingReady) {
+          LicenseMgtInfo user = LicenseMgr.GetActiveAMSUser();
+          state.activeAmsPresent = user != null && valid(user.getAssetID());
+          state.companyMatches = user != null && company != null && company.equals(user.getCompanyID());
+          state.assetMatches = user != null && CoPilotReadiness.sameAsset(asset, user.getAssetID());
+          // Report formatting differences without exposing or changing either identifier.
+          if (user != null && asset != null && user.getAssetID() != null && !asset.equals(user.getAssetID())) {
+            state.assetCaseOnlyDifference = CoPilotReadiness.sameAsset(asset, user.getAssetID());
+            state.assetWhitespaceOnlyDifference = asset.trim().equals(user.getAssetID().trim());
+          }
+          FeatureStatus full = LicenseMgr.getFeatureStatus(LicenseFeature.FULL_NAVIGATION);
+          FeatureStatus truck = LicenseMgr.getFeatureStatus(LicenseFeature.TRUCK_HEAVY_DUTY);
+          state.fullNavigationLicensed = full == FeatureStatus.LICENSED || full == FeatureStatus.UNLIMITED;
+          state.heavyTruckLicensed = truck == FeatureStatus.LICENSED || truck == FeatureStatus.UNLIMITED;
+        }
+      }
+    } catch (Exception | LinkageError error) { state.queryFailed = true; }
+    String diagnostic = state.diagnostic();
+    if (!diagnostic.equals(lastReadinessDiagnostic)) {
+      android.util.Log.i("SemiTraxCoPilot", diagnostic);
+      lastReadinessDiagnostic = diagnostic;
+    }
+    return state;
+  }
+  private boolean valid(String value) {
+    if (value == null || value.trim().isEmpty() || value.length() > 256) return false;
+    for (int i = 0; i < value.length(); i++) if (value.charAt(i) < 32 || value.charAt(i) == 127) return false;
+    return true;
+  }
+  @ReactMethod public void startSetup(String companyId, String assetId, Promise promise) {
+    main.post(() -> {
+      Activity activity = getCurrentActivity();
+      if (!valid(companyId) || !valid(assetId)) { promise.reject("COPILOT_IDS_INVALID", "Invalid device settings."); return; }
+      if (activity == null || activity.isFinishing() || activity.isDestroyed() || context.getLifecycleState() != LifecycleState.RESUMED) {
+        promise.reject("COPILOT_FOREGROUND_REQUIRED", "Keep SemiTraX open during setup."); return;
+      }
+      if (Build.VERSION.SDK_INT >= 23 && context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        promise.reject("COPILOT_LOCATION_REQUIRED", "Precise location is required."); return;
+      }
+      if (company != null && (!company.equals(companyId) || !asset.equals(assetId))) {
+        promise.reject("COPILOT_RESTART_REQUIRED", "Restart SemiTraX before changing its license identity."); return;
+      }
+      if (bound) {
+        if (connected) promise.resolve(null);
+        else promise.reject("COPILOT_SETUP_BUSY", "Setup is already running.");
+        return;
+      }
+      pending = promise;
+      try {
+        // Supply the vendor's actual AMS hook synchronously before binding.
+        // RN 0.85's Class lookup returns null for classes without @ReactModule.
+        // The pinned vendor bridge has no annotation; resolve its registered name.
+        NativeModule vendor = context.getNativeModule(LicenseListenerModule.REACT_CLASS);
+        if (!(vendor instanceof LicenseListenerModule)) { fail("COPILOT_LICENSE_BRIDGE_UNAVAILABLE"); return; }
+        LicenseListenerModule listener = (LicenseListenerModule) vendor;
+        listener.setAMSLoginInfo(assetId, companyId);
+        company = companyId;
+        asset = assetId;
+        maps.attach();
+        if (!observing) { CopilotListener.registerListener(observer); observing = true; }
+        bound = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
+        if (!bound) { fail("COPILOT_BIND_FAILED"); return; }
+        main.postDelayed(timeout, 15000);
+      } catch (Exception | LinkageError error) { fail("COPILOT_BIND_FAILED"); }
+    });
+  }
+  @ReactMethod public void readSetupState(Promise promise) {
+    main.post(() -> {
+      WritableNativeMap report = new WritableNativeMap();
+      report.putBoolean("started", started);
+      report.putBoolean("connected", connected);
+      CoPilotReadiness state = readiness();
+      report.putBoolean("amsIdentityVerified", state.verified());
+      report.putString("readinessCode", state.code());
+      promise.resolve(report);
+    });
+  }
+  @ReactMethod public void readMapCatalog(Promise promise) { maps.read(promise); }
+  @ReactMethod public void setMapPanelVisible(boolean visible) {
+    main.post(() -> {
+      releaseAwakeFlag();
+      Activity activity = getCurrentActivity();
+      if (visible && connected && started && activity != null && !activity.isFinishing() && context.getLifecycleState() == LifecycleState.RESUMED) {
+        awakeActivity = activity;
+        ownsAwakeFlag = (activity.getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) == 0;
+        if (ownsAwakeFlag) activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+      }
+    });
+  }
+  private void releaseAwakeFlag() {
+    if (ownsAwakeFlag && awakeActivity != null) awakeActivity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    awakeActivity = null;
+    ownsAwakeFlag = false;
+  }
+  @ReactMethod public void mapCommand(double id, String action, Promise promise) {
+    if (!Double.isFinite(id) || id != Math.floor(id) || id < 0 || id > Integer.MAX_VALUE) {
+      promise.reject("COPILOT_MAP_REGION_INVALID", "Invalid map region."); return;
+    }
+    maps.command((int) id, action, promise);
+  }
+  private void fail(String code) {
+    Promise result = pending;
+    pending = null;
+    cleanup();
+    if (result != null) result.reject(code, "CoPilot setup could not complete.");
+  }
+  private void cleanup() {
+    releaseAwakeFlag();
+    maps.detach();
+    main.removeCallbacks(timeout);
+    if (bound) { try { context.unbindService(connection); } catch (IllegalArgumentException ignored) { /* Already disconnected. */ } }
+    bound = false;
+    connected = false;
+    started = false;
+    if (observing) { CopilotListener.unregisterListener(observer); observing = false; }
+    // Keep identity for this process: do not silently switch AMS and remove licenses.
+  }
+  @Override public void onHostResume() {
+    main.post(() -> { if (connected && CopilotMgr.isActive()) { started = true; maps.startup(); } });
+  }
+  // Keep the service and callback observers alive across permissions, rotation and background.
+  // Downloads are polled only while resumed; the SDK retains ownership of active transfers.
+  @Override public void onHostPause() { main.post(this::releaseAwakeFlag); }
+  @Override public void onHostDestroy() { main.post(this::releaseAwakeFlag); }
+  @Override public void invalidate() {
+    maps.destroy();
+    context.removeLifecycleEventListener(this);
+    main.post(() -> fail("COPILOT_HOST_DESTROYED"));
+    super.invalidate();
+  }
+}

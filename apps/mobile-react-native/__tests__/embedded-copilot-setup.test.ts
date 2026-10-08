@@ -1,0 +1,247 @@
+import {
+  NativeModules,
+  PermissionsAndroid,
+  Platform,
+  TurboModuleRegistry,
+} from 'react-native';
+import * as Keychain from 'react-native-keychain';
+import {
+  checkEmbeddedSetup,
+  embeddedSetupMessage,
+} from '../src/services/copilot/EmbeddedSetup';
+
+jest.mock('react-native-keychain', () => ({
+  ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'device-only' },
+  setGenericPassword: jest.fn(),
+  getGenericPassword: jest.fn(),
+}));
+const ids = { companyId: 'assigned-company', assetId: 'Assigned-Device' };
+let start: jest.Mock;
+let state: jest.Mock;
+beforeEach(() => {
+  jest.useFakeTimers();
+  jest.clearAllMocks();
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue(false);
+  Object.defineProperty(Platform, 'OS', {
+    value: 'android',
+    configurable: true,
+  });
+  jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(true);
+  jest
+    .spyOn(PermissionsAndroid, 'requestMultiple')
+    .mockResolvedValue(
+      Object.fromEntries(
+        Object.values(PermissionsAndroid.PERMISSIONS).map(permission => [
+          permission,
+          PermissionsAndroid.RESULTS.DENIED,
+        ]),
+      ) as Awaited<ReturnType<typeof PermissionsAndroid.requestMultiple>>,
+    );
+  (Keychain.setGenericPassword as jest.Mock).mockResolvedValue({});
+  start = jest.fn().mockResolvedValue(null);
+  state = jest.fn().mockResolvedValue({ connected: true, started: true });
+  Object.assign(NativeModules, {
+    SemiTraxCoPilotSetup: { startSetup: start, readSetupState: state },
+    LicenseMgr: {
+      isLicensingReady: jest.fn().mockResolvedValue(true),
+      getFeatureStatus: jest.fn().mockResolvedValue(4),
+    },
+    FeatureStatus: { LICENSED: 4, UNLIMITED: 7 },
+    LicenseFeature: { FULL_NAVIGATION: 9, TRUCK_HEAVY_DUTY: 13 },
+    MapRegion: { NORTH_AMERICA: 3 },
+    MapDataMgr: {
+      getLicensedMapList: jest.fn().mockResolvedValue([3]),
+      getInstalledMaps: jest.fn().mockResolvedValue([]),
+    },
+  });
+});
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+test('uses secure device settings and reports real queried entitlements without claiming guidance', async () => {
+  const report = await checkEmbeddedSetup(ids, new AbortController().signal);
+  expect(Keychain.setGenericPassword).toHaveBeenCalledWith(
+    'device-license',
+    JSON.stringify(ids),
+    expect.objectContaining({ service: 'com.semitrax.copilot.device' }),
+  );
+  expect(start).toHaveBeenCalledWith(ids.companyId, ids.assetId);
+  expect(report).toMatchObject({
+    fullNavigationLicensed: true,
+    heavyTruckLicensed: true,
+    installedMapCount: 0,
+    licensedRegions: ['NORTH_AMERICA'],
+  });
+  expect(embeddedSetupMessage(report)).toContain(
+    'Turn-by-turn guidance is not enabled',
+  );
+  expect(embeddedSetupMessage(report)).toContain('Installed map packages: 0');
+});
+test('never starts native setup when precise location is denied', async () => {
+  (PermissionsAndroid.check as jest.Mock).mockResolvedValue(false);
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_LOCATION_REQUIRED');
+  expect(start).not.toHaveBeenCalled();
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+});
+test('never starts native setup after a secure-storage failure', async () => {
+  (Keychain.setGenericPassword as jest.Mock).mockRejectedValue(
+    new Error('private storage detail'),
+  );
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('DEVICE_SETTINGS_SAVE_FAILED');
+  expect(start).not.toHaveBeenCalled();
+});
+test('binding alone cannot be reported as engine startup', async () => {
+  state.mockResolvedValue({ connected: true, started: false });
+  const promise = checkEmbeddedSetup(ids, new AbortController().signal);
+  const failure = promise.then(
+    () => null,
+    error => error as Error,
+  );
+  await jest.advanceTimersByTimeAsync(31000);
+  expect((await failure)?.message).toBe('COPILOT_STARTUP_TIMEOUT');
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+test('does not infer truck entitlement from successful licensing readiness', async () => {
+  NativeModules.LicenseMgr.getFeatureStatus.mockResolvedValue(0);
+  const promise = checkEmbeddedSetup(ids, new AbortController().signal);
+  await jest.advanceTimersByTimeAsync(31000);
+  const report = await promise;
+  expect(report).toMatchObject({
+    licensingReady: true,
+    fullNavigationLicensed: false,
+    heavyTruckLicensed: false,
+  });
+  expect(embeddedSetupMessage(report)).toContain('not both confirmed');
+});
+test('cancellation stops further native status reads', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await expect(checkEmbeddedSetup(ids, controller.signal)).rejects.toThrow(
+    'COPILOT_CHECK_CANCELLED',
+  );
+  expect(start).not.toHaveBeenCalled();
+});
+test('disconnected service cannot supply stale startup evidence', async () => {
+  state.mockResolvedValue({ connected: false, started: true });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_SERVICE_DISCONNECTED');
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+test('vendor errors cannot leak identifiers into setup messages', async () => {
+  start.mockRejectedValue({
+    code: 'private-code',
+    message: 'secret account payload',
+  });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_CHECK_FAILED');
+});
+
+test('setup works with registry-only modules in a bridgeless runtime', async () => {
+  const names = [
+    'SemiTraxCoPilotSetup',
+    'LicenseMgr',
+    'FeatureStatus',
+    'LicenseFeature',
+    'MapRegion',
+    'MapDataMgr',
+  ];
+  const modules = Object.fromEntries(
+    names.map(name => [name, NativeModules[name]]),
+  );
+  names.forEach(name => {
+    delete NativeModules[name];
+  });
+  jest
+    .spyOn(TurboModuleRegistry, 'get')
+    .mockImplementation(name => modules[name] ?? null);
+  try {
+    const report = await checkEmbeddedSetup(ids, new AbortController().signal);
+    expect(start).toHaveBeenCalledWith(ids.companyId, ids.assetId);
+    expect(report.heavyTruckLicensed).toBe(true);
+    expect(report.installedMapCount).toBe(0);
+  } finally {
+    Object.assign(NativeModules, modules);
+  }
+});
+
+test('missing setup host fails before saving settings or calling licensing', async () => {
+  delete NativeModules.SemiTraxCoPilotSetup;
+  jest.spyOn(TurboModuleRegistry, 'get').mockReturnValue(null);
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_SETUP_HOST_UNAVAILABLE');
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+
+test('native licensing bridge failure is distinct from a missing setup host', async () => {
+  start.mockRejectedValue({
+    code: 'COPILOT_LICENSE_BRIDGE_UNAVAILABLE',
+    message: 'private vendor detail',
+  });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_LICENSE_BRIDGE_UNAVAILABLE');
+  expect(NativeModules.LicenseMgr.isLicensingReady).not.toHaveBeenCalled();
+});
+
+test('automatic restoration never prompts or rewrites saved identity', async () => {
+  await checkEmbeddedSetup(ids, new AbortController().signal, {
+    requestPermission: false,
+    save: false,
+  });
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(PermissionsAndroid.requestMultiple).not.toHaveBeenCalled();
+});
+
+test('denied permission during restoration requires user action without prompt loop', async () => {
+  jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(false);
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal, {
+      requestPermission: false,
+      save: false,
+    }),
+  ).rejects.toThrow('COPILOT_LOCATION_REQUIRED');
+  expect(PermissionsAndroid.requestMultiple).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+
+test('unresolved native callback has a bounded timeout', async () => {
+  state.mockReturnValue(new Promise(() => {}));
+  await Promise.all([
+    expect(
+      checkEmbeddedSetup(ids, new AbortController().signal),
+    ).rejects.toThrow('COPILOT_NATIVE_RESPONSE_TIMEOUT'),
+    jest.advanceTimersByTimeAsync(16001),
+  ]);
+});
+
+test('manual setup cannot replace another saved device identity', async () => {
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue({
+    password: JSON.stringify({
+      companyId: 'original-company',
+      assetId: 'original-device',
+    }),
+  });
+  await expect(
+    checkEmbeddedSetup(ids, new AbortController().signal),
+  ).rejects.toThrow('COPILOT_IDENTITY_CHANGE_BLOCKED');
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});
+test('manual recheck of the same identity preserves existing secure credentials', async () => {
+  (Keychain.getGenericPassword as jest.Mock).mockResolvedValue({
+    password: JSON.stringify(ids),
+  });
+  await checkEmbeddedSetup(ids, new AbortController().signal);
+  expect(Keychain.setGenericPassword).not.toHaveBeenCalled();
+  expect(start).toHaveBeenCalledTimes(1);
+});

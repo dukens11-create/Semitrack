@@ -1,11 +1,14 @@
+import { embeddedSession } from '../services/copilot/EmbeddedSession';
+import { useSyncExternalStore } from 'react';
 import { useDriverPalette } from './DriverUI';
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   deviceLicenseSchema,
-  openDeviceActivation,
   readDeviceLicense,
 } from '../services/copilot/DeviceActivation';
+import { embeddedSetupMessage } from '../services/copilot/EmbeddedSetup';
+import { CoPilotMapDownloads } from './CoPilotMapDownloads';
 
 export function CoPilotDeviceSetup() {
   const p = useDriverPalette();
@@ -13,6 +16,13 @@ export function CoPilotDeviceSetup() {
   const [assetId, setAssetId] = useState('');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
+  const session = useSyncExternalStore(
+    embeddedSession.subscribe,
+    embeddedSession.getSnapshot,
+  );
+  const [mapsAvailable, setMapsAvailable] = useState(false);
+  const working = busy || session.phase === 'restoring';
+
   useEffect(() => {
     let alive = true;
     void readDeviceLicense()
@@ -32,35 +42,37 @@ export function CoPilotDeviceSetup() {
       alive = false;
     };
   }, []);
-  async function activate() {
+  async function setupEmbedded() {
     const parsed = deviceLicenseSchema.safeParse({ companyId, assetId });
     if (!parsed.success) {
-      setMessage('Enter valid company and device IDs.');
+      setMessage(
+        'Enter valid company and device IDs, matching Account Manager exactly.',
+      );
       return;
     }
     setBusy(true);
-    try {
-      await openDeviceActivation(parsed.data);
-      setMessage(
-        'CoPilot opened. Complete activation there, then verify Activated in Account Manager. Embedded navigation remains unverified.',
-      );
-    } catch {
-      setMessage(
-        'Could not save settings or open CoPilot. Install CoPilot GPS on this device and retry.',
-      );
-    } finally {
-      setBusy(false);
-    }
+    await embeddedSession.ensure(parsed.data);
+    const result = embeddedSession.getSnapshot();
+    setMessage(
+      result.report
+        ? embeddedSetupMessage(result.report)
+        : result.error ?? 'Setup not completed. Retry while SemiTraX is open.',
+    );
+    setMapsAvailable(
+      !!result.report?.fullNavigationLicensed &&
+        !!result.report?.heavyTruckLicensed,
+    );
+    setBusy(false);
   }
   return (
     <View style={styles.form}>
       <Text style={[styles.text, { color: p.text }]}>
-        Device license activation
+        Embedded CoPilot setup
       </Text>
       <Text style={[styles.text, { color: p.text }]}>
-        Install CoPilot GPS first. Use the IDs assigned to this device in
-        Account Manager. Each device needs a separate license. This opens the
-        separate CoPilot app.
+        Use this device’s assigned Trimble company and device IDs. Saved
+        settings are restored automatically. Never reuse another device’s
+        license.
       </Text>
       <TextInput
         style={[styles.input, { color: p.text, backgroundColor: p.input }]}
@@ -68,10 +80,13 @@ export function CoPilotDeviceSetup() {
         placeholder="Company ID"
         placeholderTextColor={p.muted}
         value={companyId}
-        onChangeText={setCompanyId}
+        onChangeText={value => {
+          setCompanyId(value);
+          setMapsAvailable(false);
+        }}
         autoCapitalize="none"
         autoCorrect={false}
-        editable={!busy}
+        editable={!working}
       />
       <TextInput
         style={[styles.input, { color: p.text, backgroundColor: p.input }]}
@@ -79,22 +94,25 @@ export function CoPilotDeviceSetup() {
         placeholder="Device ID"
         placeholderTextColor={p.muted}
         value={assetId}
-        onChangeText={setAssetId}
+        onChangeText={value => {
+          setAssetId(value);
+          setMapsAvailable(false);
+        }}
         autoCapitalize="none"
         autoCorrect={false}
-        editable={!busy}
+        editable={!working}
       />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Open CoPilot to activate device"
-        disabled={busy}
+        accessibilityLabel="Check CoPilot setup inside SemiTraX"
+        disabled={working}
         onPress={() => {
-          void activate();
+          void setupEmbedded();
         }}
         style={styles.button}
       >
         <Text style={styles.text}>
-          {busy ? 'Please wait…' : 'Open CoPilot to activate'}
+          {working ? 'Please wait…' : 'Check setup inside SemiTraX'}
         </Text>
       </Pressable>
       {!!message && (
@@ -105,6 +123,9 @@ export function CoPilotDeviceSetup() {
           {message}
         </Text>
       )}
+      {(mapsAvailable ||
+        (session.report?.fullNavigationLicensed &&
+          session.report?.heavyTruckLicensed)) && <CoPilotMapDownloads />}
     </View>
   );
 }

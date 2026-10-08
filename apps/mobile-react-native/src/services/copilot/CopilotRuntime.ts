@@ -1,9 +1,5 @@
-import {
-  DeviceEventEmitter,
-  NativeModules,
-  Platform,
-  UIManager,
-} from 'react-native';
+import { DeviceEventEmitter, Platform, UIManager } from 'react-native';
+import { nativeCopilotModule } from './NativeModuleLookup';
 import { z } from 'zod';
 import type { CopilotConfiguration } from './CopilotConfiguration';
 import type {
@@ -53,10 +49,9 @@ const moduleMethods: Record<string, readonly string[]> = {
   SpeechListener: ['registerListener'],
 };
 function moduleObject(name: string): Record<string, unknown> {
-  const value: unknown = NativeModules[name];
-  if (!value || typeof value !== 'object')
-    throw new Error('Native module unavailable');
-  return value as Record<string, unknown>;
+  const value = nativeCopilotModule(name);
+  if (!value) throw new Error('Native module unavailable');
+  return value;
 }
 function constant(module: string, key: string): number {
   const value = moduleObject(module)[key];

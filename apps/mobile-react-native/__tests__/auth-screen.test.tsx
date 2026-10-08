@@ -126,9 +126,7 @@ test('forgot password validates email and does not promise unimplemented email d
   await fill('Email', 'driver@example.test');
   await press('Forgot password?');
   expect(requestPasswordReset).toHaveBeenCalledWith('driver@example.test');
-  expect(text()).toContain(
-    'If an account exists for this email, we’ve sent password reset instructions.',
-  );
+  expect(text()).toContain('Recovery request accepted.');
   expect(authenticate).not.toHaveBeenCalled();
 });
 

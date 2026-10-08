@@ -85,42 +85,43 @@ export function TruckMap({
   const [mapHeight, setMapHeight] = useState(600);
   const [ready, setReady] = useState(false);
   const [mapError, setMapError] = useState(false);
-  const [nativeMapReady, setNativeMapReady] = useState(false);
-  const [nativeMapError, setNativeMapError] = useState(false);
-  // The presence of a native ViewManager is not proof that the vendor map
-  // fragment exists. CoPilotViewManager.createViewInstance dereferences a null
-  // fragment and crashes Android when the map is mounted before provisioning.
-  // Keep CoPilot view creation disabled until native startup, entitlements,
-  // map inventory and fragment readiness are independently verified on-device.
-  // Mapbox is display-only; it never enables CoPilot truck guidance.
-  const copilotFragmentReadinessVerified = false;
-  const nativeCopilotViewAvailable = useMemo(() => {
-    if (Platform.OS !== 'android' || !copilotFragmentReadinessVerified) return false;
-    try {
-      return !!UIManager.getViewManagerConfig?.('CopilotView');
-    } catch {
-      return false;
-    }
-  }, []);
+  // The Trimble map is preferred only after an independent Android bridge
+  // attests to initialization, licensing, installed coverage, and a live view.
+  // Never infer readiness from ViewManager registration or a void bind call.
+  const [nativeCopilotViewAvailable, setNativeCopilotViewAvailable] = useState(false);
   useEffect(() => {
-    if (!nativeCopilotViewAvailable) return;
-    let active = true;
-    setNativeMapReady(false);
-    setNativeMapError(false);
-    const startup = NativeModules.CopilotStartupMgr as
-      | { bindCoPilotService?: () => Promise<void> | void }
+    let mounted = true;
+    if (Platform.OS !== 'android') return;
+    const bridge = NativeModules.SemiTraxCopilotMapReadiness as
+      | { getStatus?: () => Promise<unknown> }
       | undefined;
-    if (!startup || typeof startup.bindCoPilotService !== 'function') {
-      setNativeMapError(true);
-      return () => { active = false; };
-    }
-    // Treat a synchronous throw and a rejected promise as startup failures.
+    if (typeof bridge?.getStatus !== 'function') return;
     Promise.resolve()
-      .then(() => startup.bindCoPilotService!())
-      .then(() => { if (active) setNativeMapReady(true); })
-      .catch(() => { if (active) setNativeMapError(true); });
-    return () => { active = false; };
-  }, [nativeCopilotViewAvailable]);
+      .then(() => bridge.getStatus!())
+      .then(value => {
+        if (!mounted || !value || typeof value !== 'object') return;
+        const status = value as Record<string, unknown>;
+        const verified =
+          status.initialized === true &&
+          status.licensingReady === true &&
+          status.fullNavigationLicensed === true &&
+          status.heavyTruckLicensed === true &&
+          status.mapsReady === true &&
+          status.fragmentReady === true;
+        if (!verified) return;
+        try {
+          setNativeCopilotViewAvailable(
+            !!UIManager.getViewManagerConfig?.('CopilotView'),
+          );
+        } catch {
+          setNativeCopilotViewAvailable(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) setNativeCopilotViewAvailable(false);
+      });
+    return () => { mounted = false; };
+  }, []);
   useEffect(() => {
     // Mapbox token initialization must not mutate CoPilot startup state.
     if (nativeCopilotViewAvailable) return;
@@ -198,19 +199,7 @@ export function TruckMap({
     return (
       <View style={styles.fill} onLayout={event => setMapHeight(event.nativeEvent.layout.height)}>
         <View style={styles.frame}>
-          {nativeMapReady && <CopilotMapView style={styles.map} />}
-          {!nativeMapReady && (
-            <View pointerEvents="none" style={styles.nativeOverlay}>
-              <Text style={[styles.stateTitle, { color: palette.text }]}>
-                {nativeMapError ? 'CoPilot map unavailable' : 'Starting CoPilot map…'}
-              </Text>
-              <Text style={[styles.stateText, { color: palette.muted }]}>
-                {nativeMapError
-                  ? 'CoPilot native startup failed. Check license, maps, and device logs. Truck guidance remains blocked.'
-                  : 'Connecting to the native CoPilot service.'}
-              </Text>
-            </View>
-          )}
+          <CopilotMapView style={styles.map} />
         </View>
       </View>
     );

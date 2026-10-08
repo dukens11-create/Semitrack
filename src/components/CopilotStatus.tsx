@@ -128,6 +128,15 @@ export function CopilotStatus() {
                 '\nLast event: ' + (state.lastEvent ?? 'none')}
             </Text>
             <Text style={styles.diagnostics} selectable>
+              {'Licensed map regions: ' + (state.maps?.licensed.join(', ') || 'not reported') +
+                '\nInstalled map releases: ' + (state.maps?.installed.length
+                  ? state.maps.installed.map(map =>
+                      map.set + ': ' + map.year + ' Q' + map.quarter +
+                      ' (' + map.versionString + ')').join('; ')
+                  : 'not reported') +
+                '\nMap update check: ' + (state.maps?.updateStatus ?? 'not checked')}
+            </Text>
+            <Text style={styles.diagnostics} selectable>
               {'Android map check: ' + String(nativeMapStatus?.reason ?? 'checking') +
                 '\nNative view created: ' + String(nativeMapStatus?.fragmentReady ?? false) +
                 '\nLocation permission: ' + String(nativeMapStatus?.locationGranted ?? false)}

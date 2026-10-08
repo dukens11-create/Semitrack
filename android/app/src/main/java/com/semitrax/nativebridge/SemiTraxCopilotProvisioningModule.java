@@ -1,6 +1,8 @@
 package com.semitrax.nativebridge;
 
 import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
@@ -46,10 +48,18 @@ public final class SemiTraxCopilotProvisioningModule extends ReactContextBaseJav
 
     @ReactMethod
     public void readAMSIdentity(Promise promise) {
-        // This method must be implemented by the approved native AMS provider.
-        // Never fall back to hardcoded identifiers or credentials.
-        promise.reject("COPILOT_AMS_IDENTITY_NOT_PROVISIONED",
-                "No approved native AMS identity is configured for this installation.");
+        // Test asset identity is not a secret or an activation token.
+        // Never export it from release builds. CoPilot must authenticate it.
+        if (!getReactApplicationContext().getPackageName()
+                .equals("com.semitrax.app.migration.debug2")) {
+            promise.reject("COPILOT_AMS_TEST_ASSET_DISABLED",
+                    "The test AMS asset is available only in the dedicated debug package.");
+            return;
+        }
+        WritableMap identity = Arguments.createMap();
+        identity.putString("assetId", "SemiTraX-Android-Test-01");
+        identity.putString("companyId", "XGNKEA");
+        promise.resolve(identity);
     }
 
     @ReactMethod

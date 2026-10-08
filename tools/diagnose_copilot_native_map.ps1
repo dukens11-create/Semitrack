@@ -34,7 +34,7 @@ $coarseGranted = $permissionText -match 'android\.permission\.ACCESS_COARSE_LOCA
 if ($fineGranted) {
   $lines.Add("PASS: precise location permission granted")
 } elseif ($coarseGranted) {
-  $lines.Add("BLOCKED: approximate location granted, but precise location is still denied")
+  $lines.Add("PASS: approximate location permission granted (accepted by the current CoPilot service preflight)")
 } else {
   $lines.Add("BLOCKED: Android location permission denied for this app package")
 }
@@ -53,8 +53,11 @@ if (-not $SkipLaunch) {
   $lines.Add("Process PID after 20 seconds: $pidResult")
   $lines.Add("--- Fresh crash buffer ---")
   foreach ($line in (& $adb -s $Device logcat -d -b crash -v time 2>&1)) { $lines.Add([string]$line) }
+  $lines.Add("--- CoPilot startup / licensing / map-view events ---")
+  $copilotLogs = & $adb -s $Device logcat -d -v time 2>&1 | Select-String "CopilotStartupModule|CopilotViewManager|SemiTraX CoPilot|onCPStartup|onLicensingReady|onLicenseMgtLogin|AndroidRuntime"
+  foreach ($line in $copilotLogs) { $lines.Add([string]$line) }
 }
 $lines | Set-Content -Path $output -Encoding UTF8
 Write-Host "Diagnostic report saved to: $output"
-if (-not $fineGranted) { Write-Warning "Precise location is not granted. Use -OpenPermissionSettings to open the correct Android app settings." }
+if (-not ($fineGranted -or $coarseGranted)) { Write-Warning "Location permission is not granted. Use -OpenPermissionSettings to open the correct Android app settings." }
 Write-Host "No app data, maps, credentials or keystores were deleted."

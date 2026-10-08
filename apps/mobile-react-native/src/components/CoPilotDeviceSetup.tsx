@@ -20,6 +20,7 @@ export function CoPilotDeviceSetup() {
   const [assetId, setAssetId] = useState('');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState('');
+  const [activationMessage, setActivationMessage] = useState('');
   const [mapsAvailable, setMapsAvailable] = useState(false);
   const check = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -93,17 +94,17 @@ export function CoPilotDeviceSetup() {
   async function activate() {
     const parsed = deviceLicenseSchema.safeParse({ companyId, assetId });
     if (!parsed.success) {
-      setMessage('Enter valid company and device IDs.');
+      setActivationMessage('Enter valid company and device IDs.');
       return;
     }
     setBusy(true);
     try {
       await openDeviceActivation(parsed.data);
-      setMessage(
+      setActivationMessage(
         'CoPilot opened. Complete activation there, then verify Activated in Account Manager. Embedded navigation remains unverified.',
       );
     } catch (error) {
-      setMessage(
+      setActivationMessage(
         error instanceof DeviceActivationError &&
           error.code === 'COPILOT_APP_UNAVAILABLE'
           ? 'No installed app can open CoPilot activation. Install the CoPilot app supplied for your Trimble license, then retry.'
@@ -177,6 +178,11 @@ export function CoPilotDeviceSetup() {
         </Text>
       )}
       {mapsAvailable && <CoPilotMapDownloads />}
+      {!!activationMessage && (
+        <Text style={[styles.text, { color: p.text }]}>
+          {activationMessage}
+        </Text>
+      )}
       <Text style={[styles.text, { color: p.text }]}>
         Separate CoPilot app: if Trimble supplied a standalone Truck app for
         this license, you can open its activation here. Its activation does not

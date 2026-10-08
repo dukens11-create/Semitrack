@@ -37,7 +37,12 @@ export function CoPilotMapDownloads() {
     reading.current = true;
     try {
       const result = await readMapCatalog();
-      if (mounted.current) setCatalog(result);
+      if (mounted.current) {
+        setCatalog(result);
+        setMessage(previous =>
+          previous === 'Loading licensed maps…' ? '' : previous,
+        );
+      }
     } catch (error) {
       if (mounted.current)
         setMessage(
@@ -101,6 +106,12 @@ export function CoPilotMapDownloads() {
   const region = catalog?.regions.find(item => item.id === selected);
   const installed =
     catalog?.installed.some(item => item.id === selected) ?? false;
+  const initialWaiting =
+    !!catalog && !catalog.installed.length && !catalog.initialReady;
+  const initialPending =
+    !!catalog && !catalog.installed.length && catalog.initialAccepted;
+  const downloadBlocked =
+    initialWaiting || initialPending || !catalog?.downloadPolicyApplied;
   const active =
     region &&
     [
@@ -118,6 +129,7 @@ export function CoPilotMapDownloads() {
       'FAILURE_INSTALLED',
     ].includes(region.status);
   const controllable =
+    !initialPending &&
     region &&
     [
       'QUEUED',
@@ -168,6 +180,17 @@ export function CoPilotMapDownloads() {
         <Text style={{ color: p.muted }}>
           Installed packages: {catalog.installed.length} · Free storage:{' '}
           {(catalog.freeBytes / 1073741824).toFixed(1)} GB
+        </Text>
+      )}
+      {catalog && (
+        <Text accessibilityLiveRegion="polite" style={{ color: p.text }}>
+          {!catalog.downloadPolicyApplied
+            ? responseMessage('COPILOT_MAP_DOWNLOAD_POLICY_FAILED')
+            : initialPending
+            ? responseMessage('COPILOT_MAP_INITIAL_IN_PROGRESS')
+            : initialWaiting
+            ? responseMessage('COPILOT_MAP_INITIAL_NOT_READY')
+            : 'Map manager ready for a download request.'}
         </Text>
       )}
       <TextInput
@@ -227,7 +250,11 @@ export function CoPilotMapDownloads() {
             {regionLabel(region)} ·{' '}
             {mapProgress(region, catalog?.installed ?? [])}
           </Text>
-          {button('Download selected map', 'download', installed || !!active)}
+          {button(
+            'Download selected map',
+            'download',
+            installed || !!active || downloadBlocked,
+          )}
           {!!controllable && !installed && (
             <View style={styles.controls}>
               {button('Pause', 'pause', !!paused)}

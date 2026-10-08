@@ -71,3 +71,13 @@ truck profile, or navigation status. Physical download, pause/resume and invento
 verification remain device acceptance checks. Reference contracts:
 - https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/api-functions/mapdatamgr/
 - https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/how-to-guides/map-updates/
+
+### First-map readiness correction (October 8, 2026)
+
+The phone returned `FAILURE_MANAGER_BUSY` for Alabama and Alaska with zero installed packages. This is a rejected request, not download progress or a license rejection. The precise internal busy operation is not exposed by the pinned SDK.
+
+The host now observes `onReadyToDownloadInitialMapData` before permitting a first-map request. On startup it applies Wi-Fi-only downloads and `PREVENT_DATA_DOWNLOAD = ALLOW_ALL_DOWNLOADS`. If these settings cannot be applied, downloads remain blocked. A first download uses the SDK initial-map transaction (`overwrite=true`) only when inventory is empty and its readiness callback has fired. Once accepted, further first-map requests are blocked to avoid replacing that transaction. Existing-map additions still use matching release metadata and `overwrite=false`. Pause/resume/cancel controls are hidden for an initial transaction because the SDK limits these operations for overwrite downloads. No maps are deleted.
+
+The panel reports first-map readiness and whether an initial transaction was accepted. A standalone activation failure no longer replaces the embedded setup result. This change still requires physical verification: readiness callback, accepted California request, byte progress and installed inventory. Map installation does not enable guidance.
+
+References: https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/hooks-and-callbacks/ and https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/api-functions/license/

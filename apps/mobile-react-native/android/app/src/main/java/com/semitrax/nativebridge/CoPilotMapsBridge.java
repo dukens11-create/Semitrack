@@ -2,6 +2,8 @@ package com.semitrax.nativebridge;
 
 import android.content.Context;
 import android.os.StatFs;
+import com.alk.cpik.CopilotMgr;
+import com.alk.cpik.ConfigurationSetting;
 import com.alk.cpik.mapdata.MapDataListener;
 import com.alk.cpik.mapdata.MapDataListener.DownloadStatus;
 import com.alk.cpik.mapdata.MapDataMgr;
@@ -28,6 +30,9 @@ final class CoPilotMapsBridge {
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private final ConcurrentHashMap<Integer, Progress> progress = new ConcurrentHashMap<>();
   private boolean observing;
+  private volatile boolean initialReady;
+  private volatile boolean initialAccepted;
+  private volatile boolean downloadPolicyApplied;
   private static final class Progress {
     final String status;
     final long bytes;
@@ -35,6 +40,7 @@ final class CoPilotMapsBridge {
     Progress(String status, long bytes, long total) { this.status = status; this.bytes = bytes; this.total = total; }
   }
   private final MapDataListener listener = new MapDataListener() {
+    @Override public void onReadyToDownloadInitialMapData() { initialReady = true; }
     @Override public void onMapdataUpdate(MapInfo info, DownloadStatus status) {
       if (info == null || info.getRegion() == null || status == null) return;
       progress.put(info.getRegion().ordinal(), new Progress(status.name(), Math.max(0, info.getDownloadedCount()), Math.max(0, info.getMapFileSize())));
@@ -45,6 +51,14 @@ final class CoPilotMapsBridge {
     }
   };
   CoPilotMapsBridge(Context context, BooleanSupplier ready) { this.context = context; this.ready = ready; }
+  void startup() {
+    try {
+      CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.MAP_DOWNLOADS_WIFI_ONLY, true));
+      CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.PREVENT_DATA_DOWNLOAD, ConfigurationSetting.ALLOW_ALL_DOWNLOADS));
+      downloadPolicyApplied = true;
+    } catch (Exception | LinkageError error) { downloadPolicyApplied = false; }
+  }
+  void shutdown() { initialReady = false; initialAccepted = false; downloadPolicyApplied = false; }
   synchronized void attach() { if (!observing) { MapDataListener.registerListener(listener); observing = true; } }
   synchronized void detach() { if (observing) { MapDataListener.unregisterListener(listener); observing = false; } }
   void destroy() { detach(); worker.shutdownNow(); }
@@ -97,6 +111,9 @@ final class CoPilotMapsBridge {
         if (directory == null) directory = context.getFilesDir();
         result.putDouble("freeBytes", new StatFs(directory.getAbsolutePath()).getAvailableBytes());
         result.putArray("regions", regions); result.putArray("installed", installed);
+        result.putBoolean("initialReady", initialReady);
+        result.putBoolean("initialAccepted", initialAccepted);
+        result.putBoolean("downloadPolicyApplied", downloadPolicyApplied);
         requireReady();
         promise.resolve(result);
       } catch (Exception | LinkageError error) { reject(promise, error); }
@@ -110,14 +127,20 @@ final class CoPilotMapsBridge {
         MapDownloadResponse response;
         switch (action) {
           case "download": {
+            if (!downloadPolicyApplied) throw new IllegalStateException("COPILOT_MAP_DOWNLOAD_POLICY_FAILED");
             // Adding a region must use the same release as existing maps. Never overwrite them.
             List<MapInfo> inventory = MapDataMgr.getInstalledMaps();
             List<MapRegion> requested = Collections.singletonList(region);
             List<MapDataComponent> disabled = new ArrayList<>();
             if (inventory == null || inventory.isEmpty()) {
+              // Initial setup uses the SDK's first-map transaction, only after its callback.
+              // Do not replace a previously accepted initial transaction with another region.
+              if (!initialReady) throw new IllegalStateException("COPILOT_MAP_INITIAL_NOT_READY");
+              if (initialAccepted) throw new IllegalStateException("COPILOT_MAP_INITIAL_IN_PROGRESS");
               requireReady();
               progress.put(id, new Progress("REQUESTING", 0, 0));
-              response = MapDataMgr.downloadMap(requested, disabled, false);
+              response = MapDataMgr.downloadMap(requested, disabled, true);
+              if (response == MapDownloadResponse.SUCCESS) initialAccepted = true;
             }
             else {
               MapInfo release = inventory.get(0);

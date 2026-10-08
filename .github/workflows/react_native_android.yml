@@ -2,7 +2,7 @@ name: React Native Android test APK
 
 on:
   push:
-    branches: ['codex/rn-android-test-apk', 'codex/copilot-embedded-setup', 'codex/copilot-module-resolution', 'codex/copilot-map-downloads']
+    branches: ['codex/rn-android-test-apk', 'codex/copilot-embedded-setup', 'codex/copilot-module-resolution', 'codex/copilot-map-downloads', 'codex/copilot-initial-map-readiness']
     paths:
       - 'apps/mobile-react-native/**'
       - '.github/workflows/react_native_android.yml'

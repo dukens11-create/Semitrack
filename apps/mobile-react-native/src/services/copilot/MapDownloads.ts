@@ -38,6 +38,11 @@ export class MapDownloadError extends Error {
     super(code);
   }
 }
+export function setMapPanelVisible(visible: boolean): void {
+  const host = nativeCopilotModule('SemiTraxCoPilotSetup');
+  const fn = host?.setMapPanelVisible;
+  if (typeof fn === 'function') fn.call(host, visible);
+}
 async function call(method: string, ...args: unknown[]): Promise<unknown> {
   if (Platform.OS !== 'android')
     throw new MapDownloadError('COPILOT_MAPS_ANDROID_REQUIRED');

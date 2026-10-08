@@ -16,6 +16,7 @@ import {
   readMapCatalog,
   regionLabel,
   responseMessage,
+  setMapPanelVisible,
   type MapAction,
   type MapCatalog,
 } from '../services/copilot/MapDownloads';
@@ -52,6 +53,7 @@ export function CoPilotMapDownloads() {
   }
   useEffect(() => {
     mounted.current = true;
+    setMapPanelVisible(true);
     void refresh();
     const timer = setInterval(() => {
       void refresh();
@@ -61,6 +63,7 @@ export function CoPilotMapDownloads() {
     });
     return () => {
       mounted.current = false;
+      setMapPanelVisible(false);
       clearInterval(timer);
       subscription.remove();
     };
@@ -158,8 +161,8 @@ export function CoPilotMapDownloads() {
       </Text>
       <Text style={{ color: p.text }}>
         Choose a licensed region. Use Wi-Fi and keep SemiTraX open while
-        downloading. Existing maps are kept. Map installation does not enable
-        turn-by-turn guidance.
+        downloading. This panel keeps the screen awake. Existing maps are kept.
+        Map installation does not enable turn-by-turn guidance.
       </Text>
       {catalog && (
         <Text style={{ color: p.muted }}>

@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.view.WindowManager;
 import com.alk.copilot.CopilotService;
 import com.alk.cpik.CopilotListener;
 import com.alk.cpik.react.licensing.LicenseListenerModule;
@@ -42,6 +43,8 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   private String company;
   private String asset;
   private Promise pending;
+  private Activity awakeActivity;
+  private boolean ownsAwakeFlag;
   private final CopilotListener observer = new CopilotListener() {
     @Override public void onCPStartup() { started = true; }
     @Override public void onCPShutdown() { started = false; }
@@ -144,6 +147,22 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     });
   }
   @ReactMethod public void readMapCatalog(Promise promise) { maps.read(promise); }
+  @ReactMethod public void setMapPanelVisible(boolean visible) {
+    main.post(() -> {
+      releaseAwakeFlag();
+      Activity activity = getCurrentActivity();
+      if (visible && connected && started && activity != null && !activity.isFinishing() && context.getLifecycleState() == LifecycleState.RESUMED) {
+        awakeActivity = activity;
+        ownsAwakeFlag = (activity.getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) == 0;
+        if (ownsAwakeFlag) activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+      }
+    });
+  }
+  private void releaseAwakeFlag() {
+    if (ownsAwakeFlag && awakeActivity != null) awakeActivity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    awakeActivity = null;
+    ownsAwakeFlag = false;
+  }
   @ReactMethod public void mapCommand(double id, String action, Promise promise) {
     if (!Double.isFinite(id) || id != Math.floor(id) || id < 0 || id > Integer.MAX_VALUE) {
       promise.reject("COPILOT_MAP_REGION_INVALID", "Invalid map region."); return;
@@ -157,6 +176,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     if (result != null) result.reject(code, "CoPilot setup could not complete.");
   }
   private void cleanup() {
+    releaseAwakeFlag();
     maps.detach();
     main.removeCallbacks(timeout);
     if (bound) { try { context.unbindService(connection); } catch (IllegalArgumentException ignored) { /* Already disconnected. */ } }

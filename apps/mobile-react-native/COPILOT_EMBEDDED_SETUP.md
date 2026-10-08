@@ -62,7 +62,9 @@ accepted, not installed. The panel polls every three seconds while foregrounded;
 only getInstalledMaps inventory marks a region Installed, and its release is shown.
 The displayed free storage is for the app's external-files volume (internal fallback);
 the SDK performs download/storage validation. Keep the app open and use Wi-Fi.
-Unbinding on background still applies, so background download continuity is not promised.
+The map panel holds the Activity screen-on flag while open and releases only the
+flag it owns on panel close or host cleanup. Unbinding on background still applies,
+so background download continuity is not promised.
 
 Map downloads do not change the guidance boundary, routing safety prerequisites,
 truck profile, or navigation status. Physical download, pause/resume and inventory

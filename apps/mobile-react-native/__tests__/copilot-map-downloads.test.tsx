@@ -57,6 +57,7 @@ beforeEach(() => {
   read = jest.fn().mockImplementation(async () => catalog);
   command = jest.fn().mockResolvedValue('SUCCESS');
   NativeModules.SemiTraxCoPilotSetup = {
+    setMapPanelVisible: jest.fn(),
     readMapCatalog: read,
     mapCommand: command,
   };
@@ -238,6 +239,9 @@ test('duplicate taps cannot issue two download mutations', async () => {
 });
 test('no polling occurs while app is in background or after panel closes', async () => {
   await render();
+  expect(
+    NativeModules.SemiTraxCoPilotSetup.setMapPanelVisible,
+  ).toHaveBeenCalledWith(true);
   const calls = read.mock.calls.length;
   AppState.currentState = 'background';
   await act(async () => {
@@ -246,6 +250,9 @@ test('no polling occurs while app is in background or after panel closes', async
   expect(read).toHaveBeenCalledTimes(calls);
   await act(async () => tree!.unmount());
   tree = undefined;
+  expect(
+    NativeModules.SemiTraxCoPilotSetup.setMapPanelVisible,
+  ).toHaveBeenLastCalledWith(false);
   AppState.currentState = 'active';
   await jest.advanceTimersByTimeAsync(6000);
   expect(read).toHaveBeenCalledTimes(calls);

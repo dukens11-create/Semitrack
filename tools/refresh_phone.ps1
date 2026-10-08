@@ -1,6 +1,6 @@
 param(
     [string]$ApiUrl = 'https://semitrax-api.onrender.com',
-    [string]$PackageName = 'com.semitrax.app.migration.debug',
+    [string]$PackageName = 'com.semitrax.app.migration.debug2',
     [switch]$InstallExistingApk
 )
 

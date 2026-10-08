@@ -166,10 +166,16 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       // The patched vendor service silently returns without binding when
       // location access is missing. Fail with an actionable diagnostic before
       // attempting AMS login; don't wait 30 seconds for onCPStartup.
-      if (Platform.OS !== 'android' ||
-          (await PermissionsAndroid.check(
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          )) !== true) {
+      if (Platform.OS !== 'android') {
+        throw new Error('COPILOT_ANDROID_REQUIRED');
+      }
+      const fineLocation = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      );
+      const coarseLocation = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+      );
+      if (!fineLocation && !coarseLocation) {
         throw new Error('COPILOT_LOCATION_PERMISSION_REQUIRED');
       }
       // Trimble's React Native CPIK AMS flow configures the license hook

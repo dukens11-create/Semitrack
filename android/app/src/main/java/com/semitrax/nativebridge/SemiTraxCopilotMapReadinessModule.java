@@ -75,11 +75,13 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         status.putBoolean("fragmentReady", fragmentReady);
         // Licensing/map observations come from the CPIK RN SDK callbacks and
         // API responses; the native map view is checked independently above.
-        status.putBoolean("initialized", observedInitialized);
-        status.putBoolean("licensingReady", observedLicensingReady);
-        status.putBoolean("fullNavigationLicensed", observedFullNavigation);
-        status.putBoolean("heavyTruckLicensed", observedHeavyTruck);
-        status.putBoolean("mapsReady", observedMapsReady);
+        // Permission revocation must invalidate the entire ready snapshot,
+        // not only the view. The native bridge never grants entitlement.
+        status.putBoolean("initialized", locationGranted && observedInitialized);
+        status.putBoolean("licensingReady", locationGranted && observedLicensingReady);
+        status.putBoolean("fullNavigationLicensed", locationGranted && observedFullNavigation);
+        status.putBoolean("heavyTruckLicensed", locationGranted && observedHeavyTruck);
+        status.putBoolean("mapsReady", locationGranted && observedMapsReady);
         status.putString("reason", !locationGranted
             ? "LOCATION_PERMISSION_REQUIRED"
             : !fragmentReady

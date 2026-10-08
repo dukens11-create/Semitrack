@@ -20,4 +20,12 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
-allprojects { repositories { maven { url "https://api.mapbox.com/downloads/v2/releases/maven" } } }
+// Project dependencies (including Google's Prefab CLI required by AGP/CMake)
+// need Google's Maven repository, not only the buildscript repositories.
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://api.mapbox.com/downloads/v2/releases/maven" }
+    }
+}

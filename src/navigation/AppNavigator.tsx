@@ -15,6 +15,7 @@ import { MoreScreen } from '../screens/MoreScreen';
 import { PlanningScreen } from '../screens/PlanningScreen';
 import { TruckProfileScreen } from '../screens/TruckProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { DiagnosticsScreen } from '../screens/DiagnosticsScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
 import { SubscriptionScreen } from '../screens/SubscriptionScreen';
 type Routes = {
@@ -22,6 +23,7 @@ type Routes = {
   Trucks: undefined;
   Services: undefined;
   Settings: undefined;
+  Diagnostics: undefined;
   Eld: undefined;
   Offline: undefined;
   Subscription: undefined;
@@ -220,7 +222,10 @@ export function AppNavigator({ services }: { services: Services }) {
           name="Settings"
           options={{ title: 'Account and settings' }}
         >
-          {() => <SettingsScreen services={services} />}
+          {({ navigation }) => <SettingsScreen services={services} onDiagnostics={() => navigation.navigate('Diagnostics')} />}
+        </Stack.Screen>
+        <Stack.Screen name="Diagnostics" options={{ title: "Diagnostics" }}>
+          {() => <DiagnosticsScreen />}
         </Stack.Screen>
         <Stack.Screen name="Eld" options={{ title: 'ELD connections' }}>
           {() => <EldScreen services={services} />}

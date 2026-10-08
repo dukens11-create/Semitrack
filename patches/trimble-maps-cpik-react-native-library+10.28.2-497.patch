@@ -36,7 +36,7 @@ diff --git a/node_modules/trimble-maps-cpik-react-native-library/android/src/mai
                  .setPriority(Notification.PRIORITY_DEFAULT)
                  .build();
      }
-@@ -88,14 +98,26 @@
+@@ -88,13 +98,25 @@
          public void onServiceConnected(ComponentName className, IBinder service) {
              Log.i("CopilotStartupModule", "onServiceConnected");
              isCopilotServiceBound = true;

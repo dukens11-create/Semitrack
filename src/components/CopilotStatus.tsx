@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppState, Modal, NativeModules, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   CopilotLifecycle,
   initialCopilotState,
@@ -10,6 +10,7 @@ import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
 export function CopilotStatus() {
   const [state, setState] = useState(initialCopilotState);
   const [details, setDetails] = useState(false);
+  const [nativeMapStatus, setNativeMapStatus] = useState<Record<string, unknown> | null>(null);
   const lifecycleRef = useRef<CopilotLifecycle | null>(null);
   useEffect(() => {
     const lifecycle = new CopilotLifecycle(createCopilotRuntime(), next => {
@@ -51,6 +52,29 @@ export function CopilotStatus() {
       lifecycle.dispose();
     };
   }, []);
+  useEffect(() => {
+    if (!details || Platform.OS !== 'android') return;
+    const bridge = NativeModules.SemiTraxCopilotMapReadiness as
+      | { getStatus?: () => Promise<unknown> }
+      | undefined;
+    if (typeof bridge?.getStatus !== 'function') {
+      setNativeMapStatus({ reason: 'NATIVE_READINESS_BRIDGE_UNAVAILABLE' });
+      return;
+    }
+    let active = true;
+    const refresh = async () => {
+      try {
+        const result = await bridge.getStatus!();
+        if (active) setNativeMapStatus(result && typeof result === 'object'
+          ? result as Record<string, unknown> : { reason: 'INVALID_NATIVE_STATUS' });
+      } catch {
+        if (active) setNativeMapStatus({ reason: 'NATIVE_STATUS_QUERY_FAILED' });
+      }
+    };
+    void refresh();
+    const interval = setInterval(() => { void refresh(); }, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, [details]);
   const label = state.copilotReady ? 'CoPilot setup checked · Navigation not started'
     : state.phase === 'NOT_STARTED' || state.phase === 'STARTING' ? 'CoPilot setup pending'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED' ? 'CoPilot maps required'
@@ -102,6 +126,11 @@ export function CopilotStatus() {
                 '\nInstalled maps verified: ' + (String(state.mapsReady)) +
                 '\nReady for stops: ' + (String(state.readyToAddStops)) +
                 '\nLast event: ' + (state.lastEvent ?? 'none')}
+            </Text>
+            <Text style={styles.diagnostics} selectable>
+              {'Android map check: ' + String(nativeMapStatus?.reason ?? 'checking') +
+                '\\nNative view created: ' + String(nativeMapStatus?.fragmentReady ?? false) +
+                '\\nLocation permission: ' + String(nativeMapStatus?.locationGranted ?? false)}
             </Text>
             {state.phase === 'ERROR' || state.phase === 'MAPS_REQUIRED' ? (
               <Pressable

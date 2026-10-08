@@ -65,9 +65,9 @@ export function CoPilotDeviceSetup() {
         Device license activation
       </Text>
       <Text style={[styles.text, { color: p.text }]}>
-        Install CoPilot GPS first. Use the IDs assigned to this device in
-        Account Manager. Each device needs a separate license. This opens the
-        separate CoPilot app.
+        Install the CoPilot Truck app supplied for your Trimble license. Use the
+        IDs assigned to this device in Account Manager. Each device needs a
+        separate license. This opens the separate CoPilot app.
       </Text>
       <TextInput
         style={[styles.input, { color: p.text, backgroundColor: p.input }]}

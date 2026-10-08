@@ -28,7 +28,7 @@ import com.facebook.react.common.LifecycleState;
 import com.facebook.react.module.annotations.ReactModule;
 import com.semitrax.R;
 
-/** Explicit setup only: no profile, route, guidance, or map-download mutations. */
+/** Explicit setup and additive map management: no profile, route, or guidance mutation. */
 @ReactModule(name = CoPilotSetupModule.NAME)
 public final class CoPilotSetupModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
   public static final String NAME = "SemiTraxCoPilotSetup";
@@ -36,7 +36,8 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   private final Handler main = new Handler(Looper.getMainLooper());
   private volatile boolean started;
   private boolean bound;
-  private boolean connected;
+  private volatile boolean connected;
+  private final CoPilotMapsBridge maps;
   private boolean observing;
   private String company;
   private String asset;
@@ -88,6 +89,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   public CoPilotSetupModule(ReactApplicationContext context) {
     super(context);
     this.context = context;
+    this.maps = new CoPilotMapsBridge(context, () -> connected && started && context.getLifecycleState() == LifecycleState.RESUMED);
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return NAME; }
@@ -125,6 +127,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
         listener.setAMSLoginInfo(assetId, companyId);
         company = companyId;
         asset = assetId;
+        maps.attach();
         if (!observing) { CopilotListener.registerListener(observer); observing = true; }
         bound = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
         if (!bound) { fail("COPILOT_BIND_FAILED"); return; }
@@ -140,6 +143,13 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
       promise.resolve(report);
     });
   }
+  @ReactMethod public void readMapCatalog(Promise promise) { maps.read(promise); }
+  @ReactMethod public void mapCommand(double id, String action, Promise promise) {
+    if (!Double.isFinite(id) || id != Math.floor(id) || id < 0 || id > Integer.MAX_VALUE) {
+      promise.reject("COPILOT_MAP_REGION_INVALID", "Invalid map region."); return;
+    }
+    maps.command((int) id, action, promise);
+  }
   private void fail(String code) {
     Promise result = pending;
     pending = null;
@@ -147,6 +157,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
     if (result != null) result.reject(code, "CoPilot setup could not complete.");
   }
   private void cleanup() {
+    maps.detach();
     main.removeCallbacks(timeout);
     if (bound) { try { context.unbindService(connection); } catch (IllegalArgumentException ignored) { /* Already disconnected. */ } }
     bound = false;
@@ -159,6 +170,7 @@ public final class CoPilotSetupModule extends ReactContextBaseJavaModule impleme
   @Override public void onHostPause() { main.post(() -> fail("COPILOT_FOREGROUND_REQUIRED")); }
   @Override public void onHostDestroy() { main.post(() -> fail("COPILOT_HOST_DESTROYED")); }
   @Override public void invalidate() {
+    maps.destroy();
     context.removeLifecycleEventListener(this);
     main.post(() -> fail("COPILOT_HOST_DESTROYED"));
     super.invalidate();

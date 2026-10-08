@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   deviceLicenseSchema,
+  DeviceActivationError,
   openDeviceActivation,
   readDeviceLicense,
 } from '../services/copilot/DeviceActivation';
@@ -44,9 +45,15 @@ export function CoPilotDeviceSetup() {
       setMessage(
         'CoPilot opened. Complete activation there, then verify Activated in Account Manager. Embedded navigation remains unverified.',
       );
-    } catch {
+    } catch (error) {
       setMessage(
-        'Could not save settings or open CoPilot. Install CoPilot GPS on this device and retry.',
+        error instanceof DeviceActivationError &&
+          error.code === 'COPILOT_APP_UNAVAILABLE'
+          ? 'No installed app can open CoPilot activation. Install the CoPilot app supplied for your Trimble license, then retry.'
+          : error instanceof DeviceActivationError &&
+            error.code === 'DEVICE_SETTINGS_SAVE_FAILED'
+          ? 'Could not save device settings securely. Restart SemiTraX and retry.'
+          : 'CoPilot activation could not open. Open CoPilot directly and check its setup, then retry.',
       );
     } finally {
       setBusy(false);

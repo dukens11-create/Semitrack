@@ -293,7 +293,9 @@ export class CopilotLifecycle {
   }
   private async refresh(revision: number): Promise<void> {
     const current = () => this.active && revision === this.revision;
-    if (!current() || !this.config) return;
+    // Credential hooks may fire before onCPStartup. Never query license or
+    // maps until native startup is independently confirmed.
+    if (!current() || !this.config || !this.state.initialized) return;
     try {
       const license = await this.port.licenseState();
       if (!current()) return;

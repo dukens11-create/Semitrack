@@ -40,3 +40,32 @@ Validation: permission refusal, storage failure, binding without startup, missin
 truck entitlement, cancellation, disconnection and error-payload sanitization have
 regressions. Android compilation and physical-device results must be recorded
 separately; this document does not assert device acceptance.
+
+## Explicit map management
+
+The October 7 phone check after PR #363 reported actual embedded startup and
+confirmed navigation/truck entitlements, with zero installed map packages. This
+is setup evidence, not guidance acceptance.
+
+After the in-app check confirms both entitlements, the form exposes searchable
+licensed map regions. Names and descriptions come directly from the pinned SDK's
+MapRegion objects rather than JavaScript enumeration of interop constants. An
+explicit selection is required to download. Native commands recheck engine startup,
+foreground state and the licensed region before calling the SDK on a serial worker.
+The initial request downloads the latest SDK-compatible release without overwriting;
+additional regions use the verified release of existing maps. Mixed or missing
+release metadata prevents an additive request. No map deletion is exposed.
+
+Progress comes from MapDataListener callbacks and downloaded/file byte counts.
+Pause, resume and cancel call the vendor operations. SUCCESS means a request was
+accepted, not installed. The panel polls every three seconds while foregrounded;
+only getInstalledMaps inventory marks a region Installed, and its release is shown.
+The displayed free storage is for the app's external-files volume (internal fallback);
+the SDK performs download/storage validation. Keep the app open and use Wi-Fi.
+Unbinding on background still applies, so background download continuity is not promised.
+
+Map downloads do not change the guidance boundary, routing safety prerequisites,
+truck profile, or navigation status. Physical download, pause/resume and inventory
+verification remain device acceptance checks. Reference contracts:
+- https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/api-functions/mapdatamgr/
+- https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/how-to-guides/map-updates/

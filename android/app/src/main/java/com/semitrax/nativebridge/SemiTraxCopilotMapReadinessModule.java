@@ -57,6 +57,8 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         WritableMap status = Arguments.createMap();
         boolean locationGranted =
             context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+            context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
         // The CPIK manager is accessible only from the vendor Android module.
         // Query the vendor's read-only adapter reflectively; never call
@@ -82,11 +84,18 @@ public final class SemiTraxCopilotMapReadinessModule extends ReactContextBaseJav
         status.putBoolean("fullNavigationLicensed", locationGranted && observedFullNavigation);
         status.putBoolean("heavyTruckLicensed", locationGranted && observedHeavyTruck);
         status.putBoolean("mapsReady", locationGranted && observedMapsReady);
-        status.putString("reason", !locationGranted
+        String reason = !locationGranted
             ? "LOCATION_PERMISSION_REQUIRED"
-            : !fragmentReady
-                ? "COPILOT_NATIVE_VIEW_NOT_INITIALIZED"
-                : "COPILOT_LICENSE_MAP_ATTESTATION_REQUIRED");
+            : !observedInitialized
+                ? "COPILOT_NOT_INITIALIZED"
+                : !observedLicensingReady || !observedFullNavigation || !observedHeavyTruck
+                    ? "COPILOT_LICENSE_NOT_VERIFIED"
+                    : !observedMapsReady
+                        ? "COPILOT_MAP_DATA_NOT_VERIFIED"
+                        : !fragmentReady
+                            ? "COPILOT_NATIVE_VIEW_NOT_INITIALIZED"
+                            : "READY";
+        status.putString("reason", reason);
         promise.resolve(status);
     }
 }

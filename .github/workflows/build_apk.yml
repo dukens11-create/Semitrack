@@ -44,7 +44,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - name: Check runner Android SDK
+        shell: bash
+        run: |
+          test -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}" || { echo 'Android SDK unavailable'; exit 1; }
+          test -x android/gradlew || chmod +x android/gradlew
       - name: Install dependencies
         run: npm ci
       - name: Assemble Android debug

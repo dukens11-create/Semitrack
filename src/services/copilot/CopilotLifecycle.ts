@@ -57,6 +57,7 @@ export interface CopilotLifecyclePort {
   }>;
   mapState(config: CopilotConfiguration): Promise<CopilotMapInventory>;
   readyToAddStops(): Promise<boolean>;
+  reportReadiness?(state: CopilotState): void;
 }
 export const copilotEvents = [
   'onCPStartup',
@@ -142,6 +143,9 @@ export class CopilotLifecycle {
       this.state.mapsReady &&
       this.state.readyToAddStops;
     this.changed(this.state);
+    // Reflect only SDK-observed state to Android. Native view existence is
+    // attested independently and cannot be faked by this callback.
+    this.port.reportReadiness?.(this.state);
   }
   private unsupportedSdkWarning(code: CopilotErrorCode): string | null {
     switch (code) {
@@ -364,6 +368,7 @@ export class CopilotLifecycle {
     ++this.generation;
     ++this.revision;
     clearTimeout(this.startupTimer);
+    this.port.reportReadiness?.(initialCopilotState());
     for (const remove of this.removers.splice(0)) remove();
     // Removing JS observers must not repeatedly stop/restart the native service.
   }

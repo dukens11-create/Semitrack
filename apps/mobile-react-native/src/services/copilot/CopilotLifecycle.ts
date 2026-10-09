@@ -236,6 +236,9 @@ export class CopilotLifecycle {
       });
     }
     if (event === 'onFailedRouteCalculation' || event === 'onRouteSyncError') {
+      // Cancel any in-flight license/map refresh. Its delayed results must not
+      // restore READY after a safety-critical route failure.
+      ++this.revision;
       this.fail('COPILOT_ROUTE_FAILED', event);
       return;
     }

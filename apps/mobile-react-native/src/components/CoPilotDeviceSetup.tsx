@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useCopilotSetup } from '../services/copilot/CopilotProvider';
+import {
+  useCopilotSetup,
+  useCopilotState,
+} from '../services/copilot/CopilotProvider';
 import { useDriverPalette } from './DriverUI';
 export function CoPilotDeviceSetup() {
   const palette = useDriverPalette();
   const setup = useCopilotSetup();
+  const state = useCopilotState();
   const [company, setCompany] = useState('');
   const [device, setDevice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,11 +26,11 @@ export function CoPilotDeviceSetup() {
       setCompany('');
       setDevice('');
       setMessage(
-        'Saved. CoPilot checks licensing and California offline maps automatically.',
+        'Device setup saved and CoPilot started. License and California map checks continue automatically.',
       );
     } catch {
       setMessage(
-        'Setup could not complete. Check the assigned IDs and allow precise location. Existing licenses and maps are preserved.',
+        'CoPilot startup did not complete. See the setup stage below. Existing licenses and maps are preserved.',
       );
     } finally {
       setBusy(false);
@@ -37,7 +41,9 @@ export function CoPilotDeviceSetup() {
     setBusy(true);
     try {
       await setup.retry();
-      setMessage('Saved setup checked.');
+      setMessage(
+        'CoPilot started using saved setup. License and map checks continue automatically.',
+      );
     } catch {
       setMessage(
         'Allow precise location and check the saved device setup, then retry.',
@@ -108,6 +114,17 @@ export function CoPilotDeviceSetup() {
       {!!message && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           {message}
+        </Text>
+      )}
+      {!!state.error && (
+        <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
+          Setup stage: {state.operation ?? state.phase}. Status: {state.error}.
+          {state.operation === 'native-modules'
+            ? ` Missing components: ${Object.entries(state.modules)
+                .filter(([, available]) => !available)
+                .map(([name]) => name)
+                .join(', ')}.`
+            : ''}
         </Text>
       )}
       {!!setup.downloadStatus && (

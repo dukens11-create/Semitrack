@@ -197,12 +197,32 @@ export class CopilotLifecycle {
       }, 30000);
       await this.port.startNative();
       // A void bind call is not initialization evidence. Await onCPStartup.
-    } catch {
+    } catch (error) {
       if (this.active && generation === this.generation) {
         this.startupRejected = true;
         ++this.revision;
         clearTimeout(this.startupTimer);
-        this.fail('COPILOT_NOT_INITIALIZED', 'startup');
+        // Only allow known native codes; never expose SDK text or account identifiers.
+        const nativeCode = (error as { code?: unknown } | null)?.code;
+        const safeCodes = [
+          'COPILOT_STARTUP_TIMEOUT',
+          'COPILOT_VIEW_UNAVAILABLE',
+          'COPILOT_GUIDANCE_SUSPEND_FAILED',
+          'COPILOT_FOREGROUND_FAILED',
+          'COPILOT_SERVICE_DISCONNECTED',
+          'COPILOT_INVALID_BINDING',
+          'COPILOT_NATIVE_STARTUP_FAILED',
+          'COPILOT_SECURE_RESTORE_FAILED',
+          'COPILOT_PRECISE_LOCATION_REQUIRED',
+          'COPILOT_FOREGROUND_ACTIVITY_REQUIRED',
+          'COPILOT_DEVICE_SETUP_REQUIRED',
+        ];
+        this.fail(
+          'COPILOT_NOT_INITIALIZED',
+          typeof nativeCode === 'string' && safeCodes.includes(nativeCode)
+            ? nativeCode
+            : 'startup',
+        );
       }
     }
   }

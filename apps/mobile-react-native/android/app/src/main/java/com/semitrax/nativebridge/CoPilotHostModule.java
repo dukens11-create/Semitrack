@@ -325,7 +325,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         main.postDelayed(startupTimeout, 30000);
       } catch (Exception e) {
         if (startupWaiters.contains(promise)) rejectWaiters("COPILOT_NATIVE_STARTUP_FAILED");
-        else promise.reject("COPILOT_NATIVE_STARTUP_FAILED", "CoPilot requires saved setup, precise location and a visible app.");
+        else {
+          String reason = e.getMessage();
+          String code = "PRECISE_LOCATION_REQUIRED".equals(reason) ? "COPILOT_PRECISE_LOCATION_REQUIRED"
+              : "FOREGROUND_ACTIVITY_REQUIRED".equals(reason) ? "COPILOT_FOREGROUND_ACTIVITY_REQUIRED"
+              : "DEVICE_SETUP_REQUIRED".equals(reason) ? "COPILOT_DEVICE_SETUP_REQUIRED"
+              : "COPILOT_NATIVE_STARTUP_FAILED";
+          promise.reject(code, "CoPilot requires saved setup, precise location and a visible app.");
+        }
         if (!started) release();
       }
     });

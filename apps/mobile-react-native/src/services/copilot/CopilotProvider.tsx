@@ -83,6 +83,10 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     });
     lifecycle.current = next;
     await next.start();
+    const result = next.snapshot();
+    if (result.phase === 'ERROR' || !result.initialized) {
+      throw new Error('CoPilot startup did not complete.');
+    }
   }, [synchronize]);
   const retrySaved = useCallback(async () => {
     const location = new NativeLocationProvider();
@@ -95,31 +99,31 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
   }, [retry]);
   const configure = useCallback(
     async (company: string, device: string) => {
-      // Invoked by explicit setup action; native storage never returns the IDs.
-      await coPilotHost().configureDevice(
-        company.trim(),
-        device.trim(),
-        'NORTH_AMERICA_California',
-      );
       const location = new NativeLocationProvider();
       if (
         (await location.permissionStatus()) !== 'granted' &&
         (await location.permission(false)) !== 'granted'
       )
         throw new Error('Precise location is required for CoPilot startup.');
+      // Invoked by explicit setup action; native storage never returns the IDs.
+      await coPilotHost().configureDevice(
+        company.trim(),
+        device.trim(),
+        'NORTH_AMERICA_California',
+      );
       await retry();
     },
     [retry],
   );
   useEffect(() => {
     live.current = true;
-    void retry();
+    void retry().catch(() => {});
     const subscription = AppState.addEventListener('change', next => {
       active.current = next === 'active';
       if (active.current) {
         if (latest.current.initialized)
           void lifecycle.current?.recheck().then(synchronize);
-        else void retry();
+        else void retry().catch(() => {});
       } else synchronize();
     });
     return () => {

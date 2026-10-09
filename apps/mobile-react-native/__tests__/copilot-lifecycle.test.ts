@@ -436,3 +436,33 @@ test('first-map readiness retries a failed inventory query without claiming inst
   expect(h.lifecycle.snapshot().copilotReady).toBe(false);
   h.lifecycle.dispose();
 });
+
+test('startup diagnostics preserve allowlisted native code without exposing account text', async () => {
+  const h = harness();
+  h.port.startNative = async () => {
+    throw Object.assign(new Error('unit-secret-canary'), {
+      code: 'COPILOT_FOREGROUND_FAILED',
+    });
+  };
+  await h.lifecycle.start();
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_NOT_INITIALIZED',
+    operation: 'COPILOT_FOREGROUND_FAILED',
+  });
+  expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+    'unit-secret-canary',
+  );
+  h.lifecycle.dispose();
+});
+test('unknown native error codes are never displayed', async () => {
+  const h = harness();
+  h.port.startNative = async () => {
+    throw { code: 'unit-private-identity' };
+  };
+  await h.lifecycle.start();
+  expect(h.lifecycle.snapshot().operation).toBe('startup');
+  expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+    'unit-private-identity',
+  );
+  h.lifecycle.dispose();
+});

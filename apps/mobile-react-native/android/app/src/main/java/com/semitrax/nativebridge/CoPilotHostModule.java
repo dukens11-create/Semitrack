@@ -70,7 +70,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private volatile String credentialHookState = "NOT_CALLED";
   private volatile LicenseActivationResponse loginResponse;
   private volatile long credentialHookAt;
-  private boolean binding, connected, started, invalidated, mapPrepared;
+  private boolean binding, connected, invalidated, mapPrepared;
+  private volatile boolean started;
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
   private MapImageSet markerSet;
@@ -144,7 +145,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       if (invalidated) return null;
       LicenseMgtInfo assigned = assignedIdentity;
       CoPilotCredentialPolicy.Decision decision = CoPilotCredentialPolicy.decide(
-          CopilotMgr.isActive(), assigned, () -> LicenseMgr.GetActiveAMSUser());
+          // A native pointer/active flag can exist during bootstrap. Only our
+          // completed startup callback authorizes a running-identity query.
+          started && CopilotMgr.isActive(), assigned, () -> LicenseMgr.GetActiveAMSUser());
       credentialHookAt = System.nanoTime();
       credentialHookState = decision.name();
       return decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED ? assigned : null;

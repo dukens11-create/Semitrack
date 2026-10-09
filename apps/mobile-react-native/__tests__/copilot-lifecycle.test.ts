@@ -246,6 +246,33 @@ test.each(['onFailedRouteCalculation', 'onRouteSyncError'])(
     h.lifecycle.dispose();
   },
 );
+test('in-flight readiness query cannot restore READY after route failure', async () => {
+  const h = harness();
+  let finishLicense!: (value: {
+    licensingReady: boolean;
+    fullNavigationLicensed: boolean;
+    heavyTruckLicensed: boolean;
+  }) => void;
+  h.port.licenseState = jest.fn(
+    () => new Promise(resolve => { finishLicense = resolve; }),
+  );
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.port.licenseState).toHaveBeenCalledTimes(1);
+  await h.event('onFailedRouteCalculation');
+  finishLicense({
+    licensingReady: true,
+    fullNavigationLicensed: true,
+    heavyTruckLicensed: true,
+  });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_ROUTE_FAILED',
+    copilotReady: false,
+  });
+  expect(h.port.mapState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
 test('guidance remains unavailable without a verified route', () => {
   const h = harness();
   expect(() => h.lifecycle.requireGuidancePermission()).toThrow();

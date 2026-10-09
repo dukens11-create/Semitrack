@@ -28,8 +28,18 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
   const download = useRef<AutomaticMapDownload | null>(null);
   const active = useRef(AppState.currentState === 'active');
   const live = useRef(false);
+  const firstMapSignalHandled = useRef(false);
   const synchronize = useCallback(() => {
     const current = latest.current;
+    // One genuine SDK readiness signal permits a fresh bounded attempt after startup busy errors.
+    if (
+      current.lastEvent === 'onReadyToDownloadInitialMapData' &&
+      !firstMapSignalHandled.current
+    ) {
+      firstMapSignalHandled.current = true;
+      download.current?.stop();
+      download.current = null;
+    }
     const eligible =
       active.current &&
       current.initialized &&
@@ -63,6 +73,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     download.current?.stop();
     download.current = null;
     lifecycle.current?.dispose();
+    firstMapSignalHandled.current = false;
     setDownloadStatus('');
     const next = new CopilotLifecycle(createCopilotRuntime(), value => {
       if (!live.current) return;

@@ -271,7 +271,10 @@ test('in-flight readiness query cannot restore READY after route failure', async
     heavyTruckLicensed: boolean;
   }) => void;
   h.port.licenseState = jest.fn(
-    () => new Promise(resolve => { finishLicense = resolve; }),
+    () =>
+      new Promise(resolve => {
+        finishLicense = resolve;
+      }),
   );
   await h.lifecycle.start();
   await h.event('onCPStartup');
@@ -410,5 +413,26 @@ test('failure querying maps remains non-ready and does not escape the callback',
     error: 'COPILOT_NOT_READY',
     copilotReady: false,
   });
+  h.lifecycle.dispose();
+});
+test('first-map readiness retries a failed inventory query without claiming installation', async () => {
+  const h = harness();
+  h.port.mapState = jest
+    .fn()
+    .mockRejectedValueOnce(new Error('manager busy'))
+    .mockResolvedValue({
+      licensed: [1],
+      installed: [],
+      mapsReady: false,
+      updateStatus: 'NOT_CHECKED',
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().error).toBe('COPILOT_NOT_READY');
+  await h.event('onReadyToDownloadInitialMapData');
+  expect(h.port.mapState).toHaveBeenCalledTimes(2);
+  expect(h.lifecycle.snapshot().error).toBe('COPILOT_MAP_DATA_REQUIRED');
+  expect(h.lifecycle.snapshot().mapsReady).toBe(false);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
   h.lifecycle.dispose();
 });

@@ -272,6 +272,7 @@ export class CopilotLifecycle {
         'onReadyToAddStops',
         'onMapdataUpdate',
         'onMapDownloadResponse',
+        'onReadyToDownloadInitialMapData',
       ].includes(event)
     ) {
       // Invalidate readiness immediately; never retain READY while rechecking maps/licenses.

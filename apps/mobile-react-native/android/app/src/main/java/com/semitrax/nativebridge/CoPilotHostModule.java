@@ -179,6 +179,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         started = false;
         emit("onCPShutdown");
         rejectWaiters("COPILOT_SHUTDOWN");
+        release();
       });
     }
   };
@@ -219,6 +220,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       started = false;
       rejectWaiters("COPILOT_SERVICE_DISCONNECTED");
       emit("onCPShutdown");
+      release();
     }
     @Override public void onBindingDied(ComponentName name) {
       onServiceDisconnected(name);

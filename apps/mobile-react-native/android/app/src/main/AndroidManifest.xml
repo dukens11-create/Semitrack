@@ -24,8 +24,8 @@
       <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.documents" android:exported="false" android:grantUriPermissions="true">
         <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/document_paths" />
       </provider>
-      <!-- Vendor service is linked, but the application does not bind/start it
-           until licensing, profile parity and native validation are resolved. -->
+      <!-- Secure host binds from a visible activity with precise location permission.
+           Map startup does not enable unverified live guidance. -->
       <service android:name="com.alk.copilot.CopilotService"
         android:enabled="true" android:exported="false"
         android:foregroundServiceType="location" />

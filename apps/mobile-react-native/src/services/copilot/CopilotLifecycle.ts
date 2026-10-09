@@ -386,6 +386,12 @@ export class CopilotLifecycle {
       const nativeCode = (error as { code?: unknown } | null)?.code;
       const safeCodes = [
         'COPILOT_IDENTITY_UNVERIFIED',
+        'COPILOT_LICENSE_QUERY_FAILED',
+        'COPILOT_AMS_ENGINE_NOT_STARTED',
+        'COPILOT_AMS_IDENTITY_QUERY_FAILED',
+        'COPILOT_AMS_IDENTITY_MISSING',
+        'COPILOT_AMS_COMPANY_MISMATCH',
+        'COPILOT_AMS_DEVICE_MISMATCH',
         'COPILOT_INVENTORY_FAILED',
         'COPILOT_SECURE_RESTORE_FAILED',
         'CONFIGURATION_INVALID',
@@ -400,7 +406,9 @@ export class CopilotLifecycle {
         if (
           stage !== 'route-manager-readiness' &&
           nativeCode !== 'CONFIGURATION_INVALID' &&
-          nativeCode !== 'COPILOT_SECURE_RESTORE_FAILED'
+          nativeCode !== 'COPILOT_SECURE_RESTORE_FAILED' &&
+          nativeCode !== 'COPILOT_AMS_COMPANY_MISMATCH' &&
+          nativeCode !== 'COPILOT_AMS_DEVICE_MISMATCH'
         )
           this.retryReadiness(revision);
       }

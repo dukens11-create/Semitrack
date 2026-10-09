@@ -557,3 +557,56 @@ test.each(['dispose', 'route-failure'])(
     h.lifecycle.dispose();
   },
 );
+
+test.each([
+  'COPILOT_AMS_IDENTITY_MISSING',
+  'COPILOT_AMS_IDENTITY_QUERY_FAILED',
+])('%s recovers only after a fresh successful license query', async code => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.licenseState = jest
+    .fn()
+    .mockRejectedValueOnce({ code, message: 'unit-secret-canary' })
+    .mockResolvedValue({
+      licensingReady: true,
+      fullNavigationLicensed: true,
+      heavyTruckLicensed: true,
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().operation).toBe(
+    'license-verification: ' + code,
+  );
+  expect(h.port.mapState).not.toHaveBeenCalled();
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+    'unit-secret-canary',
+  );
+  await jest.advanceTimersByTimeAsync(5000);
+  expect(h.port.licenseState).toHaveBeenCalledTimes(2);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  h.lifecycle.dispose();
+});
+test.each(['COPILOT_AMS_COMPANY_MISMATCH', 'COPILOT_AMS_DEVICE_MISMATCH'])(
+  '%s stops automatic retries and cannot grant readiness',
+  async code => {
+    jest.useFakeTimers();
+    const h = harness();
+    h.port.licenseState = jest
+      .fn()
+      .mockRejectedValue({ code, message: 'unit-secret-canary' });
+    await h.lifecycle.start();
+    await h.event('onCPStartup');
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(h.port.licenseState).toHaveBeenCalledTimes(1);
+    expect(h.port.mapState).not.toHaveBeenCalled();
+    expect(h.lifecycle.snapshot().operation).toBe(
+      'license-verification: ' + code,
+    );
+    expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+    expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+      'unit-secret-canary',
+    );
+    h.lifecycle.dispose();
+  },
+);

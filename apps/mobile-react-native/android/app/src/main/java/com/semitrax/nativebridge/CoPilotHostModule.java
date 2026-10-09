@@ -66,7 +66,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private static final String CHANNEL = "semitrax_copilot";
   private JSONObject configuration;
   private boolean binding, connected, started, invalidated, mapPrepared;
-  private boolean identityMismatch, listenersRegistered;
+  private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
   private MapImageSet markerSet;
 
@@ -144,13 +144,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (invalidated || configuration == null) return null;
         LicenseMgtInfo active = LicenseMgr.GetActiveAMSUser();
         if (activeIdentityPresent(active) && !identityMatches(active)) {
-          identityMismatch = true;
           // Empty hook preserves cached licenses instead of switching the AMS account.
           return null;
         }
         return new LicenseMgtInfo(configuration.getString("device"), configuration.getString("company"));
       } catch (Exception e) {
-        identityMismatch = true;
         return null;
       }
     }
@@ -315,7 +313,6 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         startupWaiters.add(promise);
         if (binding) return;
         // Register hook before binding. No JS credentials, product keys or defaults.
-        identityMismatch = false;
         if (!listenersRegistered) {
           CopilotListener.registerListener(startupListener);
           MapDataListener.registerListener(mapListener);
@@ -341,7 +338,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     });
   }
   private void requireIdentity() throws Exception {
-    if (!started || identityMismatch || !identityMatches(LicenseMgr.GetActiveAMSUser())) throw new IllegalStateException("DEVICE_IDENTITY_UNVERIFIED");
+    if (!started) throw new IllegalStateException("COPILOT_AMS_ENGINE_NOT_STARTED");
+    LicenseMgtInfo active;
+    try { active = LicenseMgr.GetActiveAMSUser(); }
+    catch (Exception e) { throw new IllegalStateException("COPILOT_AMS_IDENTITY_QUERY_FAILED"); }
+    if (!activeIdentityPresent(active) || active.getCompanyID() == null || active.getCompanyID().isEmpty())
+      throw new IllegalStateException("COPILOT_AMS_IDENTITY_MISSING");
+    if (!configuration.getString("company").equals(active.getCompanyID()))
+      throw new IllegalStateException("COPILOT_AMS_COMPANY_MISMATCH");
+    if (!configuration.getString("device").equalsIgnoreCase(active.getAssetID()))
+      throw new IllegalStateException("COPILOT_AMS_DEVICE_MISMATCH");
+    // A fresh SDK identity is authoritative; an early hook failure cannot latch a rejection.
   }
   private boolean feature(LicenseFeature feature) {
     FeatureStatus status = LicenseMgr.getFeatureStatus(feature);
@@ -350,7 +357,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void licenseState(Promise promise) {
     main.post(() -> {
       try {
-        if (!started) throw new IllegalStateException("ENGINE_NOT_STARTED");
+        if (!started) throw new IllegalStateException("COPILOT_AMS_ENGINE_NOT_STARTED");
         boolean ready = LicenseMgr.isLicensingReady();
         // AMS can be pending after startup. Return non-ready without granting anything;
         // verify the exact assigned identity once licensing actually becomes ready.
@@ -360,7 +367,16 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("fullNavigationLicensed", ready && feature(LicenseFeature.FULL_NAVIGATION));
         result.putBoolean("heavyTruckLicensed", ready && feature(LicenseFeature.TRUCK_HEAVY_DUTY));
         promise.resolve(result);
-      } catch (Exception e) { promise.reject("COPILOT_IDENTITY_UNVERIFIED", "This device’s AMS identity and license could not be verified."); }
+      } catch (Exception e) {
+        String code = "COPILOT_LICENSE_QUERY_FAILED";
+        String detail = e.getMessage();
+        if ("COPILOT_AMS_ENGINE_NOT_STARTED".equals(detail) ||
+            "COPILOT_AMS_IDENTITY_QUERY_FAILED".equals(detail) ||
+            "COPILOT_AMS_IDENTITY_MISSING".equals(detail) ||
+            "COPILOT_AMS_COMPANY_MISMATCH".equals(detail) ||
+            "COPILOT_AMS_DEVICE_MISMATCH".equals(detail)) code = detail;
+        promise.reject(code, "This device’s AMS identity and license could not be verified.");
+      }
     });
   }
   @ReactMethod public void mapInventory(Promise promise) {

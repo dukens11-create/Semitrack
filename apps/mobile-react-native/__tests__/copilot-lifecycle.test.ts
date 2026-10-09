@@ -109,6 +109,26 @@ test('startup rejection is contained and does not expose supplied native error t
   );
   h.lifecycle.dispose();
 });
+test('late SDK startup and license callbacks cannot restore readiness after native bind rejection', async () => {
+  const h = harness();
+  h.port.startNative = async () => {
+    throw new Error('unit-native-bind-rejected');
+  };
+  await h.lifecycle.start();
+  expect(h.lifecycle.snapshot().error).toBe('COPILOT_NOT_INITIALIZED');
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  await h.event('onReadyToAddStops');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    phase: 'ERROR',
+    initialized: false,
+    copilotReady: false,
+    error: 'COPILOT_NOT_INITIALIZED',
+    operation: 'startup',
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
 test('missing initialization callback times out without inventing ready', async () => {
   jest.useFakeTimers();
   const h = harness();

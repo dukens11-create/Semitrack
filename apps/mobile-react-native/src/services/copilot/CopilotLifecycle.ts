@@ -242,6 +242,9 @@ export class CopilotLifecycle {
       this.fail('COPILOT_ROUTE_FAILED', event);
       return;
     }
+    // Only onCPStartup establishes initialization. Native callbacks arriving
+    // before startup must not query licensing or mark CoPilot ready.
+    if (!this.state.initialized && event !== 'onCPStartup') return;
     if (!this.config) return;
     // Duplicate startup notifications are not evidence that an existing
     // failed route has become safe. Only the first startup can initialize.

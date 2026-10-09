@@ -1,0 +1,47 @@
+name: Original SemiTraX recovery Android APK
+on:
+  push:
+    branches:
+      - recovery/semitrax-original-2026-09-20
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: semitrax-original-recovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile-react-native
+    env:
+      SEMITRAX_API_URL: https://semitrax-api.onrender.com
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/mobile-react-native/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install original mobile dependencies
+        run: npm ci
+      - name: Validate original mobile source
+        run: npm run check
+      - name: Build separate recovery debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload recovery APK (not approved for installation)
+        uses: actions/upload-artifact@v4
+        with:
+          name: semitrax-original-2026-09-20-debug-review-only
+          path: apps/mobile-react-native/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

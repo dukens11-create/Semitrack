@@ -610,3 +610,47 @@ test.each(['COPILOT_AMS_COMPANY_MISMATCH', 'COPILOT_AMS_DEVICE_MISMATCH'])(
     h.lifecycle.dispose();
   },
 );
+
+test.each([
+  'COPILOT_AMS_LOGIN_FAILED_LOGIN_INVALID_CREDS',
+  'COPILOT_AMS_LOGIN_FAILED_LOGIN_DEVICE_LIMIT_REACHED',
+  'COPILOT_AMS_LOGIN_FAILED_LOGIN_NO_ACTIVE_LICENSES',
+  'COPILOT_AMS_HOOK_NOT_CALLED',
+])(
+  '%s preserves the SDK diagnosis without automatic retry or map readiness',
+  async code => {
+    jest.useFakeTimers();
+    const h = harness();
+    h.port.licenseState = jest
+      .fn()
+      .mockRejectedValue({ code, message: 'unit-secret-canary' });
+    await h.lifecycle.start();
+    await h.event('onCPStartup');
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(h.port.licenseState).toHaveBeenCalledTimes(1);
+    expect(h.lifecycle.snapshot().operation).toBe(
+      'license-verification: ' + code,
+    );
+    expect(h.port.mapState).not.toHaveBeenCalled();
+    expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+      'unit-secret-canary',
+    );
+    h.lifecycle.dispose();
+  },
+);
+test('Trimble server failure retries only within the bounded recovery window', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.licenseState = jest
+    .fn()
+    .mockRejectedValue({
+      code: 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER',
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(h.port.licenseState).toHaveBeenCalledTimes(7);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  expect(h.port.mapState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});

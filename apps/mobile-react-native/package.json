@@ -12,7 +12,7 @@
     "configure": "node --experimental-strip-types scripts/configure.mts",
     "postinstall": "npm run configure && patch-package",
     "configure:release": "npm run configure -- --release",
-    "check:native": "node scripts/check-native.cjs",
+    "check:native": "node scripts/check-native.cjs && node scripts/check-copilot-native-policy.cjs",
     "check": "npm run typecheck && npm run lint -- --max-warnings=0 && npm test && npm run check:native && npm run test:tooling",
     "check:page-size": "node scripts/check-android-page-size.cjs",
     "test:tooling": "node --test scripts/check-android-page-size.test.cjs",

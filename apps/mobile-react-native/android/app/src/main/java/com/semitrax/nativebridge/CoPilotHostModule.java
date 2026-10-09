@@ -26,6 +26,7 @@ import com.alk.cpik.guidance.GuidanceSettings;
 import com.alk.cpik.guidance.GuidanceMgr;
 import com.alk.cpik.licensing.FeatureStatus;
 import com.alk.cpik.licensing.LicenseFeature;
+import com.alk.cpik.licensing.LicenseActivationResponse;
 import com.alk.cpik.licensing.LicenseListener;
 import com.alk.cpik.licensing.LicenseMgr;
 import com.alk.cpik.licensing.LicenseMgtInfo;
@@ -65,6 +66,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private static final String KEY = "semitrax_copilot_device_v1";
   private static final String CHANNEL = "semitrax_copilot";
   private JSONObject configuration;
+  private volatile LicenseMgtInfo assignedIdentity;
+  private volatile String credentialHookState = "NOT_CALLED";
+  private volatile LicenseActivationResponse loginResponse;
+  private volatile long credentialHookAt;
   private boolean binding, connected, started, invalidated, mapPrepared;
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
@@ -131,28 +136,29 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     if (!context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().putString("encrypted", envelope.toString()).commit())
       throw new IllegalStateException("STORE_FAILED");
   }
-  private boolean identityMatches(LicenseMgtInfo active) throws Exception {
-    return active != null && configuration.getString("company").equals(active.getCompanyID()) &&
-        configuration.getString("device").equalsIgnoreCase(active.getAssetID());
-  }
   private boolean activeIdentityPresent(LicenseMgtInfo active) {
     return active != null && active.getAssetID() != null && !active.getAssetID().isEmpty();
   }
   private final LicenseListener hook = new LicenseListener() {
     @Override public LicenseMgtInfo licenseMgtCredentialHook() {
-      try {
-        if (invalidated || configuration == null) return null;
-        LicenseMgtInfo active = LicenseMgr.GetActiveAMSUser();
-        if (activeIdentityPresent(active) && !identityMatches(active)) {
-          // Empty hook preserves cached licenses instead of switching the AMS account.
-          return null;
-        }
-        return new LicenseMgtInfo(configuration.getString("device"), configuration.getString("company"));
-      } catch (Exception e) {
-        return null;
-      }
+      if (invalidated) return null;
+      LicenseMgtInfo assigned = assignedIdentity;
+      CoPilotCredentialPolicy.Decision decision = CoPilotCredentialPolicy.decide(
+          CopilotMgr.isActive(), assigned, () -> LicenseMgr.GetActiveAMSUser());
+      credentialHookAt = System.nanoTime();
+      credentialHookState = decision.name();
+      return decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED ? assigned : null;
+    }
+    @Override public void onLicenseMgtLogin(LicenseActivationResponse response, LicenseMgtInfo info) {
+      // Do not retain callback account IDs or emit them into JS/logs.
+      loginResponse = response;
+      main.post(() -> emit("onLicenseMgtLogin"));
     }
   };
+  private void restoreAssignedIdentity() throws Exception {
+    assignedIdentity = configuration == null ? null :
+        new LicenseMgtInfo(configuration.getString("device"), configuration.getString("company"));
+  }
   private final CopilotListener startupListener = new CopilotListener() {
     @Override public void onCPStartup() {
       main.post(() -> {
@@ -288,6 +294,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           throw new IllegalStateException("DEVICE_IDENTITY_CHANGE_BLOCKED");
         writeStored(next);
         configuration = next;
+        restoreAssignedIdentity();
         promise.resolve(null);
       } catch (Exception e) { promise.reject("COPILOT_DEVICE_SETUP_FAILED", "Device setup could not be saved. Existing identity and maps are preserved."); }
     });
@@ -296,6 +303,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     main.post(() -> {
       try {
         configuration = readStored();
+        restoreAssignedIdentity();
         promise.resolve(configuration == null ? null : publicConfiguration());
       } catch (Exception e) { promise.reject("COPILOT_SECURE_RESTORE_FAILED", "Saved CoPilot setup could not be restored."); }
     });
@@ -317,9 +325,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           CopilotListener.registerListener(startupListener);
           MapDataListener.registerListener(mapListener);
           UIListener.registerListener(uiListener);
-          LicenseListener.registerHook(hook);
+          LicenseListener.registerListener(hook);
           listenersRegistered = true;
         }
+        // The vendor RN module also owns a default global hook. Reclaim the
+        // singleton immediately before every bind, after all RN modules exist.
+        credentialHookState = "NOT_CALLED";
+        loginResponse = null;
+        LicenseListener.registerHook(hook);
         binding = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
         if (!binding) throw new IllegalStateException("BIND_FAILED");
         main.postDelayed(startupTimeout, 30000);
@@ -343,12 +356,31 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     try { active = LicenseMgr.GetActiveAMSUser(); }
     catch (Exception e) { throw new IllegalStateException("COPILOT_AMS_IDENTITY_QUERY_FAILED"); }
     if (!activeIdentityPresent(active) || active.getCompanyID() == null || active.getCompanyID().isEmpty())
-      throw new IllegalStateException("COPILOT_AMS_IDENTITY_MISSING");
+      throw new IllegalStateException(missingIdentityCode());
     if (!configuration.getString("company").equals(active.getCompanyID()))
       throw new IllegalStateException("COPILOT_AMS_COMPANY_MISMATCH");
     if (!configuration.getString("device").equalsIgnoreCase(active.getAssetID()))
       throw new IllegalStateException("COPILOT_AMS_DEVICE_MISMATCH");
     // A fresh SDK identity is authoritative; an early hook failure cannot latch a rejection.
+  }
+  private String missingIdentityCode() {
+    LicenseActivationResponse response = loginResponse;
+    if (response != null && response != LicenseActivationResponse.SUCCESS &&
+        response != LicenseActivationResponse.FAILED_LOGIN_WILL_EXPIRE)
+      return "COPILOT_AMS_LOGIN_" + response.name();
+    if ("NOT_CALLED".equals(credentialHookState)) return "COPILOT_AMS_HOOK_NOT_CALLED";
+    if ("QUERY_FAILED".equals(credentialHookState)) return "COPILOT_AMS_HOOK_QUERY_FAILED";
+    if ("PRESERVE_OTHER_ACCOUNT".equals(credentialHookState)) return "COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED";
+    if ("NO_ASSIGNMENT".equals(credentialHookState)) return "COPILOT_AMS_ASSIGNMENT_MISSING";
+    if ("SUPPLY_ASSIGNED".equals(credentialHookState) && response == null)
+      return System.nanoTime() - credentialHookAt < 25000000000L
+          ? "COPILOT_AMS_LOGIN_RESPONSE_PENDING" : "COPILOT_AMS_LOGIN_NO_RESPONSE";
+    return "COPILOT_AMS_IDENTITY_MISSING";
+  }
+  private boolean safeLoginCode(String detail) {
+    for (LicenseActivationResponse response : LicenseActivationResponse.values())
+      if (("COPILOT_AMS_LOGIN_" + response.name()).equals(detail)) return true;
+    return false;
   }
   private boolean feature(LicenseFeature feature) {
     FeatureStatus status = LicenseMgr.getFeatureStatus(feature);
@@ -359,6 +391,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         if (!started) throw new IllegalStateException("COPILOT_AMS_ENGINE_NOT_STARTED");
         boolean ready = LicenseMgr.isLicensingReady();
+        LicenseActivationResponse response = loginResponse;
+        if (!ready && response != null && response != LicenseActivationResponse.SUCCESS &&
+            response != LicenseActivationResponse.FAILED_LOGIN_WILL_EXPIRE)
+          throw new IllegalStateException("COPILOT_AMS_LOGIN_" + response.name());
         // AMS can be pending after startup. Return non-ready without granting anything;
         // verify the exact assigned identity once licensing actually becomes ready.
         if (ready) requireIdentity();
@@ -374,7 +410,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             "COPILOT_AMS_IDENTITY_QUERY_FAILED".equals(detail) ||
             "COPILOT_AMS_IDENTITY_MISSING".equals(detail) ||
             "COPILOT_AMS_COMPANY_MISMATCH".equals(detail) ||
-            "COPILOT_AMS_DEVICE_MISMATCH".equals(detail)) code = detail;
+            "COPILOT_AMS_DEVICE_MISMATCH".equals(detail) ||
+            "COPILOT_AMS_HOOK_NOT_CALLED".equals(detail) ||
+            "COPILOT_AMS_HOOK_QUERY_FAILED".equals(detail) ||
+            "COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED".equals(detail) ||
+            "COPILOT_AMS_ASSIGNMENT_MISSING".equals(detail) ||
+            "COPILOT_AMS_LOGIN_RESPONSE_PENDING".equals(detail) ||
+            "COPILOT_AMS_LOGIN_NO_RESPONSE".equals(detail) ||
+            safeLoginCode(detail)) code = detail;
         promise.reject(code, "This device’s AMS identity and license could not be verified.");
       }
     });
@@ -529,6 +572,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       CopilotListener.unregisterListener(startupListener);
       MapDataListener.unregisterListener(mapListener);
       UIListener.unregisterListener(uiListener);
+      LicenseListener.unregisterListener(hook);
       // Do not clear native credentials, installed maps or cached licenses.
     });
     super.invalidate();

@@ -1,3 +1,4 @@
+import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
@@ -125,6 +126,11 @@ export function CoPilotDeviceSetup() {
                 .map(([name]) => name)
                 .join(', ')}.`
             : ''}
+        </Text>
+      )}
+      {!!amsSetupExplanation(state.operation) && (
+        <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
+          {amsSetupExplanation(state.operation)}
         </Text>
       )}
       {!!setup.downloadStatus && (

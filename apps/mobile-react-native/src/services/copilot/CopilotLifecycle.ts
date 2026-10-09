@@ -1,3 +1,7 @@
+import {
+  amsDiagnosticCodes,
+  retryAmsFailure,
+} from './CopilotLicenseDiagnostics';
 import type { CopilotConfiguration } from './CopilotConfiguration';
 import { CopilotP0Error } from './CopilotConfiguration';
 import { assessCopilotTruckProfile } from './CopilotTruckProfile';
@@ -385,6 +389,7 @@ export class CopilotLifecycle {
     } catch (error) {
       const nativeCode = (error as { code?: unknown } | null)?.code;
       const safeCodes = [
+        ...amsDiagnosticCodes,
         'COPILOT_IDENTITY_UNVERIFIED',
         'COPILOT_LICENSE_QUERY_FAILED',
         'COPILOT_AMS_ENGINE_NOT_STARTED',
@@ -407,8 +412,7 @@ export class CopilotLifecycle {
           stage !== 'route-manager-readiness' &&
           nativeCode !== 'CONFIGURATION_INVALID' &&
           nativeCode !== 'COPILOT_SECURE_RESTORE_FAILED' &&
-          nativeCode !== 'COPILOT_AMS_COMPANY_MISMATCH' &&
-          nativeCode !== 'COPILOT_AMS_DEVICE_MISMATCH'
+          retryAmsFailure(nativeCode)
         )
           this.retryReadiness(revision);
       }

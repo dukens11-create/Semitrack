@@ -243,6 +243,9 @@ export class CopilotLifecycle {
       return;
     }
     if (!this.config) return;
+    // Duplicate startup notifications are not evidence that an existing
+    // failed route has become safe. Only the first startup can initialize.
+    if (event === 'onCPStartup' && this.state.initialized) return;
     if (event === 'onCPStartup') {
       clearTimeout(this.startupTimer);
       this.publish({

@@ -1,6 +1,18 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
+export interface CoPilotSetupDiagnostics {
+  savedCompanyMatches: boolean;
+  savedDeviceMatches: boolean;
+  credentialHook: string;
+  hookMatchedAssigned: boolean;
+  callbackMatchedAssigned: boolean;
+  loginResponse: string;
+  canRepairTypo: boolean;
+  restartRequired: boolean;
+}
 export interface CoPilotHost {
+  setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;
+  repairAssignedSetup?(): Promise<void>;
   readonly automaticAssignedSetup?: boolean;
   configureDevice(
     company: string,

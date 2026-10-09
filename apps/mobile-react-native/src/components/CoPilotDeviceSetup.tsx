@@ -1,11 +1,15 @@
 import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   useCopilotSetup,
   useCopilotState,
 } from '../services/copilot/CopilotProvider';
+import {
+  coPilotHost,
+  type CoPilotSetupDiagnostics,
+} from '../services/copilot/CoPilotHost';
 import { useDriverPalette } from './DriverUI';
 export function CoPilotDeviceSetup() {
   const palette = useDriverPalette();
@@ -18,6 +22,43 @@ export function CoPilotDeviceSetup() {
   const [device, setDevice] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [diagnostics, setDiagnostics] =
+    useState<CoPilotSetupDiagnostics | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (automatic) {
+      try {
+        void coPilotHost()
+          .setupDiagnostics?.()
+          .then(value => {
+            if (live) setDiagnostics(value);
+          })
+          .catch(() => {});
+      } catch {}
+    }
+    return () => {
+      live = false;
+    };
+  }, [automatic, state.operation, state.error]);
+  async function repair() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const host = coPilotHost();
+      if (!host.repairAssignedSetup) throw new Error('Repair unavailable');
+      await host.repairAssignedSetup();
+      setMessage(
+        'Saved Company ID typo corrected. Use Android Settings → Apps → SemiTraX → Force stop, then reopen once to start a fresh CoPilot login. Maps and licenses are preserved.',
+      );
+      setDiagnostics(await host.setupDiagnostics!());
+    } catch {
+      setMessage(
+        'Repair blocked to preserve existing setup. See the setup checks below.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   async function configure() {
     if (busy) return;
     if (!company.trim() || !device.trim()) {
@@ -47,7 +88,7 @@ export function CoPilotDeviceSetup() {
     try {
       await setup.retry();
       setMessage(
-        'CoPilot started using saved setup. License and map checks continue automatically.',
+        'Saved setup checked. See the license result below. Retrying does not change the saved IDs.',
       );
     } catch {
       setMessage(
@@ -137,6 +178,32 @@ export function CoPilotDeviceSetup() {
       >
         <Text style={styles.buttonText}>Retry saved setup</Text>
       </Pressable>
+      {!!diagnostics && (
+        <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
+          Saved Company ID matches assignment:{' '}
+          {diagnostics.savedCompanyMatches ? 'Yes' : 'No'}.{'\n'}
+          Saved Device ID matches assignment:{' '}
+          {diagnostics.savedDeviceMatches ? 'Yes' : 'No'}.{'\n'}
+          Credential hook: {diagnostics.credentialHook}.{'\n'}
+          Hook supplied assigned pair:{' '}
+          {diagnostics.hookMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
+          Login callback matches assignment:{' '}
+          {diagnostics.callbackMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
+          Login response: {diagnostics.loginResponse}.
+        </Text>
+      )}
+      {diagnostics?.canRepairTypo && !diagnostics.restartRequired && (
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => {
+            void repair();
+          }}
+          style={styles.button}
+        >
+          <Text style={styles.buttonText}>Correct saved Company ID typo</Text>
+        </Pressable>
+      )}
       {!!message && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           {message}

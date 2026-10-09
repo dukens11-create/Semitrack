@@ -20,6 +20,16 @@ public final class CoPilotCredentialPolicyTest {
     expect("SemiTraX-Android-Test-01".equals(CoPilotEnrollmentPolicy.DEVICE), "assigned Device ID is exact");
     expect(com.alk.cpik.mapdata.MapRegion.valueOf(CoPilotEnrollmentPolicy.REGION) ==
         com.alk.cpik.mapdata.MapRegion.NORTH_AMERICA_California, "enrollment region is the shipped SDK California enum");
+    expect(CoPilotEnrollmentPolicy.isAssigned("XGNKEA", "semitrax-android-test-01"), "assignment permits SDK device case variation");
+    expect(!CoPilotEnrollmentPolicy.isAssigned("XGNKEAX", CoPilotEnrollmentPolicy.DEVICE), "saved company typo is detected");
+    expect(CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, true, true, () -> null), "confirmed rejected typo with no account can be corrected");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, true, true, () -> new LicenseMgtInfo("Other", "Other")), "active accounts cannot be replaced");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, true, true, () -> { throw new Exception(); }), "unknown account query cannot permit repair");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, true, false, () -> { throw new AssertionError("cold SDK query"); }), "cold repair never queries the SDK");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, false, true, () -> null), "non-rejected assignments are preserved");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(false, "SM-S908U", "XGNKEAX", CoPilotEnrollmentPolicy.DEVICE, true, true, () -> null), "repair is unavailable in general builds");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "OTHER", CoPilotEnrollmentPolicy.DEVICE, true, true, () -> null), "arbitrary company changes are blocked");
+    expect(!CoPilotEnrollmentPolicy.canRepairTypo(true, "SM-S908U", "XGNKEAX", "Other", true, true, () -> null), "other device changes are blocked");
     LicenseMgtInfo assigned = new LicenseMgtInfo("Unit-Device", "UNIT");
     // Reproduce the shipped SDK failure before native pointers are initialized.
     boolean earlyQueryFailed = false;

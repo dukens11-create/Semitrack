@@ -72,6 +72,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private volatile String credentialHookState = "NOT_CALLED";
   private volatile LicenseActivationResponse loginResponse;
   private volatile long credentialHookAt;
+  private volatile boolean hookMatchedAssigned, callbackMatchedAssigned;
+  private boolean assignedRepairPendingRestart;
   private boolean binding, connected, invalidated, mapPrepared;
   private volatile boolean started;
   private boolean listenersRegistered;
@@ -156,11 +158,15 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           started && CopilotMgr.isActive(), assigned, () -> LicenseMgr.GetActiveAMSUser());
       credentialHookAt = System.nanoTime();
       credentialHookState = decision.name();
+      hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
+          CoPilotEnrollmentPolicy.isAssigned(assigned.getCompanyID(), assigned.getAssetID());
       return decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED ? assigned : null;
     }
     @Override public void onLicenseMgtLogin(LicenseActivationResponse response, LicenseMgtInfo info) {
       // Do not retain callback account IDs or emit them into JS/logs.
       loginResponse = response;
+      callbackMatchedAssigned = info != null &&
+          CoPilotEnrollmentPolicy.isAssigned(info.getCompanyID(), info.getAssetID());
       main.post(() -> emit("onLicenseMgtLogin"));
     }
   };
@@ -311,6 +317,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void prepareDevice(Promise promise) {
     main.post(() -> {
       try {
+        if (assignedRepairPendingRestart && (binding || started))
+          throw new IllegalStateException("RESTART_REQUIRED");
         configuration = readStored();
         if (CoPilotEnrollmentPolicy.shouldEnroll(BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG,
             Build.MODEL, configuration != null, binding || started)) {
@@ -322,6 +330,46 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         restoreAssignedIdentity();
         promise.resolve(configuration == null ? null : publicConfiguration());
       } catch (Exception e) { promise.reject("COPILOT_SECURE_RESTORE_FAILED", "Saved CoPilot setup could not be restored."); }
+    });
+  }
+  private boolean canRepairAssignedTypo(JSONObject saved) throws Exception {
+    return saved != null && CoPilotEnrollmentPolicy.canRepairTypo(
+        BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG, Build.MODEL, saved.getString("company"), saved.getString("device"),
+        loginResponse == LicenseActivationResponse.FAILED_LOGIN_INVALID_CREDS,
+        started && CopilotMgr.isActive(), () -> LicenseMgr.GetActiveAMSUser());
+  }
+  @ReactMethod public void setupDiagnostics(Promise promise) {
+    main.post(() -> {
+      try {
+        JSONObject saved = readStored();
+        WritableMap result = Arguments.createMap();
+        result.putBoolean("savedCompanyMatches", saved != null && CoPilotEnrollmentPolicy.COMPANY.equals(saved.getString("company")));
+        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.DEVICE.equalsIgnoreCase(saved.getString("device")));
+        result.putString("credentialHook", credentialHookState);
+        result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
+        result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);
+        result.putString("loginResponse", loginResponse == null ? "NOT_RECEIVED" : loginResponse.name());
+        result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
+        result.putBoolean("restartRequired", assignedRepairPendingRestart);
+        promise.resolve(result);
+      } catch (Exception e) { promise.reject("COPILOT_DIAGNOSTIC_UNAVAILABLE", "Setup diagnostics unavailable."); }
+    });
+  }
+  @ReactMethod public void repairAssignedSetup(Promise promise) {
+    main.post(() -> {
+      try {
+        JSONObject saved = readStored();
+        if (!canRepairAssignedTypo(saved)) throw new IllegalStateException("REPAIR_NOT_ALLOWED");
+        // Save the original encrypted envelope before narrowly correcting a rejected draft.
+        android.content.SharedPreferences prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE);
+        if (!prefs.edit().putString("rejectedSetupBackup", prefs.getString("encrypted", null)).commit())
+          throw new IllegalStateException("BACKUP_FAILED");
+        JSONObject corrected = new JSONObject(saved.toString()).put("company", CoPilotEnrollmentPolicy.COMPANY);
+        writeStored(corrected);
+        assignedRepairPendingRestart = true;
+        // Do not update the running SDK identity, log out, remove licenses, or erase maps.
+        promise.resolve(null);
+      } catch (Exception e) { promise.reject("COPILOT_REPAIR_BLOCKED", "Repair blocked. Existing setup and maps are preserved."); }
     });
   }
   @ReactMethod public void startEngine(Promise promise) {

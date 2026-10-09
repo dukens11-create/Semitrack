@@ -84,7 +84,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     lifecycle.current = next;
     await next.start();
     const result = next.snapshot();
-    if (result.phase === 'ERROR' || !result.initialized) {
+    if (!result.initialized) {
       throw new Error('CoPilot startup did not complete.');
     }
   }, [synchronize]);

@@ -242,7 +242,7 @@ export function AppNavigator({ services }: { services: Services }) {
         </Stack.Screen>
         <Stack.Screen
           name="Offline"
-          options={{ title: 'Offline display maps' }}
+          options={{ title: 'CoPilot offline maps' }}
         >
           {() => <OfflineMapsScreen services={services} />}
         </Stack.Screen>

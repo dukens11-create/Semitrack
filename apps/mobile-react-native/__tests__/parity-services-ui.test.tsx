@@ -1,7 +1,7 @@
 import { Alert } from '../src/components/ThemedAlert';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Linking, Text } from 'react-native';
+import { Linking, Text, TextInput } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
 import type { Services } from '../src/app/services';
 import { EldScreen } from '../src/screens/EldScreen';
@@ -21,6 +21,26 @@ jest.mock('@rnmapbox/maps', () => ({
       unsubscribe: jest.fn(),
     },
   },
+}));
+const mockCopilotState = {
+  mapsReady: false,
+  maps: {
+    installed: [] as {
+      set: number;
+      year: number;
+      quarter: number;
+      versionString: string;
+    }[],
+  },
+};
+const mockSetup = {
+  downloadStatus: '',
+  retry: jest.fn().mockResolvedValue(undefined),
+  configure: jest.fn().mockResolvedValue(undefined),
+};
+jest.mock('../src/services/copilot/CopilotProvider', () => ({
+  useCopilotState: () => mockCopilotState,
+  useCopilotSetup: () => mockSetup,
 }));
 let screen: ReactTestRenderer;
 const content = () =>
@@ -111,90 +131,56 @@ test('ELD unconfigured provider errors remain visible and do not claim successfu
   expect(content()).toContain('not configured');
   expect(content()).not.toContain('Remaining drive:');
 });
-test('offline screen inventories only owned display packs and deletion is confirmed before native call', async () => {
-  const pack = {
-    name: 'semitrax-display-fixture',
-    status: async () => ({ percentage: 100, completedResourceSize: 1048576 }),
-  };
-  jest
-    .mocked(Mapbox.offlineManager.getPacks)
-    .mockResolvedValue([pack, { ...pack, name: 'unrelated-pack' }] as never);
-  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  const services = {
-    api: { request: jest.fn() },
-    environment: { mapboxToken: '' },
-    location: { getFreshFix: () => null },
-  } as unknown as Services;
-  await act(async () => {
-    screen = create(<OfflineMapsScreen services={services} />);
-  });
-  expect(content()).toContain('1.0');
-  expect(content()).not.toContain('unrelated-pack');
-  expect(content()).toContain('Offline Mapbox display only');
-  await press('Delete semitrax-display-fixture');
-  expect(Mapbox.offlineManager.deletePack).not.toHaveBeenCalled();
-  await act(async () =>
-    alert.mock.calls.at(-1)![2]!.find(b => b.text === 'Delete')!.onPress!(),
-  );
-  expect(Mapbox.offlineManager.deletePack).toHaveBeenCalledWith(
-    'semitrax-display-fixture',
-  );
-});
-test('offline download uses confirmed fresh GPS area and native progress, never a route engine', async () => {
-  jest.mocked(Mapbox.offlineManager.getPacks).mockResolvedValue([]);
-  jest
-    .mocked(Mapbox.offlineManager.createPack)
-    .mockImplementation(async (options, progress) => {
-      progress?.(
-        {} as never,
-        {
-          name: options.name,
-          percentage: 65,
-          completedResourceSize: 2048,
-        } as never,
-      );
-      jest.mocked(Mapbox.offlineManager.getPacks).mockResolvedValue([
-        {
-          name: options.name,
-          status: async () => ({
-            percentage: 65,
-            completedResourceSize: 2048,
-          }),
-        },
-      ] as never);
-    });
-  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  const services = {
-    api: { request: jest.fn() },
-    environment: { mapboxToken: 'pk.fixture' },
-    location: {
-      getFreshFix: () => ({
-        latitude: 40,
-        longitude: -100,
-        accuracy: 5,
-        timestamp: Date.now(),
-        heading: 0,
-        speed: 0,
-      }),
+test('offline maps use CoPilot inventory and preserve existing Mapbox packs', async () => {
+  mockCopilotState.mapsReady = true;
+  mockCopilotState.maps.installed = [
+    {
+      set: 42,
+      year: 2026,
+      quarter: 3,
+      versionString: 'California map fixture',
     },
+  ];
+  const services = {
+    api: { request: jest.fn().mockResolvedValue({}) },
   } as unknown as Services;
   await act(async () => {
     screen = create(<OfflineMapsScreen services={services} />);
   });
-  await press('Download current GPS area');
+  expect(content()).toContain('California offline map verified');
+  expect(content()).toContain('California map fixture');
+  expect(Mapbox.offlineManager.getPacks).not.toHaveBeenCalled();
   expect(Mapbox.offlineManager.createPack).not.toHaveBeenCalled();
-  await act(async () =>
-    alert.mock.calls.at(-1)![2]!.find(b => b.text === 'Download')!.onPress!(),
+  expect(Mapbox.offlineManager.deletePack).not.toHaveBeenCalled();
+  await press('Check API connectivity');
+  expect(services.api.request).toHaveBeenCalledWith('GET', '/health');
+  expect(content()).toContain('checked independently');
+});
+test('offline setup retains assigned Device ID capitalization and does not claim maps installed', async () => {
+  mockCopilotState.mapsReady = false;
+  mockCopilotState.maps.installed = [];
+  const services = { api: { request: jest.fn() } } as unknown as Services;
+  await act(async () => {
+    screen = create(<OfflineMapsScreen services={services} />);
+  });
+  expect(content()).toContain('installation has not been verified');
+  await act(async () => {
+    screen.root
+      .findAllByType(TextInput)
+      .find(n => n.props.accessibilityLabel === 'CoPilot Company ID')!
+      .props.onChangeText('Company-Fixture');
+    screen.root
+      .findAllByType(TextInput)
+      .find(n => n.props.accessibilityLabel === 'CoPilot Device ID')!
+      .props.onChangeText('Phone-FIXTURE-01');
+  });
+  await press('Save CoPilot device setup');
+  expect(mockSetup.configure).toHaveBeenCalledWith(
+    'Company-Fixture',
+    'Phone-FIXTURE-01',
   );
-  expect(Mapbox.offlineManager.createPack).toHaveBeenCalledWith(
-    expect.objectContaining({
-      minZoom: 8,
-      maxZoom: 14,
-      styleURL: Mapbox.StyleURL.Street,
-    }),
-    expect.any(Function),
-    expect.any(Function),
-  );
-  expect(content()).toContain('65');
-  expect(services.api.request).not.toHaveBeenCalled();
+  expect(content()).toContain('installation has not been verified');
+  expect(Mapbox.offlineManager.createPack).not.toHaveBeenCalled();
+  await press('Retry saved CoPilot setup');
+  expect(mockSetup.retry).toHaveBeenCalledTimes(1);
 });

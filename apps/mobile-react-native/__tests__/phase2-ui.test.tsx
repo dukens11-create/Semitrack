@@ -61,6 +61,11 @@ jest.mock('../src/services/copilot/CoPilotHost', () => ({
 }));
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
   useCopilotState: () => ({}),
+  useCopilotSetup: () => ({
+    downloadStatus: '',
+    retry: async () => {},
+    configure: async () => {},
+  }),
 }));
 // Renderer readiness is tested separately with the real lifecycle gate.
 jest.mock('../src/components/CopilotOfflineMap', () => ({

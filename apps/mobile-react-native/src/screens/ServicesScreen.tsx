@@ -187,7 +187,7 @@ export function ServicesScreen({
         disabled={!onEld}
       />
       <Button
-        title="Offline display maps"
+        title="CoPilot offline maps"
         onPress={() => onOffline?.()}
         disabled={!onOffline}
       />
@@ -204,8 +204,8 @@ export function ServicesScreen({
         setup; billing remains disabled.
       </Copy>
       <Copy>
-        Mapbox display packs can be managed under Offline display maps. Offline
-        commercial truck navigation remains unavailable.
+        CoPilot setup and installed maps can be checked under CoPilot offline
+        maps. Offline commercial truck navigation remains unavailable.
       </Copy>
     </Page>
   );

@@ -332,6 +332,22 @@ test('shutdown invalidates readiness and subscription cleanup prevents later upd
   h.lifecycle.dispose();
   expect(h.callbacks.size).toBe(0);
 });
+test('native startup event after shutdown cannot silently reactivate CoPilot', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  await h.event('onCPShutdown');
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    copilotReady: false,
+    error: 'COPILOT_NOT_INITIALIZED',
+    operation: 'shutdown',
+  });
+  h.lifecycle.dispose();
+});
 test('late query results cannot restore readiness after shutdown', async () => {
   const h = harness();
   let resolve!: (value: boolean) => void;

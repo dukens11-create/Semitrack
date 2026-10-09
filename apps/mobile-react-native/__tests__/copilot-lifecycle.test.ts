@@ -79,6 +79,23 @@ test('callbacks precede bind; bind completion cannot fabricate initialization', 
   });
   h.lifecycle.dispose();
 });
+test('readiness callbacks before native startup cannot grant license or maps', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onLicensingReady');
+  await h.event('onReadyToAddStops');
+  await h.event('onMapdataUpdate');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    copilotReady: false,
+    mapsReady: false,
+    readyToAddStops: false,
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  h.lifecycle.dispose();
+});
 test('missing module stops before provisioning/binding', async () => {
   const h = harness();
   h.port.modules = () => ({ LicenseMgr: false });
@@ -109,12 +126,48 @@ test('startup rejection is contained and does not expose supplied native error t
   );
   h.lifecycle.dispose();
 });
+test('late SDK startup and license callbacks cannot restore readiness after native bind rejection', async () => {
+  const h = harness();
+  h.port.startNative = async () => {
+    throw new Error('unit-native-bind-rejected');
+  };
+  await h.lifecycle.start();
+  expect(h.lifecycle.snapshot().error).toBe('COPILOT_NOT_INITIALIZED');
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  await h.event('onReadyToAddStops');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    phase: 'ERROR',
+    initialized: false,
+    copilotReady: false,
+    error: 'COPILOT_NOT_INITIALIZED',
+    operation: 'startup',
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
 test('missing initialization callback times out without inventing ready', async () => {
   jest.useFakeTimers();
   const h = harness();
   await h.lifecycle.start();
   jest.advanceTimersByTime(30000);
   expect(h.lifecycle.snapshot().operation).toBe('startup-timeout');
+  h.lifecycle.dispose();
+});
+test('late SDK callbacks after startup timeout cannot declare CoPilot ready', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  await h.lifecycle.start();
+  jest.advanceTimersByTime(30000);
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    phase: 'ERROR',
+    initialized: false,
+    copilotReady: false,
+    operation: 'startup-timeout',
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
   h.lifecycle.dispose();
 });
 test.each([
@@ -210,6 +263,46 @@ test.each(['onFailedRouteCalculation', 'onRouteSyncError'])(
     h.lifecycle.dispose();
   },
 );
+test('in-flight readiness query cannot restore READY after route failure', async () => {
+  const h = harness();
+  let finishLicense!: (value: {
+    licensingReady: boolean;
+    fullNavigationLicensed: boolean;
+    heavyTruckLicensed: boolean;
+  }) => void;
+  h.port.licenseState = jest.fn(
+    () => new Promise(resolve => { finishLicense = resolve; }),
+  );
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.port.licenseState).toHaveBeenCalledTimes(1);
+  await h.event('onFailedRouteCalculation');
+  finishLicense({
+    licensingReady: true,
+    fullNavigationLicensed: true,
+    heavyTruckLicensed: true,
+  });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_ROUTE_FAILED',
+    copilotReady: false,
+  });
+  expect(h.port.mapState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
+test('duplicate startup callback cannot erase an existing route failure', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  await h.event('onFailedRouteCalculation');
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_ROUTE_FAILED',
+    copilotReady: false,
+  });
+  h.lifecycle.dispose();
+});
 test('guidance remains unavailable without a verified route', () => {
   const h = harness();
   expect(() => h.lifecycle.requireGuidancePermission()).toThrow();
@@ -238,6 +331,22 @@ test('shutdown invalidates readiness and subscription cleanup prevents later upd
   });
   h.lifecycle.dispose();
   expect(h.callbacks.size).toBe(0);
+});
+test('native startup event after shutdown cannot silently reactivate CoPilot', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  await h.event('onCPShutdown');
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    copilotReady: false,
+    error: 'COPILOT_NOT_INITIALIZED',
+    operation: 'shutdown',
+  });
+  h.lifecycle.dispose();
 });
 test('late query results cannot restore readiness after shutdown', async () => {
   const h = harness();

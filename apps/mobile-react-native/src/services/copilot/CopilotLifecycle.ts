@@ -120,6 +120,7 @@ export class CopilotLifecycle {
   private removers: (() => void)[] = [];
   private config: CopilotConfiguration | null = null;
   private active = false;
+  private startupRejected = false;
   private generation = 0;
   private revision = 0;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -153,6 +154,7 @@ export class CopilotLifecycle {
   async start(): Promise<void> {
     if (this.active) return;
     this.active = true;
+    this.startupRejected = false;
     this.state = initialCopilotState();
     this.config = null;
     const generation = ++this.generation;
@@ -181,20 +183,34 @@ export class CopilotLifecycle {
         return;
       }
       this.startupTimer = setTimeout(() => {
-        if (this.active && !this.state.initialized)
+        if (
+          this.active &&
+          generation === this.generation &&
+          !this.state.initialized
+        ) {
+          this.startupRejected = true;
+          ++this.revision;
           this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout');
+        }
       }, 30000);
       await this.port.startNative();
       // A void bind call is not initialization evidence. Await onCPStartup.
     } catch {
-      if (this.active && generation === this.generation)
+      if (this.active && generation === this.generation) {
+        this.startupRejected = true;
+        ++this.revision;
+        clearTimeout(this.startupTimer);
         this.fail('COPILOT_NOT_INITIALIZED', 'startup');
+      }
     }
   }
   private event(event: string) {
-    if (!this.active) return;
+    if (!this.active || this.startupRejected) return;
     this.publish({ lastEvent: event });
     if (event === 'onCPShutdown') {
+      // A shutdown ends this native startup attempt. Only a fresh lifecycle
+      // start may accept a subsequent onCPStartup callback.
+      this.startupRejected = true;
       ++this.revision;
       clearTimeout(this.startupTimer);
       this.publish({
@@ -223,10 +239,19 @@ export class CopilotLifecycle {
       });
     }
     if (event === 'onFailedRouteCalculation' || event === 'onRouteSyncError') {
+      // Cancel any in-flight license/map refresh. Its delayed results must not
+      // restore READY after a safety-critical route failure.
+      ++this.revision;
       this.fail('COPILOT_ROUTE_FAILED', event);
       return;
     }
+    // Only onCPStartup establishes initialization. Native callbacks arriving
+    // before startup must not query licensing or mark CoPilot ready.
+    if (!this.state.initialized && event !== 'onCPStartup') return;
     if (!this.config) return;
+    // Duplicate startup notifications are not evidence that an existing
+    // failed route has become safe. Only the first startup can initialize.
+    if (event === 'onCPStartup' && this.state.initialized) return;
     if (event === 'onCPStartup') {
       clearTimeout(this.startupTimer);
       this.publish({
@@ -322,6 +347,7 @@ export class CopilotLifecycle {
   }
   dispose() {
     this.active = false;
+    this.startupRejected = false;
     ++this.generation;
     ++this.revision;
     clearTimeout(this.startupTimer);

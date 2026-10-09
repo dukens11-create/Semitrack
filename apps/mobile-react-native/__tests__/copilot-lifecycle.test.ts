@@ -469,3 +469,91 @@ test('unknown native error codes are never displayed', async () => {
   );
   h.lifecycle.dispose();
 });
+
+test('pending licensing cannot query installed configuration; licensing event resumes the checks', async () => {
+  const h = harness();
+  h.port.configuration = jest.fn(async () => config);
+  h.port.licenseState = jest
+    .fn()
+    .mockResolvedValueOnce({
+      licensingReady: false,
+      fullNavigationLicensed: false,
+      heavyTruckLicensed: false,
+    })
+    .mockResolvedValue({
+      licensingReady: true,
+      fullNavigationLicensed: true,
+      heavyTruckLicensed: true,
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.port.configuration).not.toHaveBeenCalled();
+  expect(h.port.mapState).not.toHaveBeenCalled();
+  await h.event('onLicensingReady');
+  expect(h.port.configuration).toHaveBeenCalledTimes(1);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  h.lifecycle.dispose();
+});
+test('transient inventory error retries automatically, but never fabricates installation', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.mapState = jest
+    .fn()
+    .mockRejectedValueOnce({
+      code: 'COPILOT_INVENTORY_FAILED',
+      message: 'unit-secret-canary',
+    })
+    .mockResolvedValue({
+      licensed: [1],
+      installed: [],
+      mapsReady: false,
+      updateStatus: 'NOT_CHECKED',
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().operation).toBe(
+    'installed-map-inventory: COPILOT_INVENTORY_FAILED',
+  );
+  expect(JSON.stringify(h.changed.mock.calls)).not.toContain(
+    'unit-secret-canary',
+  );
+  await jest.advanceTimersByTimeAsync(5000);
+  expect(h.port.mapState).toHaveBeenCalledTimes(2);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_MAP_DATA_REQUIRED',
+    mapsReady: false,
+    copilotReady: false,
+  });
+  h.lifecycle.dispose();
+});
+test('readiness retries are bounded and disposal cancels recovery', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.mapState = jest.fn().mockRejectedValue(new Error('transient'));
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(h.port.mapState).toHaveBeenCalledTimes(7);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  h.lifecycle.dispose();
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(h.port.mapState).toHaveBeenCalledTimes(7);
+});
+test.each(['dispose', 'route-failure'])(
+  '%s cancels a pending automatic readiness retry',
+  async stop => {
+    jest.useFakeTimers();
+    const h = harness();
+    h.port.mapState = jest.fn().mockRejectedValue(new Error('transient'));
+    await h.lifecycle.start();
+    await h.event('onCPStartup');
+    if (stop === 'dispose') h.lifecycle.dispose();
+    else await h.event('onFailedRouteCalculation');
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(h.port.mapState).toHaveBeenCalledTimes(1);
+    expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+    if (stop === 'route-failure')
+      expect(h.lifecycle.snapshot().error).toBe('COPILOT_ROUTE_FAILED');
+    h.lifecycle.dispose();
+  },
+);

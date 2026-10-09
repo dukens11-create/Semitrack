@@ -350,8 +350,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void licenseState(Promise promise) {
     main.post(() -> {
       try {
-        requireIdentity();
+        if (!started) throw new IllegalStateException("ENGINE_NOT_STARTED");
         boolean ready = LicenseMgr.isLicensingReady();
+        // AMS can be pending after startup. Return non-ready without granting anything;
+        // verify the exact assigned identity once licensing actually becomes ready.
+        if (ready) requireIdentity();
         WritableMap result = Arguments.createMap();
         result.putBoolean("licensingReady", ready);
         result.putBoolean("fullNavigationLicensed", ready && feature(LicenseFeature.FULL_NAVIGATION));

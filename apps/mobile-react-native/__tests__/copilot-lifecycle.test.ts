@@ -79,6 +79,23 @@ test('callbacks precede bind; bind completion cannot fabricate initialization', 
   });
   h.lifecycle.dispose();
 });
+test('readiness callbacks before native startup cannot grant license or maps', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onLicensingReady');
+  await h.event('onReadyToAddStops');
+  await h.event('onMapdataUpdate');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    copilotReady: false,
+    mapsReady: false,
+    readyToAddStops: false,
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  h.lifecycle.dispose();
+});
 test('missing module stops before provisioning/binding', async () => {
   const h = harness();
   h.port.modules = () => ({ LicenseMgr: false });

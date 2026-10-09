@@ -162,7 +162,8 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
         return null;
       }
     },
-    async startNative(config) {
+    async startNative(config, onStage) {
+      onStage?.('checking-android-location');
       // The patched vendor service silently returns without binding when
       // location access is missing. Fail with an actionable diagnostic before
       // attempting AMS login; don't wait 30 seconds for onCPStartup.
@@ -195,6 +196,7 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       if (config.platform !== 'android' || config.licensingMode !== 'ams-company') {
         throw new Error('COPILOT_AMS_COMPANY_CONFIGURATION_REQUIRED');
       }
+      onStage?.('checking-ams-provider');
       const nativeProvisioning = NativeModules.SemiTraxCopilotProvisioning as
         | { configureAMSLogin?: () => Promise<boolean> }
         | undefined;
@@ -215,10 +217,12 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       if (!identityProvider?.readAMSIdentity || !listener?.setAMSLoginInfo) {
         throw new Error('COPILOT_AMS_IDENTITY_REQUIRED');
       }
+      onStage?.('reading-approved-ams-identity');
       const identity = await identityProvider.readAMSIdentity();
       if (!identity?.assetId || !identity?.companyId) {
         throw new Error('COPILOT_AMS_IDENTITY_REQUIRED');
       }
+      onStage?.('setting-ams-login-hook');
       await listener.setAMSLoginInfo(identity.assetId, identity.companyId);
       const startupModule = NativeModules.CopilotStartupMgr as
         | { bindCoPilotService?: () => Promise<void> | void }
@@ -226,6 +230,7 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       if (!startupModule || typeof startupModule.bindCoPilotService !== 'function') {
         throw new Error('COPILOT_NATIVE_STARTUP_VALIDATION_REQUIRED');
       }
+      onStage?.('binding-copilot-service');
       await startupModule.bindCoPilotService();
     },
     async licenseState() {

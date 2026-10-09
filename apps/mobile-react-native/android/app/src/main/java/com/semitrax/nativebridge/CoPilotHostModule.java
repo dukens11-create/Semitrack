@@ -65,7 +65,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private static final String KEY = "semitrax_copilot_device_v1";
   private static final String CHANNEL = "semitrax_copilot";
   private JSONObject configuration;
-  private boolean binding, connected, started, invalidated;
+  private boolean binding, connected, started, invalidated, mapPrepared;
   private boolean identityMismatch, listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
   private MapImageSet markerSet;
@@ -165,7 +165,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           return;
         }
         // Map/preview integration does not authorize restored or new live guidance.
-        try { GuidanceMgr.suspendNavigation(true); }
+        try {
+          if (context.getLifecycleState() != LifecycleState.RESUMED ||
+              ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            throw new IllegalStateException("VISIBLE_PRECISE_LOCATION_REQUIRED");
+          GuidanceMgr.suspendNavigation(true);
+          CopilotMgr.enableGPS();
+        }
         catch (Exception e) { rejectWaiters("COPILOT_GUIDANCE_SUSPEND_FAILED"); release(); return; }
         started = true;
         main.removeCallbacks(startupTimeout);
@@ -236,7 +242,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     if (binding) {
       try { context.unbindService(connection); } catch (IllegalArgumentException ignored) {}
     }
-    binding = connected = started = false;
+    binding = connected = started = mapPrepared = false;
   }
   private MapRegion region() throws Exception { return MapRegion.valueOf(configuration.getString("region")); }
   private List<MapInfo> installed() {
@@ -396,7 +402,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         requireMap();
         GuidanceSettings.setMapMode(night ? GuidanceSettings.MapMode.NIGHT : GuidanceSettings.MapMode.DAY);
-        UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS);
+        MapDrawer drawer = UIMgr.getMapDrawer();
+        drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS);
+        if (!mapPrepared) {
+          drawer.setMapOrientation(MapDrawer.MapOrientation.NORTH_UP);
+          drawer.lockToChevron();
+          mapPrepared = true;
+        }
         promise.resolve(null);
       }
       catch (Exception e) { promise.reject("COPILOT_MAP_UNAVAILABLE", "CoPilot map setup is incomplete."); }

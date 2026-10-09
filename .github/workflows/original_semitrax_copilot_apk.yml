@@ -48,6 +48,7 @@ jobs:
           test -n "$aapt_bin"
           "$aapt_bin" dump badging "$apk" | grep "^package:" | tee android/app/build/outputs/apk/debug/package-identity.txt
           sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
       - name: Upload device-review APK
         uses: actions/upload-artifact@v4
         with:
@@ -56,4 +57,5 @@ jobs:
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.apk
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.sha256
             apps/mobile-react-native/android/app/build/outputs/apk/debug/package-identity.txt
+            apps/mobile-react-native/android/app/build/outputs/apk/debug/build-commit.txt
           if-no-files-found: error

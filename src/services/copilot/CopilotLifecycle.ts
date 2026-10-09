@@ -49,7 +49,7 @@ export interface CopilotLifecyclePort {
   modules(): Record<string, boolean>;
   listen(event: string, callback: () => void): () => void;
   prepareProvisioning(): Promise<CopilotConfiguration | null>;
-  startNative(config: CopilotConfiguration): Promise<void>;
+  startNative(config: CopilotConfiguration, onStage?: (stage: string) => void): Promise<void>;
   licenseState(): Promise<{
     licensingReady: boolean;
     fullNavigationLicensed: boolean;
@@ -211,11 +211,17 @@ export class CopilotLifecycle {
         );
         return;
       }
+      this.publish({ operation: 'preparing-ams-native-startup' });
       this.startupTimer = setTimeout(() => {
-        if (this.active && !this.state.initialized)
-          this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout');
+        if (this.active && generation === this.generation && !this.state.initialized)
+          this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout-after-' + (this.state.operation ?? 'unknown'));
       }, 30000);
-      await this.port.startNative(this.config);
+      await this.port.startNative(this.config, stage => {
+        if (this.active && generation === this.generation && !this.state.initialized)
+          this.publish({ operation: stage });
+      });
+      if (this.active && generation === this.generation && !this.state.initialized)
+        this.publish({ operation: 'waiting-for-onCPStartup' });
       // A void bind call is not initialization evidence. Await onCPStartup.
     } catch {
       // If native AMS provisioning or login rejects, do not mislabel the
@@ -227,7 +233,7 @@ export class CopilotLifecycle {
           this.config
             ? 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
             : 'COPILOT_NOT_INITIALIZED',
-          this.config ? 'ams-native-startup' : 'startup',
+          this.config ? 'ams-native-startup-at-' + (this.state.operation ?? 'unknown') : 'startup',
         );
       }
     }

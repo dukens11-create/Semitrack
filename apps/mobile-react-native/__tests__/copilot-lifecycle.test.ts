@@ -137,6 +137,22 @@ test('missing initialization callback times out without inventing ready', async 
   expect(h.lifecycle.snapshot().operation).toBe('startup-timeout');
   h.lifecycle.dispose();
 });
+test('late SDK callbacks after startup timeout cannot declare CoPilot ready', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  await h.lifecycle.start();
+  jest.advanceTimersByTime(30000);
+  await h.event('onCPStartup');
+  await h.event('onLicensingReady');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    phase: 'ERROR',
+    initialized: false,
+    copilotReady: false,
+    operation: 'startup-timeout',
+  });
+  expect(h.port.licenseState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
 test.each([
   'licensingReady',
   'fullNavigationLicensed',

@@ -273,6 +273,19 @@ test('in-flight readiness query cannot restore READY after route failure', async
   expect(h.port.mapState).not.toHaveBeenCalled();
   h.lifecycle.dispose();
 });
+test('duplicate startup callback cannot erase an existing route failure', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().initialized).toBe(true);
+  await h.event('onFailedRouteCalculation');
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    error: 'COPILOT_ROUTE_FAILED',
+    copilotReady: false,
+  });
+  h.lifecycle.dispose();
+});
 test('guidance remains unavailable without a verified route', () => {
   const h = harness();
   expect(() => h.lifecycle.requireGuidancePermission()).toThrow();

@@ -1,0 +1,23 @@
+name: Original SemiTraX React Native Validation
+on:
+  push:
+    branches:
+      - codex/original-semitrax-copilot-integration
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile-react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/mobile-react-native/package-lock.json
+      - run: npm ci
+      - run: npm run check

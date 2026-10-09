@@ -207,6 +207,7 @@ export class CopilotLifecycle {
         const safeCodes = [
           'COPILOT_STARTUP_TIMEOUT',
           'COPILOT_VIEW_UNAVAILABLE',
+          'COPILOT_MAP_POLICY_FAILED',
           'COPILOT_GUIDANCE_SUSPEND_FAILED',
           'COPILOT_FOREGROUND_FAILED',
           'COPILOT_SERVICE_DISCONNECTED',

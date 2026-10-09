@@ -164,6 +164,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           release();
           return;
         }
+        // This SDK API throws while inactive. Apply policy only after onCPStartup,
+        // before publishing startup or allowing JS to schedule any map download.
+        try { CopilotMgr.allowCellularDataForMapDownloads(false); }
+        catch (Exception e) { rejectWaiters("COPILOT_MAP_POLICY_FAILED"); release(); return; }
         // Map/preview integration does not authorize restored or new live guidance.
         try {
           if (context.getLifecycleState() != LifecycleState.RESUMED ||
@@ -319,7 +323,6 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           LicenseListener.registerHook(hook);
           listenersRegistered = true;
         }
-        CopilotMgr.allowCellularDataForMapDownloads(false);
         binding = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
         if (!binding) throw new IllegalStateException("BIND_FAILED");
         main.postDelayed(startupTimeout, 30000);

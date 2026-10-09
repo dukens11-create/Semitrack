@@ -183,8 +183,15 @@ export class CopilotLifecycle {
         return;
       }
       this.startupTimer = setTimeout(() => {
-        if (this.active && !this.state.initialized)
+        if (
+          this.active &&
+          generation === this.generation &&
+          !this.state.initialized
+        ) {
+          this.startupRejected = true;
+          ++this.revision;
           this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout');
+        }
       }, 30000);
       await this.port.startNative();
       // A void bind call is not initialization evidence. Await onCPStartup.

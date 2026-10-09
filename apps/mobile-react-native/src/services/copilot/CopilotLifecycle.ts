@@ -208,6 +208,9 @@ export class CopilotLifecycle {
     if (!this.active || this.startupRejected) return;
     this.publish({ lastEvent: event });
     if (event === 'onCPShutdown') {
+      // A shutdown ends this native startup attempt. Only a fresh lifecycle
+      // start may accept a subsequent onCPStartup callback.
+      this.startupRejected = true;
       ++this.revision;
       clearTimeout(this.startupTimer);
       this.publish({

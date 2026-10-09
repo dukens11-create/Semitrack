@@ -120,6 +120,7 @@ export class CopilotLifecycle {
   private removers: (() => void)[] = [];
   private config: CopilotConfiguration | null = null;
   private active = false;
+  private startupRejected = false;
   private generation = 0;
   private revision = 0;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -153,6 +154,7 @@ export class CopilotLifecycle {
   async start(): Promise<void> {
     if (this.active) return;
     this.active = true;
+    this.startupRejected = false;
     this.state = initialCopilotState();
     this.config = null;
     const generation = ++this.generation;
@@ -187,12 +189,16 @@ export class CopilotLifecycle {
       await this.port.startNative();
       // A void bind call is not initialization evidence. Await onCPStartup.
     } catch {
-      if (this.active && generation === this.generation)
+      if (this.active && generation === this.generation) {
+        this.startupRejected = true;
+        ++this.revision;
+        clearTimeout(this.startupTimer);
         this.fail('COPILOT_NOT_INITIALIZED', 'startup');
+      }
     }
   }
   private event(event: string) {
-    if (!this.active) return;
+    if (!this.active || this.startupRejected) return;
     this.publish({ lastEvent: event });
     if (event === 'onCPShutdown') {
       ++this.revision;
@@ -322,6 +328,7 @@ export class CopilotLifecycle {
   }
   dispose() {
     this.active = false;
+    this.startupRejected = false;
     ++this.generation;
     ++this.revision;
     clearTimeout(this.startupTimer);

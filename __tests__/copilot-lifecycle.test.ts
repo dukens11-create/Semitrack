@@ -160,7 +160,7 @@ test('missing initialization callback times out without inventing ready', async 
   const h = harness();
   await h.lifecycle.start();
   jest.advanceTimersByTime(30000);
-  expect(h.lifecycle.snapshot().operation).toBe('startup-timeout');
+  expect(h.lifecycle.snapshot().operation).toBe('startup-timeout-after-waiting-for-onCPStartup');
   h.lifecycle.dispose();
 });
 test.each([

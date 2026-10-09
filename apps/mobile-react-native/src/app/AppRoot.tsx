@@ -19,16 +19,19 @@ import { AuthScreen } from '../screens/AuthScreen';
 import { ApplicationAppearance } from '../features/settings/ApplicationAppearance';
 import { ThemedAlertHost } from '../components/ThemedAlert';
 import { AppNavigator } from '../navigation/AppNavigator';
+import { CopilotProvider } from '../services/copilot/CopilotProvider';
 import { CopilotStatus } from '../components/CopilotStatus';
 import { DriverSetupGate } from '../features/onboarding/DriverSetup';
 import { OfflineAccountScreen } from '../screens/OfflineAccountScreen';
 function SessionFrame({ children }: React.PropsWithChildren) {
   const p = useDriverPalette();
   return (
-    <SafeAreaView style={[styles.fill, { backgroundColor: p.canvas }]}>
-      <CopilotStatus />
-      {children}
-    </SafeAreaView>
+    <CopilotProvider>
+      <SafeAreaView style={[styles.fill, { backgroundColor: p.canvas }]}>
+        <CopilotStatus />
+        {children}
+      </SafeAreaView>
+    </CopilotProvider>
   );
 }
 function Session({ services }: { services: Services }) {
@@ -42,7 +45,11 @@ function Session({ services }: { services: Services }) {
     return <BrandedSplash />;
   }
   if (auth.status === 'offline') {
-    return <SessionFrame><OfflineAccountScreen auth={services.auth} /></SessionFrame>;
+    return (
+      <SessionFrame>
+        <OfflineAccountScreen auth={services.auth} />
+      </SessionFrame>
+    );
   }
   if (auth.status === 'unavailable') {
     return (
@@ -50,9 +57,14 @@ function Session({ services }: { services: Services }) {
         <Page>
           <Heading>Connection unavailable</Heading>
           <Copy>{auth.error}</Copy>
-          {!!auth.offline && <Button title="View saved preferences offline" onPress={() => {
-            void services.auth.openOffline();
-          }} />}
+          {!!auth.offline && (
+            <Button
+              title="View saved preferences offline"
+              onPress={() => {
+                void services.auth.openOffline();
+              }}
+            />
+          )}
           <Button
             title="Retry"
             onPress={() => {

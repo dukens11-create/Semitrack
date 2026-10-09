@@ -26,8 +26,6 @@ import { GuidanceSession } from '../features/navigation/GuidanceSession';
 import { applyGuidanceEvent } from '../features/navigation/guidanceEvents';
 import { RouteAdvisories } from '../features/navigation/RouteAdvisories';
 import { NavigationHud } from '../features/navigation/NavigationHud';
-import { navigationPresentation } from '../features/navigation/navigationPresentation';
-import { mapPreferences } from '../features/settings/mapPreferences';
 import { RoutingCapabilityStatus } from '../components/RoutingCapabilityStatus';
 import { CorridorRecords } from '../features/dot511/CorridorRecords';
 import { DriverError } from '../errors/driverErrors';
@@ -75,7 +73,8 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
-import { TruckMap } from '../features/map/TruckMap';
+import { CopilotOfflineMap } from '../components/CopilotOfflineMap';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
   services,
@@ -119,19 +118,13 @@ export function PlanningScreen({
     | 'diagnostic'
     | null
   >(null);
-  const [mapCommand, setMapCommand] = useState<{
-    type: 'overview' | 'recenter';
-    id: number;
-  }>();
+  const copilotState = useCopilotState();
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
-  const [satelliteOverride, setSatelliteOverride] = useState<boolean>();
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
-  const [bottomHeight, setBottomHeight] = useState(164);
-  const [topHeight, setTopHeight] = useState(44);
   const busyRef = useRef(false);
   const operation = useRef(0);
   const [guidanceSession] = useState(
@@ -536,15 +529,14 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
-      setSatelliteOverride(v => !(v ?? mapPreferences(settings).satellite));
+      setError('Satellite imagery is unavailable on the CoPilot offline map.');
       closeSheet();
       return;
     }
     if (action === 'overview' || action === 'recenter') {
-      setMapCommand(previous => ({
-        type: action,
-        id: (previous?.id ?? 0) + 1,
-      }));
+      setError(
+        'Map controls are unavailable until CoPilot map setup is complete.',
+      );
       closeSheet();
       return;
     }
@@ -694,12 +686,6 @@ export function PlanningScreen({
       </View>
     );
   }
-  const mapPrefs = mapPreferences(settings);
-  const livePresentation = navigationPresentation(
-    routes.route,
-    navigation,
-    location.fix,
-  );
   const feedback = (
     <>
       <ErrorText message={error ?? searchState.error ?? routes.error} />
@@ -736,60 +722,9 @@ export function PlanningScreen({
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       <View style={styles.map}>
-        <TruckMap
-          token={services.environment.mapboxToken}
-          command={mapCommand}
-          route={routes.route}
-          plan={routes.plan}
-          fix={location.fix}
-          navigationActive={
-            navigation.phase === 'navigating' &&
-            navigation.routeId === routes.route?.selectedRouteId
-          }
-          maneuverMeters={livePresentation?.guidance?.maneuverMeters}
-          progressOffset={
-            livePresentation?.guidance?.maneuverMeters !== undefined
-              ? navigation.maneuverOffset
-              : undefined
-          }
-          satellite={satelliteOverride ?? mapPrefs.satellite}
-          onToggleSatellite={() =>
-            setSatelliteOverride(value => !(value ?? mapPrefs.satellite))
-          }
-          onAudio={() => menuAction('audio')}
-          autoZoom={mapPrefs.autoZoom}
-          pois={pois.filter(
-            poi => !hiddenCategories.includes(poi.category as PlaceCategory),
-          )}
-          bottomInset={bottomHeight}
-          topInset={topHeight + 12}
-          onCoordinate={point => {
-            if (
-              busy ||
-              routes.phase === 'calculating' ||
-              routes.phase === 'rerouting'
-            )
-              return;
-            setDetail(null);
-            setSheet('search');
-            void searchStore.reverse(point);
-          }}
-          onPoi={poi => {
-            setDetail({
-              id: poi.id,
-              name: poi.name,
-              lat: poi.latitude,
-              lng: poi.longitude,
-            });
-            setSheet('search');
-          }}
-        />
+        <CopilotOfflineMap state={copilotState} />
       </View>
-      <View
-        style={styles.top}
-        pointerEvents="box-none"
-        onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
-      >
+      <View style={styles.top} pointerEvents="box-none">
         {routes.route ? (
           <View
             style={[
@@ -879,7 +814,6 @@ export function PlanningScreen({
       </View>
       <View
         testID="map-bottom-panel"
-        onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
         style={
           routes.route
             ? styles.routeBottom

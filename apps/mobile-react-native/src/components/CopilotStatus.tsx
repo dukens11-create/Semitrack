@@ -1,42 +1,13 @@
 import { useDriverPalette } from './DriverUI';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import {
-  CopilotLifecycle,
-  initialCopilotState,
-} from '../services/copilot/CopilotLifecycle';
-import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
 
 /** Non-blocking status; backend setup/authentication remains independent. */
 export function CopilotStatus() {
   const p = useDriverPalette();
-  const [state, setState] = useState(initialCopilotState);
+  const state = useCopilotState();
   const [details, setDetails] = useState(false);
-  useEffect(() => {
-    const lifecycle = new CopilotLifecycle(createCopilotRuntime(), next => {
-      setState(next);
-      if (__DEV__)
-        console.info(
-          '[SemiTraX CoPilot]',
-          JSON.stringify({
-            phase: next.phase,
-            error: next.error,
-            operation: next.operation,
-            modules: next.modules,
-            initialized: next.initialized,
-            licensingReady: next.licensingReady,
-            fullNavigationLicensed: next.fullNavigationLicensed,
-            heavyTruckLicensed: next.heavyTruckLicensed,
-            mapsReady: next.mapsReady,
-            readyToAddStops: next.readyToAddStops,
-            copilotReady: next.copilotReady,
-            lastEvent: next.lastEvent,
-          }),
-        );
-    });
-    void lifecycle.start();
-    return () => lifecycle.dispose();
-  }, []);
   if (state.warning)
     return (
       <View

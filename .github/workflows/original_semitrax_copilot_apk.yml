@@ -35,11 +35,11 @@ jobs:
         run: npm ci
       - name: Check original React Native app
         run: npm run check
-      - name: Build separate Android debug APK
+      - name: Build assigned Samsung test APK (single-device use only)
         run: |
           chmod +x android/gradlew
           cd android
-          ./gradlew :app:assembleDebug --no-daemon
+          ./gradlew :app:assembleDebug -PsemitraxAssignedSamsung=true --no-daemon
       - name: Record APK identity and SHA-256 for safe review
         run: |
           apk=android/app/build/outputs/apk/debug/app-debug.apk
@@ -48,14 +48,16 @@ jobs:
           test -n "$aapt_bin"
           "$aapt_bin" dump badging "$apk" | grep "^package:" | tee android/app/build/outputs/apk/debug/package-identity.txt
           sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          echo "Assigned Samsung SM-S908U test build only; automatic initial enrollment enabled; saved assignments preserved." > android/app/build/outputs/apk/debug/enrollment-mode.txt
           echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
       - name: Upload device-review APK
         uses: actions/upload-artifact@v4
         with:
-          name: original-semitrax-copilot-device-review
+          name: original-semitrax-copilot-assigned-samsung
           path: |
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.apk
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.sha256
             apps/mobile-react-native/android/app/build/outputs/apk/debug/package-identity.txt
             apps/mobile-react-native/android/app/build/outputs/apk/debug/build-commit.txt
+            apps/mobile-react-native/android/app/build/outputs/apk/debug/enrollment-mode.txt
           if-no-files-found: error

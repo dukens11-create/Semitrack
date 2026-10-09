@@ -11,6 +11,15 @@ public final class CoPilotCredentialPolicyTest {
     ++checks;
   }
   public static void main(String[] args) throws Exception {
+    expect(CoPilotEnrollmentPolicy.shouldEnroll(true, "SM-S908U", false, false), "designated fresh Samsung enrolls");
+    expect(!CoPilotEnrollmentPolicy.shouldEnroll(false, "SM-S908U", false, false), "general builds never seed a shared device ID");
+    expect(!CoPilotEnrollmentPolicy.shouldEnroll(true, "Other", false, false), "other models never enroll");
+    expect(!CoPilotEnrollmentPolicy.shouldEnroll(true, "SM-S908U", true, false), "saved identities are preserved");
+    expect(!CoPilotEnrollmentPolicy.shouldEnroll(true, "SM-S908U", false, true), "running sessions cannot change assignment");
+    expect("XGNKEA".equals(CoPilotEnrollmentPolicy.COMPANY), "assigned company is exact");
+    expect("SemiTraX-Android-Test-01".equals(CoPilotEnrollmentPolicy.DEVICE), "assigned Device ID is exact");
+    expect(com.alk.cpik.mapdata.MapRegion.valueOf(CoPilotEnrollmentPolicy.REGION) ==
+        com.alk.cpik.mapdata.MapRegion.NORTH_AMERICA_California, "enrollment region is the shipped SDK California enum");
     LicenseMgtInfo assigned = new LicenseMgtInfo("Unit-Device", "UNIT");
     // Reproduce the shipped SDK failure before native pointers are initialized.
     boolean earlyQueryFailed = false;

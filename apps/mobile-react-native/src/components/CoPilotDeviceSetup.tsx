@@ -1,3 +1,4 @@
+import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -10,6 +11,9 @@ export function CoPilotDeviceSetup() {
   const palette = useDriverPalette();
   const setup = useCopilotSetup();
   const state = useCopilotState();
+  const automatic =
+    NativeModules.SemiTraxCoPilotHost?.automaticAssignedSetup === true;
+  const [manual, setManual] = useState(!automatic);
   const [company, setCompany] = useState('');
   const [device, setDevice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,47 +64,68 @@ export function CoPilotDeviceSetup() {
         securely and restored automatically. California maps download on Wi-Fi
         while SemiTraX is open.
       </Text>
-      <TextInput
-        accessibilityLabel="CoPilot Company ID"
-        placeholder="Company ID"
-        placeholderTextColor={palette.muted}
-        autoCapitalize="none"
-        autoCorrect={false}
-        value={company}
-        onChangeText={setCompany}
-        editable={!busy}
-        style={[
-          styles.input,
-          { color: palette.text, borderColor: palette.muted },
-        ]}
-      />
-      <TextInput
-        accessibilityLabel="CoPilot Device ID"
-        placeholder="Device ID"
-        placeholderTextColor={palette.muted}
-        autoCapitalize="none"
-        autoCorrect={false}
-        value={device}
-        onChangeText={setDevice}
-        editable={!busy}
-        style={[
-          styles.input,
-          { color: palette.text, borderColor: palette.muted },
-        ]}
-      />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Save CoPilot device setup"
-        disabled={busy}
-        onPress={() => {
-          void configure();
-        }}
-        style={styles.button}
-      >
-        <Text style={styles.buttonText}>
-          {busy ? 'Checking setup…' : 'Save device setup'}
-        </Text>
-      </Pressable>
+      {automatic && (
+        <>
+          <Text style={{ color: palette.text }}>
+            This Samsung test build saves its assigned device setup
+            automatically. You do not need to enter IDs again. Existing saved
+            setup is preserved.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setManual(!manual)}
+          >
+            <Text style={{ color: palette.text }}>
+              {manual ? 'Hide setup fields' : 'Show setup fields'}
+            </Text>
+          </Pressable>
+        </>
+      )}
+      {manual && (
+        <>
+          <TextInput
+            accessibilityLabel="CoPilot Company ID"
+            placeholder="Company ID"
+            placeholderTextColor={palette.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={company}
+            onChangeText={setCompany}
+            editable={!busy}
+            style={[
+              styles.input,
+              { color: palette.text, borderColor: palette.muted },
+            ]}
+          />
+          <TextInput
+            accessibilityLabel="CoPilot Device ID"
+            placeholder="Device ID"
+            placeholderTextColor={palette.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={device}
+            onChangeText={setDevice}
+            editable={!busy}
+            style={[
+              styles.input,
+              { color: palette.text, borderColor: palette.muted },
+            ]}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Save CoPilot device setup"
+            disabled={busy}
+            onPress={() => {
+              void configure();
+            }}
+            style={styles.button}
+          >
+            <Text style={styles.buttonText}>
+              {busy ? 'Checking setup…' : 'Save device setup'}
+            </Text>
+          </Pressable>
+        </>
+      )}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Retry saved CoPilot setup"

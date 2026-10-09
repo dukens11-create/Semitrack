@@ -13,6 +13,7 @@ function run(args) {
 try {
   run(['-m','jdk.compiler/com.sun.tools.javac.Main','-cp',sdk,'-d',output,
     path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotCredentialPolicy.java'),
+    path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotEnrollmentPolicy.java'),
     path.join(root,'scripts/native-tests/CoPilotCredentialPolicyTest.java')]);
   run(['-cp', output + path.delimiter + sdk, 'com.semitrax.nativebridge.CoPilotCredentialPolicyTest']);
 } finally { fs.rmSync(output, {recursive:true,force:true}); }

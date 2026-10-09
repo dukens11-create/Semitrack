@@ -1,6 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotHost {
+  readonly automaticAssignedSetup?: boolean;
   configureDevice(
     company: string,
     device: string,

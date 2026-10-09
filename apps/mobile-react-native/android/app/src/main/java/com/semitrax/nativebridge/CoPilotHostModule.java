@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.Handler;
+import android.os.Build;
+import com.semitrax.BuildConfig;
 import android.os.IBinder;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
@@ -82,6 +84,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return "SemiTraxCoPilotHost"; }
+  @Override public java.util.Map<String, Object> getConstants() {
+    return Collections.singletonMap("automaticAssignedSetup",
+        BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG && "SM-S908U".equals(Build.MODEL));
+  }
   private void emit(String event) {
     if (!invalidated && context.hasActiveReactInstance())
       context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(event, null);
@@ -306,6 +312,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     main.post(() -> {
       try {
         configuration = readStored();
+        if (CoPilotEnrollmentPolicy.shouldEnroll(BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG,
+            Build.MODEL, configuration != null, binding || started)) {
+          JSONObject assigned = new JSONObject().put("company", CoPilotEnrollmentPolicy.COMPANY)
+              .put("device", CoPilotEnrollmentPolicy.DEVICE).put("region", CoPilotEnrollmentPolicy.REGION);
+          writeStored(assigned);
+          configuration = assigned;
+        }
         restoreAssignedIdentity();
         promise.resolve(configuration == null ? null : publicConfiguration());
       } catch (Exception e) { promise.reject("COPILOT_SECURE_RESTORE_FAILED", "Saved CoPilot setup could not be restored."); }

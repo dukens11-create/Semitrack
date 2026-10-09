@@ -1,6 +1,14 @@
 import { useDriverPalette } from './DriverUI';
 import React, { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { CoPilotDeviceSetup } from './CoPilotDeviceSetup';
 import { useCopilotState } from '../services/copilot/CopilotProvider';
 
 /** Non-blocking status; backend setup/authentication remains independent. */
@@ -63,10 +71,18 @@ export function CopilotStatus() {
       >
         <View style={styles.scrim}>
           <View style={[styles.card, { backgroundColor: p.card }]}>
-            <Text style={[styles.title, { color: p.text }]}>
-              CoPilot navigation
-            </Text>
-            <Text style={[styles.message, { color: p.muted }]}>{message}</Text>
+            <ScrollView
+              contentContainerStyle={styles.detailContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={[styles.title, { color: p.text }]}>
+                CoPilot navigation
+              </Text>
+              <Text style={[styles.message, { color: p.muted }]}>
+                {message}
+              </Text>
+              <CoPilotDeviceSetup />
+            </ScrollView>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close CoPilot status"
@@ -110,7 +126,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#00000088',
   },
-  card: { padding: 24, borderRadius: 20, backgroundColor: '#172534', gap: 16 },
+  card: {
+    padding: 24,
+    borderRadius: 20,
+    backgroundColor: '#172534',
+    gap: 16,
+    maxHeight: '90%',
+  },
+  detailContent: { gap: 16 },
   title: { color: 'white', fontSize: 20, fontWeight: '700' },
   message: { color: '#C5CFD8', fontSize: 15, lineHeight: 22 },
   close: { alignSelf: 'flex-end', padding: 12 },

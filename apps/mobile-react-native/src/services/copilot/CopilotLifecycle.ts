@@ -49,6 +49,8 @@ export interface CopilotLifecyclePort {
   modules(): Record<string, boolean>;
   listen(event: string, callback: () => void): () => void;
   prepareProvisioning(): Promise<CopilotConfiguration | null>;
+  /** Reload exact SDK inventory version after startup or map installation. */
+  configuration?(): Promise<CopilotConfiguration | null>;
   startNative(): Promise<void>;
   licenseState(): Promise<{
     licensingReady: boolean;
@@ -286,6 +288,15 @@ export class CopilotLifecycle {
     const current = () => this.active && revision === this.revision;
     if (!current() || !this.config) return;
     try {
+      if (this.port.configuration) {
+        const configuration = await this.port.configuration();
+        if (!current()) return;
+        if (!configuration) {
+          this.fail('COPILOT_LICENSE_PROVISIONING_REQUIRED', 'secure-restore');
+          return;
+        }
+        this.config = configuration;
+      }
       const license = await this.port.licenseState();
       if (!current()) return;
       this.publish(license);
@@ -324,6 +335,14 @@ export class CopilotLifecycle {
     } catch {
       if (current()) this.fail('COPILOT_NOT_READY', 'readiness-query');
     }
+  }
+  /** Explicit inventory query; never synthesizes an SDK startup/download event. */
+  async recheck(): Promise<void> {
+    if (!this.active || this.startupRejected || !this.state.initialized) return;
+    const revision = ++this.revision;
+    this.publish({ mapsReady: false, readyToAddStops: false });
+    this.queue = this.queue.then(() => this.refresh(revision));
+    await this.queue;
   }
   validateTruckProfile(profile: unknown) {
     const assessment = assessCopilotTruckProfile(profile);

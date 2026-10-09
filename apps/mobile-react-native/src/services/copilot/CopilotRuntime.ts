@@ -5,7 +5,10 @@ import {
   UIManager,
 } from 'react-native';
 import { z } from 'zod';
-import type { CopilotConfiguration } from './CopilotConfiguration';
+import {
+  parseCopilotConfiguration,
+  type CopilotConfiguration,
+} from './CopilotConfiguration';
 import type {
   CopilotLifecyclePort,
   CopilotMapInventory,
@@ -38,6 +41,12 @@ export function inspectInstalledMaps(
   return { licensed, installed, mapsReady, updateStatus: 'NOT_CHECKED' };
 }
 const moduleMethods: Record<string, readonly string[]> = {
+  SemiTraxCoPilotHost: [
+    'prepareDevice',
+    'startEngine',
+    'licenseState',
+    'mapInventory',
+  ],
   CopilotMgr: ['getVersionInfo'],
   CopilotStartupMgr: ['bindCoPilotService'],
   LicenseMgr: ['isLicensingReady', 'getFeatureStatus'],
@@ -105,48 +114,39 @@ export function createCopilotRuntime(): CopilotLifecyclePort {
       return () => subscription.remove();
     },
     async prepareProvisioning() {
-      // Existing CopilotProvisioning is an interface only. No approved secure credential
-      // provider or map configuration is connected. Do not use the invalid example as config.
-      return null;
+      const config = await call('SemiTraxCoPilotHost', 'prepareDevice');
+      return config === null ? null : parseCopilotConfiguration(config);
+    },
+    async configuration() {
+      const config = await call('SemiTraxCoPilotHost', 'prepareDevice');
+      return config === null ? null : parseCopilotConfiguration(config);
     },
     async startNative() {
-      // Pinned vendor bind implementation uses setSmallIcon(null) and unchecked Activity.
-      // A JS catch cannot contain asynchronous Android foreground-service exceptions.
-      // Keep binding disabled until a safe native host is implemented and device-validated.
-      throw new Error('COPILOT_NATIVE_STARTUP_VALIDATION_REQUIRED');
+      await call('SemiTraxCoPilotHost', 'startEngine');
     },
     async licenseState() {
-      const licensingReady =
-        (await call('LicenseMgr', 'isLicensingReady')) === true;
-      if (!licensingReady)
-        return {
-          licensingReady,
-          fullNavigationLicensed: false,
-          heavyTruckLicensed: false,
-        };
-      const licensed = constant('FeatureStatus', 'LICENSED');
-      const unlimited = constant('FeatureStatus', 'UNLIMITED');
-      const full = await call(
-        'LicenseMgr',
-        'getFeatureStatus',
-        constant('LicenseFeature', 'FULL_NAVIGATION'),
-      );
-      const truck = await call(
-        'LicenseMgr',
-        'getFeatureStatus',
-        constant('LicenseFeature', 'TRUCK_HEAVY_DUTY'),
-      );
-      return {
-        licensingReady,
-        fullNavigationLicensed: full === licensed || full === unlimited,
-        heavyTruckLicensed: truck === licensed || truck === unlimited,
-      };
+      return z
+        .object({
+          licensingReady: z.boolean(),
+          fullNavigationLicensed: z.boolean(),
+          heavyTruckLicensed: z.boolean(),
+        })
+        .parse(await call('SemiTraxCoPilotHost', 'licenseState'));
     },
     async mapState(config) {
       const region = constant('MapRegion', config.mapRegionConstant);
+      const native = z
+        .object({
+          licensed: z.array(z.number().int()),
+          installed: z.array(mapInfo),
+          selectedRegion: z.number().int(),
+        })
+        .parse(await call('SemiTraxCoPilotHost', 'mapInventory'));
+      if (native.selectedRegion !== region)
+        throw new Error('Selected region mismatch');
       const inventory = inspectInstalledMaps(
-        await call('MapDataMgr', 'getLicensedMapList'),
-        await call('MapDataMgr', 'getInstalledMaps'),
+        native.licensed,
+        native.installed,
         region,
         config,
       );

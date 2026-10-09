@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - codex/original-semitrax-copilot-integration
+      - codex/original-trimble-map-display
   workflow_dispatch:
 permissions:
   contents: read

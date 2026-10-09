@@ -32,6 +32,7 @@ import {
 import Mapbox from '@rnmapbox/maps';
 import { AppNavigator, DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
+import { CopilotTruckMap } from '../src/features/map/CopilotTruckMap';
 import { TruckMap } from '../src/features/map/TruckMap';
 import { WeatherStatus } from '../src/features/weather/WeatherStatus';
 import { RoutePoiBadges } from '../src/features/navigation/RoutePoiBadges';
@@ -48,6 +49,24 @@ import {
 } from '../src/features/routing/routeTelemetry';
 import { RouteStore } from '../src/features/routing/RouteStore';
 import { truck, user, route, deferred } from './fixtures';
+const mockCoPilotHost = {
+  setMapAppearance: jest.fn().mockResolvedValue(undefined),
+  mapCommand: jest.fn().mockResolvedValue(undefined),
+  mapFrame: jest.fn().mockResolvedValue(undefined),
+  drawRoutePreview: jest.fn().mockResolvedValue(undefined),
+  drawMarkers: jest.fn().mockResolvedValue(undefined),
+};
+jest.mock('../src/services/copilot/CoPilotHost', () => ({
+  coPilotHost: () => mockCoPilotHost,
+}));
+jest.mock('../src/services/copilot/CopilotProvider', () => ({
+  useCopilotState: () => ({}),
+}));
+// Renderer readiness is tested separately with the real lifecycle gate.
+jest.mock('../src/components/CopilotOfflineMap', () => ({
+  copilotMapBlocker: () => null,
+  CopilotOfflineMap: () => require('react').createElement('VerifiedCoPilotMap'),
+}));
 jest.mock('@react-navigation/native', () => ({
   useIsFocused: () => true,
   DarkTheme: { dark: true, colors: {} },
@@ -434,10 +453,8 @@ test('retained Map applies saved night preference without remounting', async () 
       </DriverPreferences>,
     );
   });
-  expect(
-    screen.root.findAll(n => String(n.type) === 'NativeMapView')[0]!.props
-      .styleURL,
-  ).toBe('street');
+  expect(mockCoPilotHost.setMapAppearance).toHaveBeenLastCalledWith(false);
+  const retainedMap = screen.root.findByType(CopilotTruckMap);
   const next = {
     ...services.settings.getSnapshot().settings!,
     dayNightMode: 'night' as const,
@@ -450,10 +467,8 @@ test('retained Map applies saved night preference without remounting', async () 
   await act(async () => {
     await services.settings.save(next);
   });
-  expect(
-    screen.root.findAll(n => String(n.type) === 'NativeMapView')[0]!.props
-      .styleURL,
-  ).toBe('dark');
+  expect(mockCoPilotHost.setMapAppearance).toHaveBeenLastCalledWith(true);
+  expect(screen.root.findByType(CopilotTruckMap)).toBe(retainedMap);
 });
 
 test('map long-press forwards only valid coordinates for reverse-geocode confirmation', async () => {
@@ -949,7 +964,8 @@ test('active driving keeps optional weather, POI badges, satellite and duplicate
   await press('Close Weather');
   await press('Navigation Controls');
   await press('Satellite map');
-  expect(screen.root.findByType(TruckMap).props.satellite).toBe(true);
+  expect(content()).toContain('Satellite imagery is unavailable');
+  expect(screen.root.findAllByType(Mapbox.MapView)).toHaveLength(0);
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test.each(['preview', 'unavailable', 'failure'] as const)(
@@ -1058,19 +1074,15 @@ test('preview cancellation removes route geometry, stop markers and advisories w
     screen = create(<PlanningScreen services={services} />);
   });
   expect(
-    screen.root.findAll(n => n.props.id === 'truck-route').length,
+    mockCoPilotHost.drawRoutePreview.mock.calls.at(-1)![0].length,
   ).toBeGreaterThan(0);
   expect(
-    screen.root.findAllByType(Mapbox.PointAnnotation).length,
+    mockCoPilotHost.drawMarkers.mock.calls.at(-1)![0].length,
   ).toBeGreaterThan(0);
   await confirmCancellation();
-  expect(screen.root.findAll(n => n.props.id === 'truck-route')).toHaveLength(
-    0,
-  );
-  expect(screen.root.findAllByType(Mapbox.PointAnnotation)).toHaveLength(0);
-  expect(
-    screen.root.findAll(n => n.props.id === 'truck-position').length,
-  ).toBeGreaterThan(0);
+  expect(mockCoPilotHost.drawRoutePreview).toHaveBeenLastCalledWith([]);
+  expect(mockCoPilotHost.drawMarkers).toHaveBeenLastCalledWith([]);
+  expect(screen.root.findByType(CopilotTruckMap).props.fix).toEqual(fix);
 });
 test('cancel does not wait for native stop, and late guidance events cannot restore navigation', async () => {
   const { services } = setup();
@@ -1116,10 +1128,14 @@ test('navigation menu connects real map commands, settings, report UI and confir
   });
   await press('Navigation Controls');
   await press('Route Overview');
-  expect(screen.root.findByType(TruckMap).props.command.type).toBe('overview');
+  expect(screen.root.findByType(CopilotTruckMap).props.command.type).toBe(
+    'overview',
+  );
   await press('Navigation Controls');
   await press('Recenter');
-  expect(screen.root.findByType(TruckMap).props.command.type).toBe('recenter');
+  expect(screen.root.findByType(CopilotTruckMap).props.command.type).toBe(
+    'recenter',
+  );
   await press('Navigation Controls');
   await press('Audio Settings');
   expect(settings).toHaveBeenCalledTimes(1);
@@ -1489,6 +1505,7 @@ test('search failure never disables unrelated POI categories and releases the se
 test.each(['day', 'night'] as const)(
   'first native map style honors persisted %s without rendering the default style',
   async mode => {
+    mockCoPilotHost.setMapAppearance.mockClear();
     const { services } = setup();
     services.environment = { ...services.environment, mapboxToken: 'pk.test' };
     const pending = deferred<unknown>();
@@ -1502,7 +1519,7 @@ test.each(['day', 'night'] as const)(
         </DriverPreferences>,
       );
     });
-    expect(screen.root.findAllByType(Mapbox.MapView)).toHaveLength(0);
+    expect(mockCoPilotHost.setMapAppearance).not.toHaveBeenCalled();
     await act(async () =>
       pending.resolve({
         voiceEnabled: true,
@@ -1514,9 +1531,11 @@ test.each(['day', 'night'] as const)(
         settingsJson: null,
       }),
     );
-    expect(screen.root.findByType(Mapbox.MapView).props.styleURL).toBe(
-      mode === 'day' ? 'street' : 'dark',
+    expect(mockCoPilotHost.setMapAppearance).toHaveBeenCalledTimes(1);
+    expect(mockCoPilotHost.setMapAppearance).toHaveBeenCalledWith(
+      mode === 'night',
     );
+    expect(screen.root.findAllByType(Mapbox.MapView)).toHaveLength(0);
   },
 );
 
@@ -1830,19 +1849,17 @@ test.each(['before confirmation', 'after confirmation'])(
       });
       await act(async () => {
         screen.root
-          .findByType(TruckMap)
+          .findByType(CopilotTruckMap)
           .props.onCoordinate({ lat: 41, lng: -100 });
       });
       // A marker can be selected while a previous map-place lookup is pending.
       await act(async () => {
-        screen.root
-          .findByType(TruckMap)
-          .props.onPoi({
-            id: 'dest',
-            name: 'Selected place',
-            latitude: 41,
-            longitude: -100,
-          });
+        screen.root.findByType(CopilotTruckMap).props.onPoi({
+          id: 'dest',
+          name: 'Selected place',
+          latitude: 41,
+          longitude: -100,
+        });
       });
       if (timing === 'before confirmation') {
         await act(async () => {

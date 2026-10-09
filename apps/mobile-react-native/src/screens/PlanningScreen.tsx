@@ -1,3 +1,4 @@
+import { navigationPresentation } from '../features/navigation/navigationPresentation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
   beginRouteDiagnostic,
@@ -73,8 +74,7 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
-import { CopilotOfflineMap } from '../components/CopilotOfflineMap';
-import { useCopilotState } from '../services/copilot/CopilotProvider';
+import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
   services,
@@ -118,13 +118,18 @@ export function PlanningScreen({
     | 'diagnostic'
     | null
   >(null);
-  const copilotState = useCopilotState();
+  const [mapCommand, setMapCommand] = useState<{
+    type: 'overview' | 'recenter';
+    id: number;
+  }>();
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
+  const [bottomHeight, setBottomHeight] = useState(164);
+  const [topHeight, setTopHeight] = useState(44);
   const busyRef = useRef(false);
   const operation = useRef(0);
   const [guidanceSession] = useState(
@@ -534,9 +539,10 @@ export function PlanningScreen({
       return;
     }
     if (action === 'overview' || action === 'recenter') {
-      setError(
-        'Map controls are unavailable until CoPilot map setup is complete.',
-      );
+      setMapCommand(previous => ({
+        type: action,
+        id: (previous?.id ?? 0) + 1,
+      }));
       closeSheet();
       return;
     }
@@ -686,6 +692,11 @@ export function PlanningScreen({
       </View>
     );
   }
+  const livePresentation = navigationPresentation(
+    routes.route,
+    navigation,
+    location.fix,
+  );
   const feedback = (
     <>
       <ErrorText message={error ?? searchState.error ?? routes.error} />
@@ -722,9 +733,52 @@ export function PlanningScreen({
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       <View style={styles.map}>
-        <CopilotOfflineMap state={copilotState} />
+        <CopilotTruckMap
+          command={mapCommand}
+          route={routes.route}
+          plan={routes.plan}
+          fix={location.fix}
+          navigationActive={
+            navigation.phase === 'navigating' &&
+            navigation.routeId === routes.route?.selectedRouteId
+          }
+          progressOffset={
+            livePresentation?.guidance?.maneuverMeters !== undefined
+              ? navigation.maneuverOffset
+              : undefined
+          }
+          pois={pois.filter(
+            poi => !hiddenCategories.includes(poi.category as PlaceCategory),
+          )}
+          bottomInset={bottomHeight}
+          topInset={topHeight + 12}
+          onCoordinate={point => {
+            if (
+              busy ||
+              routes.phase === 'calculating' ||
+              routes.phase === 'rerouting'
+            )
+              return;
+            setDetail(null);
+            setSheet('search');
+            void searchStore.reverse(point);
+          }}
+          onPoi={poi => {
+            setDetail({
+              id: poi.id,
+              name: poi.name,
+              lat: poi.latitude,
+              lng: poi.longitude,
+            });
+            setSheet('search');
+          }}
+        />
       </View>
-      <View style={styles.top} pointerEvents="box-none">
+      <View
+        style={styles.top}
+        pointerEvents="box-none"
+        onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
+      >
         {routes.route ? (
           <View
             style={[
@@ -814,6 +868,7 @@ export function PlanningScreen({
       </View>
       <View
         testID="map-bottom-panel"
+        onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
         style={
           routes.route
             ? styles.routeBottom

@@ -27,7 +27,7 @@ android {
  }
  buildTypes {
   debug {
-  applicationIdSuffix ".migration.debug"
+  applicationIdSuffix ".restored.copilot.debug"
   manifestPlaceholders = [usesCleartextTraffic:"true"]
   buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
  }
@@ -60,6 +60,8 @@ tasks.configureEach { task ->
  }
 }
 dependencies {
+ // SDK runtime is supplied by its linked library; expose types to the safe native host.
+ compileOnly files("../../node_modules/trimble-maps-cpik-react-native-library/android/libs/cpik.jar", "../../node_modules/trimble-maps-cpik-react-native-library/android/libs/copilot.jar")
  implementation("com.facebook.react:react-android")
  implementation("com.facebook.react:hermes-android")
 }

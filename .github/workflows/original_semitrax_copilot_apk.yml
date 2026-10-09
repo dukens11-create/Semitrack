@@ -1,0 +1,47 @@
+name: Original SemiTraX CoPilot Device Test APK
+on:
+  push:
+    branches:
+      - codex/original-semitrax-copilot-integration
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: original-semitrax-copilot-apk-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile-react-native
+    env:
+      SEMITRAX_API_URL: https://semitrax-api.onrender.com
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/mobile-react-native/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install dependencies
+        run: npm ci
+      - name: Check original React Native app
+        run: npm run check
+      - name: Build separate Android debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload device-review APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-semitrax-copilot-device-review
+          path: apps/mobile-react-native/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -9,6 +9,8 @@ export interface CoPilotSetupDiagnostics {
   loginResponse: string;
   canRepairTypo: boolean;
   restartRequired: boolean;
+  deviceConfigured?: boolean;
+  deviceConfigurationStatus?: string;
 }
 export interface CoPilotHost {
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;

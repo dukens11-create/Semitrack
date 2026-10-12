@@ -189,7 +189,9 @@ export function CoPilotDeviceSetup() {
           {diagnostics.hookMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
           Login callback matches assignment:{' '}
           {diagnostics.callbackMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
-          Login response: {diagnostics.loginResponse}.
+          Login response: {diagnostics.loginResponse}.{'\n'}
+          SDK Device ID setup:{' '}
+          {diagnostics.deviceConfigurationStatus ?? 'Not reported'}.
         </Text>
       )}
       {diagnostics?.canRepairTypo && !diagnostics.restartRequired && (

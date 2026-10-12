@@ -74,6 +74,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private volatile LicenseActivationResponse loginResponse;
   private volatile long credentialHookAt;
   private volatile boolean hookMatchedAssigned, callbackMatchedAssigned;
+  private volatile boolean deviceConfigured;
+  private volatile String deviceConfigurationStatus = "WAITING_FOR_STARTUP";
   private boolean assignedRepairPendingRestart;
   private boolean binding, connected, invalidated, mapPrepared;
   private volatile boolean started;
@@ -161,16 +163,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       credentialHookState = decision.name();
       hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
           CoPilotEnrollmentPolicy.isAssigned(assigned.getCompanyID(), assigned.getAssetID());
-      if (decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED && CopilotMgr.isActive()) {
-        try {
-          // Trimble requires the settings Device ID before returning activation credentials.
-          configureAssignedDevice();
-        } catch (Exception e) {
-          credentialHookState = "DEVICE_CONFIGURATION_FAILED";
-          hookMatchedAssigned = false;
-          return null;
-        }
-      }
+      // isActive may be true before the configuration native pointer is usable.
+      // Do not suppress authentication because a configuration API is not ready.
+      // Apply Device ID synchronously in the documented onCPStartup callback.
       return decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED ? assigned : null;
     }
     @Override public void onLicenseMgtLogin(LicenseActivationResponse response, LicenseMgtInfo info) {
@@ -189,15 +184,28 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       throw new IllegalStateException("DEVICE_CONFIGURATION_UNAVAILABLE");
     CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedIdentity.getAssetID()));
     // The SDK setter returns void. Read back so a silently ignored setting is not accepted.
-    if (!assignedIdentity.getAssetID().equals(CopilotMgr.getConfigurationSetting(ConfigurationSetting.DEVICE_ID).getStringValue()))
+    if (!assignedIdentity.getAssetID().equalsIgnoreCase(CopilotMgr.getConfigurationSetting(ConfigurationSetting.DEVICE_ID).getStringValue()))
       throw new IllegalStateException("DEVICE_CONFIGURATION_MISMATCH");
   }
   private final CopilotListener startupListener = new CopilotListener() {
     @Override public void onCPStartup() {
+      if (invalidated) return;
+      deviceConfigured = false;
+      try {
+        // Run inside the SDK callback, before handing startup completion to JS.
+        configureAssignedDevice();
+        deviceConfigured = true;
+        deviceConfigurationStatus = "VERIFIED";
+      } catch (ConfigurationSetting.ConfigurationException e) {
+        deviceConfigurationStatus = e.getConfigurationError() == null ? "SDK_CONFIGURATION_ERROR"
+            : e.getConfigurationError().name();
+      } catch (Exception e) {
+        // Fixed app-owned codes only; never send raw native exceptions or IDs to JS.
+        deviceConfigurationStatus = "DEVICE_CONFIGURATION_MISMATCH".equals(e.getMessage())
+            ? "READBACK_MISMATCH" : "NATIVE_CONFIGURATION_UNAVAILABLE";
+      }
       main.post(() -> {
         if (invalidated || !binding) return;
-        try { configureAssignedDevice(); }
-        catch (Exception e) { rejectWaiters("COPILOT_AMS_DEVICE_CONFIGURATION_FAILED"); release(); return; }
         if (CopilotMgr.getView() == null) {
           rejectWaiters("COPILOT_VIEW_UNAVAILABLE");
           release();
@@ -369,6 +377,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
         result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);
         result.putString("loginResponse", loginResponse == null ? "NOT_RECEIVED" : loginResponse.name());
+        result.putBoolean("deviceConfigured", deviceConfigured);
+        result.putString("deviceConfigurationStatus", deviceConfigurationStatus);
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         promise.resolve(result);
@@ -416,6 +426,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         // singleton immediately before every bind, after all RN modules exist.
         credentialHookState = "NOT_CALLED";
         loginResponse = null;
+        deviceConfigured = false;
+        deviceConfigurationStatus = "WAITING_FOR_STARTUP";
         LicenseListener.registerHook(hook);
         binding = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
         if (!binding) throw new IllegalStateException("BIND_FAILED");
@@ -436,6 +448,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   private void requireIdentity() throws Exception {
     if (!started) throw new IllegalStateException("COPILOT_AMS_ENGINE_NOT_STARTED");
+    if (!deviceConfigured) throw new IllegalStateException("COPILOT_AMS_DEVICE_CONFIGURATION_FAILED");
     LicenseMgtInfo active;
     try { active = LicenseMgr.GetActiveAMSUser(); }
     catch (Exception e) { throw new IllegalStateException("COPILOT_AMS_IDENTITY_QUERY_FAILED"); }
@@ -477,6 +490,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     main.post(() -> {
       try {
         if (!started) throw new IllegalStateException("COPILOT_AMS_ENGINE_NOT_STARTED");
+        if (!deviceConfigured) throw new IllegalStateException("COPILOT_AMS_DEVICE_CONFIGURATION_FAILED");
         boolean ready = LicenseMgr.isLicensingReady();
         LicenseActivationResponse response = loginResponse;
         if (!ready && response != null && response != LicenseActivationResponse.SUCCESS &&

@@ -15,6 +15,8 @@ export const amsLoginFailures = [
   'FAILED_GENERAL_ERROR',
 ] as const;
 export const amsDiagnosticCodes: readonly string[] = [
+  'COPILOT_AMS_PARTNER_MISMATCH',
+  'COPILOT_AMS_DEVICE_CONFIGURATION_FAILED',
   ...amsLoginFailures.map(code => 'COPILOT_AMS_LOGIN_' + code),
   'COPILOT_AMS_HOOK_NOT_CALLED',
   'COPILOT_AMS_HOOK_QUERY_FAILED',
@@ -40,6 +42,8 @@ export function retryAmsFailure(code: unknown): boolean {
       'COPILOT_AMS_LOGIN_FAILED_LICENSING_NOT_READY',
     ].includes(code);
   return ![
+    'COPILOT_AMS_PARTNER_MISMATCH',
+    'COPILOT_AMS_DEVICE_CONFIGURATION_FAILED',
     'COPILOT_AMS_COMPANY_MISMATCH',
     'COPILOT_AMS_DEVICE_MISMATCH',
     'COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED',
@@ -71,7 +75,10 @@ export function amsSetupExplanation(operation: string | null): string | null {
     case 'COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED':
     case 'COPILOT_AMS_COMPANY_MISMATCH':
     case 'COPILOT_AMS_DEVICE_MISMATCH':
+    case 'COPILOT_AMS_PARTNER_MISMATCH':
       return 'CoPilot reports a different account identity. Existing licenses are preserved; account replacement is blocked.';
+    case 'COPILOT_AMS_DEVICE_CONFIGURATION_FAILED':
+      return 'CoPilot could not apply and verify the assigned Device ID setting. Restart the app and report this setup stage if it remains.';
     case 'COPILOT_AMS_HOOK_NOT_CALLED':
     case 'COPILOT_AMS_HOOK_QUERY_FAILED':
       return 'CoPilot did not complete the native credential handoff. Restart the app and report this setup stage if it remains.';

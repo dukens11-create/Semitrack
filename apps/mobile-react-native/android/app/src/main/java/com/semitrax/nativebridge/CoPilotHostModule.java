@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat;
 import com.alk.copilot.CopilotService;
 import com.alk.cpik.CopilotListener;
 import com.alk.cpik.CopilotMgr;
+import com.alk.cpik.ConfigurationSetting;
 import com.alk.cpik.Coordinate;
 import com.alk.cpik.Stop;
 import com.alk.cpik.guidance.GuidanceSettings;
@@ -160,24 +161,43 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       credentialHookState = decision.name();
       hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
           CoPilotEnrollmentPolicy.isAssigned(assigned.getCompanyID(), assigned.getAssetID());
+      if (decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED && CopilotMgr.isActive()) {
+        try {
+          // Trimble requires the settings Device ID before returning activation credentials.
+          configureAssignedDevice();
+        } catch (Exception e) {
+          credentialHookState = "DEVICE_CONFIGURATION_FAILED";
+          hookMatchedAssigned = false;
+          return null;
+        }
+      }
       return decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED ? assigned : null;
     }
     @Override public void onLicenseMgtLogin(LicenseActivationResponse response, LicenseMgtInfo info) {
       // Do not retain callback account IDs or emit them into JS/logs.
       loginResponse = response;
-      callbackMatchedAssigned = info != null &&
-          CoPilotEnrollmentPolicy.isAssigned(info.getCompanyID(), info.getAssetID());
+      callbackMatchedAssigned = CoPilotCredentialPolicy.matches(assignedIdentity, info);
       main.post(() -> emit("onLicenseMgtLogin"));
     }
   };
   private void restoreAssignedIdentity() throws Exception {
     assignedIdentity = configuration == null ? null :
-        new LicenseMgtInfo(configuration.getString("device"), configuration.getString("company"));
+        CoPilotCredentialPolicy.assignedInfo(configuration.getString("device"), configuration.getString("company"));
+  }
+  private void configureAssignedDevice() throws Exception {
+    if (assignedIdentity == null || !CopilotMgr.isActive())
+      throw new IllegalStateException("DEVICE_CONFIGURATION_UNAVAILABLE");
+    CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedIdentity.getAssetID()));
+    // The SDK setter returns void. Read back so a silently ignored setting is not accepted.
+    if (!assignedIdentity.getAssetID().equals(CopilotMgr.getConfigurationSetting(ConfigurationSetting.DEVICE_ID).getStringValue()))
+      throw new IllegalStateException("DEVICE_CONFIGURATION_MISMATCH");
   }
   private final CopilotListener startupListener = new CopilotListener() {
     @Override public void onCPStartup() {
       main.post(() -> {
         if (invalidated || !binding) return;
+        try { configureAssignedDevice(); }
+        catch (Exception e) { rejectWaiters("COPILOT_AMS_DEVICE_CONFIGURATION_FAILED"); release(); return; }
         if (CopilotMgr.getView() == null) {
           rejectWaiters("COPILOT_VIEW_UNAVAILABLE");
           release();
@@ -425,6 +445,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       throw new IllegalStateException("COPILOT_AMS_COMPANY_MISMATCH");
     if (!configuration.getString("device").equalsIgnoreCase(active.getAssetID()))
       throw new IllegalStateException("COPILOT_AMS_DEVICE_MISMATCH");
+    if (!CoPilotCredentialPolicy.matches(assignedIdentity, active))
+      throw new IllegalStateException("COPILOT_AMS_PARTNER_MISMATCH");
     // A fresh SDK identity is authoritative; an early hook failure cannot latch a rejection.
   }
   private String missingIdentityCode() {
@@ -436,6 +458,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     if ("QUERY_FAILED".equals(credentialHookState)) return "COPILOT_AMS_HOOK_QUERY_FAILED";
     if ("PRESERVE_OTHER_ACCOUNT".equals(credentialHookState)) return "COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED";
     if ("NO_ASSIGNMENT".equals(credentialHookState)) return "COPILOT_AMS_ASSIGNMENT_MISSING";
+    if ("DEVICE_CONFIGURATION_FAILED".equals(credentialHookState)) return "COPILOT_AMS_DEVICE_CONFIGURATION_FAILED";
     if ("SUPPLY_ASSIGNED".equals(credentialHookState) && response == null)
       return System.nanoTime() - credentialHookAt < 25000000000L
           ? "COPILOT_AMS_LOGIN_RESPONSE_PENDING" : "COPILOT_AMS_LOGIN_NO_RESPONSE";
@@ -475,6 +498,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             "COPILOT_AMS_IDENTITY_MISSING".equals(detail) ||
             "COPILOT_AMS_COMPANY_MISMATCH".equals(detail) ||
             "COPILOT_AMS_DEVICE_MISMATCH".equals(detail) ||
+            "COPILOT_AMS_PARTNER_MISMATCH".equals(detail) ||
+            "COPILOT_AMS_DEVICE_CONFIGURATION_FAILED".equals(detail) ||
             "COPILOT_AMS_HOOK_NOT_CALLED".equals(detail) ||
             "COPILOT_AMS_HOOK_QUERY_FAILED".equals(detail) ||
             "COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED".equals(detail) ||

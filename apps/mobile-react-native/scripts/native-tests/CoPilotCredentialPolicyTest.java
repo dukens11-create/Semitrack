@@ -11,6 +11,17 @@ public final class CoPilotCredentialPolicyTest {
     ++checks;
   }
   public static void main(String[] args) throws Exception {
+    LicenseMgtInfo partnerInfo = CoPilotCredentialPolicy.assignedInfo("SemiTraX-Android-Test-01", "XGNKEA");
+    expect("XGNKEA".equals(partnerInfo.getCompanyID()), "Company ID retains its SDK field");
+    expect("".equals(partnerInfo.getExternalAccountID()), "Company ID is not silently used as external account ID");
+    expect("BXSRET".equals(partnerInfo.getPartnerID()), "Trimble-assigned Partner ID is supplied");
+    expect("SemiTraX-Android-Test-01".equals(partnerInfo.getAssetID()), "assigned Asset ID is retained");
+    expect(CoPilotCredentialPolicy.matches(partnerInfo, CoPilotCredentialPolicy.assignedInfo("semitrax-android-test-01", "XGNKEA")), "partner identity permits asset case variation");
+    expect(!CoPilotCredentialPolicy.matches(partnerInfo, new LicenseMgtInfo("SemiTraX-Android-Test-01", "XGNKEA")), "missing partner does not pass readiness");
+    LicenseMgtInfo otherPartner = new LicenseMgtInfo("SemiTraX-Android-Test-01", "", "OTHER");
+    otherPartner.setCompanyID("XGNKEA");
+    expect(CoPilotCredentialPolicy.decide(true, partnerInfo, () -> otherPartner) == CoPilotCredentialPolicy.Decision.PRESERVE_OTHER_ACCOUNT, "another partner account cannot be overwritten");
+    expect(!CoPilotCredentialPolicy.matches(partnerInfo, new LicenseMgtInfo("SemiTraX-Android-Test-01", "XGNKEA", "BXSRET")), "external account authentication is distinct from company authentication");
     expect(CoPilotEnrollmentPolicy.shouldEnroll(true, "SM-S908U", false, false), "designated fresh Samsung enrolls");
     expect(!CoPilotEnrollmentPolicy.shouldEnroll(false, "SM-S908U", false, false), "general builds never seed a shared device ID");
     expect(!CoPilotEnrollmentPolicy.shouldEnroll(true, "Other", false, false), "other models never enroll");

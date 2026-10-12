@@ -11,6 +11,7 @@ export interface CoPilotSetupDiagnostics {
   restartRequired: boolean;
   deviceConfigured?: boolean;
   deviceConfigurationStatus?: string;
+  deviceReadbackKind?: string;
 }
 export interface CoPilotHost {
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;

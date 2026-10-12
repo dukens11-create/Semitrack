@@ -11,6 +11,12 @@ public final class CoPilotCredentialPolicyTest {
     ++checks;
   }
   public static void main(String[] args) throws Exception {
+    expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", "", 0) == CoPilotDeviceReadbackPolicy.Result.PENDING, "an immediate empty readback does not falsely fail an accepted write");
+    expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", "Old", 9999) == CoPilotDeviceReadbackPolicy.Result.PENDING, "a stale value gets only a bounded completion window");
+    expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", "assigned", 500) == CoPilotDeviceReadbackPolicy.Result.VERIFIED, "delayed actual matching readback verifies the assignment");
+    expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", "Old", 10000) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "persistent different readback fails closed at the deadline");
+    expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", null, 10000) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "missing readback cannot become verified at the deadline");
+    expect(CoPilotDeviceReadbackPolicy.evaluate("", "", 0) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "an empty assignment cannot be verified");
     LicenseMgtInfo partnerInfo = CoPilotCredentialPolicy.assignedInfo("SemiTraX-Android-Test-01", "XGNKEA");
     expect("XGNKEA".equals(partnerInfo.getCompanyID()), "Company ID retains its SDK field");
     expect("".equals(partnerInfo.getExternalAccountID()), "Company ID is not silently used as external account ID");

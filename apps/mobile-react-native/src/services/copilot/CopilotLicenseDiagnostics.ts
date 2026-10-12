@@ -15,6 +15,7 @@ export const amsLoginFailures = [
   'FAILED_GENERAL_ERROR',
 ] as const;
 export const amsDiagnosticCodes: readonly string[] = [
+  'COPILOT_AMS_DEVICE_CONFIGURATION_PENDING',
   'COPILOT_AMS_PARTNER_MISMATCH',
   'COPILOT_AMS_DEVICE_CONFIGURATION_FAILED',
   ...amsLoginFailures.map(code => 'COPILOT_AMS_LOGIN_' + code),
@@ -55,6 +56,8 @@ export function retryAmsFailure(code: unknown): boolean {
 export function amsSetupExplanation(operation: string | null): string | null {
   const code = operation?.split(': ')[1];
   switch (code) {
+    case 'COPILOT_AMS_DEVICE_CONFIGURATION_PENDING':
+      return 'CoPilot received the Device ID setting. Waiting briefly for the SDK to return the assigned value; verification is not complete.';
     case 'COPILOT_AMS_LOGIN_RESPONSE_PENDING':
       return 'The native credential hook supplied saved setup. Waiting for Trimble’s login response; activation is not confirmed.';
     case 'COPILOT_AMS_LOGIN_NO_RESPONSE':

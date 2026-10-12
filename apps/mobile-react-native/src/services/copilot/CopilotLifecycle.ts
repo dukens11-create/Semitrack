@@ -65,6 +65,7 @@ export interface CopilotLifecyclePort {
   readyToAddStops(): Promise<boolean>;
 }
 export const copilotEvents = [
+  'onDeviceConfigurationChecked',
   'onCPStartup',
   'onCPShutdown',
   'licenseMgtCredentialHook',
@@ -295,6 +296,7 @@ export class CopilotLifecycle {
     if (
       [
         'onCPStartup',
+        'onDeviceConfigurationChecked',
         'onLicensingReady',
         'onLicenseMgtLogin',
         'onFeatureActivated',

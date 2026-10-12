@@ -17,7 +17,7 @@ const credentialHook = copilotHost.slice(copilotHost.indexOf('@Override public L
 assert(!credentialHook.includes('configureAssignedDevice(') && !credentialHook.includes('ConfigurationSetting.'), 'Bootstrap credentials must not be suppressed by configuration APIs before native startup');
 const startupCallback = copilotHost.slice(copilotHost.indexOf('@Override public void onCPStartup()'), copilotHost.indexOf('@Override public void onCPShutdown()'));
 assert(startupCallback.indexOf('configureAssignedDevice();') >= 0 && startupCallback.indexOf('configureAssignedDevice();') < startupCallback.indexOf('main.post('), 'Device ID must be configured inside the native startup callback before JS startup publication');
-assert(copilotHost.includes('if (!deviceConfigured) throw new IllegalStateException("COPILOT_AMS_DEVICE_CONFIGURATION_FAILED")'), 'Unverified Device ID must not grant map or guidance readiness');
+assert(copilotHost.includes('if (!deviceConfigured) throw new IllegalStateException(deviceConfigurationCode())'), 'Unverified Device ID must not grant map or guidance readiness');
 const java=read(output+'/android/java/com/semitrax/nativebridge/NativeSemiTraxPlatformSpec.java');
 const kotlin=read('android/app/src/main/java/com/semitrax/nativebridge/SemiTraxPlatformModule.kt');
 const header=read(output+'/ios/SemiTraxPlatformSpec/SemiTraxPlatformSpec.h');

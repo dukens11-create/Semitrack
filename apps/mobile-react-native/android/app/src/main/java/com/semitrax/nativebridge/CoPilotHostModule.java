@@ -488,8 +488,6 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       throw new IllegalStateException("COPILOT_AMS_COMPANY_MISMATCH");
     if (!configuration.getString("device").equalsIgnoreCase(active.getAssetID()))
       throw new IllegalStateException("COPILOT_AMS_DEVICE_MISMATCH");
-    if (!CoPilotCredentialPolicy.matches(assignedIdentity, active))
-      throw new IllegalStateException("COPILOT_AMS_PARTNER_MISMATCH");
     // A fresh SDK identity is authoritative; an early hook failure cannot latch a rejection.
   }
   private String missingIdentityCode() {
@@ -542,7 +540,6 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             "COPILOT_AMS_IDENTITY_MISSING".equals(detail) ||
             "COPILOT_AMS_COMPANY_MISMATCH".equals(detail) ||
             "COPILOT_AMS_DEVICE_MISMATCH".equals(detail) ||
-            "COPILOT_AMS_PARTNER_MISMATCH".equals(detail) ||
             "COPILOT_AMS_DEVICE_CONFIGURATION_FAILED".equals(detail) ||
             "COPILOT_AMS_DEVICE_CONFIGURATION_PENDING".equals(detail) ||
             "COPILOT_AMS_HOOK_NOT_CALLED".equals(detail) ||

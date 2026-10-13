@@ -4,21 +4,14 @@ import com.alk.cpik.licensing.LicenseMgtInfo;
 
 /** Immutable, device-assigned bootstrap credentials; SDK identity queries require a running engine. */
 final class CoPilotCredentialPolicy {
-  // Finn Martel confirmed this partner assignment for SemiTraX on 2026-10-12.
-  static final String PARTNER = "BXSRET";
   static LicenseMgtInfo assignedInfo(String asset, String company) {
-    // The three-argument constructor's second slot is externalAccountID.
-    // Keep the supplied Company ID in its own field; no external ID was assigned.
-    LicenseMgtInfo info = new LicenseMgtInfo(asset, "", PARTNER);
-    info.setCompanyID(company);
-    return info;
+    // Trimble confirmed direct company licensing for this account on 2026-10-13.
+    return new LicenseMgtInfo(asset, company);
   }
   private static String value(String value) { return value == null ? "" : value; }
   static boolean matches(LicenseMgtInfo assigned, LicenseMgtInfo current) {
     return assigned != null && current != null &&
         value(assigned.getCompanyID()).equals(value(current.getCompanyID())) &&
-        value(assigned.getExternalAccountID()).equals(value(current.getExternalAccountID())) &&
-        value(assigned.getPartnerID()).equals(value(current.getPartnerID())) &&
         value(assigned.getAssetID()).equalsIgnoreCase(value(current.getAssetID()));
   }
   interface IdentityReader { LicenseMgtInfo read() throws Exception; }

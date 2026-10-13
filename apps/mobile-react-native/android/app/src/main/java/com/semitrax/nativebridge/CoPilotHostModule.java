@@ -65,6 +65,10 @@ import org.json.JSONObject;
 public final class CoPilotHostModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
   private final ReactApplicationContext context;
   private final Handler main = new Handler(Looper.getMainLooper());
+  private final CoPilotLoginTrace loginTrace = new CoPilotLoginTrace();
+  private void trace(CoPilotLoginTrace.Event event) {
+    loginTrace.record(event, started, deviceConfigured, null);
+  }
   private static final String STORE = "copilot_device_v1";
   private static final String KEY = "semitrax_copilot_device_v1";
   private static final String CHANNEL = "semitrax_copilot";
@@ -162,6 +166,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           // A native pointer/active flag can exist during bootstrap. Only our
           // completed startup callback authorizes a running-identity query.
           started && CopilotMgr.isActive(), assigned, () -> LicenseMgr.GetActiveAMSUser());
+      trace(CoPilotLoginTrace.Event.CREDENTIAL_HOOK);
       credentialHookAt = System.nanoTime();
       credentialHookState = decision.name();
       hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
@@ -173,6 +178,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     }
     @Override public void onLicenseMgtLogin(LicenseActivationResponse response, LicenseMgtInfo info) {
       // Do not retain callback account IDs or emit them into JS/logs.
+      loginTrace.record(CoPilotLoginTrace.Event.LOGIN_CALLBACK, started, deviceConfigured, response);
       loginResponse = response;
       callbackMatchedAssigned = CoPilotCredentialPolicy.matches(assignedIdentity, info);
       main.post(() -> emit("onLicenseMgtLogin"));
@@ -185,7 +191,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private void configureAssignedDevice() throws Exception {
     if (assignedIdentity == null || !CopilotMgr.isActive())
       throw new IllegalStateException("DEVICE_CONFIGURATION_UNAVAILABLE");
+    trace(CoPilotLoginTrace.Event.DEVICE_WRITE_REQUEST);
     CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedIdentity.getAssetID()));
+    trace(CoPilotLoginTrace.Event.DEVICE_WRITE_RETURNED);
     deviceWriteAt = System.nanoTime();
     deviceConfigurationStatus = "WAITING_FOR_READBACK";
     main.removeCallbacks(deviceReadbackCheck);
@@ -201,6 +209,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           : result == CoPilotDeviceReadbackPolicy.Result.VERIFIED ? "MATCH" : "DIFFERENT";
       deviceConfigured = result == CoPilotDeviceReadbackPolicy.Result.VERIFIED;
       if (result == CoPilotDeviceReadbackPolicy.Result.PENDING) {
+        trace(CoPilotLoginTrace.Event.DEVICE_READBACK_PENDING);
         main.postDelayed(deviceReadbackCheck, 500);
         return;
       }
@@ -210,6 +219,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     } catch (Exception e) {
       deviceConfigurationStatus = "NATIVE_READBACK_UNAVAILABLE";
     }
+    trace(deviceConfigured ? CoPilotLoginTrace.Event.DEVICE_READBACK_VERIFIED : CoPilotLoginTrace.Event.DEVICE_READBACK_FAILED);
     emit("onDeviceConfigurationChecked");
   }
   private String deviceConfigurationCode() {
@@ -219,6 +229,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private final CopilotListener startupListener = new CopilotListener() {
     @Override public void onCPStartup() {
       if (invalidated) return;
+      trace(CoPilotLoginTrace.Event.STARTUP_CALLBACK);
       deviceConfigured = false;
       try {
         // Run inside the SDK callback, before handing startup completion to JS.
@@ -231,6 +242,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         deviceConfigurationStatus = "DEVICE_CONFIGURATION_MISMATCH".equals(e.getMessage())
             ? "READBACK_MISMATCH" : "NATIVE_CONFIGURATION_UNAVAILABLE";
       }
+      if (!"WAITING_FOR_READBACK".equals(deviceConfigurationStatus))
+        trace(CoPilotLoginTrace.Event.DEVICE_CONFIGURATION_FAILED);
       main.post(() -> {
         if (invalidated || !binding) return;
         if (CopilotMgr.getView() == null) {
@@ -252,6 +265,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         catch (Exception e) { rejectWaiters("COPILOT_GUIDANCE_SUSPEND_FAILED"); release(); return; }
         started = true;
+        trace(CoPilotLoginTrace.Event.STARTUP_PUBLISHED);
         main.removeCallbacks(startupTimeout);
         emit("onCPStartup");
         for (Promise promise : new ArrayList<>(startupWaiters)) promise.resolve(null);
@@ -259,6 +273,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       });
     }
     @Override public void onCPShutdown() {
+      trace(CoPilotLoginTrace.Event.SHUTDOWN_CALLBACK);
       main.post(() -> {
         started = false;
         emit("onCPShutdown");
@@ -273,6 +288,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   private final Runnable startupTimeout = () -> {
     if (!started) {
+      trace(CoPilotLoginTrace.Event.STARTUP_TIMEOUT);
       rejectWaiters("COPILOT_STARTUP_TIMEOUT");
       release();
     }
@@ -282,6 +298,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       if (invalidated) { release(); return; }
       try {
         connected = true;
+        trace(CoPilotLoginTrace.Event.SERVICE_CONNECTED);
         if (!(binder instanceof CopilotService.CopilotBinder)) throw new IllegalStateException("INVALID_BINDER");
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (android.os.Build.VERSION.SDK_INT >= 26) {
@@ -300,6 +317,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       }
     }
     @Override public void onServiceDisconnected(ComponentName name) {
+      trace(CoPilotLoginTrace.Event.SERVICE_DISCONNECTED);
       connected = false;
       started = false;
       rejectWaiters("COPILOT_SERVICE_DISCONNECTED");
@@ -316,6 +334,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     }
   };
   private void release() {
+    trace(CoPilotLoginTrace.Event.SERVICE_RELEASED);
     main.removeCallbacks(startupTimeout);
     main.removeCallbacks(deviceReadbackCheck);
     if (binding) {
@@ -410,6 +429,33 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putString("deviceReadbackKind", deviceReadbackKind);
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
+        trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
+        result.putString("reportBuild", "ams-trace-v1");
+        result.putInt("androidApi", Build.VERSION.SDK_INT);
+        result.putBoolean("engineStarted", started);
+        result.putBoolean("serviceBound", binding);
+        result.putBoolean("serviceConnected", connected);
+        String sdkVersion = "NOT_AVAILABLE";
+        if (started) {
+          try {
+            String version = CopilotMgr.getVersionInfo().getAppVersion();
+            if (version != null && version.matches("[0-9]+([.][0-9]+){1,4}")) sdkVersion = version;
+          } catch (Exception ignored) {}
+        }
+        result.putString("sdkVersion", sdkVersion);
+        WritableArray timeline = Arguments.createArray();
+        for (CoPilotLoginTrace.Entry entry : loginTrace.snapshot()) {
+          WritableMap item = Arguments.createMap();
+          item.putDouble("sequence", entry.sequence);
+          item.putDouble("elapsedMs", entry.elapsedMs);
+          item.putString("event", entry.event.name());
+          item.putBoolean("started", entry.started);
+          item.putBoolean("deviceVerified", entry.deviceVerified);
+          item.putString("response", entry.response == null ? "NOT_RECEIVED" : entry.response.name());
+          timeline.pushMap(item);
+        }
+        result.putArray("timeline", timeline);
+        result.putDouble("droppedEvents", loginTrace.dropped());
         promise.resolve(result);
       } catch (Exception e) { promise.reject("COPILOT_DIAGNOSTIC_UNAVAILABLE", "Setup diagnostics unavailable."); }
     });
@@ -434,8 +480,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void startEngine(Promise promise) {
     main.post(() -> {
       try {
+        trace(CoPilotLoginTrace.Event.START_REQUEST);
         if (invalidated || configuration == null) throw new IllegalStateException("DEVICE_SETUP_REQUIRED");
-        if (started) { emit("onCPStartup"); promise.resolve(null); return; }
+        if (started) { trace(CoPilotLoginTrace.Event.START_REUSED); emit("onCPStartup"); promise.resolve(null); return; }
         Activity activity = getCurrentActivity();
         if (activity == null || activity.isFinishing() || activity.isDestroyed() || context.getLifecycleState() != LifecycleState.RESUMED)
           throw new IllegalStateException("FOREGROUND_ACTIVITY_REQUIRED");
@@ -459,10 +506,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         deviceConfigurationStatus = "WAITING_FOR_STARTUP";
         deviceReadbackKind = "NOT_READ";
         LicenseListener.registerHook(hook);
+        trace(CoPilotLoginTrace.Event.HOOK_REGISTERED);
+        trace(CoPilotLoginTrace.Event.SERVICE_BIND_REQUEST);
         binding = context.bindService(new Intent(context, CopilotService.class), connection, Context.BIND_AUTO_CREATE);
         if (!binding) throw new IllegalStateException("BIND_FAILED");
         main.postDelayed(startupTimeout, 30000);
       } catch (Exception e) {
+        trace(CoPilotLoginTrace.Event.STARTUP_FAILED);
         if (startupWaiters.contains(promise)) rejectWaiters("COPILOT_NATIVE_STARTUP_FAILED");
         else {
           String reason = e.getMessage();

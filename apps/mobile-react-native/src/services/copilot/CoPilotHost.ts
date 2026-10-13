@@ -12,6 +12,21 @@ export interface CoPilotSetupDiagnostics {
   deviceConfigured?: boolean;
   deviceConfigurationStatus?: string;
   deviceReadbackKind?: string;
+  reportBuild?: string;
+  androidApi?: number;
+  engineStarted?: boolean;
+  serviceBound?: boolean;
+  serviceConnected?: boolean;
+  sdkVersion?: string;
+  droppedEvents?: number;
+  timeline?: {
+    sequence: number;
+    elapsedMs: number;
+    event: string;
+    started: boolean;
+    deviceVerified: boolean;
+    response: string;
+  }[];
 }
 export interface CoPilotHost {
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;

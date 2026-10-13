@@ -17,6 +17,25 @@ public final class CoPilotCredentialPolicyTest {
     expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", "Old", 10000) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "persistent different readback fails closed at the deadline");
     expect(CoPilotDeviceReadbackPolicy.evaluate("Assigned", null, 10000) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "missing readback cannot become verified at the deadline");
     expect(CoPilotDeviceReadbackPolicy.evaluate("", "", 0) == CoPilotDeviceReadbackPolicy.Result.MISMATCH, "an empty assignment cannot be verified");
+    long[] now = {1000000000L};
+    CoPilotLoginTrace trace = new CoPilotLoginTrace(() -> now[0]);
+    trace.record(CoPilotLoginTrace.Event.CREDENTIAL_HOOK, false, false, null);
+    now[0] += 250000000L;
+    trace.record(CoPilotLoginTrace.Event.STARTUP_CALLBACK, false, false, null);
+    now[0] += 500000000L;
+    trace.record(CoPilotLoginTrace.Event.LOGIN_CALLBACK, true, true,
+        com.alk.cpik.licensing.LicenseActivationResponse.FAILED_LOGIN_INVALID_CREDS);
+    java.util.List<CoPilotLoginTrace.Entry> savedTrace = trace.snapshot();
+    expect(savedTrace.get(0).elapsedMs == 0 && savedTrace.get(1).elapsedMs == 250 && savedTrace.get(2).elapsedMs == 750,
+        "monotonic relative timings retain credential/startup/login ordering");
+    expect(!savedTrace.get(0).deviceVerified && savedTrace.get(2).deviceVerified,
+        "trace retains device verification at callback time rather than latest state");
+    savedTrace.clear();
+    expect(trace.snapshot().size() == 3, "export snapshots cannot modify the live trace");
+    for (int i = 0; i < 100; i++) trace.record(CoPilotLoginTrace.Event.REPORT_REQUEST, true, true, null);
+    expect(trace.snapshot().size() == CoPilotLoginTrace.LIMIT && trace.dropped() == 7,
+        "native timeline is bounded and reports dropped entries");
+    expect(trace.snapshot().get(0).sequence == 8, "retained sequence numbers expose truncated history");
     LicenseMgtInfo directInfo = CoPilotCredentialPolicy.assignedInfo("SemiTraX-Android-Test-01", "XGNKEA");
     expect("XGNKEA".equals(directInfo.getCompanyID()), "assigned Company ID retains its direct SDK field");
     expect("SemiTraX-Android-Test-01".equals(directInfo.getAssetID()), "assigned Asset ID retains its direct SDK field");

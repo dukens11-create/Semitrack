@@ -1,7 +1,15 @@
 import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Pressable,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { coPilotDiagnosticReport } from '../services/copilot/CoPilotDiagnosticReport';
 import {
   useCopilotSetup,
   useCopilotState,
@@ -40,6 +48,31 @@ export function CoPilotDeviceSetup() {
       live = false;
     };
   }, [automatic, state.operation, state.error]);
+  async function shareDiagnostics() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const host = coPilotHost();
+      if (!host.setupDiagnostics) throw new Error('Diagnostics unavailable');
+      const fresh = await host.setupDiagnostics();
+      const report = coPilotDiagnosticReport(fresh, state);
+      setDiagnostics(fresh);
+      const result = await Share.share({
+        title: 'SemiTraX CoPilot diagnostics',
+        message: report,
+      });
+      if (result.action === Share.sharedAction)
+        setMessage(
+          'Diagnostic report shared. Send it in this chat for review.',
+        );
+    } catch {
+      setMessage(
+        'Could not share diagnostics. Try again while SemiTraX is open.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   async function repair() {
     if (busy) return;
     setBusy(true);
@@ -178,6 +211,21 @@ export function CoPilotDeviceSetup() {
       >
         <Text style={styles.buttonText}>Retry saved setup</Text>
       </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Share CoPilot diagnostics"
+        disabled={busy}
+        onPress={() => {
+          void shareDiagnostics();
+        }}
+        style={styles.button}
+      >
+        <Text style={styles.buttonText}>Share diagnostics</Text>
+      </Pressable>
+      <Text style={{ color: palette.muted }}>
+        Shares setup checks and a native login timeline from this app session.
+        Passwords, IDs and location are excluded.
+      </Text>
       {!!diagnostics && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           Saved Company ID matches assignment:{' '}

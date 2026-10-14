@@ -40,7 +40,7 @@ const fixedCode = (allowed: readonly string[]) =>
     );
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const snapshot = z.object({
-  reportBuild: fixedCode(['ams-trace-v1']),
+  reportBuild: fixedCode(['ams-trace-v1', 'ams-trace-v2', 'ams-testasset-v2']),
   androidApi: count.optional(),
   sdkVersion: z
     .unknown()

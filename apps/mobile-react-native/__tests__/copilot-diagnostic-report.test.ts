@@ -93,3 +93,7 @@ test('malformed booleans, non-finite timings and oversized history cannot leak t
     ),
   ).toThrow();
 });
+
+test.each(['ams-trace-v2', 'ams-testasset-v2'])('report identifies supported build %s', reportBuild => {
+  expect(coPilotDiagnosticReport({ ...native(), reportBuild }, initialCopilotState())).toContain(reportBuild);
+});

@@ -170,7 +170,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       credentialHookAt = System.nanoTime();
       credentialHookState = decision.name();
       hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
-          CoPilotEnrollmentPolicy.isAssigned(assigned.getCompanyID(), assigned.getAssetID());
+          CoPilotEnrollmentPolicy.COMPANY.equals(assigned.getCompanyID()) &&
+          CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(assigned.getAssetID());
       // isActive may be true before the configuration native pointer is usable.
       // Do not suppress authentication because a configuration API is not ready.
       // Apply Device ID synchronously in the documented onCPStartup callback.
@@ -188,11 +189,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     assignedIdentity = configuration == null ? null :
         CoPilotCredentialPolicy.assignedInfo(configuration.getString("device"), configuration.getString("company"));
   }
+  private String assignedSdkDevice() {
+    return CoPilotEnrollmentPolicy.sdkDevice(BuildConfig.SEMITRAX_TEST_ASSET, assignedIdentity.getAssetID());
+  }
   private void configureAssignedDevice() throws Exception {
     if (assignedIdentity == null || !CopilotMgr.isActive())
       throw new IllegalStateException("DEVICE_CONFIGURATION_UNAVAILABLE");
     trace(CoPilotLoginTrace.Event.DEVICE_WRITE_REQUEST);
-    CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedIdentity.getAssetID()));
+    CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedSdkDevice()));
     trace(CoPilotLoginTrace.Event.DEVICE_WRITE_RETURNED);
     deviceWriteAt = System.nanoTime();
     deviceConfigurationStatus = "WAITING_FOR_READBACK";
@@ -204,7 +208,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     try {
       String actual = CopilotMgr.getConfigurationSetting(ConfigurationSetting.DEVICE_ID).getStringValue();
       long elapsedMs = (System.nanoTime() - deviceWriteAt) / 1000000;
-      CoPilotDeviceReadbackPolicy.Result result = CoPilotDeviceReadbackPolicy.evaluate(assignedIdentity.getAssetID(), actual, elapsedMs);
+      CoPilotDeviceReadbackPolicy.Result result = CoPilotDeviceReadbackPolicy.evaluate(assignedSdkDevice(), actual, elapsedMs);
       deviceReadbackKind = actual == null ? "NO_STRING_VALUE" : actual.isEmpty() ? "EMPTY"
           : result == CoPilotDeviceReadbackPolicy.Result.VERIFIED ? "MATCH" : "DIFFERENT";
       deviceConfigured = result == CoPilotDeviceReadbackPolicy.Result.VERIFIED;
@@ -398,7 +402,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (CoPilotEnrollmentPolicy.shouldEnroll(BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG,
             Build.MODEL, configuration != null, binding || started)) {
           JSONObject assigned = new JSONObject().put("company", CoPilotEnrollmentPolicy.COMPANY)
-              .put("device", CoPilotEnrollmentPolicy.DEVICE).put("region", CoPilotEnrollmentPolicy.REGION);
+              .put("device", CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET)).put("region", CoPilotEnrollmentPolicy.REGION);
           writeStored(assigned);
           configuration = assigned;
         }
@@ -419,7 +423,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         JSONObject saved = readStored();
         WritableMap result = Arguments.createMap();
         result.putBoolean("savedCompanyMatches", saved != null && CoPilotEnrollmentPolicy.COMPANY.equals(saved.getString("company")));
-        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.DEVICE.equalsIgnoreCase(saved.getString("device")));
+        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(saved.getString("device")));
         result.putString("credentialHook", credentialHookState);
         result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
         result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);
@@ -430,7 +434,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
-        result.putString("reportBuild", "ams-trace-v1");
+        result.putString("reportBuild", BuildConfig.SEMITRAX_TEST_ASSET ? "ams-testasset-v2" : "ams-trace-v2");
         result.putInt("androidApi", Build.VERSION.SDK_INT);
         result.putBoolean("engineStarted", started);
         result.putBoolean("serviceBound", binding);

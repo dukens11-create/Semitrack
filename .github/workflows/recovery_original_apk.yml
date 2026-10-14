@@ -17,7 +17,7 @@ jobs:
         working-directory: apps/mobile-react-native
     env:
       SEMITRAX_API_URL: https://semitrax-api.onrender.com
-      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_PUBLIC_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
       MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
     steps:
       - uses: actions/checkout@v4

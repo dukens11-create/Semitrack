@@ -4,6 +4,7 @@ apply plugin: "com.facebook.react"
 // Device-test APKs use their embedded bundle. Metro is an explicit development opt-in.
 // Only the explicitly designated single-device test artifact may seed this assignment.
 def semitraxAssignedSamsung = providers.gradleProperty("semitraxAssignedSamsung").map { it.toBoolean() }.getOrElse(false)
+def semitraxTestAsset = providers.gradleProperty("semitraxTestAsset").map { it.toBoolean() }.getOrElse(false)
 def semitraxUseMetro = providers.gradleProperty("semitraxUseMetro").map { it.toBoolean() }.getOrElse(false)
 react {
  autolinkLibrariesWithApp()
@@ -22,6 +23,7 @@ android {
   versionCode 1
   versionName "0.1.0"
   buildConfigField "boolean", "SEMITRAX_ASSIGNED_SAMSUNG", "false"
+  buildConfigField "boolean", "SEMITRAX_TEST_ASSET", "false"
   // NDK r27 opt-in for source-built libraries. Prebuilt .so files still need
   // independent inspection; this cannot repair a vendor's 4 KB binary.
   externalNativeBuild {
@@ -31,7 +33,9 @@ android {
  buildTypes {
   debug {
   applicationIdSuffix ".restored.copilot.debug"
-  buildConfigField "boolean", "SEMITRAX_ASSIGNED_SAMSUNG", semitraxAssignedSamsung.toString()
+  if (semitraxTestAsset) { applicationIdSuffix ".restored.copilot.testasset" }
+  buildConfigField "boolean", "SEMITRAX_TEST_ASSET", semitraxTestAsset.toString()
+  buildConfigField "boolean", "SEMITRAX_ASSIGNED_SAMSUNG", (semitraxAssignedSamsung || semitraxTestAsset).toString()
   manifestPlaceholders = [usesCleartextTraffic:"true"]
   buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
  }

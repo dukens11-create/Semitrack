@@ -1,6 +1,15 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  mapDownload?: {
+    response: string;
+    callback: string;
+    status: string;
+    stage: string;
+    attempts: number;
+    cellularAllowed: boolean;
+    initialMapSignalReceived: boolean;
+  };
   savedCompanyMatches: boolean;
   savedDeviceMatches: boolean;
   credentialHook: string;

@@ -94,6 +94,34 @@ test('malformed booleans, non-finite timings and oversized history cannot leak t
   ).toThrow();
 });
 
-test.each(['ams-trace-v2', 'ams-testasset-v2'])('report identifies supported build %s', reportBuild => {
-  expect(coPilotDiagnosticReport({ ...native(), reportBuild }, initialCopilotState())).toContain(reportBuild);
+test.each(['ams-trace-v2', 'ams-testasset-v2'])(
+  'report identifies supported build %s',
+  reportBuild => {
+    expect(
+      coPilotDiagnosticReport(
+        { ...native(), reportBuild },
+        initialCopilotState(),
+      ),
+    ).toContain(reportBuild);
+  },
+);
+
+test('exports bounded map results and redacts unknown download payloads', () => {
+  const mapDownload = {
+    response: 'FAILURE_INVALID_CONNECTION',
+    callback: 'SECRET',
+    status: 'NOT_INITIATED',
+    stage: 'COMPLETE',
+    attempts: 3,
+    cellularAllowed: true,
+    initialMapSignalReceived: false,
+    raw: 'SECRET',
+  };
+  const report = coPilotDiagnosticReport(
+    { ...native(), reportBuild: 'maps-diag-v3', mapDownload },
+    initialCopilotState(),
+  );
+  expect(report).toContain('FAILURE_INVALID_CONNECTION');
+  expect(report).toContain('maps-diag-v3');
+  expect(report).not.toContain('SECRET');
 });

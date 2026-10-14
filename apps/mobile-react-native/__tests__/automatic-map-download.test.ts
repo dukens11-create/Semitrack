@@ -81,3 +81,17 @@ test('foreground loss before inventory completes prevents download', async () =>
   await job.tick();
   expect(port.download).not.toHaveBeenCalled();
 });
+
+test.each(['FAILURE_MANAGER_BUSY', 'FAILURE_INVALID_CONNECTION'])(
+  'preserves exact %s after retries stop',
+  async response => {
+    jest.useFakeTimers();
+    const { port, report, job } = fixture();
+    port.download.mockResolvedValue(response);
+    await job.tick();
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining(response));
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining(response));
+    expect(port.refresh).not.toHaveBeenCalled();
+  },
+);

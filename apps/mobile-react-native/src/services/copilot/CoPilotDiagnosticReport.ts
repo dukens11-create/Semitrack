@@ -1,6 +1,29 @@
 import { z } from 'zod';
 import { amsLoginFailures } from './CopilotLicenseDiagnostics';
 
+export const mapDownloadResponses = [
+  'NOT_REQUESTED',
+  'NOT_RECEIVED',
+  'NATIVE_EXCEPTION',
+  'INSTALLED',
+  'SUCCESS',
+  'FAILURE_INVALID_CONNECTION',
+  'FAILURE_INVALID_ARGUMENT',
+  'FAILURE_MANAGER_BUSY',
+  'FAILURE_VALIDATION',
+  'FAILURE_VERSION',
+  'FAILURE_INSTALLED',
+  'FAILURE_DOWNLOADING',
+  'FAILURE_DOWNLOADED',
+  'FAILURE_PAUSED',
+  'FAILURE_CANCELLED',
+  'FAILURE_UNLICENSED',
+  'FAILURE_ENQUEUE',
+  'FAILURE_INSUFFICIENT_DISK_SPACE',
+  'FAILURE_PREINSTALLED',
+  'FAILURE_MAPUPTODATE',
+  'FAILED_GENERIC_ERROR',
+];
 const responses = [
   'NOT_RECEIVED',
   'SUCCESS',
@@ -40,7 +63,44 @@ const fixedCode = (allowed: readonly string[]) =>
     );
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const snapshot = z.object({
-  reportBuild: fixedCode(['ams-trace-v1', 'ams-trace-v2', 'ams-testasset-v2']),
+  reportBuild: fixedCode([
+    'ams-trace-v1',
+    'ams-trace-v2',
+    'ams-testasset-v2',
+    'maps-diag-v3',
+  ]),
+  mapDownload: z
+    .object({
+      response: fixedCode(mapDownloadResponses),
+      callback: fixedCode(mapDownloadResponses),
+      status: fixedCode([
+        'STATUS_UNKNOWN',
+        'DOWNLOADING',
+        'SUCCEEDED',
+        'CANCELLED',
+        'FAILED',
+        'PAUSED',
+        'NOT_INITIATED',
+        'WAITING_ON_STORAGE_SPACE',
+        'INSTALLATION_STARTED',
+        'INSTALLATION_FINISHED',
+      ]),
+      stage: fixedCode([
+        'NOT_REQUESTED',
+        'IDENTITY_CHECK',
+        'FOREGROUND_CHECK',
+        'LICENSE_CHECK',
+        'INVENTORY_CHECK',
+        'REGION_CHECK',
+        'NETWORK_POLICY',
+        'SDK_REQUEST',
+        'COMPLETE',
+      ]),
+      attempts: count,
+      cellularAllowed: z.boolean(),
+      initialMapSignalReceived: z.boolean(),
+    })
+    .optional(),
   androidApi: count.optional(),
   sdkVersion: z
     .unknown()

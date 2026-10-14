@@ -89,6 +89,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
   private MapImageSet markerSet;
+  private volatile String mapDownloadResponse = "NOT_REQUESTED";
+  private volatile String mapDownloadCallback = "NOT_RECEIVED";
+  private volatile String mapDownloadStatus = "NOT_INITIATED";
+  private volatile String mapDownloadStage = "NOT_REQUESTED";
+  private volatile boolean mapCellularAllowed;
+  private volatile int mapDownloadAttempts;
+  private volatile boolean initialMapSignalReceived;
 
   public CoPilotHostModule(ReactApplicationContext context) {
     super(context);
@@ -109,6 +116,22 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(event, value);
   }
   private final MapDataListener mapListener = new MapDataListener() {
+    @Override public void onReadyToDownloadInitialMapData() {
+      initialMapSignalReceived = true;
+    }
+    @Override public void onMapDownloadResponse(MapDownloadResponse response, List<MapRegion> regions, boolean initial) {
+      // Ignore callbacks for unrelated regions and retain only enum values.
+      try {
+        if (regions != null && regions.contains(region()) && response != null)
+          mapDownloadCallback = response.name();
+      } catch (Exception ignored) {}
+    }
+    @Override public void onMapdataUpdate(MapInfo info, MapDataListener.DownloadStatus status) {
+      try {
+        if (info != null && info.getRegion() == region() && status != null)
+          mapDownloadStatus = status.name();
+      } catch (Exception ignored) {}
+    }
     @Override public void onMapLocationPicked(Stop stop) {
       if (!started || stop == null || stop.getAddressObject() == null) return;
       Coordinate coordinate = stop.getAddressObject().getCoordinate();
@@ -434,7 +457,16 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
-        result.putString("reportBuild", BuildConfig.SEMITRAX_TEST_ASSET ? "ams-testasset-v2" : "ams-trace-v2");
+        result.putString("reportBuild", BuildConfig.SEMITRAX_TEST_ASSET ? "maps-diag-v3" : "maps-diag-v3");
+        WritableMap download = Arguments.createMap();
+        download.putString("response", mapDownloadResponse);
+        download.putString("callback", mapDownloadCallback);
+        download.putString("status", mapDownloadStatus);
+        download.putString("stage", mapDownloadStage);
+        download.putInt("attempts", mapDownloadAttempts);
+        download.putBoolean("cellularAllowed", mapCellularAllowed);
+        download.putBoolean("initialMapSignalReceived", initialMapSignalReceived);
+        result.putMap("mapDownload", download);
         result.putInt("androidApi", Build.VERSION.SDK_INT);
         result.putBoolean("engineStarted", started);
         result.putBoolean("serviceBound", binding);
@@ -640,20 +672,32 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private void downloadSelectedMap(boolean allowCellular, Promise promise) {
     main.post(() -> {
       try {
+        ++mapDownloadAttempts;
+        mapDownloadResponse = "NOT_RECEIVED";
+        mapDownloadStage = "IDENTITY_CHECK";
         requireIdentity();
+        mapDownloadStage = "FOREGROUND_CHECK";
         if (context.getLifecycleState() != LifecycleState.RESUMED) throw new IllegalStateException("FOREGROUND_REQUIRED");
+        mapDownloadStage = "LICENSE_CHECK";
         if (!LicenseMgr.isLicensingReady() || !feature(LicenseFeature.FULL_NAVIGATION) || !feature(LicenseFeature.TRUCK_HEAVY_DUTY))
           throw new IllegalStateException("LICENSE_REQUIRED");
-        if (selectedInstalled() != null) { promise.resolve("INSTALLED"); return; }
+        mapDownloadStage = "INVENTORY_CHECK";
+        if (selectedInstalled() != null) { mapDownloadResponse = "INSTALLED"; mapDownloadStage = "COMPLETE"; promise.resolve("INSTALLED"); return; }
+        mapDownloadStage = "REGION_CHECK";
         List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
         if (licensed == null || !licensed.contains(region())) throw new IllegalStateException("REGION_UNLICENSED");
         // Cellular is allowed only by the explicit mobile-data action in setup.
+        mapDownloadStage = "NETWORK_POLICY";
         CopilotMgr.allowCellularDataForMapDownloads(allowCellular);
+        mapCellularAllowed = allowCellular;
         // SDK validates storage and network.
         // Initial-install mode only when verified inventory is empty: no existing map is overwritten.
+        mapDownloadStage = "SDK_REQUEST";
         MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), installed().isEmpty());
+        mapDownloadResponse = response.name();
+        mapDownloadStage = "COMPLETE";
         promise.resolve(response.name());
-      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, an allowed internet connection and sufficient storage."); }
+      } catch (Exception e) { mapDownloadResponse = "NATIVE_EXCEPTION"; promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, an allowed internet connection and sufficient storage."); }
     });
   }
   private void requireMap() throws Exception {

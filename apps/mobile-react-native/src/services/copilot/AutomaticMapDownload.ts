@@ -1,3 +1,4 @@
+import { mapDownloadResponses } from './CoPilotDiagnosticReport';
 export interface AutomaticMapPort {
   active(): boolean;
   installed(): Promise<boolean>;
@@ -12,6 +13,7 @@ export class AutomaticMapDownload {
   private started = false;
   private pending = false;
   private checks = 0;
+  private lastResponse = 'NOT_REQUESTED';
   private timer?: ReturnType<typeof setTimeout>;
   constructor(
     private port: AutomaticMapPort,
@@ -33,7 +35,7 @@ export class AutomaticMapDownload {
       if (!this.started) {
         if (this.attempts >= 3) {
           this.report(
-            'CoPilot is still busy. Retry map setup after checking your allowed internet connection and storage.',
+            `Map download stopped after ${this.attempts} attempts. Last result: ${this.lastResponse}. Share diagnostics for review.`,
           );
           this.stop();
           return;
@@ -41,6 +43,9 @@ export class AutomaticMapDownload {
         ++this.attempts;
         const response = await this.port.download();
         if (this.stopped) return;
+        this.lastResponse = mapDownloadResponses.includes(response)
+          ? response
+          : 'NOT_AVAILABLE';
         if (
           [
             'SUCCESS',
@@ -60,13 +65,15 @@ export class AutomaticMapDownload {
           )
         ) {
           this.report(
-            'Waiting for CoPilot or your allowed internet connection. Setup will retry automatically.',
+            response === 'FAILURE_MANAGER_BUSY'
+              ? 'CoPilot download manager is busy (FAILURE_MANAGER_BUSY). Retrying automatically.'
+              : 'CoPilot rejected the download connection (FAILURE_INVALID_CONNECTION). Retrying automatically.',
           );
         } else {
           this.report(
             response === 'FAILURE_INSUFFICIENT_DISK_SPACE'
               ? 'Free storage is needed before the offline map can download.'
-              : 'CoPilot could not accept the map download. Check device setup, your allowed internet connection and storage.',
+              : `CoPilot could not accept the map download (${this.lastResponse}). Share diagnostics for review.`,
           );
           this.stop();
           return;

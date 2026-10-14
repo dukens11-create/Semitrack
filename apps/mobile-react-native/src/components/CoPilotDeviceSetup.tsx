@@ -1,3 +1,4 @@
+import { Alert } from './ThemedAlert';
 import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
 import React, { useEffect, useState } from 'react';
@@ -135,8 +136,9 @@ export function CoPilotDeviceSetup() {
     <View style={styles.container}>
       <Text style={{ color: palette.muted }}>
         Use the Company ID and Device ID assigned to this phone. Setup is saved
-        securely and restored automatically. California maps download on Wi-Fi
-        while SemiTraX is open.
+        securely and restored automatically. California maps use Wi-Fi by
+        default. If you have no Wi-Fi, allow mobile data below and keep SemiTraX
+        open.
       </Text>
       {automatic && (
         <>
@@ -275,6 +277,45 @@ export function CoPilotDeviceSetup() {
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           {amsSetupExplanation(state.operation)}
         </Text>
+      )}
+      {!state.mapsReady && state.licensingReady && (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Download CoPilot maps using mobile data"
+            disabled={busy || setup.cellularAllowed}
+            style={styles.button}
+            onPress={() =>
+              Alert.alert(
+                'Download maps using mobile data?',
+                'Offline maps can use a large amount of data. Your carrier may charge for it. Mobile data will be allowed for this app session.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Allow mobile data',
+                    onPress: () => {
+                      void setup.allowCellularDownload().catch(() => {
+                        setMessage(
+                          'Could not enable mobile-data downloads. Update SemiTraX and try again.',
+                        );
+                      });
+                    },
+                  },
+                ],
+              )
+            }
+          >
+            <Text style={styles.buttonText}>
+              {setup.cellularAllowed
+                ? 'Mobile data allowed for maps'
+                : 'Download maps using mobile data'}
+            </Text>
+          </Pressable>
+          <Text style={{ color: palette.muted }}>
+            Navigation stays unavailable until the licensed offline map is
+            installed and verified.
+          </Text>
+        </>
       )}
       {!!setup.downloadStatus && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>

@@ -40,6 +40,7 @@ export interface CoPilotHost {
   prepareDevice(): Promise<unknown>;
   mapInventory(): Promise<unknown>;
   downloadSelectedMap(): Promise<string>;
+  downloadSelectedMapUsingCellular?(): Promise<string>;
   setMapAppearance(night: boolean): Promise<void>;
   mapCommand(command: string): Promise<void>;
   drawRoutePreview(

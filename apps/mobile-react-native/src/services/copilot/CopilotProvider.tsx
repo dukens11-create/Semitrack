@@ -15,6 +15,8 @@ import { coPilotHost, selectedMapInstalled } from './CoPilotHost';
 const StateContext = createContext(initialCopilotState());
 const SetupContext = createContext({
   downloadStatus: '',
+  cellularAllowed: false,
+  allowCellularDownload: async () => {},
   retry: async () => {},
   configure: async (_company: string, _device: string) => {},
 });
@@ -23,6 +25,8 @@ export const useCopilotSetup = () => useContext(SetupContext);
 export function CopilotProvider({ children }: React.PropsWithChildren) {
   const [state, setState] = useState(initialCopilotState);
   const [downloadStatus, setDownloadStatus] = useState('');
+  const [cellularAllowed, setCellularAllowed] = useState(false);
+  const cellular = useRef(false);
   const latest = useRef(state);
   const lifecycle = useRef<CopilotLifecycle | null>(null);
   const download = useRef<AutomaticMapDownload | null>(null);
@@ -57,7 +61,13 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       {
         active: () => live.current && active.current,
         installed: selectedMapInstalled,
-        download: () => coPilotHost().downloadSelectedMap(),
+        download: () => {
+          const host = coPilotHost();
+          if (!cellular.current) return host.downloadSelectedMap();
+          if (!host.downloadSelectedMapUsingCellular)
+            throw new Error('Update SemiTraX to download over mobile data.');
+          return host.downloadSelectedMapUsingCellular();
+        },
         refresh: async () => {
           await lifecycle.current?.recheck();
         },
@@ -68,6 +78,19 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     );
     void download.current.tick();
   }, []);
+  const allowCellularDownload = useCallback(async () => {
+    if (!live.current || !active.current) return;
+    if (!coPilotHost().downloadSelectedMapUsingCellular)
+      throw new Error('Update SemiTraX to download over mobile data.');
+    cellular.current = true;
+    setCellularAllowed(true);
+    download.current?.stop();
+    download.current = null;
+    setDownloadStatus(
+      'Mobile data allowed for this app session. Checking offline map…',
+    );
+    synchronize();
+  }, [synchronize]);
   const retry = useCallback(async () => {
     if (!live.current) return;
     download.current?.stop();
@@ -136,7 +159,13 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
   return (
     <StateContext.Provider value={state}>
       <SetupContext.Provider
-        value={{ downloadStatus, retry: retrySaved, configure }}
+        value={{
+          downloadStatus,
+          cellularAllowed,
+          allowCellularDownload,
+          retry: retrySaved,
+          configure,
+        }}
       >
         {children}
       </SetupContext.Provider>

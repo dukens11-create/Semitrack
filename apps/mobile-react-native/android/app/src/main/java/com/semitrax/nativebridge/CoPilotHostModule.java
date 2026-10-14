@@ -632,6 +632,12 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     });
   }
   @ReactMethod public void downloadSelectedMap(Promise promise) {
+    downloadSelectedMap(false, promise);
+  }
+  @ReactMethod public void downloadSelectedMapUsingCellular(Promise promise) {
+    downloadSelectedMap(true, promise);
+  }
+  private void downloadSelectedMap(boolean allowCellular, Promise promise) {
     main.post(() -> {
       try {
         requireIdentity();
@@ -641,11 +647,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (selectedInstalled() != null) { promise.resolve("INSTALLED"); return; }
         List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
         if (licensed == null || !licensed.contains(region())) throw new IllegalStateException("REGION_UNLICENSED");
-        // SDK validates storage and network; cellular downloads are explicitly disabled.
+        // Cellular is allowed only by the explicit mobile-data action in setup.
+        CopilotMgr.allowCellularDataForMapDownloads(allowCellular);
+        // SDK validates storage and network.
         // Initial-install mode only when verified inventory is empty: no existing map is overwritten.
         MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), installed().isEmpty());
         promise.resolve(response.name());
-      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, Wi-Fi and sufficient storage."); }
+      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, an allowed internet connection and sufficient storage."); }
     });
   }
   private void requireMap() throws Exception {

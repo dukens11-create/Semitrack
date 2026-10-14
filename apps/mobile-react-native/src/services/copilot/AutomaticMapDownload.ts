@@ -33,7 +33,7 @@ export class AutomaticMapDownload {
       if (!this.started) {
         if (this.attempts >= 3) {
           this.report(
-            'CoPilot is still busy. Retry map setup after checking Wi-Fi and storage.',
+            'CoPilot is still busy. Retry map setup after checking your allowed internet connection and storage.',
           );
           this.stop();
           return;
@@ -52,7 +52,7 @@ export class AutomaticMapDownload {
         ) {
           this.started = true;
           this.report(
-            'Checking download and installation progress… Keep SemiTraX open on Wi-Fi.',
+            'Checking download and installation progress… Keep SemiTraX open with an internet connection.',
           );
         } else if (
           ['FAILURE_MANAGER_BUSY', 'FAILURE_INVALID_CONNECTION'].includes(
@@ -60,13 +60,13 @@ export class AutomaticMapDownload {
           )
         ) {
           this.report(
-            'Waiting for CoPilot or Wi-Fi. Setup will retry automatically.',
+            'Waiting for CoPilot or your allowed internet connection. Setup will retry automatically.',
           );
         } else {
           this.report(
             response === 'FAILURE_INSUFFICIENT_DISK_SPACE'
               ? 'Free storage is needed before the offline map can download.'
-              : 'CoPilot could not accept the map download. Check device setup, Wi-Fi and storage.',
+              : 'CoPilot could not accept the map download. Check device setup, your allowed internet connection and storage.',
           );
           this.stop();
           return;
@@ -82,7 +82,7 @@ export class AutomaticMapDownload {
     } catch {
       if (!this.stopped) {
         this.report(
-          'Map setup could not be verified. Check device licensing, Wi-Fi and storage, then retry.',
+          'Map setup could not be verified. Check device licensing, your allowed internet connection and storage, then retry.',
         );
         this.stop();
       }

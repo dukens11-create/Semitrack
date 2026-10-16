@@ -61,13 +61,7 @@ jobs:
           "$aapt_bin" dump badging "$apk" | grep "^package:" | tee android/app/build/outputs/apk/debug/package-identity.txt
           signer=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           "$signer" verify --print-certs "$apk" > android/app/build/outputs/apk/debug/signing-certificate.txt
-          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' android/app/build/outputs/apk/debug/signing-certificate.txt)
-          echo "Expected certificate: $SEMITRAX_VERIFIED_CERT_SHA256"
-          echo "APK certificate: $actual"
-          if [ "$actual" != "$SEMITRAX_VERIFIED_CERT_SHA256" ]; then
-            echo "::error::APK signing certificate does not match the restored test key"
-            exit 1
-          fi
+          node scripts/verify-test-certificate.cjs android/app/build/outputs/apk/debug/signing-certificate.txt
           sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
           echo "Assigned Samsung SM-S908U only; TestAsset diagnostic mode: $SEMITRAX_TEST_ASSET; saved assignments preserved." > android/app/build/outputs/apk/debug/enrollment-mode.txt
           echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt

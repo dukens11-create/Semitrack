@@ -61,6 +61,8 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       {
         active: () => live.current && active.current,
         installed: selectedMapInstalled,
+        progress: async () =>
+          (await coPilotHost().setupDiagnostics?.())?.mapDownload?.status,
         download: () => {
           const host = coPilotHost();
           if (!cellular.current) return host.downloadSelectedMap();

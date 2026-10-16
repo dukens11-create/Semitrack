@@ -44,6 +44,7 @@ import com.alk.cpik.ui.MapImageInfoList;
 import com.alk.cpik.ui.MapImageSet;
 import com.alk.cpik.ui.UIListener;
 import com.alk.cpik.ui.UIMgr;
+import com.alk.cpik.route.RouteMgr;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -690,6 +691,15 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         mapDownloadStage = "NETWORK_POLICY";
         CopilotMgr.allowCellularDataForMapDownloads(allowCellular);
         mapCellularAllowed = allowCellular;
+        // A finished download switches into installed data only while CoPilot is idle.
+        // Keep its internal navigation window available during setup; do not start or clear a route.
+        if (!RouteMgr.hasDestination()) UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+        // Preserve an accepted transfer across JS retries/foreground transitions.
+        if ("DOWNLOADING".equals(mapDownloadStatus) || "SUCCEEDED".equals(mapDownloadStatus)
+            || "INSTALLATION_STARTED".equals(mapDownloadStatus)) {
+          promise.resolve("DOWNLOADING".equals(mapDownloadStatus) ? "FAILURE_DOWNLOADING" : "FAILURE_DOWNLOADED");
+          return;
+        }
         // SDK validates storage and network.
         // Initial-install mode only when verified inventory is empty: no existing map is overwritten.
         mapDownloadStage = "SDK_REQUEST";

@@ -3,6 +3,7 @@ export interface AutomaticMapPort {
   active(): boolean;
   installed(): Promise<boolean>;
   download(): Promise<string>;
+  progress?(): Promise<string | undefined>;
   refresh(): Promise<void>;
 }
 
@@ -32,6 +33,38 @@ export class AutomaticMapDownload {
         return;
       }
       if (this.stopped || !this.port.active()) return;
+      const progress = await this.port.progress?.();
+      if (this.stopped || !this.port.active()) return;
+      if (
+        [
+          'DOWNLOADING',
+          'SUCCEEDED',
+          'INSTALLATION_STARTED',
+          'INSTALLATION_FINISHED',
+        ].includes(progress ?? '')
+      ) {
+        this.started = true;
+        this.report(
+          progress === 'DOWNLOADING'
+            ? 'Downloading offline map… Keep SemiTraX open.'
+            : progress === 'SUCCEEDED'
+            ? 'Map downloaded. Waiting for CoPilot to install it. Keep SemiTraX open.'
+            : progress === 'INSTALLATION_STARTED'
+            ? 'Installing offline map… Keep SemiTraX open.'
+            : 'Installation finished. Verifying the licensed map inventory…',
+        );
+      } else if (
+        this.started &&
+        ['FAILED', 'CANCELLED', 'PAUSED', 'WAITING_ON_STORAGE_SPACE'].includes(
+          progress ?? '',
+        )
+      ) {
+        this.report(
+          `Map setup stopped (${progress}). Check storage and connection, then retry map setup.`,
+        );
+        this.stop();
+        return;
+      }
       if (!this.started) {
         if (this.attempts >= 3) {
           this.report(

@@ -74,6 +74,8 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
+import { copilotMapBlocker } from '../components/CopilotOfflineMap';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
@@ -95,6 +97,9 @@ export function PlanningScreen({
     trucks = useStore(services.trucks),
     location = useStore(services.location);
   const { settings } = useStore(services.settings);
+  const copilot = useCopilotState();
+  // Native onboarding (including the EULA) needs an unobstructed viewport.
+  const nativeSetupVisible = copilotMapBlocker(copilot) === null && !copilot.readyToAddStops;
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
   );
@@ -750,8 +755,8 @@ export function PlanningScreen({
           pois={pois.filter(
             poi => !hiddenCategories.includes(poi.category as PlaceCategory),
           )}
-          bottomInset={bottomHeight}
-          topInset={topHeight + 12}
+          bottomInset={nativeSetupVisible ? 0 : bottomHeight}
+          topInset={nativeSetupVisible ? 0 : topHeight + 12}
           onCoordinate={point => {
             if (
               busy ||
@@ -775,7 +780,7 @@ export function PlanningScreen({
         />
       </View>
       <View
-        style={styles.top}
+        style={[styles.top, nativeSetupVisible && { display: 'none' }]}
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
@@ -869,15 +874,16 @@ export function PlanningScreen({
       <View
         testID="map-bottom-panel"
         onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
-        style={
+        style={[
           routes.route
             ? styles.routeBottom
             : [
                 styles.bottom,
                 expanded ? styles.expandedBottom : styles.collapsedBottom,
                 { backgroundColor: palette.card },
-              ]
-        }
+              ],
+          nativeSetupVisible && { display: 'none' },
+        ]}
       >
         <WeatherStatus
           driving={navigationSession}

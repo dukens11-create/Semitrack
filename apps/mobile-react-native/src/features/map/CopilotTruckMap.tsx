@@ -199,7 +199,7 @@ export function CopilotTruckMap({
       ) : (
         <CopilotOfflineMap state={state} />
       )}
-      {allowed && appearanceReady && (
+      {allowed && appearanceReady && state.readyToAddStops && (
         <View
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"

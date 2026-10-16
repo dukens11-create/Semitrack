@@ -38,6 +38,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Test certificate verification parser
+        run: node --test scripts/verify-test-certificate.test.cjs
       - name: Restore persistent test signing key
         env:
           SEMITRAX_TEST_KEYSTORE_BASE64: ${{ secrets.SEMITRAX_TEST_KEYSTORE_BASE64 }}

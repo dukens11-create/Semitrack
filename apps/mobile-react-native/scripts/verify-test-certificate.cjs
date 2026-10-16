@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 function verifyCertificate(report, expected) {
-  const fingerprints = [...report.matchAll(/^\s*Signer[^\r\n]*? certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$/gm)].map(match => match[1].toLowerCase());
+  const fingerprints = [...report.matchAll(/^\s*(?:V[1-4] )?Signer[^\r\n]*? certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\s*$/gm)].map(match => match[1].toLowerCase());
   if (!fingerprints.length) throw new Error('No signer certificate SHA-256 fingerprint found in apksigner output');
   if (!/^[0-9a-f]{64}$/.test(expected || '')) throw new Error('Missing or invalid expected certificate');
   if (fingerprints.some(value => value !== expected)) throw new Error('APK signer certificate differs from the saved test key');

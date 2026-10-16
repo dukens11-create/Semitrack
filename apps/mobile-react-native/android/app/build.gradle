@@ -44,7 +44,6 @@ android {
  }
  buildTypes {
   debug {
-  signingConfig signingConfigs.debug
   applicationIdSuffix ".restored.copilot.debug"
   if (semitraxTestAsset) { applicationIdSuffix ".restored.copilot.testasset" }
   buildConfigField "boolean", "SEMITRAX_TEST_ASSET", semitraxTestAsset.toString()

@@ -30,8 +30,21 @@ android {
    cmake { arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" }
   }
  }
+ // CI must use the exact keystore validated by restore-test-signing.sh.
+ signingConfigs {
+  debug {
+   def persistentKey = System.getenv("SEMITRAX_TEST_KEYSTORE_PATH")
+   if (persistentKey) {
+    storeFile file(persistentKey)
+    storePassword "android"
+    keyAlias "androiddebugkey"
+    keyPassword "android"
+   }
+  }
+ }
  buildTypes {
   debug {
+  signingConfig signingConfigs.debug
   applicationIdSuffix ".restored.copilot.debug"
   if (semitraxTestAsset) { applicationIdSuffix ".restored.copilot.testasset" }
   buildConfigField "boolean", "SEMITRAX_TEST_ASSET", semitraxTestAsset.toString()

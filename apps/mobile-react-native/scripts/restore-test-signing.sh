@@ -14,3 +14,4 @@ printf '%s' "$SEMITRAX_TEST_KEYSTORE_BASE64" | base64 --decode > "$keyfile"
 actual=$(keytool -exportcert -keystore "$keyfile" -alias androiddebugkey -storepass android | sha256sum | cut -d ' ' -f 1)
 [[ "$actual" = "$expected" ]] || { rm -f "$keyfile"; echo "Signing certificate mismatch"; exit 1; }
 printf 'SEMITRAX_VERIFIED_CERT_SHA256=%s\n' "$actual" >> "$GITHUB_ENV"
+printf 'SEMITRAX_TEST_KEYSTORE_PATH=%s\n' "$keyfile" >> "$GITHUB_ENV"

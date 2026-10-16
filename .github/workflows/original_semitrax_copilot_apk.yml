@@ -38,6 +38,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Restore persistent test signing key
+        env:
+          SEMITRAX_TEST_KEYSTORE_BASE64: ${{ secrets.SEMITRAX_TEST_KEYSTORE_BASE64 }}
+          SEMITRAX_TEST_CERT_SHA256: ${{ vars.SEMITRAX_TEST_CERT_SHA256 }}
+        run: bash scripts/restore-test-signing.sh
       - name: Install dependencies
         run: npm ci
       - name: Check original React Native app
@@ -54,6 +59,10 @@ jobs:
           aapt_bin=$(find "${ANDROID_HOME}/build-tools" -type f -name aapt | sort -V | tail -n 1)
           test -n "$aapt_bin"
           "$aapt_bin" dump badging "$apk" | grep "^package:" | tee android/app/build/outputs/apk/debug/package-identity.txt
+          signer=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$signer" verify --print-certs "$apk" > android/app/build/outputs/apk/debug/signing-certificate.txt
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' android/app/build/outputs/apk/debug/signing-certificate.txt)
+          test "$actual" = "$SEMITRAX_VERIFIED_CERT_SHA256"
           sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
           echo "Assigned Samsung SM-S908U only; TestAsset diagnostic mode: $SEMITRAX_TEST_ASSET; saved assignments preserved." > android/app/build/outputs/apk/debug/enrollment-mode.txt
           echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
@@ -74,4 +83,5 @@ jobs:
             apps/mobile-react-native/android/app/build/outputs/apk/debug/package-identity.txt
             apps/mobile-react-native/android/app/build/outputs/apk/debug/build-commit.txt
             apps/mobile-react-native/android/app/build/outputs/apk/debug/enrollment-mode.txt
+            apps/mobile-react-native/android/app/build/outputs/apk/debug/signing-certificate.txt
           if-no-files-found: error

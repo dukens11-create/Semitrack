@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { prisma } from "../lib/prisma.js";
 import { verifyToken } from "../utils/jwt.js";
+import { currentAccessSession } from "../services/accessSession.js";
 
 declare global {
   namespace Express {
@@ -18,7 +19,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
 
   if (!auth?.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing bearer token" });
+    return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Please sign in again." } });
   }
 
   try {
@@ -27,14 +28,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     // Revalidate current account state on every protected request. A role
     // demotion or suspension must take effect immediately rather than waiting
     // for an already-issued access token to expire.
-    void prisma.user
-      .findUnique({
-        where: { id: claims.userId },
-        select: { id: true, email: true, role: true, disabledAt: true },
-      })
+    void currentAccessSession(prisma, claims)
       .then(async (user) => {
         if (!user || user.disabledAt) {
-          res.status(401).json({ error: "Account unavailable" });
+          res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Please sign in again." } });
           return;
         }
         req.user = {
@@ -52,18 +49,18 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
       .catch(next);
     return;
   } catch {
-    return res.status(401).json({ error: "Invalid token" });
+    return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Please sign in again." } });
   }
 }
 
 export function requireRole(roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Please sign in again." } });
     }
 
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: "Forbidden" });
+      return res.status(403).json({ error: { code: "FORBIDDEN", message: "This action is not authorized." } });
     }
 
     return next();

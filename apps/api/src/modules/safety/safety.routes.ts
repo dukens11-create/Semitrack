@@ -8,9 +8,10 @@ import {
   distanceMeters,
   expiresAtForReport,
   matchItemsToRoute,
+  corridorRouteOffset,
   type Coordinate,
 } from "../../services/safetyDataService.js";
-import { refreshDotProviders } from "../../services/dotFeedService.js";
+import { refreshDotProviders, configuredDotProviders } from "../../services/dotFeedService.js";
 import { loadRoadFeaturesNearby } from "../../services/roadFeatureService.js";
 
 export const safetyRouter = Router();
@@ -48,7 +49,14 @@ const corridorSchema = z.object({
   maxDistanceAheadMeters: z.number().min(100).max(1_000_000).default(160_934),
   routeBearing: z.number().min(0).max(360).optional(),
   limit: z.number().int().min(1).max(100).default(30),
+  currentLocation: coordinateSchema.extend({accuracy: z.number().min(0).max(100), timestamp: z.number().finite()}).optional(),
 });
+
+function correlatedCorridorBody(body: unknown) {
+  const input = body as {route?: unknown; currentLocation?: unknown} | null;
+  const offset = corridorRouteOffset(input?.route, input?.currentLocation);
+  return {...input, currentRouteOffsetMeters: offset};
+}
 
 const valueByType = {
   WEIGH_STATION_STATUS: ["OPEN", "CLOSED", "INSPECTION"],
@@ -77,19 +85,20 @@ function corridorResponse<T extends { latitude: number; longitude: number; direc
   input: z.infer<typeof corridorSchema>,
   records: T[],
 ) {
+  const offset = input.currentRouteOffsetMeters;
   return matchItemsToRoute(
     input.route,
     records,
     (record) => ({ lat: record.latitude, lng: record.longitude }),
     input.maxCorridorMeters,
-    input.currentRouteOffsetMeters,
+    offset,
   )
-    .filter((match) => match.routeOffsetMeters - input.currentRouteOffsetMeters <= input.maxDistanceAheadMeters)
+    .filter((match) => match.routeOffsetMeters - offset <= input.maxDistanceAheadMeters)
     .filter((match) => directionMatches(match.item.direction, input.routeBearing))
     .slice(0, input.limit)
     .map((match) => ({
       ...match.item,
-      routeDistanceAheadMeters: match.routeOffsetMeters - input.currentRouteOffsetMeters,
+      routeDistanceAheadMeters: match.routeOffsetMeters - offset,
       detourOffsetMeters: match.distanceFromRouteMeters,
     }));
 }
@@ -121,7 +130,7 @@ async function communityAggregate(type: keyof typeof valueByType, entityId: stri
 
 safetyRouter.post("/restrictions/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.parse(req.body);
+    const input = corridorSchema.parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const items = await prisma.truckRestriction.findMany({
       where: {
@@ -147,7 +156,7 @@ safetyRouter.get("/restrictions/:id", requireAuth, asyncRoute(async (req, res, n
 
 safetyRouter.post("/weigh-stations/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.parse(req.body);
+    const input = corridorSchema.parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const stations = await prisma.weighStation.findMany({
       where: {
@@ -195,7 +204,7 @@ safetyRouter.get("/weigh-stations/nearby", requireAuth, asyncRoute(async (req, r
 
 safetyRouter.post("/parking/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.parse(req.body);
+    const input = corridorSchema.parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const locations = await prisma.parkingLocation.findMany({
       where: { active: true, latitude: { gte: box.minLat, lte: box.maxLat }, longitude: { gte: box.minLng, lte: box.maxLng } },
@@ -217,7 +226,7 @@ safetyRouter.post("/parking/corridor", requireAuth, asyncRoute(async (req, res, 
 
 safetyRouter.post("/fuel/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.extend({ maxPriceAgeHours: z.number().min(1).max(168).default(24) }).parse(req.body);
+    const input = corridorSchema.extend({ maxPriceAgeHours: z.number().min(1).max(168).default(24) }).parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const stations = await prisma.fuelStation.findMany({
       where: { active: true, latitude: { gte: box.minLat, lte: box.maxLat }, longitude: { gte: box.minLng, lte: box.maxLng } },
@@ -234,9 +243,32 @@ safetyRouter.post("/fuel/corridor", requireAuth, asyncRoute(async (req, res, nex
   } catch (error) { next(error); }
 }));
 
+async function publicDotRecords<T extends {provider: string; lastUpdated: Date; sourceUrl?: string | null; imageUrl?: string | null; streamUrl?: string | null}>(records: T[], dataType: string) {
+  const states = await prisma.providerSyncState.findMany({where: {dataType}});
+  const configs = configuredDotProviders().filter(provider => provider.config.dataType === dataType);
+  return records.map(record => {
+    const state = states.find(item => item.provider === record.provider);
+    const age = Date.now() - record.lastUpdated.getTime();
+    const configured = state && configs.find(provider => provider.id === record.provider && provider.jurisdiction === state.jurisdiction);
+    const current = !!configured && !!state && state.status === "HEALTHY" && !!state.lastSuccessAt
+      && Date.now() - state.lastSuccessAt.getTime() >= 0
+      && Date.now() - state.lastSuccessAt.getTime() <= state.refreshIntervalSec * 2000
+      && age >= 0 && age <= 15 * 60000;
+    const {sourceUrl: _source, imageUrl, streamUrl, ...publicRecord} = record;
+    const publicLink = (value?: string | null) => {
+      try { const url = new URL(value ?? ""); return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash ? url.href : undefined; } catch { return undefined; }
+    };
+    return {...publicRecord, dataStatus: current ? "CURRENT_PROVIDER_REPORT" : "STALE_OR_UNVERIFIED",
+      jurisdiction: state?.jurisdiction ?? null,
+      attribution: configured?.config.attribution ?? record.provider,
+      sourceUrl: configured?.config.publicSourceUrl,
+      imageUrl: current ? publicLink(imageUrl) : undefined, streamUrl: current ? publicLink(streamUrl) : undefined};
+  });
+}
+
 safetyRouter.post("/road-events/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.parse(req.body);
+    const input = corridorSchema.parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const events = await prisma.dotRoadEvent.findMany({
       where: {
@@ -247,19 +279,19 @@ safetyRouter.post("/road-events/corridor", requireAuth, asyncRoute(async (req, r
       },
       take: 1_000,
     });
-    res.json({ items: corridorResponse(input, events) });
+    res.json({ items: await publicDotRecords(corridorResponse(input, events), "ROAD_EVENTS") });
   } catch (error) { next(error); }
 }));
 
 safetyRouter.post("/cameras/corridor", requireAuth, asyncRoute(async (req, res, next) => {
   try {
-    const input = corridorSchema.parse(req.body);
+    const input = corridorSchema.parse(correlatedCorridorBody(req.body));
     const box = bounds(input.route, input.maxCorridorMeters);
     const cameras = await prisma.trafficCamera.findMany({
       where: { active: true, latitude: { gte: box.minLat, lte: box.maxLat }, longitude: { gte: box.minLng, lte: box.maxLng } },
       take: 1_000,
     });
-    res.json({ items: corridorResponse(input, cameras) });
+    res.json({ items: await publicDotRecords(corridorResponse(input, cameras), "CAMERAS") });
   } catch (error) { next(error); }
 }));
 
@@ -364,13 +396,14 @@ safetyRouter.get("/community-reports/:type/:entityId/aggregate", requireAuth, as
   } catch (error) { next(error); }
 }));
 
-safetyRouter.patch("/admin/community-reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR", "FLEET_ADMIN"]), asyncRoute(async (req, res, next) => {
+safetyRouter.patch("/admin/community-reports/:id", requireAuth, requireRole(["ADMIN", "MODERATOR"]), asyncRoute(async (req, res, next) => {
   try {
     const input = z.object({ status: z.enum(["APPROVED", "REJECTED", "REMOVED", "EXPIRED"]), reason: z.string().trim().min(2).max(500) }).parse(req.body);
     const id = z.string().min(1).parse(req.params.id);
-    const report = await prisma.communityDataReport.update({
-      where: { id },
-      data: { moderationStatus: input.status, moderationReason: input.reason },
+    const report = await prisma.$transaction(async tx => {
+      const updated = await tx.communityDataReport.update({ where: { id }, data: { moderationStatus: input.status, moderationReason: input.reason } });
+      await tx.adminAuditLog.create({ data: { actorUserId: req.user!.userId, action: 'COMMUNITY_DATA_MODERATED', targetType: 'COMMUNITY_DATA_REPORT', targetId: id, metadataJson: { status: input.status, reason: input.reason } } });
+      return updated;
     });
     res.json(report);
   } catch (error) { next(error); }
@@ -382,11 +415,12 @@ safetyRouter.get("/admin/provider-status", requireAuth, requireRole(["ADMIN", "M
   } catch (error) { next(error); }
 }));
 
-safetyRouter.post("/admin/provider-sync", requireAuth, requireRole(["ADMIN", "FLEET_ADMIN"]), asyncRoute(async (_req, res, next) => {
+safetyRouter.post("/admin/provider-sync", requireAuth, requireRole(["ADMIN"]), asyncRoute(async (req, res, next) => {
   try {
+    await prisma.adminAuditLog.create({ data: { actorUserId: req.user!.userId, action: 'PROVIDER_SYNC_REQUESTED', targetType: 'PROVIDER', metadataJson: {} } });
     const results = await refreshDotProviders(true);
     res.json({ items: results.map((result) => result.status === "fulfilled"
       ? { ok: true, ...result.value }
-      : { ok: false, error: result.reason instanceof Error ? result.reason.message : "Provider failed" }) });
+      : { ok: false, error: "Provider refresh failed" }) });
   } catch (error) { next(error); }
 }));

@@ -169,3 +169,68 @@ export function aggregateCommunityStatus(
     stale: false,
   };
 }
+
+/** Advisory queries only: reject ambiguous loop/intersection progress rather than guess. */
+export function correlateRoutePosition(route: Coordinate[], point: Coordinate) {
+  const match = matchItemsToRoute(route, [point], p => p, 250)[0];
+  if (!match) throw new Error("ROUTE_LOCATION_UNCORRELATED");
+  let traversed = 0;
+  for (let i = 1; i < route.length; i++) {
+    const start = route[i - 1]!, end = route[i]!;
+    const segment = distanceMeters(start, end);
+    const projected = projectToSegment(point, start, end);
+    if (projected.distance <= 100 && Math.abs(traversed + segment * projected.fraction - match.routeOffsetMeters) > 1000)
+      throw new Error("ROUTE_LOCATION_AMBIGUOUS");
+    traversed += segment;
+  }
+  return match.routeOffsetMeters;
+}
+
+export function pointAtRouteOffset(route: Coordinate[], offset: number): Coordinate | null {
+  if (!Number.isFinite(offset) || offset < 0 || route.length < 2) return null;
+  let remaining = offset;
+  for (let i = 1; i < route.length; i++) {
+    const a = route[i - 1]!, b = route[i]!, length = distanceMeters(a, b);
+    if (Math.abs(b.lng - a.lng) > 180) return null;
+    if (length > 0 && remaining <= length) {
+      const fraction = remaining / length;
+      return {lat: a.lat + (b.lat - a.lat) * fraction, lng: a.lng + (b.lng - a.lng) * fraction};
+    }
+    remaining -= length;
+  }
+  return null;
+}
+
+const corridorMessages = {
+  CORRIDOR_ROUTE_REQUIRED: "A valid non-empty planned route is required for corridor information.",
+  CORRIDOR_LOCATION_REQUIRED: "Current location is required for corridor information.",
+  CORRIDOR_LOCATION_INVALID: "A valid precise location is required for corridor information.",
+  CORRIDOR_LOCATION_STALE: "Location is stale. Acquire a fresh precise fix and retry corridor information.",
+  CORRIDOR_LOCATION_OFF_ROUTE: "Current location is not on the planned route. Review the route and retry.",
+  CORRIDOR_LOCATION_AMBIGUOUS: "Progress on this route is ambiguous. Acquire a new location and review the route.",
+  CORRIDOR_CORRELATION_FAILED: "Location could not be correlated with the planned route. Review and retry.",
+} as const;
+export class CorridorCorrelationError extends Error {
+  readonly httpStatus = 422;
+  readonly code: keyof typeof corridorMessages;
+  constructor(code: keyof typeof corridorMessages) { super(corridorMessages[code]); this.code = code; }
+}
+/** Shared advisory correlation boundary; never substitutes zero progress after an error. */
+export function corridorRouteOffset(route: unknown, location: unknown, now = Date.now()): number {
+  const coordinate = (value: any): value is Coordinate => !!value &&
+    typeof value.lat === "number" && Number.isFinite(value.lat) && Math.abs(value.lat) <= 90 &&
+    typeof value.lng === "number" && Number.isFinite(value.lng) && Math.abs(value.lng) <= 180;
+  if (!Array.isArray(route) || route.length < 2 || route.length > 20000 || !route.every(coordinate) ||
+    !route.some(point => distanceMeters(point, route[0]!) > 0)) throw new CorridorCorrelationError("CORRIDOR_ROUTE_REQUIRED");
+  if (location == null) throw new CorridorCorrelationError("CORRIDOR_LOCATION_REQUIRED");
+  const fix = location as Coordinate & {accuracy: number; timestamp: number};
+  if (!coordinate(fix) || !Number.isFinite(fix.accuracy) || fix.accuracy < 0 || fix.accuracy > 100 ||
+    !Number.isFinite(fix.timestamp) || fix.timestamp > now + 5000) throw new CorridorCorrelationError("CORRIDOR_LOCATION_INVALID");
+  if (now - fix.timestamp > 15000) throw new CorridorCorrelationError("CORRIDOR_LOCATION_STALE");
+  try { return correlateRoutePosition(route, fix); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    throw new CorridorCorrelationError(reason === "ROUTE_LOCATION_AMBIGUOUS" ? "CORRIDOR_LOCATION_AMBIGUOUS" :
+      reason === "ROUTE_LOCATION_UNCORRELATED" ? "CORRIDOR_LOCATION_OFF_ROUTE" : "CORRIDOR_CORRELATION_FAILED");
+  }
+}

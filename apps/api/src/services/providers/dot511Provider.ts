@@ -35,6 +35,8 @@ export type Dot511Snapshot = {
   events: NormalizedRoadEvent[];
   cameras: NormalizedTrafficCamera[];
   fetchedAt: Date;
+  /** All records validated and operator confirmed a complete feed contract. */
+  complete: boolean;
 };
 
 export interface Dot511Provider {
@@ -52,6 +54,10 @@ const configSchema = z.object({
   format: z.enum(["GEOJSON", "ARCGIS_JSON"]),
   refreshIntervalSec: z.number().int().min(60).max(86_400).default(300),
   dataType: z.enum(["ROAD_EVENTS", "CAMERAS"]),
+  attribution: z.string().trim().min(1).max(500).optional(),
+  publicSourceUrl: z.string().url().refine(value => {const u = new URL(value); return u.protocol === "https:" && !u.username && !u.password && !u.search && !u.hash;}).optional(),
+  // Enable only for a provider endpoint documented to return the complete snapshot.
+  completeSnapshot: z.boolean().default(false),
   authorizationHeaderEnv: z.string().min(1).optional(),
   mapping: z.object({
     id: z.string().default("id"),
@@ -83,14 +89,22 @@ function validCoordinate(latitude: number, longitude: number) {
     && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
 }
 
+function providerCoordinate(value: unknown) {
+  return typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+}
+
 function unpack(data: any, format: DotProviderConfig["format"]) {
+  if (data?.exceededTransferLimit === true || data?.hasMore === true || data?.next || data?.nextPageToken ||
+    Array.isArray(data?.links) && data.links.some((link: any) => link?.rel === "next")) throw new Error("Provider snapshot is incomplete");
   const features = Array.isArray(data) ? data : data?.features;
   if (!Array.isArray(features)) throw new Error("Provider response has no feature array");
   return features.map((feature) => {
+    if (!feature || typeof feature !== "object" || Array.isArray(feature)) throw new Error("Malformed provider feature");
     const properties = feature.properties ?? feature.attributes ?? feature;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) throw new Error("Malformed provider properties");
     const coordinates = feature.geometry?.coordinates;
-    const longitude = format === "GEOJSON" ? Number(coordinates?.[0]) : Number(feature.geometry?.x ?? properties.longitude);
-    const latitude = format === "GEOJSON" ? Number(coordinates?.[1]) : Number(feature.geometry?.y ?? properties.latitude);
+    const longitude = format === "GEOJSON" ? providerCoordinate(coordinates?.[0]) : providerCoordinate(feature.geometry?.x ?? properties.longitude);
+    const latitude = format === "GEOJSON" ? providerCoordinate(coordinates?.[1]) : providerCoordinate(feature.geometry?.y ?? properties.latitude);
     return { properties, latitude, longitude, geometry: feature.geometry };
   });
 }
@@ -117,8 +131,23 @@ export class ConfiguredDot511Provider implements Dot511Provider {
     const response = await fetch(this.endpointUrl, { headers, signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}`);
     const fetchedAt = new Date();
-    const features = unpack(await response.json(), this.config.format)
-      .filter((feature) => validCoordinate(feature.latitude, feature.longitude));
+    const features = unpack(await response.json(), this.config.format);
+    const identities = new Set<string>();
+    // Validate the entire snapshot before producing any normalized records.
+    // Discarding even one record would make absence unsafe evidence for retirement.
+    for (const {properties, latitude, longitude} of features) {
+      const id = properties[this.config.mapping.id];
+      const updated = date(properties[this.config.mapping.updatedAt]);
+      if (!validCoordinate(latitude, longitude) ||
+        !(typeof id === "string" && id.trim() || typeof id === "number" && Number.isFinite(id)) ||
+        !updated || updated > fetchedAt || identities.has(String(id))) {
+        throw new Error("Provider snapshot contains invalid or duplicate records");
+      }
+      identities.add(String(id));
+      for (const key of [this.config.mapping.startsAt, this.config.mapping.endsAt]) {
+        if (properties[key] != null && !date(properties[key])) throw new Error("Invalid provider event time");
+      }
+    }
     if (this.config.dataType === "CAMERAS") {
       const cameras = features.map(({ properties, latitude, longitude }) => ({
         providerCameraId: String(properties[this.config.mapping.id]),
@@ -129,10 +158,13 @@ export class ConfiguredDot511Provider implements Dot511Provider {
         longitude,
         imageUrl: properties[this.config.mapping.imageUrl]?.toString(),
         streamUrl: properties[this.config.mapping.streamUrl]?.toString(),
-        lastUpdated: date(properties[this.config.mapping.updatedAt], fetchedAt)!,
+        lastUpdated: date(properties[this.config.mapping.updatedAt])!,
         active: true,
-      })).filter((camera) => camera.providerCameraId && (camera.imageUrl || camera.streamUrl));
-      return { events: [], cameras, fetchedAt };
+      }));
+      if (cameras.some(camera => ![camera.imageUrl, camera.streamUrl].some(value => {
+        try { return !!value && ["https:", "http:"].includes(new URL(value).protocol); } catch { return false; }
+      }))) throw new Error("Provider snapshot contains an invalid camera");
+      return { events: [], cameras, fetchedAt, complete: this.config.completeSnapshot };
     }
     const events = features.map(({ properties, latitude, longitude, geometry }) => {
       const rawType = String(properties[this.config.mapping.type] ?? "OTHER").toUpperCase().replaceAll(/[^A-Z]+/g, "_");
@@ -149,17 +181,24 @@ export class ConfiguredDot511Provider implements Dot511Provider {
         direction: properties[this.config.mapping.direction]?.toString(),
         startsAt: date(properties[this.config.mapping.startsAt]),
         endsAt: date(properties[this.config.mapping.endsAt]),
-        lastUpdated: date(properties[this.config.mapping.updatedAt], fetchedAt)!,
+        lastUpdated: date(properties[this.config.mapping.updatedAt])!,
         active: true,
         geometry,
-        sourceUrl: this.endpointUrl,
+        sourceUrl: undefined,
       };
-    }).filter((event) => event.providerEventId);
-    return { events, cameras: [], fetchedAt };
+    });
+    return { events, cameras: [], fetchedAt, complete: this.config.completeSnapshot };
   }
 }
 
 export function parseDotProviderConfigs(raw: string) {
   const parsed = JSON.parse(raw) as unknown;
-  return z.array(configSchema).parse(parsed);
+  const configs = z.array(configSchema).parse(parsed);
+  const identities = new Set<string>();
+  for (const config of configs) {
+    const identity = config.id + ":" + config.dataType;
+    if (identities.has(identity)) throw new Error("Provider IDs must be unique per data type across jurisdictions");
+    identities.add(identity);
+  }
+  return configs;
 }

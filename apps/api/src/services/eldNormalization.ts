@@ -11,6 +11,7 @@ function compact<T extends Record<string, unknown>>(value: T) {
 }
 
 function seconds(value: unknown, milliseconds = false) {
+  if ((typeof value !== 'number' && typeof value !== 'string') || value === '' || (typeof value==='string' && !value.trim())) return undefined;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return undefined;
   return milliseconds ? Math.round(parsed / 1000) : Math.round(parsed);
@@ -53,4 +54,11 @@ export function normalizeEldSnapshot(
   }).filter((entry) => entry.providerDriverId);
 
   return { provider, drivers, vehicles, hos };
+}
+
+/** Provider-account clocks are not proof of the signed-in driver's HOS identity. */
+export function currentHosStatus(connections:{lastSyncedAt:Date|null;metadataJson:unknown}[],now=Date.now()){
+ if(!connections.length)return {items:[],status:'UNKNOWN',reason:'ELD_NOT_CONNECTED',certifiedEld:false};
+ const fresh=connections.some(c=>c.lastSyncedAt&&now-c.lastSyncedAt.getTime()>=0&&now-c.lastSyncedAt.getTime()<=300000);
+ return {items:[],status:'UNKNOWN',reason:fresh?'DRIVER_MAPPING_REQUIRED':'ELD_DATA_STALE',certifiedEld:false};
 }

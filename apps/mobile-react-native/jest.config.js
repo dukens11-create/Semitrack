@@ -1,0 +1,1 @@
+module.exports = {preset: '@react-native/jest-preset', testMatch: ['**/*.test.ts', '**/*.test.tsx'], setupFilesAfterEnv: ['react-native-url-polyfill/auto'], transformIgnorePatterns: ['node_modules/(?!((jest-)?react-native|react-native-url-polyfill|@react-native(-community)?)/)']};

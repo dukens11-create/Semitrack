@@ -116,21 +116,24 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     if (!invalidated && context.hasActiveReactInstance())
       context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(event, value);
   }
+  private final java.util.concurrent.ConcurrentHashMap<MapRegion, String> regionDownloadStatus = new java.util.concurrent.ConcurrentHashMap<>();
   private final MapDataListener mapListener = new MapDataListener() {
     @Override public void onReadyToDownloadInitialMapData() {
       initialMapSignalReceived = true;
     }
     @Override public void onMapDownloadResponse(MapDownloadResponse response, List<MapRegion> regions, boolean initial) {
-      // Ignore callbacks for unrelated regions and retain only enum values.
+      // Retain only SDK enums; catalog downloads may be outside California.
       try {
-        if (regions != null && regions.contains(region()) && response != null)
+        if (regions != null && !regions.isEmpty() && response != null)
           mapDownloadCallback = response.name();
       } catch (Exception ignored) {}
     }
     @Override public void onMapdataUpdate(MapInfo info, MapDataListener.DownloadStatus status) {
       try {
-        if (info != null && info.getRegion() == region() && status != null)
+        if (info != null && info.getRegion() != null && status != null) {
+          regionDownloadStatus.put(info.getRegion(), status.name());
           mapDownloadStatus = status.name();
+        }
       } catch (Exception ignored) {}
     }
     @Override public void onMapLocationPicked(Stop stop) {
@@ -677,6 +680,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           boolean present = false;
           for (MapInfo map : installed()) if (map.getRegion() == region) present = true;
           row.putBoolean("installed", present);
+          row.putString("downloadStatus", regionDownloadStatus.getOrDefault(region, "NOT_INITIATED"));
           catalog.pushMap(row);
         }
         promise.resolve(catalog);
@@ -714,7 +718,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           // downloadMap performs a synchronous web request; keep it off the UI thread.
           new Thread(() -> {
             try {
-              // Never replace an existing transfer or delete installed maps.
+              // Add to installed maps; keep every map component enabled.
               MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
               mapDownloadResponse = response.name();
               mapDownloadStage = "SDK_RESPONSE";
@@ -768,10 +772,24 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         // SDK validates storage and network.
         // Initial-install mode only when verified inventory is empty: no existing map is overwritten.
         mapDownloadStage = "SDK_REQUEST";
-        MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), installed().isEmpty());
-        mapDownloadResponse = response.name();
-        mapDownloadStage = "COMPLETE";
-        promise.resolve(response.name());
+        final boolean initialInstall = installed().isEmpty();
+        if (!catalogRequest.compareAndSet(false, true)) {
+          mapDownloadResponse = "FAILURE_MANAGER_BUSY";
+          mapDownloadStage = "APP_REQUEST_BUSY";
+          promise.resolve(mapDownloadResponse);
+          return;
+        }
+        new Thread(() -> {
+          try {
+            MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), initialInstall);
+            mapDownloadResponse = response.name();
+            mapDownloadStage = "SDK_RESPONSE";
+            promise.resolve(response.name());
+          } catch (Exception e) {
+            mapDownloadResponse = "NATIVE_EXCEPTION";
+            promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download request failed.");
+          } finally { catalogRequest.set(false); }
+        }, "CoPilotInitialMap").start();
       } catch (Exception e) { mapDownloadResponse = "NATIVE_EXCEPTION"; promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, an allowed internet connection and sufficient storage."); }
     });
   }

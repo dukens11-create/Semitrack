@@ -38,3 +38,16 @@ test('shows a visible dialog when the native download rejects', async () => {
   expect(button('Download selected licensed maps').props.disabled).toBe(false);
   alert.mockRestore();
 });
+
+test('busy response does not claim a download started', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  mockHost.downloadLicensedRegions.mockResolvedValueOnce('FAILURE_MANAGER_BUSY');
+  await act(async () => { screen = create(<CoPilotMapCatalog />); });
+  const button = (title: string) => screen.root.findAllByType(Button).find(node => node.props.title === title)!;
+  await act(async () => button('Refresh licensed and installed maps').props.onPress());
+  await act(async () => button('Select: NORTH AMERICA Nevada').props.onPress());
+  await act(async () => button('Download selected licensed maps').props.onPress());
+  expect(JSON.stringify(screen.toJSON())).toContain('No new download is confirmed');
+  expect(mockHost.downloadLicensedRegions).toHaveBeenCalledTimes(1);
+  alert.mockRestore();
+});

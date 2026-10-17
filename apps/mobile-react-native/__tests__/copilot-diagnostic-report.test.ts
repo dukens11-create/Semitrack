@@ -125,3 +125,13 @@ test('exports bounded map results and redacts unknown download payloads', () => 
   expect(report).toContain('maps-diag-v3');
   expect(report).not.toContain('SECRET');
 });
+
+test.each(['SDK_RESPONSE', 'APP_REQUEST_BUSY', 'CATALOG_SDK_REQUEST', 'CATALOG_VALIDATION_FAILED'])(
+  'preserves catalog stage %s without exposing arbitrary strings', stage => {
+    const report = coPilotDiagnosticReport({ ...native(), mapDownload: {
+      response: 'FAILURE_MANAGER_BUSY', callback: 'NOT_RECEIVED', status: 'NOT_INITIATED',
+      stage, attempts: 3, cellularAllowed: false, initialMapSignalReceived: false,
+    } }, initialCopilotState());
+    expect(report).toContain(`"stage": "${stage}"`);
+  },
+);

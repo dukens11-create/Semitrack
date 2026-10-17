@@ -105,6 +105,7 @@ const snapshot = z.object({
         'NOT_REQUESTED',
         'IDENTITY_CHECK',
         'FOREGROUND_CHECK',
+        'ROUTE_CHECK',
         'LICENSE_CHECK',
         'INVENTORY_CHECK',
         'REGION_CHECK',

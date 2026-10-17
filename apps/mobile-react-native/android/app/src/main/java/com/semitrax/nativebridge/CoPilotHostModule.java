@@ -715,20 +715,33 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private final java.util.concurrent.atomic.AtomicBoolean catalogRequest = new java.util.concurrent.atomic.AtomicBoolean(false);
   @ReactMethod public void downloadLicensedRegions(ReadableArray names, boolean cellular, Promise promise) {
     main.post(() -> {
+      String failureMessage = "CoPilot device setup could not be verified. Open Details and check setup.";
       try {
         ++mapDownloadAttempts;
         mapDownloadResponse = "NOT_RECEIVED";
         mapDownloadStage = "CATALOG_IDENTITY_CHECK";
         requireIdentity();
-        if (context.getLifecycleState() != LifecycleState.RESUMED || RouteMgr.hasDestination())
-          throw new IllegalStateException("Stop navigation before downloading maps.");
+        mapDownloadStage = "FOREGROUND_CHECK";
+        failureMessage = "Keep SemiTraX open while requesting maps.";
+        if (context.getLifecycleState() != LifecycleState.RESUMED) throw new IllegalStateException();
+        mapDownloadStage = "ROUTE_CHECK";
+        failureMessage = "CoPilot still has a destination, even if guidance has not started. Cancel the trip in CoPilot, then retry the download.";
+        if (RouteMgr.hasDestination()) throw new IllegalStateException();
+        mapDownloadStage = "LICENSE_CHECK";
+        failureMessage = "CoPilot navigation and heavy-duty truck licensing could not be verified. Open Details and check setup.";
         if (!LicenseMgr.isLicensingReady() || !feature(LicenseFeature.FULL_NAVIGATION) || !feature(LicenseFeature.TRUCK_HEAVY_DUTY))
           throw new IllegalStateException();
+        mapDownloadStage = "REGION_CHECK";
+        failureMessage = "The selected map region could not be verified against the current license. Refresh licensed maps and select an available region.";
         List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
         ArrayList<MapRegion> requested = new ArrayList<>();
         for (int i = 0; i < names.size(); i++) {
+          mapDownloadStage = "REGION_CHECK";
+          failureMessage = "The selected map region could not be verified against the current license. Refresh licensed maps and select an available region.";
           MapRegion target = MapRegion.valueOf(names.getString(i));
           if (licensed == null || !licensed.contains(target)) throw new IllegalStateException();
+          mapDownloadStage = "INVENTORY_CHECK";
+          failureMessage = "Installed maps could not be checked. Refresh the map list before retrying.";
           boolean present = false;
           for (MapInfo map : installed()) if (map.getRegion() == target) present = true;
           if (!present && !requested.contains(target)) requested.add(target);
@@ -736,9 +749,12 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (requested.isEmpty()) { mapDownloadResponse = "INSTALLED"; mapDownloadStage = "COMPLETE"; promise.resolve("INSTALLED"); return; }
         if (!catalogRequest.compareAndSet(false, true)) { mapDownloadResponse = "FAILURE_MANAGER_BUSY"; mapDownloadStage = "APP_REQUEST_BUSY"; promise.resolve("FAILURE_MANAGER_BUSY"); return; }
         try {
+          mapDownloadStage = "NETWORK_POLICY";
+          failureMessage = "CoPilot could not apply the mobile-data preference. Retry the map request.";
           CopilotMgr.allowCellularDataForMapDownloads(cellular);
           mapCellularAllowed = cellular;
           mapDownloadStage = "CATALOG_SDK_REQUEST";
+          failureMessage = "CoPilot could not prepare the map download. Share diagnostics from Details.";
           UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
           // downloadMap performs a synchronous web request; keep it off the UI thread.
           new Thread(() -> {
@@ -755,7 +771,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             } finally { catalogRequest.set(false); }
           }, "CoPilotMapCatalog").start();
         } catch (Exception e) { catalogRequest.set(false); throw e; }
-      } catch (Exception e) { mapDownloadResponse = "BLOCKED"; mapDownloadStage = "CATALOG_VALIDATION_FAILED"; promise.reject("COPILOT_DOWNLOAD_BLOCKED", "Map download requires licensed regions, verified setup and no active route."); }
+      } catch (Exception e) { mapDownloadResponse = "BLOCKED"; promise.reject("COPILOT_DOWNLOAD_BLOCKED", failureMessage); }
     });
   }
   @ReactMethod public void downloadSelectedMap(Promise promise) {

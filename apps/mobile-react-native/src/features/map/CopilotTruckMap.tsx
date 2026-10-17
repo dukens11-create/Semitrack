@@ -1,3 +1,4 @@
+import { EnginePreferences } from '../../components/EnginePreferences';
 import { EngineTruckProfile } from '../../components/EngineTruckProfile';
 import { DriverIcon } from '../../components/DriverIcon';
 import { DrivingNearbyOverlay } from '../navigation/DrivingNearbyOverlay';
@@ -284,6 +285,7 @@ export function CopilotTruckMap({
             </Pressable>
           )}
           {moreControls && <EngineTruckProfile onEdit={onSettings} />}
+          {moreControls && <EnginePreferences />}
           {moreControls && <CoPilotVoiceControls />}
           {moreControls && <CoPilotPlaces />}
           {moreControls && onSettings && (

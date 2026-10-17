@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { DriverIcon } from '../../components/DriverIcon';
 import { useDriverPalette } from '../../components/DriverUI';
-import { poiIcon } from '../poi/PoiPresentation';
+import { PoiCategoryPicture } from '../poi/PoiPresentation';
 import type { Poi, PoiService } from '../poi/PoiService';
 import type { LocationFix } from '../../services/location/LocationService';
 import { freshFix } from './navigationPresentation';
@@ -211,13 +210,7 @@ export function DrivingNearbyOverlay({
                   { backgroundColor: p.card, borderColor: p.border },
                 ]}
               >
-                <DriverIcon
-                  name={poiIcon(row.category)}
-                  size={18}
-                  color={
-                    row.category === 'weigh_station' ? '#008F7D' : p.actionText
-                  }
-                />
+                <PoiCategoryPicture category={row.category} size={24} />
                 <View style={styles.copy}>
                   <Text
                     style={[styles.label, { color: p.muted }]}

@@ -1,3 +1,4 @@
+import { PlaceLiveDetails } from '../features/poi/PlaceLiveDetails';
 import { navigationPresentation } from '../features/navigation/navigationPresentation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
@@ -1524,6 +1525,9 @@ export function PlanningScreen({
                 <DriverCopy>
                   {poiDetails(selectedMapPoi?.id === detail.id ? selectedMapPoi : pois.find(poi => poi.id === detail.id)!)}
                 </DriverCopy>
+              )}
+              {selectedMapPoi?.id === detail.id && (
+                <PlaceLiveDetails poi={selectedMapPoi} service={services.poi} route={routes.route} fix={location.fix} />
               )}
               <DriverCopy>
                 Confirm the destination and truck access before departure.

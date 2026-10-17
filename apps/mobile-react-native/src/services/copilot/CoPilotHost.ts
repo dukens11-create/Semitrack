@@ -54,6 +54,7 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  guidanceSnapshot?(): Promise<unknown>;
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;
   repairAssignedSetup?(): Promise<void>;
   readonly automaticAssignedSetup?: boolean;

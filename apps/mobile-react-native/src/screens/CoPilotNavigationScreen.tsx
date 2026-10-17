@@ -16,6 +16,8 @@ import type { Services } from '../app/services';
 import { useStore } from '../hooks/useStore';
 import { DriverIcon } from '../components/DriverIcon';
 import { WeatherStatus } from '../features/weather/WeatherStatus';
+import { useCoPilotGuidance } from '../services/copilot/useCoPilotGuidance';
+import { guidancePresentation } from '../services/copilot/CoPilotGuidance';
 
 function CurrentWeather({
   services,
@@ -49,6 +51,8 @@ export function CoPilotNavigationScreen({
   const state = useCopilotState();
   const palette = useDriverPalette();
   const allowed = copilotMapBlocker(state) === null;
+  const { sample, now } = useCoPilotGuidance(active && allowed);
+  const live = guidancePresentation(sample, now);
   const prepared = useRef(false);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -77,11 +81,22 @@ export function CoPilotNavigationScreen({
   return (
     <View style={styles.screen}>
       {allowed && state.readyToAddStops && (
-        <View style={[styles.toolbar, palette.dark ? styles.toolbarDark : styles.toolbarLight]}>
+        <View
+          style={[
+            styles.toolbar,
+            palette.dark ? styles.toolbarDark : styles.toolbarLight,
+          ]}
+        >
           <View style={styles.brand} accessibilityLabel="SemiTraX navigation">
-            <DriverIcon name="local_shipping_rounded" size={25} color="#FFFFFF" />
+            <DriverIcon
+              name="local_shipping_rounded"
+              size={25}
+              color="#FFFFFF"
+            />
             <View>
-              <Text style={styles.wordmark}>SemiTra<Text style={styles.brandX}>X</Text></Text>
+              <Text style={styles.wordmark}>
+                SemiTra<Text style={styles.brandX}>X</Text>
+              </Text>
               <Text style={styles.caption}>Powered by Trimble</Text>
             </View>
           </View>
@@ -93,6 +108,33 @@ export function CoPilotNavigationScreen({
         </View>
       )}
       <CopilotOfflineMap state={state} />
+      {allowed && active && (
+        <View
+          style={styles.telemetry}
+          accessibilityLabel="Live CoPilot driving information"
+        >
+          <View>
+            <Text style={styles.metricLabel}>SPEED</Text>
+            <Text style={styles.metric}>
+              {live.speedMph === undefined ? '—' : Math.round(live.speedMph)}{' '}
+              <Text style={styles.metricLabel}>MPH</Text>
+            </Text>
+          </View>
+          <View>
+            <Text style={styles.metricLabel}>TRUCK LIMIT</Text>
+            <Text style={styles.metric}>
+              {live.truckSpeedLimitMph === undefined
+                ? '—'
+                : Math.round(live.truckSpeedLimitMph)}
+            </Text>
+          </View>
+          <View>
+            <Text style={styles.metricLabel}>HEADING</Text>
+            <Text style={styles.metric}>{live.heading ?? '—'}</Text>
+          </View>
+          {!live.fresh && <Text style={styles.gpsStatus}>Waiting for GPS</Text>}
+        </View>
+      )}
       {error && (
         <View accessibilityRole="alert">
           <DriverCopy>
@@ -125,8 +167,26 @@ const styles = StyleSheet.create({
   toolbarDark: { backgroundColor: '#102E46' },
   toolbarLight: { backgroundColor: '#104A70' },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  wordmark: { color: '#FFFFFF', fontSize: 22, fontWeight: '800', letterSpacing: 0.2 },
+  wordmark: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
   brandX: { color: '#8DD8FF' },
   caption: { color: '#D0E6F3', fontSize: 10, fontWeight: '500' },
   weather: { flexShrink: 1 },
+  telemetry: {
+    backgroundColor: '#104A70',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  metricLabel: { color: '#D0E6F3', fontSize: 10, fontWeight: '600' },
+  metric: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
+  gpsStatus: { color: '#D0E6F3', fontSize: 12 },
 });

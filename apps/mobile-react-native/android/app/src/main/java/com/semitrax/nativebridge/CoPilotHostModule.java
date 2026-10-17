@@ -99,10 +99,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private volatile boolean mapCellularAllowed;
   private volatile int mapDownloadAttempts;
   private volatile boolean initialMapSignalReceived;
+  private final CoPilotGuidanceTelemetry guidanceTelemetry;
 
   public CoPilotHostModule(ReactApplicationContext context) {
     super(context);
     this.context = context;
+    guidanceTelemetry = new CoPilotGuidanceTelemetry(main,
+        () -> started && connected && !invalidated,
+        value -> emitMap("SemiTraxCoPilotGuidance", value));
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return "SemiTraxCoPilotHost"; }
@@ -382,6 +386,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     }
   };
   private void release() {
+    guidanceTelemetry.stop();
     trace(CoPilotLoginTrace.Event.SERVICE_RELEASED);
     main.removeCallbacks(startupTimeout);
     main.removeCallbacks(deviceReadbackCheck);
@@ -566,6 +571,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           LicenseListener.registerListener(hook);
           listenersRegistered = true;
         }
+        guidanceTelemetry.start();
         // The vendor RN module also owns a default global hook. Reclaim the
         // singleton immediately before every bind, after all RN modules exist.
         credentialHookState = "NOT_CALLED";
@@ -983,6 +989,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         promise.resolve(null);
       } catch (Exception e) { promise.reject("COPILOT_MAP_COMMAND_FAILED", "CoPilot map control is unavailable."); }
     });
+  }
+  @ReactMethod public void guidanceSnapshot(Promise promise) {
+    main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }
   @ReactMethod public void drawRoutePreview(ReadableArray points, Promise promise) {
     main.post(() -> {

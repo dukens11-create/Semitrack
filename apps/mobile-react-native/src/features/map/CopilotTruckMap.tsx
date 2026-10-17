@@ -1,3 +1,4 @@
+import { CoPilotVoiceControls } from '../../components/CoPilotVoiceControls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
@@ -244,6 +245,7 @@ export function CopilotTruckMap({
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"
         >
+          <CoPilotVoiceControls />
           {onSettings && (
             <Pressable
               accessibilityRole="button"

@@ -1445,7 +1445,7 @@ export function PlanningScreen({
           {categories(true)}
           <CorridorRecords items={searchState.advisories ?? []} />
           <DriverCopy>
-            Addresses: Mapbox. Truck places: SemiTraX place provider. Neither
+            Addresses: Mapbox. Android truck places: CoPilot offline catalog. Along-route places are nearby results filtered against the planned road path; distances are estimates. Neither
             result verifies a truck entrance.
           </DriverCopy>
           {searchState.phase === 'waiting' && (

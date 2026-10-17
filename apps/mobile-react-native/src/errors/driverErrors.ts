@@ -1,5 +1,6 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  COPILOT_POI_UNAVAILABLE: 'CoPilot place search is unavailable or still completing. Check offline map coverage and retry shortly.',
   PLACE_SEARCH_CONFIGURATION:
     'Address search is unavailable until a public map token is configured. Contact support with code PLACE_SEARCH_CONFIGURATION.',
   PLACE_SEARCH_UNAUTHORIZED:

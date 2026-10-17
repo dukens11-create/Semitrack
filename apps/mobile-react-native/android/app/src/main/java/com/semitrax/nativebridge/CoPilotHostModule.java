@@ -26,6 +26,11 @@ import com.alk.cpik.ConfigurationSetting;
 import com.alk.cpik.Coordinate;
 import com.alk.cpik.Stop;
 import com.alk.cpik.POICategory;
+import com.alk.cpik.POIListener;
+import com.alk.cpik.POIAlert;
+import com.alk.cpik.POISearchResult;
+import com.alk.cpik.StopBuilder;
+import com.alk.cpik.GeocodeSearchType;
 import com.alk.cpik.POISettings;
 import com.alk.cpik.guidance.GuidanceSettings;
 import com.alk.cpik.guidance.GuidanceMgr;
@@ -988,6 +993,114 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         promise.resolve(null);
       } catch (Exception e) { promise.reject("COPILOT_MAP_COMMAND_FAILED", "CoPilot map control is unavailable."); }
+    });
+  }
+  // CPIK searches have no request ID. Keep ownership until completion, even after a
+  // JS timeout, so a late result cannot be attributed to a newer category search.
+  private boolean poiSearchBusy = false;
+  @ReactMethod public void searchNativePois(String name, ReadableArray ids, double lat, double lng, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        if (poiSearchBusy) { promise.reject("COPILOT_POI_BUSY", "Previous CoPilot place search is still completing. Retry shortly."); return; }
+        if (name == null || name.length() > 80 || ids.size() > 100 || !Double.isFinite(lat) || !Double.isFinite(lng)
+            || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new IllegalArgumentException();
+        ArrayList<Integer> categories = new ArrayList<>();
+        for (int i = 0; i < ids.size(); i++) {
+          int id = ids.getInt(i);
+          boolean known = false;
+          for (POICategory category : CopilotMgr.getPOICategories()) if (category.getID() == id) known = true;
+          if (!known) throw new IllegalArgumentException();
+          categories.add(id);
+        }
+        if (categories.isEmpty() && name.trim().isEmpty()) throw new IllegalArgumentException();
+        List<Stop> centers = StopBuilder.fromLatLon(new Coordinate(lat, lng)).geocode(GeocodeSearchType.BEST_MATCH);
+        if (centers == null || centers.isEmpty()) throw new IllegalStateException();
+        poiSearchBusy = true;
+        final boolean[] settled = {false};
+        final boolean[] completed = {false};
+        final Runnable timeout = () -> {
+          if (!settled[0]) { settled[0] = true; promise.reject("COPILOT_POI_TIMEOUT", "CoPilot places timed out. Retry after the search completes."); }
+        };
+        POIListener listener = new POIListener() {
+          @Override public void onPOIAlert(List<POIAlert> alerts) {}
+          @Override public void onPOISearchResults(List<POISearchResult> results, boolean complete) {
+            if (!complete) return;
+            main.post(() -> {
+              if (completed[0]) return;
+              completed[0] = true;
+              poiSearchBusy = false;
+              main.removeCallbacks(timeout);
+              if (settled[0]) return;
+              settled[0] = true;
+              if (invalidated) { promise.reject("COPILOT_POI_UNAVAILABLE", "CoPilot closed during search."); return; }
+              try {
+                WritableArray items = Arguments.createArray();
+                if (results != null) for (POISearchResult result : results) {
+                  if (result.getStop() == null || result.getStop().getAddressObject() == null) continue;
+                  Coordinate point = result.getStop().getAddressObject().getCoordinate();
+                  if (point == null || !point.isValid() || result.getName() == null || result.getName().trim().isEmpty()) continue;
+                  WritableMap item = Arguments.createMap();
+                  item.putString("id", "copilot:" + result.getCategoryID() + ":" + point.getLatitude() + ":" + point.getLongitude() + ":" + result.getName());
+                  item.putString("name", result.getName());
+                  item.putDouble("latitude", point.getLatitude());
+                  item.putDouble("longitude", point.getLongitude());
+                  item.putInt("nativeCategoryId", result.getCategoryID());
+                  item.putString("provider", "copilot");
+                  item.putString("address", result.getStop().getAddressObject().getAddress());
+                  items.pushMap(item);
+                }
+                promise.resolve(items);
+              } catch (Exception e) { promise.reject("COPILOT_POI_INVALID", "CoPilot place results could not be read."); }
+            });
+          }
+        };
+        main.postDelayed(timeout, 15000);
+        try {
+          CopilotMgr.searchPOIsNearLocation(name, categories, centers.get(0), 50, 100, Collections.singletonList(listener));
+        } catch (Exception e) { main.removeCallbacks(timeout); poiSearchBusy = false; settled[0] = true; throw e; }
+      } catch (Exception e) { promise.reject("COPILOT_POI_UNAVAILABLE", "CoPilot place search is unavailable. Check map coverage."); }
+    });
+  }
+  private WritableArray nativePoiCatalog() {
+    List<POICategory> categories = CopilotMgr.getPOICategories();
+    if (categories == null || categories.isEmpty()) throw new IllegalStateException("POI catalog not ready");
+    WritableArray values = Arguments.createArray();
+    for (POICategory category : categories) {
+      WritableMap value = Arguments.createMap();
+      value.putInt("id", category.getID());
+      value.putString("name", category.getName());
+      value.putBoolean("visible", category.isDisplayedOnMap());
+      values.pushMap(value);
+    }
+    return values;
+  }
+  @ReactMethod public void poiCatalog(Promise promise) {
+    main.post(() -> {
+      try { requireMap(); promise.resolve(nativePoiCatalog()); }
+      catch (Exception e) { promise.reject("COPILOT_POI_UNAVAILABLE", "CoPilot places are not ready."); }
+    });
+  }
+  @ReactMethod public void setPoiCategoryVisible(int id, boolean visible, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        List<POICategory> categories = CopilotMgr.getPOICategories();
+        if (categories == null || categories.isEmpty()) throw new IllegalStateException();
+        boolean found = false;
+        for (POICategory category : categories) {
+          if (category.getID() == id) { category.setDisplayOnMap(visible); found = true; }
+        }
+        if (!found) throw new IllegalArgumentException();
+        CopilotMgr.updatePOICategoriesDisplayStatus(categories);
+        if (visible) UIMgr.setPOIDisplaySetting(UIMgr.POIDisplayType.ALWAYS);
+        boolean verified = false;
+        for (POICategory category : CopilotMgr.getPOICategories()) {
+          if (category.getID() == id && category.isDisplayedOnMap() == visible) verified = true;
+        }
+        if (!verified) throw new IllegalStateException();
+        promise.resolve(nativePoiCatalog());
+      } catch (Exception e) { promise.reject("COPILOT_POI_UPDATE_FAILED", "CoPilot place visibility could not be confirmed."); }
     });
   }
   @ReactMethod public void guidanceSnapshot(Promise promise) {

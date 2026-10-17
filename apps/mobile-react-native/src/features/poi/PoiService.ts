@@ -30,12 +30,29 @@ export const poiSchema = z
   .passthrough();
 export type Poi = z.infer<typeof poiSchema>;
 export class PoiService {
-  constructor(private api: ApiClient) {}
+  constructor(
+    private api: ApiClient,
+    private nativePlaces?: {
+      nearby(
+        category: PlaceCategory,
+        center: Coordinate,
+        signal?: AbortSignal,
+      ): Promise<Poi[]>;
+      alongRoute(
+        category: PlaceCategory,
+        route: TruckRoute,
+        fix: LocationFix,
+        signal?: AbortSignal,
+      ): Promise<Poi[]>;
+    },
+  ) {}
   async nearby(
     category: PlaceCategory,
     center: Coordinate,
     signal?: AbortSignal,
   ): Promise<Poi[]> {
+    if (this.nativePlaces)
+      return this.nativePlaces.nearby(category, center, signal);
     const params = new URLSearchParams({
       category,
       lat: String(center.lat),
@@ -65,6 +82,8 @@ export class PoiService {
     fix: LocationFix,
     signal?: AbortSignal,
   ): Promise<Poi[]> {
+    if (this.nativePlaces)
+      return this.nativePlaces.alongRoute(category, route, fix, signal);
     const data = z.object({ items: z.array(z.unknown()) }).parse(
       await this.api.request(
         'POST',
@@ -128,12 +147,19 @@ export class PoiService {
     return data.items;
   }
   async currentWeather(fix: LocationFix, signal?: AbortSignal) {
-    return z.record(z.unknown()).parse(await this.api.request(
-      'POST', '/weather/current', {
-        lat: fix.latitude, lng: fix.longitude,
-        accuracy: fix.accuracy, timestamp: fix.timestamp,
-      }, signal,
-    ));
+    return z.record(z.unknown()).parse(
+      await this.api.request(
+        'POST',
+        '/weather/current',
+        {
+          lat: fix.latitude,
+          lng: fix.longitude,
+          accuracy: fix.accuracy,
+          timestamp: fix.timestamp,
+        },
+        signal,
+      ),
+    );
   }
   async routeWeather(
     route: TruckRoute,

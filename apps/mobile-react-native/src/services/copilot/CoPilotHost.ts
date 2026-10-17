@@ -54,6 +54,12 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  searchNativePois?(
+    name: string,
+    ids: number[],
+    lat: number,
+    lng: number,
+  ): Promise<unknown>;
   poiCatalog?(): Promise<unknown>;
   setPoiCategoryVisible?(id: number, visible: boolean): Promise<unknown>;
   guidanceSnapshot?(): Promise<unknown>;

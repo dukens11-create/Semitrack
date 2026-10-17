@@ -124,7 +124,7 @@ function setup(selected: typeof truck | null = truck, fix: unknown = null) {
   const calculate = jest.fn().mockResolvedValue(true);
   const routes = Object.assign(
     new Store({ phase: 'idle', route: null, plan: null }),
-    { calculate },
+    { calculate, clear: jest.fn() },
   );
   const trucks = Object.assign(
     new Store({ profiles: selected ? [selected] : [], selected }),
@@ -1995,4 +1995,31 @@ test('native onboarding clears planning overlays and restores them after readine
   } finally {
     mockCopilotState.readyToAddStops = true;
   }
+});
+
+ test('chosen start routes from a provider address without requiring device GPS', async () => {
+  const { services, calculate } = setup();
+  const previousAppState = AppState.currentState;
+  AppState.currentState = 'active';
+  try {
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Set destination for truck routes');
+    await press('Choose starting location');
+    await selectRouteDestination();
+    await press('Use as starting location');
+    expect(content()).toContain('Real provider destination');
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(services.location.requestFreshFix).not.toHaveBeenCalled();
+    expect(calculate).toHaveBeenCalledWith(
+      expect.objectContaining({lat: 41, lng: -100}),
+      expect.any(Object), truck, 0,
+    );
+    await press('Set destination for truck routes');
+    await press('Use Current location');
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(services.location.requestFreshFix).toHaveBeenCalledTimes(1);
+    expect(calculate).toHaveBeenCalledTimes(1);
+  } finally { AppState.currentState = previousAppState; }
 });

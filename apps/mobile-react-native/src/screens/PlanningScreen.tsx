@@ -133,6 +133,8 @@ export function PlanningScreen({
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
+  const [plannedStart, setPlannedStart] = useState<Stop | null>(null);
+  const [selectingStart, setSelectingStart] = useState(false);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
@@ -258,6 +260,7 @@ export function PlanningScreen({
     searchStore.cancel();
     setAppendPlan(null);
     setSheet(null);
+    setSelectingStart(false);
   }
   function openAddStop() {
     const current = services.routes.getSnapshot();
@@ -334,6 +337,10 @@ export function PlanningScreen({
     );
   }
   async function startNavigation() {
+    if (plannedStart) {
+      setError("This is a route preview from your chosen start. Select Current location and recalculate before starting live navigation.");
+      return;
+    }
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
     const truck = services.trucks.getSnapshot().selected;
@@ -451,9 +458,9 @@ export function PlanningScreen({
     }
     const controller = new AbortController();
     gpsRequest.current = controller;
-    setAcquiringGps(true);
+    setAcquiringGps(!plannedStart);
     try {
-      await services.location.requestFreshFix(controller.signal);
+      if (!plannedStart) await services.location.requestFreshFix(controller.signal);
       await waitForRouteForeground(controller.signal);
       // A driver may edit/sign out while GPS is being acquired. Never send the old profile.
       const selected = services.trucks.getSnapshot().selected;
@@ -472,7 +479,7 @@ export function PlanningScreen({
       setAcquiringGps(false);
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
-    if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
+    if (await services.routes.calculate(plannedStart ?? origin(), plan, truck, alternatives)) {
       // Store only what the driver typed, never temporary provider geometry or a route.
       if (query.trim())
         void saveRecent(services.settings, items =>
@@ -1235,9 +1242,35 @@ export function PlanningScreen({
       )}
       {active && sheet === 'search' && (
         <DriverSheet
-          title={appendPlan ? 'Add Stop' : 'Set destination'}
+          title={selectingStart ? 'Choose starting location' : appendPlan ? 'Add Stop' : 'Set destination'}
           onClose={() => closeSheet()}
         >
+          {!appendPlan && (
+            <>
+              <DriverCopy>From: {plannedStart?.name ?? 'Current location'}</DriverCopy>
+              <DriverButton
+                title={selectingStart ? 'Choose destination instead' : 'Choose starting location'}
+                secondary
+                disabled={stopEditingDisabled}
+                onPress={() => {
+                  setSelectingStart(value => !value);
+                  searchStore.clear();
+                  setDetail(null);
+                }}
+              />
+              {(plannedStart || selectingStart) && (
+                <DriverButton title="Use Current location" secondary disabled={stopEditingDisabled}
+                  onPress={() => {
+                    setPlannedStart(null);
+                    setSelectingStart(false);
+                    searchStore.clear();
+                    setDetail(null);
+                    services.routes.clear();
+                  }} />
+              )}
+              {selectingStart && <DriverCopy>Search any city or full address, including the state or country. This start is for route planning; live navigation uses your current location.</DriverCopy>}
+            </>
+          )}
           {appendPlan && (
             <DriverCopy>
               Choose the next stop after {appendPlan.destination.name}. Your
@@ -1456,12 +1489,20 @@ export function PlanningScreen({
               {feedback}
               <DriverButton
                 title={
-                  appendPlan
+                  selectingStart ? 'Use as starting location' : appendPlan
                     ? 'Add Stop & recalculate'
                     : 'Set final destination'
                 }
-                disabled={stopEditingDisabled || !trucks.selected}
+                disabled={stopEditingDisabled || (!selectingStart && !trucks.selected)}
                 onPress={() => {
+                  if (selectingStart) {
+                    setPlannedStart(detail);
+                    setSelectingStart(false);
+                    setDetail(null);
+                    searchStore.clear();
+                    services.routes.clear();
+                    return;
+                  }
                   void run(() =>
                     appendPlan
                       ? appendSelectedStop(detail)
@@ -1479,7 +1520,7 @@ export function PlanningScreen({
                   }}
                 />
               )}
-              {routes.plan && !appendPlan && (
+              {routes.plan && !appendPlan && !selectingStart && (
                 <DriverButton
                   title="Add stop to current route"
                   secondary
@@ -1560,7 +1601,7 @@ export function PlanningScreen({
                 }}
               />
               <DriverButton
-                title="Recalculate from current location"
+                title={plannedStart ? "Recalculate from chosen start" : "Recalculate from current location"}
                 disabled={pending}
                 onPress={() => {
                   void run(() => calculate(routes.plan!));

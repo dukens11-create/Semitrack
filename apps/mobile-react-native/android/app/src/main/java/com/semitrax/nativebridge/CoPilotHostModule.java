@@ -687,6 +687,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void downloadLicensedRegions(ReadableArray names, boolean cellular, Promise promise) {
     main.post(() -> {
       try {
+        ++mapDownloadAttempts;
+        mapDownloadResponse = "NOT_RECEIVED";
+        mapDownloadStage = "CATALOG_IDENTITY_CHECK";
         requireIdentity();
         if (context.getLifecycleState() != LifecycleState.RESUMED || RouteMgr.hasDestination())
           throw new IllegalStateException("Stop navigation before downloading maps.");
@@ -701,23 +704,29 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           for (MapInfo map : installed()) if (map.getRegion() == target) present = true;
           if (!present && !requested.contains(target)) requested.add(target);
         }
-        if (requested.isEmpty()) { promise.resolve("INSTALLED"); return; }
-        if (!catalogRequest.compareAndSet(false, true)) { promise.resolve("FAILURE_MANAGER_BUSY"); return; }
+        if (requested.isEmpty()) { mapDownloadResponse = "INSTALLED"; mapDownloadStage = "COMPLETE"; promise.resolve("INSTALLED"); return; }
+        if (!catalogRequest.compareAndSet(false, true)) { mapDownloadResponse = "FAILURE_MANAGER_BUSY"; mapDownloadStage = "APP_REQUEST_BUSY"; promise.resolve("FAILURE_MANAGER_BUSY"); return; }
         try {
           CopilotMgr.allowCellularDataForMapDownloads(cellular);
+          mapCellularAllowed = cellular;
+          mapDownloadStage = "CATALOG_SDK_REQUEST";
           UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
           // downloadMap performs a synchronous web request; keep it off the UI thread.
           new Thread(() -> {
             try {
               // Never replace an existing transfer or delete installed maps.
               MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
+              mapDownloadResponse = response.name();
+              mapDownloadStage = "SDK_RESPONSE";
               promise.resolve(response.name());
             } catch (Exception e) {
+              mapDownloadResponse = "NATIVE_EXCEPTION";
+              mapDownloadStage = "CATALOG_REQUEST_FAILED";
               promise.reject("COPILOT_DOWNLOAD_FAILED", "Map request failed. Check connection and storage.");
             } finally { catalogRequest.set(false); }
           }, "CoPilotMapCatalog").start();
         } catch (Exception e) { catalogRequest.set(false); throw e; }
-      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_BLOCKED", "Map download requires licensed regions, verified setup and no active route."); }
+      } catch (Exception e) { mapDownloadResponse = "BLOCKED"; mapDownloadStage = "CATALOG_VALIDATION_FAILED"; promise.reject("COPILOT_DOWNLOAD_BLOCKED", "Map download requires licensed regions, verified setup and no active route."); }
     });
   }
   @ReactMethod public void downloadSelectedMap(Promise promise) {

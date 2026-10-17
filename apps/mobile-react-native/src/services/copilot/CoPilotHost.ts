@@ -54,6 +54,8 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  poiCatalog?(): Promise<unknown>;
+  setPoiCategoryVisible?(id: number, visible: boolean): Promise<unknown>;
   guidanceSnapshot?(): Promise<unknown>;
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;
   repairAssignedSetup?(): Promise<void>;

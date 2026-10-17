@@ -990,6 +990,47 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       } catch (Exception e) { promise.reject("COPILOT_MAP_COMMAND_FAILED", "CoPilot map control is unavailable."); }
     });
   }
+  private WritableArray nativePoiCatalog() {
+    List<POICategory> categories = CopilotMgr.getPOICategories();
+    if (categories == null || categories.isEmpty()) throw new IllegalStateException("POI catalog not ready");
+    WritableArray values = Arguments.createArray();
+    for (POICategory category : categories) {
+      WritableMap value = Arguments.createMap();
+      value.putInt("id", category.getID());
+      value.putString("name", category.getName());
+      value.putBoolean("visible", category.isDisplayedOnMap());
+      values.pushMap(value);
+    }
+    return values;
+  }
+  @ReactMethod public void poiCatalog(Promise promise) {
+    main.post(() -> {
+      try { requireMap(); promise.resolve(nativePoiCatalog()); }
+      catch (Exception e) { promise.reject("COPILOT_POI_UNAVAILABLE", "CoPilot places are not ready."); }
+    });
+  }
+  @ReactMethod public void setPoiCategoryVisible(int id, boolean visible, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        List<POICategory> categories = CopilotMgr.getPOICategories();
+        if (categories == null || categories.isEmpty()) throw new IllegalStateException();
+        boolean found = false;
+        for (POICategory category : categories) {
+          if (category.getID() == id) { category.setDisplayOnMap(visible); found = true; }
+        }
+        if (!found) throw new IllegalArgumentException();
+        CopilotMgr.updatePOICategoriesDisplayStatus(categories);
+        if (visible) UIMgr.setPOIDisplaySetting(UIMgr.POIDisplayType.ALWAYS);
+        boolean verified = false;
+        for (POICategory category : CopilotMgr.getPOICategories()) {
+          if (category.getID() == id && category.isDisplayedOnMap() == visible) verified = true;
+        }
+        if (!verified) throw new IllegalStateException();
+        promise.resolve(nativePoiCatalog());
+      } catch (Exception e) { promise.reject("COPILOT_POI_UPDATE_FAILED", "CoPilot place visibility could not be confirmed."); }
+    });
+  }
   @ReactMethod public void guidanceSnapshot(Promise promise) {
     main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }

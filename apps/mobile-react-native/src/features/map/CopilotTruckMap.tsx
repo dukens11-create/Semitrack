@@ -1,8 +1,10 @@
+import { CoPilotPlaces } from '../../components/CoPilotPlaces';
 import { CoPilotVoiceControls } from '../../components/CoPilotVoiceControls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -241,11 +243,13 @@ export function CopilotTruckMap({
         <CopilotOfflineMap state={state} />
       )}
       {allowed && appearanceReady && state.readyToAddStops && !settingsOpen && (
-        <View
+        <ScrollView
+          contentContainerStyle={styles.controlContent}
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"
         >
           <CoPilotVoiceControls />
+          <CoPilotPlaces />
           {onSettings && (
             <Pressable
               accessibilityRole="button"
@@ -300,7 +304,7 @@ export function CopilotTruckMap({
           >
             <Text style={[styles.symbol, { color: palette.text }]}>−</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       )}
       {!!error && (
         <View
@@ -327,6 +331,8 @@ const styles = StyleSheet.create({
   controls: {
     position: 'absolute',
     right: 12,
+  },
+  controlContent: {
     gap: 10,
     alignItems: 'flex-end',
   },

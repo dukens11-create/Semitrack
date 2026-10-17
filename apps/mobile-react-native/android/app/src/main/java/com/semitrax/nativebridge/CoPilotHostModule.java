@@ -864,6 +864,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         MapDrawer drawer = UIMgr.getMapDrawer();
         switch (command) {
           case "native-map":
+            GuidanceSettings.setSpeedLimitOnMap(true);
             drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
             UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
             break;

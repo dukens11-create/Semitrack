@@ -1,20 +1,53 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, Text, StyleSheet, View } from 'react-native';
 import {
   CopilotOfflineMap,
   copilotMapBlocker,
 } from '../components/CopilotOfflineMap';
-import { DriverButton, DriverCopy } from '../components/DriverUI';
+import {
+  DriverButton,
+  DriverCopy,
+  useDriverPalette,
+} from '../components/DriverUI';
 import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
+
+import type { Services } from '../app/services';
+import { useStore } from '../hooks/useStore';
+import { WeatherStatus } from '../features/weather/WeatherStatus';
+
+function CurrentWeather({
+  services,
+  active,
+}: {
+  services: Services;
+  active: boolean;
+}) {
+  useEffect(() => {
+    if (active) void services.location.start().catch(() => {});
+  }, [services, active]);
+  const location = useStore(services.location);
+  const routes = useStore(services.routes);
+  return (
+    <WeatherStatus
+      services={services}
+      route={routes.route}
+      fix={location.fix}
+    />
+  );
+}
 
 /** CoPilot owns the visible trip, search, preferences and navigation controls. */
 export function CoPilotNavigationScreen({
   active = true,
+  services,
 }: {
   active?: boolean;
+  services?: Services;
 }) {
   const state = useCopilotState();
+  const palette = useDriverPalette();
+  const [expanded, setExpanded] = useState(false);
   const allowed = copilotMapBlocker(state) === null;
   const prepared = useRef(false);
   const [error, setError] = useState(false);
@@ -46,6 +79,7 @@ export function CoPilotNavigationScreen({
     try {
       await coPilotHost().mapCommand(command);
       setError(false);
+      setExpanded(false);
     } catch {
       setError(true);
     }
@@ -53,6 +87,22 @@ export function CoPilotNavigationScreen({
   return (
     <View style={styles.screen}>
       {allowed && state.readyToAddStops && (
+        <View style={[styles.toolbar, { backgroundColor: palette.card }]}>
+          {services && <CurrentWeather services={services} active={active} />}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="CoPilot tools"
+            accessibilityState={{ expanded }}
+            onPress={() => setExpanded(value => !value)}
+            style={styles.tools}
+          >
+            <Text style={{ color: palette.text }}>
+              Tools {expanded ? '▴' : '▾'}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+      {allowed && state.readyToAddStops && expanded && (
         <View style={styles.controls}>
           {(
             [
@@ -94,6 +144,13 @@ export function CoPilotNavigationScreen({
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  toolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+  },
+  tools: { minHeight: 48, paddingHorizontal: 16, justifyContent: 'center' },
   controls: { flexDirection: 'row', flexWrap: 'wrap', padding: 4, gap: 4 },
   action: { width: '49%' },
 });

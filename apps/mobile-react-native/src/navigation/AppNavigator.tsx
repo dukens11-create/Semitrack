@@ -107,7 +107,10 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
               />
             ) : index === 1 ? (
-              <CoPilotNavigationScreen active={focused && tab === 1} />
+              <CoPilotNavigationScreen
+                services={services}
+                active={focused && tab === 1}
+              />
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />
             ) : index === 3 ? (

@@ -2057,11 +2057,13 @@ test('native CoPilot screen waits for onboarding and offers retry after control 
   }
 });
 
-test('CoPilot entry buttons open native dialogs without submitting a custom route', async () => {
+test('native map uses CoPilot menu without duplicate SemiTraX controls', async () => {
   const { services } = setup();
   await act(async () => { screen = create(<DriverShell services={services} open={jest.fn()} />); });
-  mockCoPilotHost.mapCommand.mockClear();
-  for (const title of ['CoPilot menu', 'Trip plan', 'CoPilot settings', 'Return to map']) { await press('CoPilot tools'); await press(title); }
-  expect(mockCoPilotHost.mapCommand.mock.calls.map(call => call[0])).toEqual(['copilot-menu', 'trip-plan', 'settings', 'map']);
+  for (const title of ['CoPilot tools', 'CoPilot menu', 'Trip plan', 'CoPilot settings', 'Return to map']) {
+    expect(screen.root.findAllByProps({accessibilityLabel: title})).toHaveLength(0);
+    expect(content()).not.toContain(title);
+  }
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('native-map');
   expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
 });

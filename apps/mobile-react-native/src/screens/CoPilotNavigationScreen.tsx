@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import {
   CopilotOfflineMap,
   copilotMapBlocker,
@@ -47,7 +47,6 @@ export function CoPilotNavigationScreen({
 }) {
   const state = useCopilotState();
   const palette = useDriverPalette();
-  const [expanded, setExpanded] = useState(false);
   const allowed = copilotMapBlocker(state) === null;
   const prepared = useRef(false);
   const [error, setError] = useState(false);
@@ -74,54 +73,11 @@ export function CoPilotNavigationScreen({
       current = false;
     };
   }, [active, allowed, state.readyToAddStops, retry]);
-  async function open(command: string) {
-    if (!active || !allowed || !state.readyToAddStops) return;
-    try {
-      await coPilotHost().mapCommand(command);
-      setError(false);
-      setExpanded(false);
-    } catch {
-      setError(true);
-    }
-  }
   return (
     <View style={styles.screen}>
-      {allowed && state.readyToAddStops && (
+      {services && allowed && state.readyToAddStops && (
         <View style={[styles.toolbar, { backgroundColor: palette.card }]}>
-          {services && <CurrentWeather services={services} active={active} />}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="CoPilot tools"
-            accessibilityState={{ expanded }}
-            onPress={() => setExpanded(value => !value)}
-            style={styles.tools}
-          >
-            <Text style={{ color: palette.text }}>
-              Tools {expanded ? '▴' : '▾'}
-            </Text>
-          </Pressable>
-        </View>
-      )}
-      {allowed && state.readyToAddStops && expanded && (
-        <View style={styles.controls}>
-          {(
-            [
-              ['CoPilot menu', 'copilot-menu'],
-              ['Trip plan', 'trip-plan'],
-              ['CoPilot settings', 'settings'],
-              ['Return to map', 'map'],
-            ] as const
-          ).map(([title, command]) => (
-            <View key={command} style={styles.action}>
-              <DriverButton
-                title={title}
-                secondary
-                onPress={() => {
-                  void open(command);
-                }}
-              />
-            </View>
-          ))}
+          <CurrentWeather services={services} active={active} />
         </View>
       )}
       <CopilotOfflineMap state={state} />
@@ -147,10 +103,6 @@ const styles = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     minHeight: 48,
   },
-  tools: { minHeight: 48, paddingHorizontal: 16, justifyContent: 'center' },
-  controls: { flexDirection: 'row', flexWrap: 'wrap', padding: 4, gap: 4 },
-  action: { width: '49%' },
 });

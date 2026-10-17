@@ -14,6 +14,9 @@ export const guidanceSampleSchema = z.object({
   roadSpeedLimitMph: z.number().finite().positive().optional(),
   truckSpeedLimitMph: z.number().finite().positive().optional(),
   hasDestination: z.boolean().optional(),
+  routeStatus: z
+    .enum(['unknown', 'none', 'calculating', 'ready', 'failed', 'arrived'])
+    .optional(),
   etaAt: z.number().finite().positive().optional(),
   remainingMeters: z.number().finite().nonnegative().optional(),
   instruction: z.string().nullable().optional(),
@@ -34,6 +37,8 @@ export function guidancePresentation(
     now - sample.observedAt >= -5000 &&
     now - sample.observedAt <= 15000;
   const heading = fresh ? sample?.heading : undefined;
+  const readyRoute =
+    fresh && sample?.hasDestination && sample.routeStatus === 'ready';
   return {
     fresh,
     speedMph: fresh ? sample?.speedMph : undefined,
@@ -47,15 +52,10 @@ export function guidancePresentation(
     truckSpeedLimitMph: fresh ? sample?.truckSpeedLimitMph : undefined,
     roadSpeedLimitMph: fresh ? sample?.roadSpeedLimitMph : undefined,
     etaAt:
-      fresh &&
-      sample?.hasDestination &&
-      sample.etaAt !== undefined &&
-      sample.etaAt >= now
+      readyRoute && sample.etaAt !== undefined && sample.etaAt >= now
         ? sample.etaAt
         : undefined,
-    remainingMeters:
-      fresh && sample?.hasDestination ? sample.remainingMeters : undefined,
-    instruction:
-      fresh && sample?.hasDestination ? sample.instruction : undefined,
+    remainingMeters: readyRoute ? sample.remainingMeters : undefined,
+    instruction: readyRoute ? sample.instruction : undefined,
   };
 }

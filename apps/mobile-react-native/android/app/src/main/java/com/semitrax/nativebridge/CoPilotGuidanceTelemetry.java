@@ -9,6 +9,7 @@ import com.alk.cpik.guidance.PositionInfo;
 import com.alk.cpik.guidance.TurnInstruction;
 import com.alk.cpik.guidance.UnitsOfMeasure;
 import com.alk.cpik.route.RouteMgr;
+import com.alk.cpik.route.RouteListener;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.WritableMap;
 import android.os.Handler;
@@ -29,17 +30,37 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
   private Integer roadLimit, truckLimit;
   private boolean limitImperial;
   private boolean positionImperial;
+  private String routeStatus = "unknown";
+  private final RouteListener routes = new RouteListener() {
+    @Override public void onStartRouteCalculation() {
+      dispatch(() -> routeStatus = "calculating");
+    }
+    @Override public void onCompleteRouteCalculation() {
+      dispatch(() -> routeStatus = "ready");
+    }
+    @Override public void onFailedRouteCalculation(int leg, Stop stop) {
+      dispatch(() -> routeStatus = "failed");
+    }
+  };
 
   CoPilotGuidanceTelemetry(Handler main, BooleanSupplier available, Consumer<WritableMap> sink) {
     this.main = main; this.available = available; this.sink = sink;
   }
   void start() {
-    if (!registered) { registered = true; generation++; GuidanceListener.registerListener(this); }
+    if (!registered) {
+      registered = true; generation++;
+      GuidanceListener.registerListener(this);
+      RouteListener.registerListener(routes);
+    }
   }
   void stop() {
-    if (registered) GuidanceListener.unregisterListener(this);
+    if (registered) {
+      GuidanceListener.unregisterListener(this);
+      RouteListener.unregisterListener(routes);
+    }
     registered = false; generation++;
     position = null; positionReceivedAt = 0; roadLimit = truckLimit = null;
+    routeStatus = "unknown";
   }
   private void dispatch(Runnable action) {
     final long ticket = generation;
@@ -68,7 +89,9 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
   @Override public void onEstimatedTravelTimeUpdated(int hours, int minutes) { dispatch(() -> {}); }
   @Override public void onTurnInstructionEvent(TurnInstruction instruction) { dispatch(() -> {}); }
   @Override public void onItineraryUpdated() { dispatch(() -> {}); }
-  @Override public void onArrivedAtStop(boolean last, Stop stop) { dispatch(() -> {}); }
+  @Override public void onArrivedAtStop(boolean last, Stop stop) {
+    dispatch(() -> { if (last) routeStatus = "arrived"; });
+  }
 
   WritableMap snapshot() {
     WritableMap out = Arguments.createMap();
@@ -107,7 +130,10 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
     try {
       boolean destination = RouteMgr.hasDestination();
       out.putBoolean("hasDestination", destination);
-      if (destination) {
+      if (!destination && !"calculating".equals(routeStatus) && !"failed".equals(routeStatus) && !"arrived".equals(routeStatus)) routeStatus = "none";
+      out.putString("routeStatus", routeStatus);
+      // Never present the previous route's ETA during a new calculation or failure.
+      if (destination && "ready".equals(routeStatus)) {
         Date eta = GuidanceMgr.getETA();
         if (eta != null && eta.getTime() >= now) out.putDouble("etaAt", eta.getTime());
         // Imperial distance is documented as miles. Metric contracts differ across SDK versions.

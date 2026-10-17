@@ -14,6 +14,7 @@ const sample = {
   truckSpeedLimitMph: 55,
   roadSpeedLimitMph: 65,
   hasDestination: true,
+  routeStatus: 'ready' as const,
   etaAt: now + 600000,
   remainingMeters: 10000,
   instruction: 'Turn right',
@@ -76,3 +77,16 @@ it('rejects nonfinite, invalid coordinates, sentinel limits and incomplete sampl
     expect(guidanceSampleSchema.safeParse(bad).success).toBe(false);
   }
 });
+it.each(['calculating', 'failed', 'arrived', 'unknown', 'none'] as const)(
+  'does not reuse route ETA or instructions while native state is %s',
+  routeStatus => {
+    expect(guidancePresentation({ ...sample, routeStatus }, now)).toMatchObject(
+      {
+        etaAt: undefined,
+        instruction: undefined,
+        remainingMeters: undefined,
+        speedMph: 42,
+      },
+    );
+  },
+);

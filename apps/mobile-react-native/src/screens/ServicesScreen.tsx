@@ -187,7 +187,7 @@ export function ServicesScreen({
         disabled={!onEld}
       />
       <Button
-        title="CoPilot offline maps"
+        title="SemiTraX offline maps"
         onPress={() => onOffline?.()}
         disabled={!onOffline}
       />
@@ -204,7 +204,7 @@ export function ServicesScreen({
         setup; billing remains disabled.
       </Copy>
       <Copy>
-        CoPilot setup and installed maps can be checked under CoPilot offline
+        SemiTraX setup and installed maps can be checked under SemiTraX offline
         maps. Offline commercial truck navigation remains unavailable.
       </Copy>
     </Page>

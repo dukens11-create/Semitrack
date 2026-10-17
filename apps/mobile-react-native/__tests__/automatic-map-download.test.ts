@@ -128,7 +128,7 @@ test('download success is displayed as pending installation', async () => {
   );
   await job.tick();
   expect(report).toHaveBeenLastCalledWith(
-    expect.stringContaining('Waiting for CoPilot to install'),
+    expect.stringContaining('Waiting for SemiTraX to install'),
   );
   expect(port.refresh).not.toHaveBeenCalled();
   job.stop();

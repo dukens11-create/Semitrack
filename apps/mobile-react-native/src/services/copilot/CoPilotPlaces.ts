@@ -13,13 +13,13 @@ export type CoPilotPoiCategory = z.infer<
 export async function readCoPilotPlaces() {
   const host = coPilotHost();
   if (!host.poiCatalog)
-    throw new Error('Update the app to connect CoPilot places');
+    throw new Error('Update the app to connect SemiTraX places');
   return coPilotPoiCatalogSchema.parse(await host.poiCatalog());
 }
 export async function setCoPilotPlaceVisible(id: number, visible: boolean) {
   const host = coPilotHost();
   if (!host.setPoiCategoryVisible)
-    throw new Error('Update the app to connect CoPilot places');
+    throw new Error('Update the app to connect SemiTraX places');
   const catalog = coPilotPoiCatalogSchema.parse(
     await host.setPoiCategoryVisible(id, visible),
   );

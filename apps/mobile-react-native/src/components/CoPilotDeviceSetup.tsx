@@ -82,7 +82,7 @@ export function CoPilotDeviceSetup() {
       if (!host.repairAssignedSetup) throw new Error('Repair unavailable');
       await host.repairAssignedSetup();
       setMessage(
-        'Saved Company ID typo corrected. Use Android Settings → Apps → SemiTraX → Force stop, then reopen once to start a fresh CoPilot login. Maps and licenses are preserved.',
+        'Saved Company ID typo corrected. Use Android Settings → Apps → SemiTraX → Force stop, then reopen once to start a fresh SemiTraX login. Maps and licenses are preserved.',
       );
       setDiagnostics(await host.setupDiagnostics!());
     } catch {
@@ -106,11 +106,11 @@ export function CoPilotDeviceSetup() {
       setCompany('');
       setDevice('');
       setMessage(
-        'Device setup saved and CoPilot started. License and California map checks continue automatically.',
+        'Device setup saved and SemiTraX started. License and California map checks continue automatically.',
       );
     } catch {
       setMessage(
-        'CoPilot startup did not complete. See the setup stage below. Existing licenses and maps are preserved.',
+        'SemiTraX startup did not complete. See the setup stage below. Existing licenses and maps are preserved.',
       );
     } finally {
       setBusy(false);
@@ -160,7 +160,7 @@ export function CoPilotDeviceSetup() {
       {manual && (
         <>
           <TextInput
-            accessibilityLabel="CoPilot Company ID"
+            accessibilityLabel="SemiTraX Company ID"
             placeholder="Company ID"
             placeholderTextColor={palette.muted}
             autoCapitalize="none"
@@ -174,7 +174,7 @@ export function CoPilotDeviceSetup() {
             ]}
           />
           <TextInput
-            accessibilityLabel="CoPilot Device ID"
+            accessibilityLabel="SemiTraX Device ID"
             placeholder="Device ID"
             placeholderTextColor={palette.muted}
             autoCapitalize="none"
@@ -189,7 +189,7 @@ export function CoPilotDeviceSetup() {
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Save CoPilot device setup"
+            accessibilityLabel="Save SemiTraX device setup"
             disabled={busy}
             onPress={() => {
               void configure();
@@ -204,7 +204,7 @@ export function CoPilotDeviceSetup() {
       )}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Retry saved CoPilot setup"
+        accessibilityLabel="Retry saved SemiTraX setup"
         disabled={busy}
         onPress={() => {
           void retry();
@@ -294,7 +294,7 @@ export function CoPilotDeviceSetup() {
         <>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Download CoPilot maps using mobile data"
+            accessibilityLabel="Download SemiTraX maps using mobile data"
             disabled={busy || setup.cellularAllowed}
             style={styles.button}
             onPress={() =>

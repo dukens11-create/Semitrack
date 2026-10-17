@@ -37,7 +37,7 @@ export function CoPilotPlaces() {
       .catch(() => {
         if (current)
           setError(
-            'CoPilot places unavailable. Check maps and install the latest app build.',
+            'SemiTraX places unavailable. Check maps and install the latest app build.',
           );
       })
       .finally(() => {
@@ -68,7 +68,7 @@ export function CoPilotPlaces() {
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="CoPilot POI categories"
+        accessibilityLabel="SemiTraX POI categories"
         style={[styles.trigger, { backgroundColor: p.card }]}
         onPress={() => setOpen(true)}
       >
@@ -82,14 +82,14 @@ export function CoPilotPlaces() {
         animationType="slide"
       >
         <View style={[styles.page, { backgroundColor: p.canvas }]}>
-          <Text style={[styles.title, { color: p.text }]}>CoPilot places</Text>
+          <Text style={[styles.title, { color: p.text }]}>SemiTraX places</Text>
           <Text style={{ color: p.muted }}>
-            All categories supplied by your installed CoPilot catalog. Switches
+            All categories supplied by your installed SemiTraX catalog. Switches
             control native map icons; zoom in to see places. SemiTraX provider
             searches remain separate.
           </Text>
           <TextInput
-            accessibilityLabel="Search CoPilot categories"
+            accessibilityLabel="Search SemiTraX categories"
             placeholder="Search categories"
             placeholderTextColor={p.muted}
             value={query}
@@ -102,7 +102,7 @@ export function CoPilotPlaces() {
             </Text>
           )}
           {busy && (
-            <Text style={{ color: p.muted }}>Updating CoPilot places…</Text>
+            <Text style={{ color: p.muted }}>Updating SemiTraX places…</Text>
           )}
           <ScrollView style={styles.list}>
             {catalog

@@ -10,7 +10,7 @@ const speech = {
   getVolume: jest.fn(),
   setMuteState: jest.fn(),
   setVolume: jest.fn(),
-  playSpeechSample: jest.fn(),
+  playTTSMessage: jest.fn(),
 };
 beforeEach(() => {
   Object.defineProperty(Platform, 'OS', {
@@ -22,7 +22,7 @@ beforeEach(() => {
   speech.isMuted.mockResolvedValue(false);
   speech.getVolume.mockResolvedValue(0.5);
 });
-test('reads CoPilot state and reads back mute changes', async () => {
+test('reads SemiTraX state and reads back mute changes', async () => {
   expect(await readCoPilotVoice()).toEqual({ muted: false, volume: 0.5 });
   speech.isMuted.mockResolvedValue(true);
   expect(await setCoPilotMute(true)).toEqual({ muted: true, volume: 0.5 });
@@ -41,10 +41,10 @@ test('test sample respects mute and zero volume', async () => {
   speech.isMuted.mockResolvedValue(false);
   speech.getVolume.mockResolvedValue(0);
   await expect(testCoPilotVoice()).rejects.toThrow();
-  expect(speech.playSpeechSample).not.toHaveBeenCalled();
+  expect(speech.playTTSMessage).not.toHaveBeenCalled();
   speech.getVolume.mockResolvedValue(0.5);
   await testCoPilotVoice();
-  expect(speech.playSpeechSample).toHaveBeenCalledWith(0);
+  expect(speech.playTTSMessage).toHaveBeenCalledWith('Welcome to SemiTraX', 0, false, false);
 });
 test('native failures and invalid readbacks cannot claim success', async () => {
   speech.setMuteState.mockRejectedValue(new Error('not ready'));

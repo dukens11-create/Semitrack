@@ -154,7 +154,7 @@ export function DriverSetup({
         <DriverTitle small>Planning and live guidance</DriverTitle>
         <DriverCopy>
           Trimble supplies commercial truck route planning. A route preview is
-          not live guidance. CoPilot navigation requires the supported native
+          not live guidance. SemiTraX navigation requires the supported native
           integration, license and maps. Unsupported or unproven routes stay
           blocked. Always follow posted restrictions and confirm truck access.
         </DriverCopy>

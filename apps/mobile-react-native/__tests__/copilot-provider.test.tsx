@@ -99,7 +99,7 @@ test('failed native startup cannot report saved-and-started success', async () =
   });
   await act(async () => {
     await expect(setup.configure('COMPANY', 'Device')).rejects.toThrow(
-      'CoPilot startup did not complete.',
+      'SemiTraX startup did not complete.',
     );
   });
 });

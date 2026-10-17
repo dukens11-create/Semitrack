@@ -40,22 +40,22 @@ export function CoPilotMapCatalog() {
           ? 'Download request accepted. Keep SemiTraX open; refresh installed maps to verify completion.'
           : result === 'FAILURE_MANAGER_BUSY'
           ? 'CoPilot could not accept this request because its map manager is busy. No new download is confirmed. Existing maps are preserved. Share diagnostics so we can identify the blocked operation.'
-          : 'CoPilot download response: ' + result + '. Refresh before retrying.';
+          : 'SemiTraX download response: ' + result + '. Refresh before retrying.';
         if (live.current) {
           setMessage(resultMessage);
-          Alert.alert('CoPilot map download', resultMessage);
+          Alert.alert('SemiTraX map download', resultMessage);
         }
       } else {
         const rows = await refresh();
         if (live.current) setMessage(rows.length
           ? 'Select licensed regions below. A United States package may be available; otherwise choose individual regions. Only listed packages are authorized by your license.'
-          : 'No downloadable regions were returned by CoPilot. Check your map entitlement with Trimble.');
+          : 'No downloadable regions were returned by SemiTraX. Check your map entitlement with Trimble.');
       }
     } catch (error) {
       if (live.current) {
         const detail = error instanceof Error ? error.message : 'Map management is unavailable.';
         setMessage(detail);
-        Alert.alert('CoPilot map request failed', detail);
+        Alert.alert('SemiTraX map request failed', detail);
       }
     } finally {
       pending.current = false;

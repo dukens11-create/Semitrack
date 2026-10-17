@@ -591,7 +591,7 @@ export function SettingsScreen({
               <DriverCard>
                 <DriverTitle small>
                   {guidancePhase === 'unavailable'
-                    ? 'CoPilot setup required'
+                    ? 'SemiTraX setup required'
                     : 'Navigation preferences'}
                 </DriverTitle>
                 <DriverCopy>{navigationCopy}</DriverCopy>
@@ -633,7 +633,7 @@ export function SettingsScreen({
                   />
                   <DriverCopy>
                     Language code, for example en-US. Language availability
-                    depends on CoPilot.
+                    depends on SemiTraX.
                   </DriverCopy>
                   <DriverButton
                     title="Save voice language"
@@ -696,7 +696,7 @@ export function SettingsScreen({
               </DriverCopy>
               <DriverCopy>
                 Commercial truck route planning with Mapbox display and Trimble
-                routing. CoPilot active navigation requires entitlement, maps
+                routing. SemiTraX active navigation requires entitlement, maps
                 and device validation.
               </DriverCopy>
             </DriverCard>

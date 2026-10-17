@@ -97,7 +97,7 @@ export interface CoPilotHost {
 export function coPilotHost(): CoPilotHost {
   const host = NativeModules.SemiTraxCoPilotHost as CoPilotHost | undefined;
   if (Platform.OS !== 'android' || !host)
-    throw new Error('CoPilot native host unavailable');
+    throw new Error('SemiTraX native host unavailable');
   return host;
 }
 const inventory = z.object({

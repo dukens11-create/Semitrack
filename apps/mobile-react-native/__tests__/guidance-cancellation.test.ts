@@ -34,7 +34,7 @@ function fixture(phase: NavigationState['phase'] = 'idle') {
   });
   return { engine, session: new GuidanceSession(engine) };
 }
-test('preview cancellation does not initialize or stop CoPilot', async () => {
+test('preview cancellation does not initialize or stop SemiTraX', async () => {
   const { engine, session } = fixture();
   expect(await session.cancel()).toBe(true);
   expect(engine.initialize).not.toHaveBeenCalled();

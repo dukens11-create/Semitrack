@@ -210,7 +210,7 @@ export function NavigationMenu({
         available outside the driving map.
       </Text>
       <Text style={[styles.notice, { color: p.muted }]}>
-        Live guidance and rerouting require licensed CoPilot maps and runtime.
+        Live guidance and rerouting require licensed SemiTraX maps and runtime.
         POIs and road reports require available provider data. Sharing sends a
         planning summary, not live tracking.
       </Text>

@@ -123,7 +123,7 @@ export function CopilotTruckMap({
       .catch(() => {
         if (active) {
           setAppearanceReady(false);
-          setError('CoPilot map appearance could not be applied. Retry setup.');
+          setError('SemiTraX map appearance could not be applied. Retry setup.');
         }
       });
     return () => {
@@ -225,7 +225,7 @@ export function CopilotTruckMap({
         );
       return true;
     } catch {
-      setError('CoPilot map control is unavailable. Retry setup.');
+      setError('SemiTraX map control is unavailable. Retry setup.');
       return false;
     }
   }
@@ -251,7 +251,7 @@ export function CopilotTruckMap({
       {allowed && !appearanceReady ? (
         <View style={[styles.pending, { backgroundColor: palette.canvas }]}>
           <Text style={{ color: palette.text }}>
-            {error || 'Preparing CoPilot map…'}
+            {error || 'Preparing SemiTraX map…'}
           </Text>
         </View>
       ) : (
@@ -287,7 +287,7 @@ export function CopilotTruckMap({
           {moreControls && onSettings && (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="CoPilot settings"
+              accessibilityLabel="SemiTraX settings"
               style={[styles.button, { backgroundColor: palette.card }]}
               onPress={onSettings}
             >

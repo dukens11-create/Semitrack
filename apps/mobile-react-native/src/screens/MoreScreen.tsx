@@ -168,7 +168,7 @@ export function MoreScreen({
         icon="map"
         iconColors={iconColors.offline}
         title="Offline maps"
-        caption="Downloaded display maps. Offline truck routing requires CoPilot."
+        caption="Downloaded display maps. Offline truck routing requires SemiTraX."
         onPress={onOffline}
         disabled={!onOffline}
       />

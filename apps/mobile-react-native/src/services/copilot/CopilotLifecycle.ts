@@ -267,7 +267,7 @@ export class CopilotLifecycle {
     ) {
       this.publish({
         warning:
-          'CoPilot reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
+          'SemiTraX reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
       });
     }
     if (event === 'onFailedRouteCalculation' || event === 'onRouteSyncError') {

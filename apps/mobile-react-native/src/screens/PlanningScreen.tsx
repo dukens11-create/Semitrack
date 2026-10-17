@@ -102,8 +102,11 @@ export function PlanningScreen({
     location = useStore(services.location);
   const { settings } = useStore(services.settings);
   const copilot = useCopilotState();
-  const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
+  const [nativeSettingsRequested, setNativeSettingsOpen] = useState(false);
   const [engineTripOpen, setEngineTripOpen] = useState(false);
+  // Native map callbacks describe the SDK screen, not ownership of the trip.
+  // Keep planner controls and preview drawing suspended throughout the handoff.
+  const nativeSettingsOpen = nativeSettingsRequested || engineTripOpen;
   const [savedEngineTrip, setSavedEngineTrip] = useState(false);
   const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
 

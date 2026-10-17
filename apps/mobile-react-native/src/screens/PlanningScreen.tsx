@@ -35,6 +35,7 @@ import {
   ActivityIndicator,
   AppState,
   BackHandler,
+  DeviceEventEmitter,
   Keyboard,
   Pressable,
   ScrollView,
@@ -101,6 +102,7 @@ export function PlanningScreen({
   const copilot = useCopilotState();
   const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
   const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
+
   // Native onboarding (including the EULA) needs an unobstructed viewport.
   const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
   const [searchStore] = useState(
@@ -262,6 +264,27 @@ export function PlanningScreen({
     setSheet(null);
     setSelectingStart(false);
   }
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      'SemiTraxCoPilotScreenChanged',
+      (event: unknown) => {
+        if (!event || typeof event !== 'object' ||
+            !('navigationScreen' in event) || typeof event.navigationScreen !== 'boolean') return;
+        // Search, trip planning, POIs and settings all belong to CoPilot while
+        // its own screen is open. Keep the map mounted and preserve its trip.
+        setNativeSettingsOpen(!event.navigationScreen);
+        if (!event.navigationScreen) {
+          gpsRequest.current?.abort();
+          searchStore.cancel();
+          setAppendPlan(null);
+          setSheet(null);
+          setSelectingStart(false);
+        }
+      },
+    );
+    return () => subscription.remove();
+  }, [searchStore]);
+
   function openAddStop() {
     const current = services.routes.getSnapshot();
     if (

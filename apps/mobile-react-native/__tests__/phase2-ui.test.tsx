@@ -4,6 +4,7 @@ import { OfflineMapsScreen } from '../src/screens/OfflineMapsScreen';
 import { ServicesScreen } from '../src/screens/ServicesScreen';
 import { SettingsScreen } from '../src/screens/SettingsScreen';
 import {
+  DeviceEventEmitter,
   ScrollView,
   StyleSheet,
   View,
@@ -2022,4 +2023,20 @@ test('native onboarding clears planning overlays and restores them after readine
     expect(services.location.requestFreshFix).toHaveBeenCalledTimes(1);
     expect(calculate).toHaveBeenCalledTimes(1);
   } finally { AppState.currentState = previousAppState; }
+});
+
+
+test('CoPilot search and trip screens hide SemiTraX overlays without remounting the map', async () => {
+  const { services } = setup();
+  await act(async () => { screen = create(<PlanningScreen services={services} />); });
+  const map = screen.root.findByType(CopilotTruckMap);
+  await act(async () => {
+    DeviceEventEmitter.emit('SemiTraxCoPilotScreenChanged', { navigationScreen: false });
+  });
+  expect(screen.root.findByType(CopilotTruckMap)).toBe(map);
+  expect(map.props.settingsOpen).toBe(true);
+  expect(StyleSheet.flatten(screen.root.findByProps({testID: 'map-bottom-panel'}).props.style).display).toBe('none');
+  await press('Back to SemiTraX map');
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('map');
+  expect(map.props.settingsOpen).toBe(false);
 });

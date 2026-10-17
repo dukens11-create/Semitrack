@@ -59,8 +59,9 @@ const mockCoPilotHost = {
 jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockCoPilotHost,
 }));
+const mockCopilotState = { readyToAddStops: true };
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
-  useCopilotState: () => ({}),
+  useCopilotState: () => mockCopilotState,
   useCopilotSetup: () => ({
     downloadStatus: '',
     retry: async () => {},
@@ -1966,5 +1967,26 @@ test('background destination confirmation shows a safe pre-dispatch error and di
     );
   } finally {
     AppState.currentState = previous;
+  }
+});
+
+test('native onboarding clears planning overlays and restores them after readiness', async () => {
+  const { services } = setup();
+  mockCopilotState.readyToAddStops = false;
+  try {
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    const panel = () => screen.root.findByProps({ testID: 'map-bottom-panel' });
+    expect(StyleSheet.flatten(panel().props.style).display).toBe('none');
+    expect(button('Zoom in')).toBeUndefined();
+    mockCopilotState.readyToAddStops = true;
+    await act(async () => {
+      screen.update(<PlanningScreen services={services} />);
+    });
+    expect(StyleSheet.flatten(panel().props.style).display).not.toBe('none');
+    expect(button('Zoom in')).toBeDefined();
+  } finally {
+    mockCopilotState.readyToAddStops = true;
   }
 });

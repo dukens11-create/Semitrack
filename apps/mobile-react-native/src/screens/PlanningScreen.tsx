@@ -780,7 +780,7 @@ export function PlanningScreen({
         />
       </View>
       <View
-        style={[styles.top, nativeSetupVisible && { display: 'none' }]}
+        style={[styles.top, nativeSetupVisible && styles.hiddenForNativeSetup]}
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
@@ -882,7 +882,7 @@ export function PlanningScreen({
                 expanded ? styles.expandedBottom : styles.collapsedBottom,
                 { backgroundColor: palette.card },
               ],
-          nativeSetupVisible && { display: 'none' },
+          nativeSetupVisible && styles.hiddenForNativeSetup,
         ]}
       >
         <WeatherStatus
@@ -1655,6 +1655,7 @@ export function PlanningScreen({
   );
 }
 const styles = StyleSheet.create({
+  hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
   removeRecent: {
     minWidth: 48,

@@ -849,6 +849,15 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           coordinates.add(new Coordinate(latitude, longitude));
         }
         MapDrawer drawer = UIMgr.getMapDrawer();
+        // SemiTraX owns the planning trip. A restored/native preview must not
+        // remain under our dashed geometry with a different distance or ETA.
+        // This method is preview-only; the guidance renderer must not call it.
+        if (!RouteMgr.isCopilotReadyToAddStops()) throw new IllegalStateException("COPILOT_NOT_READY");
+        GuidanceMgr.suspendNavigation(true);
+        RouteMgr.removeAllStops();
+        if (!RouteMgr.getStopList().isEmpty()) throw new IllegalStateException("COPILOT_PREVIEW_CLEAR_UNCONFIRMED");
+        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+        drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS);
         drawer.clearDashedLine();
         if (coordinates.size() > 1) drawer.drawDashedLine(coordinates);
         promise.resolve(null);

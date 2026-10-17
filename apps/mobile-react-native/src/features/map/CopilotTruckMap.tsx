@@ -58,7 +58,7 @@ export function CopilotTruckMap({
   const [northUp, setNorthUp] = useState(true);
   const previousCommand = useRef<number | undefined>(undefined);
   const selected = useRef({ onPoi, onCoordinate, allowed: false });
-  selected.current = { onPoi, onCoordinate, allowed };
+  selected.current = { onPoi, onCoordinate, allowed: allowed && !settingsOpen };
   const geometry = useMemo(() => {
     const progress = routeDisplayProgress(
       route,
@@ -89,6 +89,7 @@ export function CopilotTruckMap({
       setAppearanceReady(false);
       return;
     }
+    if (settingsOpen) return;
     let active = true;
     void coPilotHost()
       .setMapAppearance(palette.dark)
@@ -106,7 +107,7 @@ export function CopilotTruckMap({
     return () => {
       active = false;
     };
-  }, [allowed, palette.dark]);
+  }, [allowed, palette.dark, settingsOpen]);
   useEffect(() => {
     const picked = DeviceEventEmitter.addListener(
       'SemiTraxCoPilotMapPicked',
@@ -133,7 +134,14 @@ export function CopilotTruckMap({
     };
   }, []);
   useEffect(() => {
-    if (!allowed || !appearanceReady) return;
+    if (
+      !allowed ||
+      !appearanceReady ||
+      !state.readyToAddStops ||
+      settingsOpen ||
+      navigationActive
+    )
+      return;
     let active = true;
     void coPilotHost()
       .drawRoutePreview(geometry)
@@ -146,9 +154,16 @@ export function CopilotTruckMap({
     return () => {
       active = false;
     };
-  }, [allowed, appearanceReady, geometry]);
+  }, [
+    allowed,
+    appearanceReady,
+    state.readyToAddStops,
+    geometry,
+    settingsOpen,
+    navigationActive,
+  ]);
   useEffect(() => {
-    if (!allowed || !appearanceReady) return;
+    if (!allowed || !appearanceReady || settingsOpen) return;
     let active = true;
     void coPilotHost()
       .drawMarkers(markers.values)
@@ -158,9 +173,9 @@ export function CopilotTruckMap({
     return () => {
       active = false;
     };
-  }, [allowed, appearanceReady, markers]);
+  }, [allowed, appearanceReady, markers, settingsOpen]);
   async function control(action: string) {
-    if (!allowed || !appearanceReady) return;
+    if (!allowed || !appearanceReady || settingsOpen) return false;
     try {
       if (action === 'overview' && geometry.length) {
         const longs = geometry.map(point => point[0]),
@@ -175,8 +190,10 @@ export function CopilotTruckMap({
         await coPilotHost().mapCommand(
           action === 'overview' ? 'recenter' : action,
         );
+      return true;
     } catch {
       setError('CoPilot map control is unavailable. Retry setup.');
+      return false;
     }
   }
   const currentControl = useRef(control);
@@ -185,13 +202,14 @@ export function CopilotTruckMap({
     if (
       !allowed ||
       !appearanceReady ||
+      settingsOpen ||
       !command ||
       previousCommand.current === command.id
     )
       return;
     previousCommand.current = command.id;
     void currentControl.current(command.type);
-  }, [allowed, appearanceReady, command]);
+  }, [allowed, appearanceReady, command, settingsOpen]);
   return (
     <View style={styles.screen}>
       {allowed && !appearanceReady ? (
@@ -232,10 +250,10 @@ export function CopilotTruckMap({
             accessibilityRole="button"
             accessibilityLabel="Compass / north up"
             style={[styles.button, { backgroundColor: palette.card }]}
-            onPress={() => {
+            onPress={async () => {
               const next = !northUp;
-              setNorthUp(next);
-              void control(next ? 'north-up' : 'heading-up');
+              if (await control(next ? 'north-up' : 'heading-up'))
+                setNorthUp(next);
             }}
           >
             <Text style={[styles.symbol, { color: palette.text }]}>

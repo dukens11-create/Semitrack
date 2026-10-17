@@ -14,7 +14,7 @@ jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockHost,
 }));
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
-  useCopilotState: () => ({}),
+  useCopilotState: () => ({ readyToAddStops: true }),
 }));
 jest.mock('../src/components/CopilotOfflineMap', () => ({
   copilotMapBlocker: () => null,
@@ -79,4 +79,68 @@ test('late marker events cannot select a replacement POI', async () => {
   });
   expect(choose).toHaveBeenCalledTimes(1);
   expect(choose).toHaveBeenCalledWith(second);
+});
+
+test('settings retain control of the native view and ignore planner coordinate picks', async () => {
+  const choose = jest.fn();
+  const render = (settingsOpen: boolean) => (
+    <CopilotTruckMap
+      route={null}
+      plan={null}
+      fix={null}
+      pois={[]}
+      settingsOpen={settingsOpen}
+      onCoordinate={choose}
+    />
+  );
+  await act(async () => {
+    screen = create(render(false));
+  });
+  jest.clearAllMocks();
+  await act(async () => screen.update(render(true)));
+  await act(async () => {
+    DeviceEventEmitter.emit('SemiTraxCoPilotMapPicked', { lat: 40, lng: -120 });
+  });
+  expect(choose).not.toHaveBeenCalled();
+  expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
+  expect(mockHost.setMapAppearance).not.toHaveBeenCalled();
+  expect(mockHost.drawMarkers).not.toHaveBeenCalled();
+  await act(async () => screen.update(render(false)));
+  expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
+});
+
+test('active guidance never invokes the native preview cleanup', async () => {
+  await act(async () => {
+    screen = create(
+      <CopilotTruckMap
+        route={null}
+        plan={null}
+        fix={null}
+        pois={[]}
+        navigationActive
+      />,
+    );
+  });
+  expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
+});
+
+test('failed orientation command does not change the compass state', async () => {
+  await act(async () => {
+    screen = create(
+      <CopilotTruckMap route={null} plan={null} fix={null} pois={[]} />,
+    );
+  });
+  mockHost.mapCommand.mockRejectedValueOnce(new Error('unavailable'));
+  const compass = () =>
+    screen.root.findByProps({ accessibilityLabel: 'Compass / north up' });
+  await act(async () => {
+    await compass().props.onPress();
+  });
+  await act(async () => {
+    await compass().props.onPress();
+  });
+  expect(mockHost.mapCommand.mock.calls.map(call => call[0])).toEqual([
+    'heading-up',
+    'heading-up',
+  ]);
 });

@@ -390,7 +390,12 @@ export function PlanningScreen({
     if (host?.reviewEngineTripProfile && host.openEngineTrip && host.returnFromEngineTrip) {
       const tripHost = host;
       origin(); // Require a fresh app GPS fix before offering the handoff.
-      const reviewed = engineTripProfileSchema.parse(await host.reviewEngineTripProfile());
+      let reviewed;
+      try { reviewed = engineTripProfileSchema.parse(await host.reviewEngineTripProfile()); }
+      catch {
+        setError('Review the Heavy-Duty Truck profile in engine settings. Finish or cancel any existing engine trip before preparing a new one.');
+        return;
+      }
       if (services.routes.getSnapshot().route !== current.route || services.routes.getSnapshot().plan !== current.plan) return;
       Alert.alert('SemiTraX truck navigation',
         `${engineTripProfileSummary(reviewed)}\n\nUse this engine profile, including its hazmat and routing preferences, for this trip. Saved planner truck settings are separate. The engine will calculate the route; review it and tap Go.`,
@@ -406,9 +411,9 @@ export function PlanningScreen({
             setStartingNavigation(true);
             try {
               await tripHost.openEngineTrip!(reviewed.ticket, points);
-            } catch (e) {
+            } catch {
               // A rejected handoff can already have reached native code. Keep engine controls visible.
-              Alert.alert('SemiTraX trip', errorMessage(e));
+              Alert.alert('SemiTraX trip', 'The engine could not confirm the trip handoff. Check GPS and the truck profile in Trip controls. If a trip is present, cancel it before returning to the planner.');
             } finally { setStartingNavigation(false); }
           }); } },
         ]);
@@ -632,8 +637,8 @@ export function PlanningScreen({
         setSavedEngineTrip(false);
       } else await coPilotHost().mapCommand('map');
       setNativeSettingsOpen(false);
-    } catch (e) {
-      Alert.alert('SemiTraX map', engineTripOpen ? errorMessage(e) : 'The map could not reopen. Please try again.');
+    } catch {
+      Alert.alert('SemiTraX map', engineTripOpen ? 'Use Trip controls to finish or cancel the engine trip before returning to the planner. If preparation has not finished, wait for the engine response.' : 'The map could not reopen. Please try again.');
     }
   }
   const closeNativeSettings = useRef(closeCoPilotSettings);
@@ -852,9 +857,11 @@ export function PlanningScreen({
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {nativeSettingsOpen && (
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
-          {engineTripOpen && <DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} />}
           {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
-          <DriverButton title={engineTripOpen ? 'Back to planner' : 'Back to SemiTraX map'} disabled={startingNavigation} secondary onPress={() => { void closeCoPilotSettings(); }} />
+          <View style={ds.row}>
+            {engineTripOpen && <View style={ds.grow}><DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} /></View>}
+            <View style={ds.grow}><DriverButton title={engineTripOpen ? 'Back to planner' : 'Back to SemiTraX map'} disabled={startingNavigation} secondary onPress={() => { void closeCoPilotSettings(); }} /></View>
+          </View>
         </View>
       )}
       <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>

@@ -353,7 +353,7 @@ export function PlanningScreen({
       refreshNavigationState();
       if (result === 'unavailable')
         setError(
-          'CoPilot provisioning required. Your truck route is ready, but turn-by-turn navigation cannot start until the licensed CoPilot runtime and maps are provisioned.',
+          'Turn-by-turn connection unavailable in this build. Your route is a planning preview. Re-entering your IDs or downloading maps will not complete the missing guidance connection.',
         );
       if (result === 'stop-unconfirmed') {
         setStopUnconfirmed(true);
@@ -921,6 +921,7 @@ export function PlanningScreen({
           nativeSetupVisible && styles.hiddenForNativeSetup,
         ]}
       >
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.routePanelContent}>
         <WeatherStatus
           driving={navigationSession}
           detailsRequest={weatherDetailsRequest}
@@ -1045,10 +1046,7 @@ export function PlanningScreen({
                 style={[styles.handle, { backgroundColor: palette.border }]}
               />
             </Pressable>
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.bottomContent}
-            >
+            <View style={styles.bottomContent}>
               {feedback}
               <Pressable
                 accessibilityRole="button"
@@ -1093,9 +1091,10 @@ export function PlanningScreen({
                     : 'Location off'}
                 </Text>
               )}
-            </ScrollView>
+            </View>
           </>
         )}
+        </ScrollView>
       </View>
       {active && sheet === 'filter' && (
         <DriverSheet title="Places Filter" onClose={closeSheet}>
@@ -1683,7 +1682,7 @@ export function PlanningScreen({
           <Text style={[styles.panelStatus, { color: palette.muted }]}>
             {navigationSession
               ? 'Quit Nav stops guidance after confirmation and retains the route. Cancel Route clears it.'
-              : 'Route preview only. Start Navigation checks CoPilot licensing and maps.'}
+              : 'Route preview only. Start Navigation requires a connected truck-guidance engine.'}
           </Text>
         </NavigationPanel>
       )}
@@ -1701,7 +1700,9 @@ const styles = StyleSheet.create({
   },
   maneuverOverlay: { flex: 1, marginRight: 62 },
   previewOverlay: { marginRight: 0 },
+  routePanelContent: { gap: 8 },
   routeBottom: {
+    maxHeight: '42%',
     position: 'absolute',
     left: 12,
     right: 12,

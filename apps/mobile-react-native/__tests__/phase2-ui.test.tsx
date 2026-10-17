@@ -320,7 +320,7 @@ test('real route preview retains visible Start and fails closed on unavailable g
   expect(button('Compare alternatives')).toBeDefined();
   expect(button('Start Navigation').props.disabled).toBe(false);
   await press('Start Navigation');
-  expect(content()).toContain('CoPilot provisioning required');
+  expect(content()).toContain('Turn-by-turn connection unavailable');
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test('busy search prevents duplicate provider calls and restores interaction after completion', async () => {

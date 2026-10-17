@@ -80,6 +80,7 @@ import {
 import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { copilotMapBlocker } from '../components/CopilotOfflineMap';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
+import { engineTripLocations, engineTripProfileSchema, engineTripProfileSummary } from '../services/copilot/EngineTrip';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
@@ -102,6 +103,7 @@ export function PlanningScreen({
   const { settings } = useStore(services.settings);
   const copilot = useCopilotState();
   const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
+  const [engineTripOpen, setEngineTripOpen] = useState(false);
   const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
 
   // Native onboarding (including the EULA) needs an unobstructed viewport.
@@ -161,9 +163,9 @@ export function PlanningScreen({
   const navigationSession = navigationActive || navigation.phase === 'arrived';
   const palette = useDriverPalette();
   useEffect(() => {
-    onNavigationActiveChange?.(active && navigationSession);
+    onNavigationActiveChange?.(active && (navigationSession || engineTripOpen));
     return () => onNavigationActiveChange?.(false);
-  }, [active, navigationSession, onNavigationActiveChange]);
+  }, [active, navigationSession, engineTripOpen, onNavigationActiveChange]);
   useEffect(() => {
     let mounted = true;
     void services.trucks
@@ -368,6 +370,35 @@ export function PlanningScreen({
     }
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
+    let host: ReturnType<typeof coPilotHost> | undefined;
+    try { host = coPilotHost(); } catch { /* Older builds retain the unavailable-guidance path. */ }
+    if (host?.reviewEngineTripProfile && host.openEngineTrip && host.returnFromEngineTrip) {
+      const tripHost = host;
+      origin(); // Require a fresh app GPS fix before offering the handoff.
+      const reviewed = engineTripProfileSchema.parse(await host.reviewEngineTripProfile());
+      if (services.routes.getSnapshot().route !== current.route) return;
+      Alert.alert('SemiTraX truck navigation',
+        `${engineTripProfileSummary(reviewed)}\n\nUse this engine profile, including its hazmat and routing preferences, for this trip. Saved planner truck settings are separate. The engine will calculate the route; review it and tap Go.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Review settings', onPress: () => { void openCoPilotSettings(); } },
+          { text: 'Use this profile', onPress: () => { void run(async () => {
+            if (services.routes.getSnapshot().route !== current.route || AppState.currentState !== 'active') return;
+            const points = engineTripLocations(origin(), current.plan!);
+            closeSheet();
+            setEngineTripOpen(true);
+            setNativeSettingsOpen(true);
+            setStartingNavigation(true);
+            try {
+              await tripHost.openEngineTrip!(reviewed.ticket, points);
+            } catch (e) {
+              // A rejected handoff can already have reached native code. Keep engine controls visible.
+              Alert.alert('SemiTraX trip', errorMessage(e));
+            } finally { setStartingNavigation(false); }
+          }); } },
+        ]);
+      return;
+    }
     const truck = services.trucks.getSnapshot().selected;
     if (!truck) throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     const generation = operation.current;
@@ -578,10 +609,15 @@ export function PlanningScreen({
   }
   async function closeCoPilotSettings() {
     try {
-      await coPilotHost().mapCommand('map');
+      if (engineTripOpen) {
+        const host = coPilotHost();
+        if (!host.returnFromEngineTrip) throw new Error('Engine trip controls unavailable.');
+        await host.returnFromEngineTrip();
+        setEngineTripOpen(false);
+      } else await coPilotHost().mapCommand('map');
       setNativeSettingsOpen(false);
-    } catch {
-      Alert.alert('SemiTraX map', 'The map could not reopen. Please try again.');
+    } catch (e) {
+      Alert.alert('SemiTraX map', engineTripOpen ? errorMessage(e) : 'The map could not reopen. Please try again.');
     }
   }
   const closeNativeSettings = useRef(closeCoPilotSettings);
@@ -800,7 +836,9 @@ export function PlanningScreen({
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {nativeSettingsOpen && (
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
-          <DriverButton title="Back to SemiTraX map" secondary onPress={() => { void closeCoPilotSettings(); }} />
+          {engineTripOpen && <DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} />}
+          {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
+          <DriverButton title={engineTripOpen ? 'Back to planner' : 'Back to SemiTraX map'} disabled={startingNavigation} secondary onPress={() => { void closeCoPilotSettings(); }} />
         </View>
       )}
       <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>

@@ -2063,3 +2063,38 @@ test('native map uses SemiTraX menu without duplicate SemiTraX controls', async 
   expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('native-map');
   expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
 });
+
+test('engine handoff reviews its truck, preserves stop order and keeps native controls until trip ends', async () => {
+  const priorState = AppState.currentState;
+  AppState.currentState = 'active';
+  const native = mockCoPilotHost as typeof mockCoPilotHost & Partial<import('../src/services/copilot/CoPilotHost').CoPilotHost>;
+  const profile = { ticket: 'review-ticket', name: 'Duke', heightInches: 162, widthInches: 102, lengthInches: 636, weightLbs: 80000 };
+  native.reviewEngineTripProfile = jest.fn().mockResolvedValue(profile);
+  native.openEngineTrip = jest.fn().mockResolvedValue(undefined);
+  native.returnFromEngineTrip = jest.fn().mockRejectedValueOnce(new Error('Finish or cancel the engine trip first.')).mockResolvedValue(undefined);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  try {
+    const { services } = setup(truck, { latitude: 39, longitude: -119, timestamp: Date.now(), accuracy: 5 });
+    const plan = { stops: [{ id: 'fuel', name: 'Fuel', lat: 39.5, lng: -119 }], destination: { id: 'dest', name: 'Destination', lat: 40, lng: -120 } };
+    services.routes = new Store({ phase: 'preview', route: route(), plan }) as unknown as RouteStore;
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Start Navigation');
+    expect(native.openEngineTrip).not.toHaveBeenCalled();
+    expect(alert.mock.calls.at(-1)![1]).toContain('Duke');
+    await act(async () => { alert.mock.calls.at(-1)![2]!.find(b => b.text === 'Use this profile')!.onPress!(); });
+    expect(native.openEngineTrip).toHaveBeenCalledWith('review-ticket', [
+      { name: 'Current location', lat: 39, lng: -119 },
+      { name: 'Fuel', lat: 39.5, lng: -119 },
+      { name: 'Destination', lat: 40, lng: -120 },
+    ]);
+    expect(services.guidance.startNavigation).not.toHaveBeenCalled();
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    await press('Back to planner');
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    await press('Back to planner');
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(false);
+  } finally {
+    delete native.reviewEngineTripProfile; delete native.openEngineTrip; delete native.returnFromEngineTrip;
+    alert.mockRestore(); AppState.currentState = priorState;
+  }
+});

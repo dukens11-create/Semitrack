@@ -93,6 +93,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private final Runnable deviceReadbackCheck = this::verifyDeviceReadback;
   private boolean assignedRepairPendingRestart;
   private boolean binding, connected, invalidated, mapPrepared;
+  private final CoPilotTripHandoff tripHandoff = new CoPilotTripHandoff();
+  private volatile boolean tripPreparing;
   private volatile boolean started;
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
@@ -959,6 +961,85 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     return value;
   }
 
+  @ReactMethod public void reviewEngineTripProfile(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        if (tripPreparing) throw new IllegalStateException("A trip is already being prepared.");
+        com.alk.cpik.route.VehicleRoutingProfile profile = tripHandoff.review();
+        com.alk.cpik.route.VehicleDimensions dims = profile.getVehicleDimensions();
+        WritableMap value = Arguments.createMap();
+        value.putString("ticket", tripHandoff.ticket());
+        value.putString("name", profile.getName());
+        value.putInt("heightInches", dims.getHeight().getInches());
+        value.putInt("widthInches", dims.getWidth().getInches());
+        value.putInt("lengthInches", dims.getLength().getInches());
+        value.putInt("weightLbs", dims.getTotalWeight().getPounds());
+        promise.resolve(value);
+      } catch (Exception e) { promise.reject("ENGINE_PROFILE_UNAVAILABLE", e.getMessage()); }
+    });
+  }
+  @ReactMethod public void openEngineTrip(String ticket, ReadableArray locations, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        requireTripForeground();
+        if (tripPreparing) throw new IllegalStateException("A trip is already being prepared.");
+        tripHandoff.validate(ticket);
+        int count = locations.size();
+        if (count < 2 || count > 27) throw new IllegalArgumentException("Invalid trip stop count.");
+        double[][] points = new double[count][2];
+        String[] names = new String[count];
+        for (int i = 0; i < count; i++) {
+          ReadableMap stop = locations.getMap(i);
+          points[i][0] = stop.getDouble("lat"); points[i][1] = stop.getDouble("lng");
+          names[i] = stop.getString("name");
+          if (names[i] == null || names[i].trim().isEmpty()) throw new IllegalArgumentException("Stop name required.");
+        }
+        tripPreparing = true;
+        new Thread(() -> {
+          try {
+            com.alk.cpik.StopList stops = tripHandoff.geocode(ticket, points, names);
+            main.post(() -> {
+              try {
+                requireMap(); requireTripForeground();
+                tripHandoff.validate(ticket);
+                UIMgr.getMapDrawer().clearDashedLine();
+                if (markerSet != null) UIMgr.getMapDrawer().removeImageSet(markerSet);
+                UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
+                CopilotMgr.enableGPS();
+                tripHandoff.submit(ticket, stops);
+                GuidanceMgr.suspendNavigation(false);
+                // Means native preview was requested, not that guidance has started.
+                promise.resolve(null);
+              } catch (Exception e) { promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); }
+              finally { tripPreparing = false; }
+            });
+          } catch (Exception e) {
+            main.post(() -> { tripPreparing = false; promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); });
+          }
+        }, "SemiTraXTripGeocode").start();
+      } catch (Exception e) { promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); }
+    });
+  }
+  private void requireTripForeground() throws Exception {
+    if (invalidated || context.getLifecycleState() != LifecycleState.RESUMED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
+        !RouteMgr.isReceivingGPSSignal())
+      throw new IllegalStateException("Open SemiTraX and wait for a precise GPS signal before starting.");
+  }
+  @ReactMethod public void returnFromEngineTrip(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        if (tripPreparing || !tripHandoff.canReturnToPlanner())
+          throw new IllegalStateException("Use Trip controls to finish or cancel the engine trip before returning to the planner.");
+        GuidanceMgr.suspendNavigation(true);
+        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+        promise.resolve(null);
+      } catch (Exception e) { promise.reject("ENGINE_TRIP_ACTIVE", e.getMessage()); }
+    });
+  }
   @ReactMethod public void mapCommand(String command, Promise promise) {
     main.post(() -> {
       try {
@@ -1176,6 +1257,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       MapDataListener.unregisterListener(mapListener);
       UIListener.unregisterListener(uiListener);
       LicenseListener.unregisterListener(hook);
+      tripHandoff.close();
       // Do not clear native credentials, installed maps or cached licenses.
     });
     super.invalidate();

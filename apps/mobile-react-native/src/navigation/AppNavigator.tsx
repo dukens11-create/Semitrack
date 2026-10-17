@@ -53,6 +53,7 @@ export function DriverShell({
   const p = useDriverPalette();
   const [tab, setTab] = useState(1);
   const [visited, setVisited] = useState([1]);
+  const [navigationVisible, setNavigationVisible] = useState(false);
   const focused = useIsFocused();
   function select(index: number, confirmed = false) {
     if (
@@ -109,6 +110,7 @@ export function DriverShell({
             ) : index === 1 ? (
               <PlanningScreen
                 services={services}
+                onNavigationActiveChange={setNavigationVisible}
                 active={focused && tab === 1}
                 onTrucks={() => open('Trucks')}
                 onServices={() => open('Services')}
@@ -130,7 +132,7 @@ export function DriverShell({
           </View>
         ))}
       </View>
-      {
+      {!navigationVisible && (
         <View
           accessibilityRole="tablist"
           style={[
@@ -173,7 +175,7 @@ export function DriverShell({
             </Pressable>
           ))}
         </View>
-      }
+      )}
     </View>
   );
 }

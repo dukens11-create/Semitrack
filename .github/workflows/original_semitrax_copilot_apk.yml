@@ -6,6 +6,7 @@ on:
       - codex/original-trimble-map-display
       - codex/semitrax-auth-audit-20261014
       - codex/copilot-poi-catalog
+      - codex/copilot-engine-trip
   workflow_dispatch:
     inputs:
       test_asset:

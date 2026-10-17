@@ -188,3 +188,22 @@ test('storage measurement failure is distinct from zero available bytes', () => 
     ).toThrow();
   }
 });
+
+test('native display report retains ETA clock offset and POI settings without private payloads', () => {
+  const report = coPilotDiagnosticReport({
+    ...native(),
+    nativeDisplay: {
+      status: 'AVAILABLE', deviceUtcOffsetMinutes: -420,
+      headingDisplayEnabled: true, speedLimitOnMap: true,
+      poiAlertsEnabled: true, poiAlertDistance: 'THREE_MILES',
+      poiAlertCategoryCount: 4, poiDisplayedCategoryCount: 6,
+      etaMinutesFromNow: -120,
+      destination: 'PRIVATE_DESTINATION', latitude: 39.62,
+    },
+  }, initialCopilotState());
+  expect(report).toContain('"etaMinutesFromNow": -120');
+  expect(report).toContain('THREE_MILES');
+  expect(report).toContain('"deviceUtcOffsetMinutes": -420');
+  expect(report).not.toContain('PRIVATE_DESTINATION');
+  expect(report).not.toContain('latitude');
+});

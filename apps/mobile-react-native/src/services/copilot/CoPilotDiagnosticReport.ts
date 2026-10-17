@@ -73,6 +73,21 @@ const snapshot = z.object({
     'maps-diag-v3',
     'maps-storage-v4',
   ]),
+  nativeDisplay: z.object({
+    status: fixedCode(['AVAILABLE', 'PARTIAL', 'NOT_STARTED']),
+    deviceUtcOffsetMinutes: z.number().int().min(-840).max(840),
+    headingDisplayEnabled: z.boolean().optional(),
+    speedLimitOnMap: z.boolean().optional(),
+    poiAlertsEnabled: z.boolean().optional(),
+    poiAlertDistance: fixedCode([
+      'TWOTENTHS_MILE', 'HALF_MILE', 'ONE_MILE', 'THREE_MILES', 'TEN_MILES',
+      'TWENTYFIVE_MILES', 'HALF_KILOMETER', 'ONE_KILOMETER', 'TWO_KILOMETERS',
+      'FIVE_KILOMETERS', 'SIXTEEN_KILOMETERS', 'FORTY_KILOMETERS',
+    ]).optional(),
+    poiAlertCategoryCount: count.optional(),
+    poiDisplayedCategoryCount: count.optional(),
+    etaMinutesFromNow: z.number().finite().optional(),
+  }).optional(),
   appStorage: z
     .union([
       z

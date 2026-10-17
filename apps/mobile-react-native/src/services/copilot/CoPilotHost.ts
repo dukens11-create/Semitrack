@@ -1,6 +1,17 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  nativeDisplay?: {
+    status: string;
+    deviceUtcOffsetMinutes: number;
+    headingDisplayEnabled?: boolean;
+    speedLimitOnMap?: boolean;
+    poiAlertsEnabled?: boolean;
+    poiAlertDistance?: string;
+    poiAlertCategoryCount?: number;
+    poiDisplayedCategoryCount?: number;
+    etaMinutesFromNow?: number;
+  };
   appStorage?: {
     status: 'AVAILABLE' | 'UNAVAILABLE';
     availableBytes?: number;

@@ -25,6 +25,8 @@ import com.alk.cpik.CopilotMgr;
 import com.alk.cpik.ConfigurationSetting;
 import com.alk.cpik.Coordinate;
 import com.alk.cpik.Stop;
+import com.alk.cpik.POICategory;
+import com.alk.cpik.POISettings;
 import com.alk.cpik.guidance.GuidanceSettings;
 import com.alk.cpik.guidance.GuidanceMgr;
 import com.alk.cpik.licensing.FeatureStatus;
@@ -487,6 +489,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           storage.putString("status", "UNAVAILABLE");
         }
         result.putMap("appStorage", storage);
+        result.putMap("nativeDisplay", nativeDisplayDiagnostics());
         WritableMap download = Arguments.createMap();
         download.putString("response", mapDownloadResponse);
         download.putString("callback", mapDownloadCallback);
@@ -857,6 +860,94 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       catch (Exception e) { promise.reject("COPILOT_MAP_UNAVAILABLE", "CoPilot map setup is incomplete."); }
     });
   }
+  // One-time defaults; subsequent driver changes in CoPilot remain authoritative.
+  private void prepareNativeDisplay() throws Exception {
+    android.content.SharedPreferences prefs =
+        context.getSharedPreferences(STORE, Context.MODE_PRIVATE);
+    if (!prefs.getBoolean("nativeHeadingV1", false)) {
+      try {
+        CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(
+            ConfigurationSetting.CHEVRON_DISPLAY, ConfigurationSetting.CHEVRON_DISPLAY_HEADING));
+        if (Integer.valueOf(ConfigurationSetting.CHEVRON_DISPLAY_HEADING).equals(
+            CopilotMgr.getConfigurationSetting(ConfigurationSetting.CHEVRON_DISPLAY).getIntegerValue()))
+          prefs.edit().putBoolean("nativeHeadingV1", true).apply();
+      } catch (Exception ignored) { /* POI setup is independent of heading support. */ }
+    }
+    if (prefs.getBoolean("nativePlacesV1", false)) return;
+    List<POICategory> categories = CopilotMgr.getPOICategories();
+    if (categories == null || categories.isEmpty()) return;
+    POISettings current = CopilotMgr.getPOIAlertSettings();
+    List<POICategory> alerts = new ArrayList<>();
+    if (current.getPOIAlertCategories() != null) alerts.addAll(current.getPOIAlertCategories());
+    boolean found = false;
+    for (POICategory category : categories) {
+      int id = category.getID();
+      // Documented SDK categories: truck services/repair, parking/rest, fuel.
+      if (id != 48 && id != 70 && id != 34 && id != 22) continue;
+      found = true;
+      category.setDisplayOnMap(true);
+      boolean present = false;
+      for (POICategory selected : alerts) {
+        if (selected.getID() == id) { present = true; break; }
+      }
+      if (!present) alerts.add(category);
+    }
+    if (!found) return; // Catalog may not be ready; retry on next map entry.
+    // Pass the complete catalog to preserve the visibility of other categories.
+    CopilotMgr.updatePOICategoriesDisplayStatus(categories);
+    POISettings settings = new POISettings();
+    settings.setPOIAlertEnabled(true);
+    settings.setPOIAlertCategories(alerts);
+    if (!current.getPOIAlertEnabled()) {
+      settings.setPOIAlertLocation(POISettings.POIAlertLocation.ON_ROUTE);
+      settings.setPOIAlertDistance(POISettings.POIAlertDistance.THREE_MILES);
+    }
+    CopilotMgr.setPOIAlertSettings(settings);
+    POISettings verified = CopilotMgr.getPOIAlertSettings();
+    if (!verified.getPOIAlertEnabled())
+      throw new IllegalStateException("POI settings not accepted");
+    for (POICategory expected : alerts) {
+      boolean present = false;
+      for (POICategory actual : verified.getPOIAlertCategories())
+        if (actual.getID() == expected.getID()) { present = true; break; }
+      if (!present) throw new IllegalStateException("POI category not accepted");
+    }
+    prefs.edit().putBoolean("nativePlacesV1", true).apply();
+  }
+
+  private WritableMap nativeDisplayDiagnostics() {
+    WritableMap value = Arguments.createMap();
+    value.putString("status", started ? "AVAILABLE" : "NOT_STARTED");
+    value.putInt("deviceUtcOffsetMinutes",
+        java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000);
+    if (!started) return value;
+    try {
+      value.putBoolean("headingDisplayEnabled",
+          Integer.valueOf(ConfigurationSetting.CHEVRON_DISPLAY_HEADING).equals(
+              CopilotMgr.getConfigurationSetting(ConfigurationSetting.CHEVRON_DISPLAY).getIntegerValue()));
+    } catch (Exception ignored) {}
+    try {
+      value.putBoolean("speedLimitOnMap", GuidanceSettings.isSpeedLimitOnMap());
+      POISettings settings = CopilotMgr.getPOIAlertSettings();
+      value.putBoolean("poiAlertsEnabled", settings.getPOIAlertEnabled());
+      value.putString("poiAlertDistance", settings.getPOIAlertDistance().name());
+      value.putInt("poiAlertCategoryCount", settings.getPOIAlertCategories().size());
+      int displayed = 0;
+      for (POICategory category : CopilotMgr.getPOICategories())
+        if (category.isDisplayedOnMap()) displayed++;
+      value.putInt("poiDisplayedCategoryCount", displayed);
+    } catch (Exception ignored) { value.putString("status", "PARTIAL"); }
+    try {
+      // Relative value avoids exporting destinations, coordinates or trip dates.
+      if (RouteMgr.hasDestination()) {
+        java.util.Date eta = GuidanceMgr.getETA();
+        value.putDouble("etaMinutesFromNow",
+            (eta.getTime() - System.currentTimeMillis()) / 60000.0);
+      }
+    } catch (Exception ignored) { /* ETA is unavailable without a calculated route. */ }
+    return value;
+  }
+
   @ReactMethod public void mapCommand(String command, Promise promise) {
     main.post(() -> {
       try {
@@ -867,6 +958,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             GuidanceSettings.setSpeedLimitOnMap(true);
             drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
             UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+            // Optional display configuration must never block the native map.
+            try { prepareNativeDisplay(); } catch (Exception ignored) {}
             break;
           case "copilot-menu": UIMgr.showDialog(UIMgr.Dialog.DRIVING_MENU); break;
           case "trip-plan": UIMgr.showDialog(UIMgr.Dialog.PREVIEW_TRIP_PLAN_DIALOG); break;

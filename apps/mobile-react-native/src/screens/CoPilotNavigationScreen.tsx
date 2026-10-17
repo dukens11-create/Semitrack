@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import {
   CopilotOfflineMap,
   copilotMapBlocker,
@@ -14,6 +14,7 @@ import { coPilotHost } from '../services/copilot/CoPilotHost';
 
 import type { Services } from '../app/services';
 import { useStore } from '../hooks/useStore';
+import { DriverIcon } from '../components/DriverIcon';
 import { WeatherStatus } from '../features/weather/WeatherStatus';
 
 function CurrentWeather({
@@ -75,9 +76,20 @@ export function CoPilotNavigationScreen({
   }, [active, allowed, state.readyToAddStops, retry]);
   return (
     <View style={styles.screen}>
-      {services && allowed && state.readyToAddStops && (
-        <View style={[styles.toolbar, { backgroundColor: palette.card }]}>
-          <CurrentWeather services={services} active={active} />
+      {allowed && state.readyToAddStops && (
+        <View style={[styles.toolbar, palette.dark ? styles.toolbarDark : styles.toolbarLight]}>
+          <View style={styles.brand} accessibilityLabel="SemiTraX navigation">
+            <DriverIcon name="local_shipping_rounded" size={25} color="#FFFFFF" />
+            <View>
+              <Text style={styles.wordmark}>SemiTra<Text style={styles.brandX}>X</Text></Text>
+              <Text style={styles.caption}>Powered by Trimble</Text>
+            </View>
+          </View>
+          {services && (
+            <View style={styles.weather}>
+              <CurrentWeather services={services} active={active} />
+            </View>
+          )}
         </View>
       )}
       <CopilotOfflineMap state={state} />
@@ -103,6 +115,18 @@ const styles = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48,
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    minHeight: 60,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 8,
   },
+  toolbarDark: { backgroundColor: '#102E46' },
+  toolbarLight: { backgroundColor: '#104A70' },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  wordmark: { color: '#FFFFFF', fontSize: 22, fontWeight: '800', letterSpacing: 0.2 },
+  brandX: { color: '#8DD8FF' },
+  caption: { color: '#D0E6F3', fontSize: 10, fontWeight: '500' },
+  weather: { flexShrink: 1 },
 });

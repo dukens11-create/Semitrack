@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert } from '../src/components/ThemedAlert';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { CoPilotMapCatalog } from '../src/components/CoPilotMapCatalog';
 import { Button } from '../src/components/ui';

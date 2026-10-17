@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Switch } from 'react-native';
+import { Switch } from 'react-native';
+import { Alert } from './ThemedAlert';
 import { Button, Copy } from './ui';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
 
@@ -63,16 +64,16 @@ export function CoPilotMapCatalog() {
     <Copy>Additional offline maps</Copy>
     <Copy>{message}</Copy>
     <Button title="Refresh licensed and installed maps" disabled={busy} onPress={() => { void run(false); }} />
-    {regions.map(region => <Button
-      key={region.name}
-      title={(region.installed ? 'Installed: ' : selected.includes(region.name) ? 'Selected: ' : 'Select: ') + region.name.replace(/_/g, ' ')}
-      disabled={busy || region.installed}
-      onPress={() => setSelected(old => old.includes(region.name) ? old.filter(name => name !== region.name) : [...old, region.name])}
-    />)}
     <Copy>Allow mobile data for these downloads (large downloads may use substantial data).</Copy>
     <Switch accessibilityLabel="Allow mobile data for additional maps" value={cellular} disabled={busy} onValueChange={setCellular} />
     <Copy>{message}</Copy>
     <Button title="Download selected licensed maps" disabled={busy || !selected.length} onPress={() => { void run(true); }} />
+    {regions.map(region => <Button
+      key={region.name}
+      title={(region.installed ? 'Installed: ' : selected.includes(region.name) ? 'Selected: ' : 'Select: ') + region.name.replace(/_/g, ' ')}
+      disabled={busy || region.installed}
+      onPress={() => setSelected(old => old.includes(region.name) ? old.filter(name => name !== region.name) : region.name === 'NORTH_AMERICA_North_America' ? [region.name] : [...old.filter(name => name !== 'NORTH_AMERICA_North_America'), region.name])}
+    />)}
     <Copy>Installed maps are preserved. Map downloads do not grant truck-route or navigation readiness.</Copy>
   </>;
 }

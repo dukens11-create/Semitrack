@@ -54,6 +54,14 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  hasEngineTrip?(): Promise<boolean>;
+  resumeEngineTrip?(): Promise<void>;
+  reviewEngineTripProfile?(): Promise<unknown>;
+  openEngineTrip?(
+    ticket: string,
+    locations: { lat: number; lng: number; name: string }[],
+  ): Promise<void>;
+  returnFromEngineTrip?(): Promise<void>;
   searchNativePois?(
     name: string,
     ids: number[],

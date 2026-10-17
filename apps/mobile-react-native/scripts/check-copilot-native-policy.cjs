@@ -16,6 +16,7 @@ try {
     path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotLoginTrace.java'),
     path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotDeviceReadbackPolicy.java'),
     path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotEnrollmentPolicy.java'),
+    path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotTripHandoff.java'),
     path.join(root,'scripts/native-tests/CoPilotCredentialPolicyTest.java')]);
   run(['-cp', output + path.delimiter + sdk, 'com.semitrax.nativebridge.CoPilotCredentialPolicyTest']);
 } finally { fs.rmSync(output, {recursive:true,force:true}); }

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Alert } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { CoPilotMapCatalog } from '../src/components/CoPilotMapCatalog';
 import { Button } from '../src/components/ui';
@@ -23,4 +24,17 @@ test('downloads only explicit selections with cellular off and verifies installe
   expect(mockHost.downloadLicensedRegions).toHaveBeenCalledWith(['NORTH_AMERICA_United_States'], false);
   expect(button('Selected: NORTH AMERICA United States')).toBeDefined();
   expect(JSON.stringify(screen.toJSON())).toContain('Download request accepted');
+});
+
+test('shows a visible dialog when the native download rejects', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  mockHost.downloadLicensedRegions.mockRejectedValueOnce(new Error('No active route allowed'));
+  await act(async () => { screen = create(<CoPilotMapCatalog />); });
+  const button = (title: string) => screen.root.findAllByType(Button).find(node => node.props.title === title)!;
+  await act(async () => button('Refresh licensed and installed maps').props.onPress());
+  await act(async () => button('Select: NORTH AMERICA Nevada').props.onPress());
+  await act(async () => button('Download selected licensed maps').props.onPress());
+  expect(alert).toHaveBeenCalledWith('CoPilot map request failed', 'No active route allowed');
+  expect(button('Download selected licensed maps').props.disabled).toBe(false);
+  alert.mockRestore();
 });

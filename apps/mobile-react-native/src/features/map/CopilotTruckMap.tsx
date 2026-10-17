@@ -61,6 +61,7 @@ export function CopilotTruckMap({
   onSettings,
 }: CopilotMapProps) {
   const [mapHeight, setMapHeight] = useState(0);
+  const [moreControls, setMoreControls] = useState(false);
   const state = useCopilotState();
   const palette = useDriverPalette();
   const allowed = copilotMapBlocker(state) === null;
@@ -259,9 +260,18 @@ export function CopilotTruckMap({
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"
         >
-          <CoPilotVoiceControls />
-          <CoPilotPlaces />
-          {onSettings && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="More map controls"
+            accessibilityState={{ expanded: moreControls }}
+            style={[styles.button, { backgroundColor: palette.card }]}
+            onPress={() => setMoreControls(value => !value)}
+          >
+            <Text style={[styles.symbol, { color: palette.text }]}>•••</Text>
+          </Pressable>
+          {moreControls && <CoPilotVoiceControls />}
+          {moreControls && <CoPilotPlaces />}
+          {moreControls && onSettings && (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="CoPilot settings"
@@ -377,13 +387,13 @@ const styles = StyleSheet.create({
     right: 12,
   },
   controlContent: {
-    gap: 10,
+    gap: 6,
     alignItems: 'flex-end',
   },
   button: {
     width: 48,
     minHeight: 48,
-    borderRadius: 14,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },

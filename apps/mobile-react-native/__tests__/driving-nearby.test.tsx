@@ -92,7 +92,7 @@ afterEach(async () => {
   screen = undefined;
   jest.useRealTimers();
 });
-test('shows all four driving rows, miles and unavailable exits without starting navigation', async () => {
+test('shows four compact mileage cards without blank exit labels', async () => {
   const service = {
     nearby: jest.fn(async (category: string) => batch(category).items),
   };
@@ -114,11 +114,11 @@ test('shows all four driving rows, miles and unavailable exits without starting 
   expect(service.nearby).toHaveBeenCalledTimes(3);
   expect(text).toContain('NE');
   expect(text).toContain('Straight-line mi');
-  expect(text).toContain('Truck stop 1');
-  expect(text).toContain('Truck stop 2');
+  expect(text).toContain('Truck 1');
+  expect(text).toContain('Truck 2');
   expect(text).toContain('Weigh station');
   expect(text).toContain('Rest area');
-  expect(text).toContain('Exit —');
+  expect(text).not.toContain('Exit —');
   await act(async () => jest.advanceTimersByTime(10000));
   expect(service.nearby).toHaveBeenCalledTimes(3);
 });
@@ -153,5 +153,5 @@ test('inactive screen makes no search and short viewport collapses instead of co
       .map(node => node.props.children)
       .flat()
       .join(' '),
-  ).not.toContain('Truck stop 1');
+  ).not.toContain('Truck 1');
 });

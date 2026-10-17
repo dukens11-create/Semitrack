@@ -217,7 +217,7 @@ test('POI badges need fresh sourced ahead evidence and a real fresh fix; no samp
   expect(screen.toJSON()).toBeNull();
 });
 
-test('preview keeps the compact destination and shows LIMIT and MPH without a fake maneuver or speed limit', async () => {
+test('preview keeps the compact destination without live guidance instruments', async () => {
   jest.spyOn(Date, 'now').mockReturnValue(now);
   const destination = 'Reno Junction, California, United States';
   await act(async () => {
@@ -236,9 +236,9 @@ test('preview keeps the compact destination and shows LIMIT and MPH without a fa
   expect(text()).toContain(destination);
   expect(text()).toContain('Trimble estimate');
   expect(text()).toContain('Guidance has not started');
-  expect(text()).toContain('LIMIT');
-  expect(text()).toContain('MPH');
-  expect(text()).toContain('--');
+  expect(text()).not.toContain('LIMIT');
+  expect(text()).not.toContain('MPH');
+  expect(text()).not.toContain('--');
   expect(text()).toContain('39');
   expect(text()).not.toContain('375 ft');
   expect(text()).not.toContain('Provider speed limit');

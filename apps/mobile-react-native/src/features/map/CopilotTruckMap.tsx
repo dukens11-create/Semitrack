@@ -1,3 +1,4 @@
+import { EngineTruckProfile } from '../../components/EngineTruckProfile';
 import { DriverIcon } from '../../components/DriverIcon';
 import { DrivingNearbyOverlay } from '../navigation/DrivingNearbyOverlay';
 import type { PoiService } from '../poi/PoiService';
@@ -282,6 +283,7 @@ export function CopilotTruckMap({
               <DriverIcon name="satellite" size={26} color={palette.text} />
             </Pressable>
           )}
+          {moreControls && <EngineTruckProfile onEdit={onSettings} />}
           {moreControls && <CoPilotVoiceControls />}
           {moreControls && <CoPilotPlaces />}
           {moreControls && onSettings && (

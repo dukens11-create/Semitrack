@@ -157,7 +157,7 @@ test('More and route summary retain separate controls', async () => {
         route={route()}
         state={{ phase: 'idle' }}
         fix={null}
-        placement="dashboard"
+        placement="all"
         onMore={more}
         onReview={review}
       />,
@@ -252,7 +252,7 @@ test('preview exposes GPS speed and an estimated arrival without inventing guida
         route={route()}
         state={{ phase: 'idle' }}
         fix={fix}
-        placement="dashboard"
+        placement="all"
       />,
     );
   });

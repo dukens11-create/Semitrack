@@ -40,7 +40,7 @@ export function CoPilotVoiceControls() {
         .catch(() => {
           if (id === generation.current)
             setError(
-              'CoPilot voice unavailable. Close and retry when the engine is ready.',
+              'SemiTraX voice unavailable. Close and retry when the engine is ready.',
             );
         });
     };
@@ -87,7 +87,7 @@ export function CoPilotVoiceControls() {
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="CoPilot voice controls"
+        accessibilityLabel="SemiTraX voice controls"
         onPress={() => setOpen(true)}
         style={[styles.trigger, { backgroundColor: p.card }]}
       >
@@ -104,7 +104,7 @@ export function CoPilotVoiceControls() {
             accessibilityViewIsModal
             style={[styles.panel, { backgroundColor: p.card }]}
           >
-            <Text style={[styles.title, { color: p.text }]}>CoPilot voice</Text>
+            <Text style={[styles.title, { color: p.text }]}>SemiTraX voice</Text>
             <Text style={{ color: p.muted }}>
               {state
                 ? `${state.muted ? 'Muted' : 'Sound on'} · Volume ${Math.round(
@@ -152,8 +152,8 @@ export function CoPilotVoiceControls() {
               }}
             />
             <Text style={{ color: p.muted }}>
-              Volume adjusts CoPilot’s device audio stream. Spoken turns require
-              active CoPilot guidance.
+              Volume adjusts SemiTraX’s device audio stream. Spoken turns require
+              active SemiTraX guidance.
             </Text>
             {!!error && (
               <Text accessibilityRole="alert" style={{ color: p.danger }}>

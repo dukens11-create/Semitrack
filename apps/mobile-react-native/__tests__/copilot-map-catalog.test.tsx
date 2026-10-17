@@ -34,7 +34,7 @@ test('shows a visible dialog when the native download rejects', async () => {
   await act(async () => button('Refresh licensed and installed maps').props.onPress());
   await act(async () => button('Select: NORTH AMERICA Nevada').props.onPress());
   await act(async () => button('Download selected licensed maps').props.onPress());
-  expect(alert).toHaveBeenCalledWith('CoPilot map request failed', 'No active route allowed');
+  expect(alert).toHaveBeenCalledWith('SemiTraX map request failed', 'No active route allowed');
   expect(button('Download selected licensed maps').props.disabled).toBe(false);
   alert.mockRestore();
 });

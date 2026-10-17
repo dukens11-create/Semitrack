@@ -1701,7 +1701,7 @@ test('More opens the existing offline display-map screen without implying offlin
     screen = create(<DriverShell services={services} open={open} />);
   });
   await press('More');
-  expect(content()).toContain('Offline truck routing requires CoPilot');
+  expect(content()).toContain('Offline truck routing requires SemiTraX');
   await press('Offline maps');
   expect(open).toHaveBeenCalledWith('Offline');
 });
@@ -2019,7 +2019,7 @@ test('native onboarding clears planning overlays and restores them after readine
 });
 
 
-test('CoPilot search and trip screens hide SemiTraX overlays without remounting the map', async () => {
+test('SemiTraX search and trip screens hide SemiTraX overlays without remounting the map', async () => {
   const { services } = setup();
   await act(async () => { screen = create(<PlanningScreen services={services} />); });
   const map = screen.root.findByType(CopilotTruckMap);
@@ -2034,7 +2034,7 @@ test('CoPilot search and trip screens hide SemiTraX overlays without remounting 
   expect(map.props.settingsOpen).toBe(false);
 });
 
-test('native CoPilot screen waits for onboarding and offers retry after control failure', async () => {
+test('native SemiTraX screen waits for onboarding and offers retry after control failure', async () => {
   const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
   mockCopilotState.readyToAddStops = false;
   try {
@@ -2043,20 +2043,20 @@ test('native CoPilot screen waits for onboarding and offers retry after control 
     mockCoPilotHost.mapCommand.mockRejectedValueOnce(new Error('unavailable'));
     mockCopilotState.readyToAddStops = true;
     await act(async () => screen.update(<CoPilotNavigationScreen />));
-    expect(content()).toContain('CoPilot controls could not open');
-    await press('Retry CoPilot controls');
-    expect(content()).not.toContain('CoPilot controls could not open');
+    expect(content()).toContain('SemiTraX controls could not open');
+    await press('Retry SemiTraX controls');
+    expect(content()).not.toContain('SemiTraX controls could not open');
     expect(mockCoPilotHost.mapCommand).toHaveBeenCalledTimes(2);
   } finally {
     mockCopilotState.readyToAddStops = true;
   }
 });
 
-test('native map uses CoPilot menu without duplicate SemiTraX controls', async () => {
+test('native map uses SemiTraX menu without duplicate SemiTraX controls', async () => {
   const { services } = setup();
   const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
   await act(async () => { screen = create(<CoPilotNavigationScreen services={services} active />); });
-  for (const title of ['CoPilot tools', 'CoPilot menu', 'Trip plan', 'CoPilot settings', 'Return to map']) {
+  for (const title of ['SemiTraX tools', 'SemiTraX menu', 'Trip plan', 'SemiTraX settings', 'Return to map']) {
     expect(screen.root.findAllByProps({accessibilityLabel: title})).toHaveLength(0);
     expect(content()).not.toContain(title);
   }

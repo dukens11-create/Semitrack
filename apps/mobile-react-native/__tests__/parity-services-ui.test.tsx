@@ -131,7 +131,7 @@ test('ELD unconfigured provider errors remain visible and do not claim successfu
   expect(content()).toContain('not configured');
   expect(content()).not.toContain('Remaining drive:');
 });
-test('offline maps use CoPilot inventory and preserve existing Mapbox packs', async () => {
+test('offline maps use SemiTraX inventory and preserve existing Mapbox packs', async () => {
   mockCopilotState.mapsReady = true;
   mockCopilotState.maps.installed = [
     {
@@ -167,20 +167,20 @@ test('offline setup retains assigned Device ID capitalization and does not claim
   await act(async () => {
     screen.root
       .findAllByType(TextInput)
-      .find(n => n.props.accessibilityLabel === 'CoPilot Company ID')!
+      .find(n => n.props.accessibilityLabel === 'SemiTraX Company ID')!
       .props.onChangeText('Company-Fixture');
     screen.root
       .findAllByType(TextInput)
-      .find(n => n.props.accessibilityLabel === 'CoPilot Device ID')!
+      .find(n => n.props.accessibilityLabel === 'SemiTraX Device ID')!
       .props.onChangeText('Phone-FIXTURE-01');
   });
-  await press('Save CoPilot device setup');
+  await press('Save SemiTraX device setup');
   expect(mockSetup.configure).toHaveBeenCalledWith(
     'Company-Fixture',
     'Phone-FIXTURE-01',
   );
   expect(content()).toContain('installation has not been verified');
   expect(Mapbox.offlineManager.createPack).not.toHaveBeenCalled();
-  await press('Retry saved CoPilot setup');
+  await press('Retry saved SemiTraX setup');
   expect(mockSetup.retry).toHaveBeenCalledTimes(1);
 });

@@ -335,7 +335,7 @@ test('shutdown invalidates readiness and subscription cleanup prevents later upd
   h.lifecycle.dispose();
   expect(h.callbacks.size).toBe(0);
 });
-test('native startup event after shutdown cannot silently reactivate CoPilot', async () => {
+test('native startup event after shutdown cannot silently reactivate SemiTraX', async () => {
   const h = harness();
   await h.lifecycle.start();
   await h.event('onCPStartup');

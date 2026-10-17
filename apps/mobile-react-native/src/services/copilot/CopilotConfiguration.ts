@@ -41,7 +41,7 @@ export class CopilotP0Error extends Error {
     super(
       code === 'TRUCK_RESTRICTIONS_UNREPRESENTABLE'
         ? 'Truck guidance is unavailable because required truck restrictions are unsupported.'
-        : 'CoPilot setup or navigation prerequisites could not be verified.',
+        : 'SemiTraX setup or navigation prerequisites could not be verified.',
     );
     Object.defineProperty(this, 'cause', { value: cause, enumerable: false });
     this.name = 'CopilotP0Error';

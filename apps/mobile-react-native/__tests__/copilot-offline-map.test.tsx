@@ -7,7 +7,7 @@ import {
   type CopilotState,
 } from '../src/services/copilot/CopilotLifecycle';
 
-const mockNativeMap = jest.fn(() => <Text>Actual CoPilot renderer</Text>);
+const mockNativeMap = jest.fn(() => <Text>Actual SemiTraX renderer</Text>);
 jest.mock('react-native/Libraries/ReactNative/requireNativeComponent', () => ({
   __esModule: true,
   default: () => mockNativeMap,

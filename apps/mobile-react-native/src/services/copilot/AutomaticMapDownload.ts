@@ -48,7 +48,7 @@ export class AutomaticMapDownload {
           progress === 'DOWNLOADING'
             ? 'Downloading offline map… Keep SemiTraX open.'
             : progress === 'SUCCEEDED'
-            ? 'Map downloaded. Waiting for CoPilot to install it. Keep SemiTraX open.'
+            ? 'Map downloaded. Waiting for SemiTraX to install it. Keep SemiTraX open.'
             : progress === 'INSTALLATION_STARTED'
             ? 'Installing offline map… Keep SemiTraX open.'
             : 'Installation finished. Verifying the licensed map inventory…',
@@ -99,8 +99,8 @@ export class AutomaticMapDownload {
         ) {
           this.report(
             response === 'FAILURE_MANAGER_BUSY'
-              ? 'CoPilot download manager is busy (FAILURE_MANAGER_BUSY). Retrying automatically.'
-              : 'CoPilot rejected the download connection (FAILURE_INVALID_CONNECTION). Retrying automatically.',
+              ? 'SemiTraX download manager is busy (FAILURE_MANAGER_BUSY). Retrying automatically.'
+              : 'SemiTraX rejected the download connection (FAILURE_INVALID_CONNECTION). Retrying automatically.',
           );
         } else {
           this.report(

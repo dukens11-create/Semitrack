@@ -1,3 +1,4 @@
+import { testCoPilotVoice } from './CoPilotVoice';
 import React, {
   createContext,
   useCallback,
@@ -24,6 +25,12 @@ export const useCopilotState = () => useContext(StateContext);
 export const useCopilotSetup = () => useContext(SetupContext);
 export function CopilotProvider({ children }: React.PropsWithChildren) {
   const [state, setState] = useState(initialCopilotState);
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (!state.copilotReady || greeted.current || AppState.currentState !== 'active') return;
+    greeted.current = true;
+    void testCoPilotVoice().catch(() => {});
+  }, [state.copilotReady]);
   const [downloadStatus, setDownloadStatus] = useState('');
   const [cellularAllowed, setCellularAllowed] = useState(false);
   const cellular = useRef(false);
@@ -110,7 +117,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     await next.start();
     const result = next.snapshot();
     if (!result.initialized) {
-      throw new Error('CoPilot startup did not complete.');
+      throw new Error('SemiTraX startup did not complete.');
     }
   }, [synchronize]);
   const retrySaved = useCallback(async () => {
@@ -119,7 +126,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       (await location.permissionStatus()) !== 'granted' &&
       (await location.permission(false)) !== 'granted'
     )
-      throw new Error('Precise location is required for CoPilot startup.');
+      throw new Error('Precise location is required for SemiTraX startup.');
     await retry();
   }, [retry]);
   const configure = useCallback(
@@ -129,7 +136,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
         (await location.permissionStatus()) !== 'granted' &&
         (await location.permission(false)) !== 'granted'
       )
-        throw new Error('Precise location is required for CoPilot startup.');
+        throw new Error('Precise location is required for SemiTraX startup.');
       // Invoked by explicit setup action; native storage never returns the IDs.
       await coPilotHost().configureDevice(
         company.trim(),

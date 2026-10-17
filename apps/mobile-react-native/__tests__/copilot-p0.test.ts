@@ -206,7 +206,7 @@ test('every SemiTraX truck field has an explicit classification', () => {
     Object.keys({ ...truck, createOperationId: undefined }).sort(),
   );
 });
-test('create-operation identity is metadata, never a CoPilot routing field', () => {
+test('create-operation identity is metadata, never a SemiTraX routing field', () => {
   expect(copilotTruckFieldMatrix.createOperationId.routing).toBe(false);
 });
 

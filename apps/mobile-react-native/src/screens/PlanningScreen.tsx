@@ -1,3 +1,4 @@
+import { PlaceLiveDetails } from '../features/poi/PlaceLiveDetails';
 import { navigationPresentation } from '../features/navigation/navigationPresentation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
@@ -572,7 +573,7 @@ export function PlanningScreen({
       await coPilotHost().mapCommand('settings');
       setNativeSettingsOpen(true);
     } catch {
-      setError('CoPilot settings are unavailable until map setup is complete.');
+      setError('SemiTraX settings are unavailable until map setup is complete.');
     }
   }
   async function closeCoPilotSettings() {
@@ -580,7 +581,7 @@ export function PlanningScreen({
       await coPilotHost().mapCommand('map');
       setNativeSettingsOpen(false);
     } catch {
-      Alert.alert('CoPilot map', 'The map could not reopen. Please try again.');
+      Alert.alert('SemiTraX map', 'The map could not reopen. Please try again.');
     }
   }
   const closeNativeSettings = useRef(closeCoPilotSettings);
@@ -600,7 +601,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
-      setError('Satellite imagery is unavailable on the CoPilot offline map.');
+      setError('Satellite imagery is unavailable on the SemiTraX offline map.');
       closeSheet();
       return;
     }
@@ -621,7 +622,7 @@ export function PlanningScreen({
       if (navigationSession || startingNavigation) {
         Alert.alert(
           'Live rerouting unavailable',
-          'Live truck-safe rerouting requires the licensed CoPilot rerouting integration. Your current route is retained. End navigation to review a new Trimble route from your current location.',
+          'Live truck-safe rerouting requires the licensed SemiTraX rerouting integration. Your current route is retained. End navigation to review a new Trimble route from your current location.',
         );
         return;
       }
@@ -837,7 +838,7 @@ export function PlanningScreen({
             setSheet('search');
             void searchStore.reverse(point);
           }}
-          onSatellite={() => Alert.alert('Satellite map', 'Satellite imagery is not connected to this CoPilot offline map.')}
+          onSatellite={() => Alert.alert('Satellite map', 'Satellite imagery is not connected to this SemiTraX offline map.')}
           onPoi={poi => {
             setSelectedMapPoi(poi);
             setDetail({
@@ -1525,6 +1526,9 @@ export function PlanningScreen({
                   {poiDetails(selectedMapPoi?.id === detail.id ? selectedMapPoi : pois.find(poi => poi.id === detail.id)!)}
                 </DriverCopy>
               )}
+              {selectedMapPoi?.id === detail.id && (
+                <PlaceLiveDetails poi={selectedMapPoi} service={services.poi} route={routes.route} fix={location.fix} />
+              )}
               <DriverCopy>
                 Confirm the destination and truck access before departure.
               </DriverCopy>
@@ -1668,7 +1672,7 @@ export function PlanningScreen({
           />
           <DriverCopy>
             Start Navigation stays available even before provisioning. If the
-            licensed CoPilot runtime or maps are unavailable, SemiTraX will fail
+            licensed SemiTraX runtime or maps are unavailable, SemiTraX will fail
             closed and keep this route in preview mode instead of starting fake
             or passenger-car guidance.
           </DriverCopy>

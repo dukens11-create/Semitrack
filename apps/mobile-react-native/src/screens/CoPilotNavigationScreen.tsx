@@ -111,7 +111,7 @@ export function CoPilotNavigationScreen({
       {allowed && active && (
         <View
           style={styles.telemetry}
-          accessibilityLabel="Live CoPilot driving information"
+          accessibilityLabel="Live SemiTraX driving information"
         >
           <View>
             <Text style={styles.metricLabel}>SPEED</Text>
@@ -138,10 +138,10 @@ export function CoPilotNavigationScreen({
       {error && (
         <View accessibilityRole="alert">
           <DriverCopy>
-            CoPilot controls could not open. Retry or check setup in Details.
+            SemiTraX controls could not open. Retry or check setup in Details.
           </DriverCopy>
           <DriverButton
-            title="Retry CoPilot controls"
+            title="Retry SemiTraX controls"
             onPress={() => {
               prepared.current = false;
               setRetry(value => value + 1);

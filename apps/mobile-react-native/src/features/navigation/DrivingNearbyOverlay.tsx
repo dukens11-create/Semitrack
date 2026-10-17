@@ -124,7 +124,7 @@ export function DrivingNearbyOverlay({
   if (!active) return null;
   const heading = drivingHeading(fix, now);
   const rows = visibleNearby(cache, fix, now);
-  const compact = availableHeight < 266;
+  const compact = availableHeight < 290;
   const minimized = collapsed || availableHeight < 158;
   return (
     <View
@@ -132,7 +132,7 @@ export function DrivingNearbyOverlay({
       style={[
         styles.panel,
         compact ? styles.wide : styles.narrow,
-        { backgroundColor: p.card, borderColor: p.border },
+        { borderColor: p.border },
       ]}
     >
       <Pressable
@@ -144,7 +144,7 @@ export function DrivingNearbyOverlay({
         }
         accessibilityState={{ expanded: !minimized }}
         onPress={() => setCollapsed(value => !value)}
-        style={styles.header}
+        style={[styles.header, { backgroundColor: p.card }]}
       >
         <View
           accessibilityLabel={
@@ -171,7 +171,7 @@ export function DrivingNearbyOverlay({
         </View>
         <View style={styles.headerCopy}>
           <Text style={[styles.heading, { color: p.text }]}>
-            {heading?.label ?? '—'} · Nearby
+            {heading?.label ?? 'Nearby'}
           </Text>
           <Text style={[styles.caption, { color: p.muted }]}>
             Straight-line mi
@@ -208,7 +208,7 @@ export function DrivingNearbyOverlay({
                 style={[
                   styles.row,
                   compact && styles.gridCell,
-                  { borderTopColor: p.border },
+                  { backgroundColor: p.card, borderColor: p.border },
                 ]}
               >
                 <DriverIcon
@@ -223,22 +223,18 @@ export function DrivingNearbyOverlay({
                     style={[styles.label, { color: p.muted }]}
                     numberOfLines={1}
                   >
-                    {label}
-                  </Text>
-                  <Text
-                    style={[styles.name, { color: p.text }]}
-                    numberOfLines={1}
-                  >
-                    {row.poi?.name ?? row.status}
+                    {row.category === 'truck_stop'
+                      ? `Truck ${row.slot + 1}`
+                      : label}
                   </Text>
                   <Text
                     style={[styles.distance, { color: p.text }]}
                     numberOfLines={1}
                   >
                     {row.miles === undefined
-                      ? '— mi'
+                      ? '—'
                       : `${row.miles.toFixed(1)} mi`}
-                    {exits ? `  ·  Exit ${exit ?? '—'}` : ''}
+                    {exits && exit ? ` · Exit ${exit}` : ''}
                   </Text>
                 </View>
               </Pressable>
@@ -250,15 +246,16 @@ export function DrivingNearbyOverlay({
   );
 }
 const styles = StyleSheet.create({
-  panel: { borderRadius: 14, borderWidth: 1, overflow: 'hidden', elevation: 3 },
-  narrow: { width: 174 },
-  wide: { width: 280, maxWidth: '100%' },
+  panel: { gap: 6 },
+  narrow: { width: 112 },
+  wide: { width: 230, maxWidth: '100%' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 8,
-    minHeight: 42,
+    minHeight: 44,
+    borderRadius: 12,
   },
   headerCopy: { flex: 1 },
   heading: { fontSize: 12, fontWeight: '800' },
@@ -272,19 +269,21 @@ const styles = StyleSheet.create({
   },
   north: { fontSize: 8, color: '#E45438', lineHeight: 10, fontWeight: '800' },
   needle: { fontSize: 19, lineHeight: 20, fontWeight: '800' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  gridCell: { width: '50%' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  gridCell: { width: 112 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    minHeight: 54,
+    minHeight: 48,
+    marginBottom: 6,
+    borderRadius: 10,
     paddingHorizontal: 7,
     paddingVertical: 3,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   copy: { flex: 1 },
   label: { fontSize: 10, lineHeight: 12 },
   name: { fontSize: 12, lineHeight: 15, fontWeight: '600' },
-  distance: { fontSize: 14, lineHeight: 17, fontWeight: '800' },
+  distance: { fontSize: 18, lineHeight: 23, fontWeight: '800' },
 });

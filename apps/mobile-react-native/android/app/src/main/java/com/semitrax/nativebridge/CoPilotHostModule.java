@@ -303,7 +303,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         // before publishing startup or allowing JS to schedule any map download.
         try { CopilotMgr.allowCellularDataForMapDownloads(false); }
         catch (Exception e) { rejectWaiters("COPILOT_MAP_POLICY_FAILED"); release(); return; }
-        // Map/preview integration does not authorize restored or new live guidance.
+        // Keep startup suspended until the verified native CoPilot screen is opened.
         try {
           if (context.getLifecycleState() != LifecycleState.RESUMED ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
@@ -955,6 +955,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         MapDrawer drawer = UIMgr.getMapDrawer();
         switch (command) {
           case "native-map":
+            // Opening the native navigation screen hands control to CoPilot.
+            // Merely enabling GPS does not undo startup suspension.
+            if (context.getLifecycleState() != LifecycleState.RESUMED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+              throw new IllegalStateException("VISIBLE_PRECISE_LOCATION_REQUIRED");
+            CopilotMgr.enableGPS();
+            GuidanceMgr.suspendNavigation(false);
+            drawer.lockToChevron();
             GuidanceSettings.setSpeedLimitOnMap(true);
             drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
             UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);

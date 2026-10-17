@@ -54,6 +54,8 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  hasEngineTrip?(): Promise<boolean>;
+  resumeEngineTrip?(): Promise<void>;
   reviewEngineTripProfile?(): Promise<unknown>;
   openEngineTrip?(
     ticket: string,

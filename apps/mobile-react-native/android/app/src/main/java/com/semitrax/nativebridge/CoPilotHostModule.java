@@ -961,6 +961,32 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     return value;
   }
 
+  @ReactMethod public void hasEngineTrip(Promise promise) {
+    main.post(() -> {
+      try { requireMap(); promise.resolve(RouteMgr.hasDestination()); }
+      catch (Exception e) { promise.reject("ENGINE_TRIP_UNAVAILABLE", "Engine trip status unavailable."); }
+    });
+  }
+  @ReactMethod public void resumeEngineTrip(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        if (tripPreparing || !RouteMgr.hasDestination() ||
+            RouteMgr.getActiveVehicleRoutingProfile().getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY ||
+            context.getLifecycleState() != LifecycleState.RESUMED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+          throw new IllegalStateException("A saved heavy-duty truck trip and precise location permission are required.");
+        UIMgr.getMapDrawer().clearDashedLine();
+        if (markerSet != null) UIMgr.getMapDrawer().removeImageSet(markerSet);
+        UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
+        UIMgr.getMapDrawer().lockToChevron();
+        CopilotMgr.enableGPS();
+        GuidanceMgr.suspendNavigation(false);
+        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+        promise.resolve(null);
+      } catch (Exception e) { promise.reject("ENGINE_TRIP_UNAVAILABLE", e.getMessage()); }
+    });
+  }
   @ReactMethod public void reviewEngineTripProfile(Promise promise) {
     main.post(() -> {
       try {

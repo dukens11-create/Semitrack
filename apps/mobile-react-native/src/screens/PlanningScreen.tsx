@@ -104,10 +104,25 @@ export function PlanningScreen({
   const copilot = useCopilotState();
   const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
   const [engineTripOpen, setEngineTripOpen] = useState(false);
+  const [savedEngineTrip, setSavedEngineTrip] = useState(false);
   const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
 
   // Native onboarding (including the EULA) needs an unobstructed viewport.
   const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
+  useEffect(() => {
+    if (!active || !copilot.readyToAddStops || engineTripOpen) return;
+    let current = true;
+    const check = () => {
+      try {
+        void coPilotHost().hasEngineTrip?.().then(value => {
+          if (current) setSavedEngineTrip(value === true);
+        }).catch(() => { if (current) setSavedEngineTrip(false); });
+      } catch { setSavedEngineTrip(false); }
+    };
+    check();
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') check(); });
+    return () => { current = false; sub.remove(); };
+  }, [active, copilot.readyToAddStops, engineTripOpen]);
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
   );
@@ -376,14 +391,14 @@ export function PlanningScreen({
       const tripHost = host;
       origin(); // Require a fresh app GPS fix before offering the handoff.
       const reviewed = engineTripProfileSchema.parse(await host.reviewEngineTripProfile());
-      if (services.routes.getSnapshot().route !== current.route) return;
+      if (services.routes.getSnapshot().route !== current.route || services.routes.getSnapshot().plan !== current.plan) return;
       Alert.alert('SemiTraX truck navigation',
         `${engineTripProfileSummary(reviewed)}\n\nUse this engine profile, including its hazmat and routing preferences, for this trip. Saved planner truck settings are separate. The engine will calculate the route; review it and tap Go.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Review settings', onPress: () => { void openCoPilotSettings(); } },
           { text: 'Use this profile', onPress: () => { void run(async () => {
-            if (services.routes.getSnapshot().route !== current.route || AppState.currentState !== 'active') return;
+            if (services.routes.getSnapshot().route !== current.route || services.routes.getSnapshot().plan !== current.plan || AppState.currentState !== 'active') return;
             const points = engineTripLocations(origin(), current.plan!);
             closeSheet();
             setEngineTripOpen(true);
@@ -614,6 +629,7 @@ export function PlanningScreen({
         if (!host.returnFromEngineTrip) throw new Error('Engine trip controls unavailable.');
         await host.returnFromEngineTrip();
         setEngineTripOpen(false);
+        setSavedEngineTrip(false);
       } else await coPilotHost().mapCommand('map');
       setNativeSettingsOpen(false);
     } catch (e) {
@@ -894,6 +910,15 @@ export function PlanningScreen({
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
+        {savedEngineTrip && <DriverButton title="Resume engine trip" onPress={() => { void run(async () => {
+          const host = coPilotHost();
+          if (!host.resumeEngineTrip) throw new Error('Engine trip controls unavailable.');
+          closeSheet();
+          setEngineTripOpen(true);
+          setNativeSettingsOpen(true);
+          try { await host.resumeEngineTrip(); }
+          catch (e) { Alert.alert('SemiTraX trip', errorMessage(e)); }
+        }); }} />}
         {routes.route ? (
           <View
             style={[

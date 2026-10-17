@@ -2098,3 +2098,20 @@ test('engine handoff reviews its truck, preserves stop order and keeps native co
     alert.mockRestore(); AppState.currentState = priorState;
   }
 });
+
+test('a retained engine trip can reopen without a planner route or a second stop transfer', async () => {
+  const native = mockCoPilotHost as typeof mockCoPilotHost & Partial<import('../src/services/copilot/CoPilotHost').CoPilotHost>;
+  native.hasEngineTrip = jest.fn().mockResolvedValue(true);
+  native.resumeEngineTrip = jest.fn().mockResolvedValue(undefined);
+  native.openEngineTrip = jest.fn();
+  try {
+    const { services } = setup();
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Resume engine trip');
+    expect(native.resumeEngineTrip).toHaveBeenCalledTimes(1);
+    expect(native.openEngineTrip).not.toHaveBeenCalled();
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+  } finally {
+    delete native.hasEngineTrip; delete native.resumeEngineTrip; delete native.openEngineTrip;
+  }
+});

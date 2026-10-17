@@ -1,3 +1,5 @@
+import { DrivingNearbyOverlay } from '../navigation/DrivingNearbyOverlay';
+import type { PoiService } from '../poi/PoiService';
 import { CoPilotPlaces } from '../../components/CoPilotPlaces';
 import { CoPilotVoiceControls } from '../../components/CoPilotVoiceControls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -23,6 +25,8 @@ import { useCopilotState } from '../../services/copilot/CopilotProvider';
 import { coPilotHost } from '../../services/copilot/CoPilotHost';
 import { routeDisplayProgress } from '../navigation/routeDisplayProgress';
 export interface CopilotMapProps {
+  nearbyService?: Pick<PoiService, 'nearby'>;
+  active?: boolean;
   command?: { type: 'overview' | 'recenter'; id: number };
   route: TruckRoute | null;
   plan: StopPlan | null;
@@ -40,6 +44,9 @@ export interface CopilotMapProps {
 let nextMarkerId = 1;
 /** Backend geometry is a dashed planning overlay, never a native guidance route. */
 export function CopilotTruckMap({
+  nearbyService,
+  active: screenActive = true,
+  fix,
   command,
   route,
   plan,
@@ -53,6 +60,7 @@ export function CopilotTruckMap({
   settingsOpen = false,
   onSettings,
 }: CopilotMapProps) {
+  const [mapHeight, setMapHeight] = useState(0);
   const state = useCopilotState();
   const palette = useDriverPalette();
   const allowed = copilotMapBlocker(state) === null;
@@ -232,7 +240,10 @@ export function CopilotTruckMap({
     void currentControl.current(command.type);
   }, [allowed, appearanceReady, command, settingsOpen]);
   return (
-    <View style={styles.screen}>
+    <View
+      style={styles.screen}
+      onLayout={event => setMapHeight(event.nativeEvent.layout.height)}
+    >
       {allowed && !appearanceReady ? (
         <View style={[styles.pending, { backgroundColor: palette.canvas }]}>
           <Text style={{ color: palette.text }}>
@@ -306,6 +317,33 @@ export function CopilotTruckMap({
           </Pressable>
         </ScrollView>
       )}
+      {nearbyService &&
+        allowed &&
+        appearanceReady &&
+        state.readyToAddStops &&
+        !settingsOpen && (
+          <View
+            pointerEvents="box-none"
+            style={[
+              styles.nearby,
+              {
+                top: topInset,
+                maxHeight: Math.max(
+                  42,
+                  mapHeight - topInset - bottomInset - 12,
+                ),
+              },
+            ]}
+          >
+            <DrivingNearbyOverlay
+              service={nearbyService}
+              fix={fix}
+              active={screenActive}
+              availableHeight={mapHeight - topInset - bottomInset - 12}
+              onSelect={onPoi}
+            />
+          </View>
+        )}
       {!!error && (
         <View
           style={[
@@ -322,6 +360,12 @@ export function CopilotTruckMap({
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  nearby: {
+    position: 'absolute',
+    left: 10,
+    right: 72,
+    alignItems: 'flex-start',
+  },
   pending: {
     flex: 1,
     alignItems: 'center',

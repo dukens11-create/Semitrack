@@ -422,10 +422,15 @@ export class CopilotLifecycle {
     }
   }
   /** Explicit inventory query; never synthesizes an SDK startup/download event. */
-  async recheck(): Promise<void> {
+  async recheck(preserveVerifiedMap = false): Promise<void> {
     if (!this.active || this.startupRejected || !this.state.initialized) return;
     const revision = ++this.revision;
-    this.publish({ mapsReady: false, readyToAddStops: false });
+    // A foreground check need not detach the already verified native renderer.
+    // Route permission is still suspended until the fresh checks finish.
+    this.publish({
+      mapsReady: preserveVerifiedMap && this.state.mapsReady,
+      readyToAddStops: false,
+    });
     this.queue = this.queue.then(() => this.refresh(revision));
     await this.queue;
   }

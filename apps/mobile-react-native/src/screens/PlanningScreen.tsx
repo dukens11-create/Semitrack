@@ -803,6 +803,8 @@ export function PlanningScreen({
       )}
       <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>
         <CopilotTruckMap
+          nearbyService={services.poi}
+          active={active && sheet === null}
           settingsOpen={nativeSettingsOpen}
           onSettings={() => { void openCoPilotSettings(); }}
           command={mapCommand}

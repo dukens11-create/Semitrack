@@ -147,7 +147,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       active.current = next === 'active';
       if (active.current) {
         if (latest.current.initialized)
-          void lifecycle.current?.recheck().then(synchronize);
+          void lifecycle.current?.recheck(true).then(synchronize);
         else void retry().catch(() => {});
       } else synchronize();
     });

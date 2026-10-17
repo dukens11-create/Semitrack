@@ -664,6 +664,62 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       } catch (Exception e) { promise.reject("COPILOT_INVENTORY_FAILED", "Installed-map verification is unavailable."); }
     });
   }
+  @ReactMethod public void licensedMapCatalog(Promise promise) {
+    main.post(() -> {
+      try {
+        requireIdentity();
+        if (!LicenseMgr.isLicensingReady()) throw new IllegalStateException();
+        WritableArray catalog = Arguments.createArray();
+        List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
+        if (licensed != null) for (MapRegion region : licensed) {
+          WritableMap row = Arguments.createMap();
+          row.putString("name", region.name());
+          boolean present = false;
+          for (MapInfo map : installed()) if (map.getRegion() == region) present = true;
+          row.putBoolean("installed", present);
+          catalog.pushMap(row);
+        }
+        promise.resolve(catalog);
+      } catch (Exception e) { promise.reject("COPILOT_CATALOG_FAILED", "Licensed map catalog is unavailable. Retry device setup."); }
+    });
+  }
+  private final java.util.concurrent.atomic.AtomicBoolean catalogRequest = new java.util.concurrent.atomic.AtomicBoolean(false);
+  @ReactMethod public void downloadLicensedRegions(ReadableArray names, boolean cellular, Promise promise) {
+    main.post(() -> {
+      try {
+        requireIdentity();
+        if (context.getLifecycleState() != LifecycleState.RESUMED || RouteMgr.hasDestination())
+          throw new IllegalStateException("Stop navigation before downloading maps.");
+        if (!LicenseMgr.isLicensingReady() || !feature(LicenseFeature.FULL_NAVIGATION) || !feature(LicenseFeature.TRUCK_HEAVY_DUTY))
+          throw new IllegalStateException();
+        List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
+        ArrayList<MapRegion> requested = new ArrayList<>();
+        for (int i = 0; i < names.size(); i++) {
+          MapRegion target = MapRegion.valueOf(names.getString(i));
+          if (licensed == null || !licensed.contains(target)) throw new IllegalStateException();
+          boolean present = false;
+          for (MapInfo map : installed()) if (map.getRegion() == target) present = true;
+          if (!present && !requested.contains(target)) requested.add(target);
+        }
+        if (requested.isEmpty()) { promise.resolve("INSTALLED"); return; }
+        if (!catalogRequest.compareAndSet(false, true)) { promise.resolve("FAILURE_MANAGER_BUSY"); return; }
+        try {
+          CopilotMgr.allowCellularDataForMapDownloads(cellular);
+          UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+          // downloadMap performs a synchronous web request; keep it off the UI thread.
+          new Thread(() -> {
+            try {
+              // Never replace an existing transfer or delete installed maps.
+              MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
+              promise.resolve(response.name());
+            } catch (Exception e) {
+              promise.reject("COPILOT_DOWNLOAD_FAILED", "Map request failed. Check connection and storage.");
+            } finally { catalogRequest.set(false); }
+          }, "CoPilotMapCatalog").start();
+        } catch (Exception e) { catalogRequest.set(false); throw e; }
+      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_BLOCKED", "Map download requires licensed regions, verified setup and no active route."); }
+    });
+  }
   @ReactMethod public void downloadSelectedMap(Promise promise) {
     downloadSelectedMap(false, promise);
   }

@@ -125,7 +125,9 @@ export function CopilotTruckMap({
       .catch(() => {
         if (active) {
           setAppearanceReady(false);
-          setError('SemiTraX map appearance could not be applied. Retry setup.');
+          setError(
+            'SemiTraX map appearance could not be applied. Retry setup.',
+          );
         }
       });
     return () => {
@@ -269,19 +271,19 @@ export function CopilotTruckMap({
             accessibilityRole="button"
             accessibilityLabel="More map controls"
             accessibilityState={{ expanded: moreControls }}
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => setMoreControls(value => !value)}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>•••</Text>
+            <Text style={styles.symbol}>•••</Text>
           </Pressable>
           {onSatellite && (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Satellite map information — imagery not connected"
-              style={[styles.button, { backgroundColor: palette.card }]}
+              style={styles.button}
               onPress={onSatellite}
             >
-              <DriverIcon name="satellite" size={26} color={palette.text} />
+              <DriverIcon name="satellite" size={26} color="#FFFFFF" />
             </Pressable>
           )}
           {moreControls && <EngineTruckProfile onEdit={onSettings} />}
@@ -292,55 +294,53 @@ export function CopilotTruckMap({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="SemiTraX settings"
-              style={[styles.button, { backgroundColor: palette.card }]}
+              style={styles.button}
               onPress={onSettings}
             >
-              <Text style={[styles.symbol, { color: palette.text }]}>⚙</Text>
+              <Text style={styles.symbol}>⚙</Text>
             </Pressable>
           )}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Recenter / follow truck"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('recenter');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>◎</Text>
+            <Text style={styles.symbol}>◎</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Compass / north up"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={async () => {
               const next = !northUp;
               if (await control(next ? 'north-up' : 'heading-up'))
                 setNorthUp(next);
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>
-              {northUp ? 'N' : '↑'}
-            </Text>
+            <Text style={styles.symbol}>{northUp ? 'N' : '↑'}</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Zoom in"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('zoom-in');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>+</Text>
+            <Text style={styles.symbol}>+</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Zoom out"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('zoom-out');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>−</Text>
+            <Text style={styles.symbol}>−</Text>
           </Pressable>
         </ScrollView>
       )}
@@ -408,13 +408,16 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   button: {
+    backgroundColor: '#172433',
+    borderColor: '#425263',
+    borderWidth: 1,
     width: 48,
     minHeight: 48,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  symbol: { fontSize: 24, fontWeight: '700' },
+  symbol: { fontSize: 24, fontWeight: '700', color: '#FFFFFF' },
   error: {
     position: 'absolute',
     left: 12,

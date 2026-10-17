@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useDriverPalette } from '../../components/DriverUI';
 import { PoiCategoryPicture } from '../poi/PoiPresentation';
 import type { Poi, PoiService } from '../poi/PoiService';
 import type { LocationFix } from '../../services/location/LocationService';
@@ -27,7 +26,13 @@ export function DrivingNearbyOverlay({
   availableHeight: number;
   onSelect?: (poi: Poi) => void;
 }) {
-  const p = useDriverPalette();
+  const p = {
+    card: '#172433',
+    text: '#FFFFFF',
+    muted: '#C4CED8',
+    border: '#425263',
+    actionText: '#FF9877',
+  };
   const [cache, setCache] = useState<NearbyCache>({});
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState(false);

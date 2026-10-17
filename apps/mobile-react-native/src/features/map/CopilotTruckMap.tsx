@@ -1,3 +1,4 @@
+import { DriverIcon } from '../../components/DriverIcon';
 import { DrivingNearbyOverlay } from '../navigation/DrivingNearbyOverlay';
 import type { PoiService } from '../poi/PoiService';
 import { CoPilotPlaces } from '../../components/CoPilotPlaces';
@@ -40,6 +41,7 @@ export interface CopilotMapProps {
   bottomInset?: number;
   settingsOpen?: boolean;
   onSettings?: () => void;
+  onSatellite?: () => void;
 }
 let nextMarkerId = 1;
 /** Backend geometry is a dashed planning overlay, never a native guidance route. */
@@ -59,6 +61,7 @@ export function CopilotTruckMap({
   bottomInset = 0,
   settingsOpen = false,
   onSettings,
+  onSatellite,
 }: CopilotMapProps) {
   const [mapHeight, setMapHeight] = useState(0);
   const [moreControls, setMoreControls] = useState(false);
@@ -269,6 +272,16 @@ export function CopilotTruckMap({
           >
             <Text style={[styles.symbol, { color: palette.text }]}>•••</Text>
           </Pressable>
+          {onSatellite && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Satellite map information — imagery not connected"
+              style={[styles.button, { backgroundColor: palette.card }]}
+              onPress={onSatellite}
+            >
+              <DriverIcon name="satellite" size={26} color={palette.text} />
+            </Pressable>
+          )}
           {moreControls && <CoPilotVoiceControls />}
           {moreControls && <CoPilotPlaces />}
           {moreControls && onSettings && (

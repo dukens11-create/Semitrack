@@ -135,6 +135,7 @@ export function PlanningScreen({
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
+  const [selectedMapPoi, setSelectedMapPoi] = useState<import('../features/poi/PoiService').Poi | null>(null);
   const [plannedStart, setPlannedStart] = useState<Stop | null>(null);
   const [selectingStart, setSelectingStart] = useState(false);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
@@ -836,7 +837,9 @@ export function PlanningScreen({
             setSheet('search');
             void searchStore.reverse(point);
           }}
+          onSatellite={() => Alert.alert('Satellite map', 'Satellite imagery is not connected to this CoPilot offline map.')}
           onPoi={poi => {
+            setSelectedMapPoi(poi);
             setDetail({
               id: poi.id,
               name: poi.name,
@@ -1517,9 +1520,9 @@ export function PlanningScreen({
                 onPress={() => setDetail(null)}
               />
               <DriverTitle small>{detail.name}</DriverTitle>
-              {pois.find(poi => poi.id === detail.id) && (
+              {(selectedMapPoi?.id === detail.id || pois.find(poi => poi.id === detail.id)) && (
                 <DriverCopy>
-                  {poiDetails(pois.find(poi => poi.id === detail.id)!)}
+                  {poiDetails(selectedMapPoi?.id === detail.id ? selectedMapPoi : pois.find(poi => poi.id === detail.id)!)}
                 </DriverCopy>
               )}
               <DriverCopy>

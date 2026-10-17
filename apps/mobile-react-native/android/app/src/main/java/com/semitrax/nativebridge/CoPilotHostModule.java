@@ -867,6 +867,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
             UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
             break;
+          case "copilot-menu": UIMgr.showDialog(UIMgr.Dialog.DRIVING_MENU); break;
+          case "trip-plan": UIMgr.showDialog(UIMgr.Dialog.PREVIEW_TRIP_PLAN_DIALOG); break;
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
           case "recenter": drawer.lockToChevron(); break;

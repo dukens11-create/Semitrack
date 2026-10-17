@@ -41,8 +41,39 @@ export function CoPilotNavigationScreen({
       current = false;
     };
   }, [active, allowed, state.readyToAddStops, retry]);
+  async function open(command: string) {
+    if (!active || !allowed || !state.readyToAddStops) return;
+    try {
+      await coPilotHost().mapCommand(command);
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  }
   return (
     <View style={styles.screen}>
+      {allowed && state.readyToAddStops && (
+        <View style={styles.controls}>
+          {(
+            [
+              ['CoPilot menu', 'copilot-menu'],
+              ['Trip plan', 'trip-plan'],
+              ['CoPilot settings', 'settings'],
+              ['Return to map', 'map'],
+            ] as const
+          ).map(([title, command]) => (
+            <View key={command} style={styles.action}>
+              <DriverButton
+                title={title}
+                secondary
+                onPress={() => {
+                  void open(command);
+                }}
+              />
+            </View>
+          ))}
+        </View>
+      )}
       <CopilotOfflineMap state={state} />
       {error && (
         <View accessibilityRole="alert">
@@ -51,11 +82,18 @@ export function CoPilotNavigationScreen({
           </DriverCopy>
           <DriverButton
             title="Retry CoPilot controls"
-            onPress={() => setRetry(value => value + 1)}
+            onPress={() => {
+              prepared.current = false;
+              setRetry(value => value + 1);
+            }}
           />
         </View>
       )}
     </View>
   );
 }
-const styles = StyleSheet.create({ screen: { flex: 1 } });
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  controls: { flexDirection: 'row', flexWrap: 'wrap', padding: 4, gap: 4 },
+  action: { width: '49%' },
+});

@@ -2056,3 +2056,12 @@ test('native CoPilot screen waits for onboarding and offers retry after control 
     mockCopilotState.readyToAddStops = true;
   }
 });
+
+test('CoPilot entry buttons open native dialogs without submitting a custom route', async () => {
+  const { services } = setup();
+  await act(async () => { screen = create(<DriverShell services={services} open={jest.fn()} />); });
+  mockCoPilotHost.mapCommand.mockClear();
+  for (const title of ['CoPilot menu', 'Trip plan', 'CoPilot settings', 'Return to map']) await press(title);
+  expect(mockCoPilotHost.mapCommand.mock.calls.map(call => call[0])).toEqual(['copilot-menu', 'trip-plan', 'settings', 'map']);
+  expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
+});

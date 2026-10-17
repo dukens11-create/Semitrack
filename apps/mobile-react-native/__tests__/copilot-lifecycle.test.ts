@@ -680,3 +680,49 @@ test('route readiness retries stop at the limit without granting navigation', as
   expect(jest.getTimerCount()).toBe(0);
   h.lifecycle.dispose();
 });
+
+test('foreground refresh keeps verified map mounted but suspends route permission', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  h.changed.mockClear();
+  const refresh = h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    mapsReady: true,
+    readyToAddStops: false,
+    copilotReady: false,
+  });
+  await refresh;
+  expect(h.changed.mock.calls.every(([state]) => state.mapsReady)).toBe(true);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  h.lifecycle.dispose();
+});
+test('foreground refresh still blocks revoked licenses and missing maps', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  (h.port.licenseState as jest.Mock).mockResolvedValueOnce({
+    licensingReady: true,
+    fullNavigationLicensed: false,
+    heavyTruckLicensed: true,
+  });
+  await h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    copilotReady: false,
+    fullNavigationLicensed: false,
+    error: 'COPILOT_LICENSE_PROVISIONING_REQUIRED',
+  });
+  (h.port.mapState as jest.Mock).mockResolvedValueOnce({
+    licensed: [1],
+    installed: [],
+    mapsReady: false,
+    updateStatus: 'UNKNOWN',
+  });
+  await h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    copilotReady: false,
+    mapsReady: false,
+    error: 'COPILOT_MAP_DATA_REQUIRED',
+  });
+  h.lifecycle.dispose();
+});

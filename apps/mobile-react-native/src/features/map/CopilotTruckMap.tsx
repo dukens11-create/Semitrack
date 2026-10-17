@@ -152,6 +152,17 @@ export function CopilotTruckMap({
     let active = true;
     void coPilotHost()
       .drawRoutePreview(geometry)
+      .then(async () => {
+        if (!active || geometry.length < 2) return;
+        const longs = geometry.map(point => point[0]);
+        const lats = geometry.map(point => point[1]);
+        await coPilotHost().mapFrame(
+          Math.min(...longs),
+          Math.min(...lats),
+          Math.max(...longs),
+          Math.max(...lats),
+        );
+      })
       .catch(() => {
         if (active)
           setError(

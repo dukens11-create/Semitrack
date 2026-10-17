@@ -997,6 +997,20 @@ export function PlanningScreen({
                 !navigationSession ? () => setSheet('route') : undefined
               }
             />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Review route truck profile"
+              onPress={onTrucks}
+              style={[styles.truckChip, { backgroundColor: palette.card }]}
+            >
+              <DriverIcon name="local_shipping_rounded" size={18} />
+              <Text style={[styles.chipText, { color: palette.text }]} numberOfLines={2}>
+                {trucks.selected
+                  ? `${trucks.selected.name} · ${trucks.selected.heightFt} ft H · ${trucks.selected.lengthFt} ft L · ${trucks.selected.weightLbs.toLocaleString()} lb`
+                  : 'Truck profile required'}
+                {navigationSession ? ' · Review restrictions' : ' · Planning profile'}
+              </Text>
+            </Pressable>
             {!navigationSession && routes.plan && (
               <View style={styles.routeActions}>
                 <View style={ds.grow}>

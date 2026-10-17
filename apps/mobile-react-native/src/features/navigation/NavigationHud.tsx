@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { DriverIcon } from '../../components/DriverIcon';
 import { useDriverPalette } from '../../components/DriverUI';
+import { useCoPilotGuidance } from '../../services/copilot/useCoPilotGuidance';
+import { guidancePresentation } from '../../services/copilot/CoPilotGuidance';
 import { LaneGuidance } from './LaneGuidance';
 import { routeDisplayProgress } from './routeDisplayProgress';
 import type { TruckRoute } from '../../models/contracts';
@@ -42,6 +44,10 @@ export function NavigationHud({
   onReview?: () => void;
 }) {
   const palette = useDriverPalette();
+  const { sample, now } = useCoPilotGuidance(
+    !!route && placement !== 'maneuver',
+  );
+  const telemetry = guidancePresentation(sample, now);
   const [, tick] = useState(0);
   useEffect(() => {
     if (!route) return;
@@ -79,14 +85,20 @@ export function NavigationHud({
           timeZoneName: 'short',
         })
       : undefined;
+  const speedMps =
+    data.speedMps ??
+    (telemetry.speedMph === undefined
+      ? undefined
+      : telemetry.speedMph / 2.236936);
+  const limitMph = g?.speedLimitMph ?? telemetry.truckSpeedLimitMph;
   const speed =
-    data.speedMps === undefined
+    speedMps === undefined
       ? '--'
-      : String(Math.round(data.speedMps * (metric ? 3.6 : 2.236936)));
+      : String(Math.round(speedMps * (metric ? 3.6 : 2.236936)));
   const limit =
-    g?.speedLimitMph === undefined
+    limitMph === undefined
       ? '--'
-      : String(Math.round(g.speedLimitMph * (metric ? 1.609344 : 1)));
+      : String(Math.round(limitMph * (metric ? 1.609344 : 1)));
   const road = g?.currentRoad;
   const shield =
     /^(?:I[- ]|Interstate\s+)(\d+)\b/i.exec(g?.highway ?? road ?? '') ??
@@ -241,7 +253,10 @@ export function NavigationHud({
           ]}
         >
           {preview
-            ? 'Planning estimate · Trimble'
+            ? 'Planning estimate · Trimble · ETA ' +
+              new Date(
+                Date.now() + route.durationSeconds * 1000,
+              ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
             : eta
             ? eta + ' · arrival'
             : data.mode === 'arrived'
@@ -292,20 +307,27 @@ export function NavigationHud({
           )}
         </>
       )}
-      {!preview && (placement === 'all' || placement === 'dashboard') && (
+      {(placement === 'all' || placement === 'dashboard') && (
         <View style={styles.instruments}>
           <View
             style={[styles.speedCard, palette.dark && styles.nightSpeedCard]}
           >
             <View style={styles.limit}>
               <Text style={styles.limitNumber}>{limit}</Text>
-              <Text style={styles.limitLabel}>LIMIT</Text>
+              <Text style={styles.limitLabel}>
+                {g?.speedLimitMph === undefined ? 'TRUCK LIMIT' : 'LIMIT'}
+              </Text>
             </View>
             <View style={styles.speed}>
               <Text style={styles.speedNumber}>{speed}</Text>
               <Text style={styles.unit}>{metric ? 'KM/H' : 'MPH'}</Text>
             </View>
           </View>
+          {!data.gpsFresh && !telemetry.fresh && (
+            <Text style={[styles.grow, { color: palette.muted }]}>
+              Waiting for GPS
+            </Text>
+          )}
           {road && (
             <View style={[styles.roadBadge, { backgroundColor: palette.card }]}>
               {shield && (
@@ -362,8 +384,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 11,
-    padding: 14,
-    borderRadius: 18,
+    padding: 10,
+    borderRadius: 14,
     borderWidth: 1,
     elevation: 4,
   },
@@ -383,7 +405,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   previewDestination: { fontSize: 17, fontWeight: '800', lineHeight: 22 },
-  previewCaption: { fontSize: 11, lineHeight: 16, marginTop: 5 },
+  previewCaption: { fontSize: 11, lineHeight: 14, marginTop: 2 },
   panelInstruction: { fontSize: 21, color: 'white', fontWeight: '800' },
   panelRoad: { fontSize: 16 },
   distancePill: { backgroundColor: '#233D4B', borderRadius: 14, padding: 12 },

@@ -5,7 +5,7 @@ import { isCurrentAdminProvider } from './modules/analytics/providerHealth.js';
 import { tripStatusRouter } from './modules/trips/trip-status.routes.js';
 import { documentRouter } from './modules/documents/document.routes.js';
 import { CorridorCorrelationError, corridorRouteOffset } from "./services/safetyDataService.js";
-import { routeWeatherSchema, getCorrelatedRouteWeather } from "./services/weatherService.js";
+import { routeWeatherSchema, getCorrelatedRouteWeather, getCurrentWeather } from "./services/weatherService.js";
 import { claimEldOAuth, updateEldRevision } from './services/eldConcurrency.js';
 import { operationalRouter } from './modules/admin/operational.routes.js';
 import { auditTruck, isVerifiedTruck, publicTruck, saveTruck, verifyTruck } from "./modules/trucks/profileRevision.js";
@@ -305,6 +305,10 @@ app.get("/location/timezone", requireAuth, asyncRoute(async (req, res) => {
     lng: z.coerce.number().min(-180).max(180),
   }).parse(req.query);
   res.status(503).json({error:{code:'TIMEZONE_PROVIDER_NOT_CONFIGURED',message:'An approved timezone provider is not configured.',retryable:false}});
+}));
+
+app.post("/weather/current", requireAuth, asyncRoute(async (req, res) => {
+  res.json(await getCurrentWeather(req.body));
 }));
 
 app.post("/weather/route", requireAuth, asyncRoute(async (req, res) => {

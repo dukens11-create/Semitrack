@@ -126,12 +126,65 @@ test('exports bounded map results and redacts unknown download payloads', () => 
   expect(report).not.toContain('SECRET');
 });
 
-test.each(['SDK_RESPONSE', 'APP_REQUEST_BUSY', 'CATALOG_SDK_REQUEST', 'CATALOG_VALIDATION_FAILED'])(
-  'preserves catalog stage %s without exposing arbitrary strings', stage => {
-    const report = coPilotDiagnosticReport({ ...native(), mapDownload: {
-      response: 'FAILURE_MANAGER_BUSY', callback: 'NOT_RECEIVED', status: 'NOT_INITIATED',
-      stage, attempts: 3, cellularAllowed: false, initialMapSignalReceived: false,
-    } }, initialCopilotState());
-    expect(report).toContain(`"stage": "${stage}"`);
-  },
-);
+test.each([
+  'SDK_RESPONSE',
+  'APP_REQUEST_BUSY',
+  'CATALOG_SDK_REQUEST',
+  'CATALOG_VALIDATION_FAILED',
+])('preserves catalog stage %s without exposing arbitrary strings', stage => {
+  const report = coPilotDiagnosticReport(
+    {
+      ...native(),
+      mapDownload: {
+        response: 'FAILURE_MANAGER_BUSY',
+        callback: 'NOT_RECEIVED',
+        status: 'NOT_INITIATED',
+        stage,
+        attempts: 3,
+        cellularAllowed: false,
+        initialMapSignalReceived: false,
+      },
+    },
+    initialCopilotState(),
+  );
+  expect(report).toContain(`"stage": "${stage}"`);
+});
+
+test('storage report includes only Android capacity counts and strips paths', () => {
+  const report = coPilotDiagnosticReport(
+    {
+      ...native(),
+      reportBuild: 'maps-storage-v4',
+      appStorage: {
+        status: 'AVAILABLE',
+        availableBytes: 12000000000,
+        totalBytes: 128000000000,
+        path: 'PRIVATE_PATH',
+      },
+    },
+    initialCopilotState(),
+  );
+  expect(report).toContain('12000000000');
+  expect(report).toContain('maps-storage-v4');
+  expect(report).not.toContain('PRIVATE_PATH');
+});
+
+test('storage measurement failure is distinct from zero available bytes', () => {
+  const report = coPilotDiagnosticReport(
+    { ...native(), appStorage: { status: 'UNAVAILABLE' } },
+    initialCopilotState(),
+  );
+  expect(report).toContain('UNAVAILABLE');
+  expect(report).not.toContain('availableBytes');
+  for (const availableBytes of [-1, Infinity, 'SECRET', 101]) {
+    expect(() =>
+      coPilotDiagnosticReport(
+        {
+          ...native(),
+          appStorage: { status: 'AVAILABLE', availableBytes, totalBytes: 100 },
+        },
+        initialCopilotState(),
+      ),
+    ).toThrow();
+  }
+});

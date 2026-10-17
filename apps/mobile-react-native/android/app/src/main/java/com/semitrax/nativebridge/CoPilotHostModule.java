@@ -476,7 +476,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
-        result.putString("reportBuild", BuildConfig.SEMITRAX_TEST_ASSET ? "maps-diag-v3" : "maps-diag-v3");
+        result.putString("reportBuild", "maps-storage-v4");
+        WritableMap storage = Arguments.createMap();
+        try {
+          android.os.StatFs filesystem = new android.os.StatFs(context.getFilesDir().getAbsolutePath());
+          storage.putString("status", "AVAILABLE");
+          storage.putDouble("availableBytes", filesystem.getAvailableBytes());
+          storage.putDouble("totalBytes", filesystem.getTotalBytes());
+        } catch (Exception ignored) {
+          storage.putString("status", "UNAVAILABLE");
+        }
+        result.putMap("appStorage", storage);
         WritableMap download = Arguments.createMap();
         download.putString("response", mapDownloadResponse);
         download.putString("callback", mapDownloadCallback);

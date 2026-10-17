@@ -245,6 +245,18 @@ export function CoPilotDeviceSetup() {
           SDK readback: {diagnostics.deviceReadbackKind ?? 'Not reported'}.
         </Text>
       )}
+      {diagnostics?.appStorage && (
+        <Text style={{ color: palette.text }}>
+          {diagnostics.appStorage.status === 'AVAILABLE' &&
+          Number.isFinite(diagnostics.appStorage.availableBytes)
+            ? `Android storage available to SemiTraX: ${(
+                (diagnostics.appStorage.availableBytes ?? 0) / 1_000_000_000
+              ).toFixed(
+                2,
+              )} GB. This measures the app's storage volume; it does not confirm that a map download can start.`
+            : 'Android app storage could not be measured.'}
+        </Text>
+      )}
       {diagnostics?.canRepairTypo && !diagnostics.restartRequired && (
         <Pressable
           accessibilityRole="button"

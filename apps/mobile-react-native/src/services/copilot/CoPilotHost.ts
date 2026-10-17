@@ -1,6 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  appStorage?: {
+    status: 'AVAILABLE' | 'UNAVAILABLE';
+    availableBytes?: number;
+    totalBytes?: number;
+  };
   mapDownload?: {
     response: string;
     callback: string;
@@ -48,7 +53,9 @@ export interface CoPilotHost {
   ): Promise<void>;
   prepareDevice(): Promise<unknown>;
   mapInventory(): Promise<unknown>;
-  licensedMapCatalog?(): Promise<{ name: string; installed: boolean; downloadStatus?: string }[]>;
+  licensedMapCatalog?(): Promise<
+    { name: string; installed: boolean; downloadStatus?: string }[]
+  >;
   downloadLicensedRegions?(names: string[], cellular: boolean): Promise<string>;
   downloadSelectedMap(): Promise<string>;
   downloadSelectedMapUsingCellular?(): Promise<string>;

@@ -71,7 +71,20 @@ const snapshot = z.object({
     'ams-trace-v2',
     'ams-testasset-v2',
     'maps-diag-v3',
+    'maps-storage-v4',
   ]),
+  appStorage: z
+    .union([
+      z
+        .object({
+          status: z.literal('AVAILABLE'),
+          availableBytes: count,
+          totalBytes: count,
+        })
+        .refine(value => value.availableBytes <= value.totalBytes),
+      z.object({ status: z.literal('UNAVAILABLE') }),
+    ])
+    .optional(),
   mapDownload: z
     .object({
       response: fixedCode(mapDownloadResponses),

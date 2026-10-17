@@ -863,6 +863,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         requireMap();
         MapDrawer drawer = UIMgr.getMapDrawer();
         switch (command) {
+          case "native-map":
+            drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
+            UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+            break;
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
           case "recenter": drawer.lockToChevron(); break;

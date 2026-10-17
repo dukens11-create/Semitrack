@@ -201,7 +201,7 @@ afterEach(async () => {
   if (screen) await act(async () => screen.unmount());
   jest.clearAllMocks();
 });
-test('opens Map, offers all five tabs, and keeps planner state while switching tabs', async () => {
+test('opens CoPilot without duplicate planner controls and retains its view across tabs', async () => {
   const { services } = setup();
   await act(async () => {
     screen = create(<DriverShell services={services} open={jest.fn()} />);
@@ -209,20 +209,18 @@ test('opens Map, offers all five tabs, and keeps planner state while switching t
   expect(button('Map').props.accessibilityState.selected).toBe(true);
   for (const label of ['Home', 'Map', 'Trips', 'Docs', 'More'])
     expect(button(label)).toBeDefined();
-  await press('Set destination for truck routes');
-  await act(async () =>
-    screen.root
-      .findByType(TextInput)
-      .props.onChangeText('retained destination'),
-  );
-  await press('Close Set destination');
+  expect(button('Set destination for truck routes')).toBeUndefined();
+  const nativeScreen = screen.root.findByType(require('../src/screens/CoPilotNavigationScreen').CoPilotNavigationScreen);
   await press('Home');
   expect(content()).toContain('Ready to roll,');
   await press('Map');
-  await press('Set destination for truck routes');
-  expect(screen.root.findByType(TextInput).props.value).toBe(
-    'retained destination',
-  );
+  expect(screen.root.findByType(require('../src/screens/CoPilotNavigationScreen').CoPilotNavigationScreen)).toBe(nativeScreen);
+  expect(button('Start Navigation')).toBeUndefined();
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledTimes(1);
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('native-map');
+  expect(mockCoPilotHost.setMapAppearance).not.toHaveBeenCalled();
+  expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
+  expect(mockCoPilotHost.drawMarkers).not.toHaveBeenCalled();
 });
 test('empty token shows honest map unavailable state without initializing or mounting Mapbox', async () => {
   await act(async () => {
@@ -2039,4 +2037,22 @@ test('CoPilot search and trip screens hide SemiTraX overlays without remounting 
   await press('Back to SemiTraX map');
   expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('map');
   expect(map.props.settingsOpen).toBe(false);
+});
+
+test('native CoPilot screen waits for onboarding and offers retry after control failure', async () => {
+  const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
+  mockCopilotState.readyToAddStops = false;
+  try {
+    await act(async () => { screen = create(<CoPilotNavigationScreen />); });
+    expect(mockCoPilotHost.mapCommand).not.toHaveBeenCalled();
+    mockCoPilotHost.mapCommand.mockRejectedValueOnce(new Error('unavailable'));
+    mockCopilotState.readyToAddStops = true;
+    await act(async () => screen.update(<CoPilotNavigationScreen />));
+    expect(content()).toContain('CoPilot controls could not open');
+    await press('Retry CoPilot controls');
+    expect(content()).not.toContain('CoPilot controls could not open');
+    expect(mockCoPilotHost.mapCommand).toHaveBeenCalledTimes(2);
+  } finally {
+    mockCopilotState.readyToAddStops = true;
+  }
 });

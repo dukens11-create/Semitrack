@@ -18,7 +18,7 @@ import { driverColors, useDriverPalette } from '../components/DriverUI';
 import { DriverDashboardScreen } from '../screens/DriverDashboardScreen';
 import { TripsScreen, DocumentsScreen } from '../screens/DriverLibraryScreens';
 import { MoreScreen } from '../screens/MoreScreen';
-import { PlanningScreen } from '../screens/PlanningScreen';
+import { CoPilotNavigationScreen } from '../screens/CoPilotNavigationScreen';
 import { TruckProfileScreen } from '../screens/TruckProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
@@ -53,7 +53,6 @@ export function DriverShell({
   const p = useDriverPalette();
   const [tab, setTab] = useState(1);
   const [visited, setVisited] = useState([1]);
-  const [fullNavigation, setFullNavigation] = useState(false);
   const focused = useIsFocused();
   function select(index: number, confirmed = false) {
     if (
@@ -108,14 +107,7 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
               />
             ) : index === 1 ? (
-              <PlanningScreen
-                active={focused && tab === 1}
-                onNavigationActiveChange={setFullNavigation}
-                services={services}
-                onTrucks={() => open('Trucks')}
-                onServices={() => open('Services')}
-                onSettings={() => open('Settings')}
-              />
+              <CoPilotNavigationScreen active={focused && tab === 1} />
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />
             ) : index === 3 ? (
@@ -133,7 +125,7 @@ export function DriverShell({
           </View>
         ))}
       </View>
-      {!(tab === 1 && fullNavigation) && (
+      {
         <View
           accessibilityRole="tablist"
           style={[
@@ -176,7 +168,7 @@ export function DriverShell({
             </Pressable>
           ))}
         </View>
-      )}
+      }
     </View>
   );
 }

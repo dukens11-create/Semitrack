@@ -29,6 +29,10 @@ const messages: Record<string, string> = {
   AUTH_EXPIRED: 'Please sign in again to continue.',
   PROVIDER_UNAVAILABLE:
     'The requested provider is temporarily unavailable. Please retry later.',
+  TRIMBLE_ROUTE_PATH_DISABLED:
+    'Truck routing is disabled in the server configuration. SemiTraX support must enable RoutePath requests.',
+  TRIMBLE_ROUTE_PATH_REQUIRED:
+    'Trimble did not supply the required road path. SemiTraX support must check the RoutePath entitlement.',
   TRIMBLE_API_KEY_MISSING:
     'Trimble truck routing is not configured. Contact SemiTraX support.',
   TRIMBLE_CONFIGURATION_INVALID:

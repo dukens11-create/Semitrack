@@ -22,6 +22,10 @@ export async function buildTruckRoute(input: RouteBuildInput) {
     throw new RoutingProviderError("Trimble", "TRIMBLE_PROVIDER_REQUIRED",
       "Commercial truck routing requires the configured Trimble provider.", 503);
   }
+  if (!env.trimbleRoutePathEnabled) {
+    throw new RoutingProviderError("Trimble", "TRIMBLE_ROUTE_PATH_DISABLED",
+      "Navigation-quality route requests are disabled in the backend configuration.", 503);
+  }
   const provider = trimble;
   let route: RouteBuildResult;
   try { route = await provider.buildRoute(input); }

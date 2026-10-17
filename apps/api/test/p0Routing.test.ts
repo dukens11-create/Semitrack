@@ -536,3 +536,19 @@ test('restriction warning supersedes healthy evidence and later safe response re
   h.response(payload());await buildTruckRoute(input);
   assert.equal(h.health().status,'OPERATIONAL');
 });
+
+
+test('disabled RoutePath reports configuration failure before calling the provider', async t => {
+  const old = env.trimbleRoutePathEnabled;
+  const provider = t.mock.method(TrimbleRouteProvider.prototype, 'buildRoute', async () => {throw Error('unexpected');});
+  env.trimbleRoutePathEnabled = false;
+  try {
+    await assert.rejects(() => buildTruckRoute(input), e => e.code === 'TRIMBLE_ROUTE_PATH_DISABLED' && e.httpStatus === 503);
+    assert.equal(provider.mock.callCount(), 0);
+  } finally {env.trimbleRoutePathEnabled = old;}
+});
+
+
+test('route request asks for structured warning evidence', () => {
+  assert.equal(buildTrimbleRouteRequest(input,config).ReportRoutes[0].ReportingOptions.IncludeDetailedWarning,true);
+});

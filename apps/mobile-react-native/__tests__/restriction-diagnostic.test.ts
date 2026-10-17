@@ -86,3 +86,11 @@ test('warning identifiers are bounded and do not acquire invented meanings', () 
   expect(result?.providerWarningTypes).toHaveLength(16);
   expect(result?.category).toBe('UNCLASSIFIED_PROVIDER_WARNING');
 });
+
+
+test('documented 53-foot warning has actionable wording without authorizing navigation', () => {
+  const {restrictionMessage} = require('../src/features/routing/restrictionDiagnostic');
+  expect(restrictionMessage([6])).toContain('not designated for a 53-foot vehicle');
+  expect(restrictionMessage([6])).toContain('not been accepted for navigation');
+  expect(restrictionMessage([999])).toContain('Unclassified road warning');
+});

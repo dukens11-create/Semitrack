@@ -127,6 +127,14 @@ export class PoiService {
     );
     return data.items;
   }
+  async currentWeather(fix: LocationFix, signal?: AbortSignal) {
+    return z.record(z.unknown()).parse(await this.api.request(
+      'POST', '/weather/current', {
+        lat: fix.latitude, lng: fix.longitude,
+        accuracy: fix.accuracy, timestamp: fix.timestamp,
+      }, signal,
+    ));
+  }
   async routeWeather(
     route: TruckRoute,
     fix: LocationFix,

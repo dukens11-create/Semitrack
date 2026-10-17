@@ -1130,7 +1130,7 @@ export function PlanningScreen({
           )}
           <DriverCopy>
             {routes.diagnostic.providerDetailAvailable
-              ? 'Provider warning identifiers are available. Their specific road restriction is not yet classified.'
+              ? 'Provider warning identifiers are available above. A warning does not authorize travel on a restricted road.'
               : 'The backend did not supply detailed provider warning evidence.'}
             {
               ' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'

@@ -201,26 +201,21 @@ afterEach(async () => {
   if (screen) await act(async () => screen.unmount());
   jest.clearAllMocks();
 });
-test('opens CoPilot without duplicate planner controls and retains its view across tabs', async () => {
+test('opens the SemiTraX planner and retains its view across tabs', async () => {
   const { services } = setup();
   await act(async () => {
     screen = create(<DriverShell services={services} open={jest.fn()} />);
   });
   expect(button('Map').props.accessibilityState.selected).toBe(true);
-  for (const label of ['Home', 'Map', 'Trips', 'Docs', 'More'])
-    expect(button(label)).toBeDefined();
-  expect(button('Set destination for truck routes')).toBeUndefined();
-  const nativeScreen = screen.root.findByType(require('../src/screens/CoPilotNavigationScreen').CoPilotNavigationScreen);
+  expect(button('Set destination for truck routes')).toBeDefined();
+  const planner = screen.root.findByType(PlanningScreen);
   await press('Home');
   expect(content()).toContain('Ready to roll,');
+  expect(planner.props.active).toBe(false);
   await press('Map');
-  expect(screen.root.findByType(require('../src/screens/CoPilotNavigationScreen').CoPilotNavigationScreen)).toBe(nativeScreen);
-  expect(button('Start Navigation')).toBeUndefined();
-  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledTimes(1);
-  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('native-map');
-  expect(mockCoPilotHost.setMapAppearance).not.toHaveBeenCalled();
-  expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
-  expect(mockCoPilotHost.drawMarkers).not.toHaveBeenCalled();
+  expect(screen.root.findByType(PlanningScreen)).toBe(planner);
+  expect(planner.props.active).toBe(true);
+  expect(mockCoPilotHost.mapCommand).not.toHaveBeenCalledWith('native-map');
 });
 test('empty token shows honest map unavailable state without initializing or mounting Mapbox', async () => {
   await act(async () => {
@@ -2059,7 +2054,8 @@ test('native CoPilot screen waits for onboarding and offers retry after control 
 
 test('native map uses CoPilot menu without duplicate SemiTraX controls', async () => {
   const { services } = setup();
-  await act(async () => { screen = create(<DriverShell services={services} open={jest.fn()} />); });
+  const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
+  await act(async () => { screen = create(<CoPilotNavigationScreen services={services} active />); });
   for (const title of ['CoPilot tools', 'CoPilot menu', 'Trip plan', 'CoPilot settings', 'Return to map']) {
     expect(screen.root.findAllByProps({accessibilityLabel: title})).toHaveLength(0);
     expect(content()).not.toContain(title);

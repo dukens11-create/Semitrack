@@ -18,7 +18,7 @@ import { useDriverPalette } from '../components/DriverUI';
 import { DriverDashboardScreen } from '../screens/DriverDashboardScreen';
 import { TripsScreen, DocumentsScreen } from '../screens/DriverLibraryScreens';
 import { MoreScreen } from '../screens/MoreScreen';
-import { CoPilotNavigationScreen } from '../screens/CoPilotNavigationScreen';
+import { PlanningScreen } from '../screens/PlanningScreen';
 import { TruckProfileScreen } from '../screens/TruckProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
@@ -107,9 +107,11 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
               />
             ) : index === 1 ? (
-              <CoPilotNavigationScreen
+              <PlanningScreen
                 services={services}
                 active={focused && tab === 1}
+                onTrucks={() => open('Trucks')}
+                onServices={() => open('Services')}
               />
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />

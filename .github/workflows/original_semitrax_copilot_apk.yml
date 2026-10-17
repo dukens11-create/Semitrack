@@ -4,7 +4,13 @@ on:
     branches:
       - codex/original-semitrax-copilot-integration
       - codex/original-trimble-map-display
+      - codex/semitrax-auth-audit-20261014
   workflow_dispatch:
+    inputs:
+      test_asset:
+        description: "Build isolated TestAsset diagnostic app for the designated Samsung"
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -18,7 +24,8 @@ jobs:
         working-directory: apps/mobile-react-native
     env:
       SEMITRAX_API_URL: https://semitrax-api.onrender.com
-      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      SEMITRAX_TEST_ASSET: ${{ github.event_name == 'push' && github.ref_name == 'codex/semitrax-auth-audit-20261014' || inputs.test_asset || false }}
+      MAPBOX_PUBLIC_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
       MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +38,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Test certificate verification parser
+        run: node --test scripts/verify-test-certificate.test.cjs
+      - name: Restore persistent test signing key
+        env:
+          SEMITRAX_TEST_KEYSTORE_BASE64: ${{ secrets.SEMITRAX_TEST_KEYSTORE_BASE64 }}
+          SEMITRAX_TEST_CERT_SHA256: ${{ vars.SEMITRAX_TEST_CERT_SHA256 }}
+        run: bash scripts/restore-test-signing.sh
       - name: Install dependencies
         run: npm ci
       - name: Check original React Native app
@@ -39,7 +53,7 @@ jobs:
         run: |
           chmod +x android/gradlew
           cd android
-          ./gradlew :app:assembleDebug -PsemitraxAssignedSamsung=true --no-daemon
+          ./gradlew :app:assembleDebug -PsemitraxAssignedSamsung=true -PsemitraxTestAsset="$SEMITRAX_TEST_ASSET" --no-daemon
       - name: Record APK identity and SHA-256 for safe review
         run: |
           apk=android/app/build/outputs/apk/debug/app-debug.apk
@@ -47,17 +61,28 @@ jobs:
           aapt_bin=$(find "${ANDROID_HOME}/build-tools" -type f -name aapt | sort -V | tail -n 1)
           test -n "$aapt_bin"
           "$aapt_bin" dump badging "$apk" | grep "^package:" | tee android/app/build/outputs/apk/debug/package-identity.txt
+          signer=$(find "${ANDROID_HOME}/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          "$signer" verify --print-certs "$apk" > android/app/build/outputs/apk/debug/signing-certificate.txt
+          node scripts/verify-test-certificate.cjs android/app/build/outputs/apk/debug/signing-certificate.txt
           sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
-          echo "Assigned Samsung SM-S908U test build only; automatic initial enrollment enabled; saved assignments preserved." > android/app/build/outputs/apk/debug/enrollment-mode.txt
+          echo "Assigned Samsung SM-S908U only; TestAsset diagnostic mode: $SEMITRAX_TEST_ASSET; saved assignments preserved." > android/app/build/outputs/apk/debug/enrollment-mode.txt
           echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
+      - name: Package authentication source for Trimble review
+        run: |
+          tar -czf android/app/build/outputs/apk/debug/authentication-source.tar.gz \
+            android/app/src/main/java/com/semitrax/nativebridge/CoPilot*.java \
+            android/app/build.gradle src/services/copilot/CopilotProvider.tsx \
+            src/services/copilot/CoPilotHost.ts patches/trimble-maps-cpik-react-native-library+10.28.2-497.patch
       - name: Upload device-review APK
         uses: actions/upload-artifact@v4
         with:
-          name: original-semitrax-copilot-assigned-samsung
+          name: original-semitrax-copilot-samsung-${{ env.SEMITRAX_TEST_ASSET }}
           path: |
+            apps/mobile-react-native/android/app/build/outputs/apk/debug/*.tar.gz
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.apk
             apps/mobile-react-native/android/app/build/outputs/apk/debug/*.sha256
             apps/mobile-react-native/android/app/build/outputs/apk/debug/package-identity.txt
             apps/mobile-react-native/android/app/build/outputs/apk/debug/build-commit.txt
             apps/mobile-react-native/android/app/build/outputs/apk/debug/enrollment-mode.txt
+            apps/mobile-react-native/android/app/build/outputs/apk/debug/signing-certificate.txt
           if-no-files-found: error

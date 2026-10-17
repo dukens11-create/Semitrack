@@ -1,7 +1,9 @@
+import { mapDownloadResponses } from './CoPilotDiagnosticReport';
 export interface AutomaticMapPort {
   active(): boolean;
   installed(): Promise<boolean>;
   download(): Promise<string>;
+  progress?(): Promise<string | undefined>;
   refresh(): Promise<void>;
 }
 
@@ -12,6 +14,7 @@ export class AutomaticMapDownload {
   private started = false;
   private pending = false;
   private checks = 0;
+  private lastResponse = 'NOT_REQUESTED';
   private timer?: ReturnType<typeof setTimeout>;
   constructor(
     private port: AutomaticMapPort,
@@ -30,10 +33,42 @@ export class AutomaticMapDownload {
         return;
       }
       if (this.stopped || !this.port.active()) return;
+      const progress = await this.port.progress?.();
+      if (this.stopped || !this.port.active()) return;
+      if (
+        [
+          'DOWNLOADING',
+          'SUCCEEDED',
+          'INSTALLATION_STARTED',
+          'INSTALLATION_FINISHED',
+        ].includes(progress ?? '')
+      ) {
+        this.started = true;
+        this.report(
+          progress === 'DOWNLOADING'
+            ? 'Downloading offline map… Keep SemiTraX open.'
+            : progress === 'SUCCEEDED'
+            ? 'Map downloaded. Waiting for CoPilot to install it. Keep SemiTraX open.'
+            : progress === 'INSTALLATION_STARTED'
+            ? 'Installing offline map… Keep SemiTraX open.'
+            : 'Installation finished. Verifying the licensed map inventory…',
+        );
+      } else if (
+        this.started &&
+        ['FAILED', 'CANCELLED', 'PAUSED', 'WAITING_ON_STORAGE_SPACE'].includes(
+          progress ?? '',
+        )
+      ) {
+        this.report(
+          `Map setup stopped (${progress}). Check storage and connection, then retry map setup.`,
+        );
+        this.stop();
+        return;
+      }
       if (!this.started) {
         if (this.attempts >= 3) {
           this.report(
-            'CoPilot is still busy. Retry map setup after checking Wi-Fi and storage.',
+            `Map download stopped after ${this.attempts} attempts. Last result: ${this.lastResponse}. Share diagnostics for review.`,
           );
           this.stop();
           return;
@@ -41,6 +76,9 @@ export class AutomaticMapDownload {
         ++this.attempts;
         const response = await this.port.download();
         if (this.stopped) return;
+        this.lastResponse = mapDownloadResponses.includes(response)
+          ? response
+          : 'NOT_AVAILABLE';
         if (
           [
             'SUCCESS',
@@ -52,7 +90,7 @@ export class AutomaticMapDownload {
         ) {
           this.started = true;
           this.report(
-            'Checking download and installation progress… Keep SemiTraX open on Wi-Fi.',
+            'Checking download and installation progress… Keep SemiTraX open with an internet connection.',
           );
         } else if (
           ['FAILURE_MANAGER_BUSY', 'FAILURE_INVALID_CONNECTION'].includes(
@@ -60,13 +98,15 @@ export class AutomaticMapDownload {
           )
         ) {
           this.report(
-            'Waiting for CoPilot or Wi-Fi. Setup will retry automatically.',
+            response === 'FAILURE_MANAGER_BUSY'
+              ? 'CoPilot download manager is busy (FAILURE_MANAGER_BUSY). Retrying automatically.'
+              : 'CoPilot rejected the download connection (FAILURE_INVALID_CONNECTION). Retrying automatically.',
           );
         } else {
           this.report(
             response === 'FAILURE_INSUFFICIENT_DISK_SPACE'
               ? 'Free storage is needed before the offline map can download.'
-              : 'CoPilot could not accept the map download. Check device setup, Wi-Fi and storage.',
+              : `CoPilot could not accept the map download (${this.lastResponse}). Share diagnostics for review.`,
           );
           this.stop();
           return;
@@ -82,7 +122,7 @@ export class AutomaticMapDownload {
     } catch {
       if (!this.stopped) {
         this.report(
-          'Map setup could not be verified. Check device licensing, Wi-Fi and storage, then retry.',
+          'Map setup could not be verified. Check device licensing, your allowed internet connection and storage, then retry.',
         );
         this.stop();
       }

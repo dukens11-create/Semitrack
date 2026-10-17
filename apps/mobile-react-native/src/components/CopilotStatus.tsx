@@ -29,7 +29,7 @@ export function CopilotStatus() {
       </View>
     );
   const label = state.copilotReady
-    ? 'CoPilot setup checked · Navigation not started'
+    ? 'CoPilot setup checked'
     : state.phase === 'NOT_STARTED' || state.phase === 'STARTING'
     ? 'CoPilot setup pending'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
@@ -38,7 +38,7 @@ export function CopilotStatus() {
     ? 'CoPilot provisioning required'
     : 'CoPilot turn-by-turn unavailable';
   const message = state.copilotReady
-    ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
+    ? 'CoPilot setup checks passed. Use the CoPilot screen for the current trip and guidance status.'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
     ? 'Navigation is unavailable until licensed CoPilot maps are installed and verified.'
     : 'CoPilot turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';

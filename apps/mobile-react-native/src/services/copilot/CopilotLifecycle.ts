@@ -377,6 +377,7 @@ export class CopilotLifecycle {
       this.publish({ readyToAddStops });
       if (!this.state.initialized || !readyToAddStops) {
         this.fail('COPILOT_NOT_READY', 'ready-to-add-stops');
+        this.retryReadiness(revision);
         return;
       }
       // Readiness refresh must not erase a route/guidance failure.

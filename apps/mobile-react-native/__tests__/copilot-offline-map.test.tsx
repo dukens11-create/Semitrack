@@ -8,10 +8,10 @@ import {
 } from '../src/services/copilot/CopilotLifecycle';
 
 const mockNativeMap = jest.fn(() => <Text>Actual CoPilot renderer</Text>);
-jest.mock(
-  'react-native/Libraries/ReactNative/requireNativeComponent',
-  () => ({ __esModule: true, default: () => mockNativeMap }),
-);
+jest.mock('react-native/Libraries/ReactNative/requireNativeComponent', () => ({
+  __esModule: true,
+  default: () => mockNativeMap,
+}));
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: jest.requireActual('react-native').View,
 }));
@@ -84,4 +84,25 @@ test('removes the native view immediately when startup is lost', async () => {
     ),
   );
   expect(screen.root.findAllByType(mockNativeMap)).toHaveLength(0);
+});
+
+test('displays verified maps while route readiness remains blocked', async () => {
+  const state = {
+    ...verified(),
+    error: 'COPILOT_NOT_READY' as const,
+    operation: 'ready-to-add-stops',
+    readyToAddStops: false,
+  };
+  await render(state);
+  expect(mockNativeMap).toHaveBeenCalled();
+  expect(state.copilotReady).toBe(false);
+  expect(state.readyToAddStops).toBe(false);
+});
+test('other not-ready failures still block the renderer', async () => {
+  await render({
+    ...verified(),
+    error: 'COPILOT_NOT_READY',
+    operation: 'secure-restore',
+  });
+  expect(mockNativeMap).not.toHaveBeenCalled();
 });

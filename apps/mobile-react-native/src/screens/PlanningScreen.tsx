@@ -34,6 +34,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  BackHandler,
+  DeviceEventEmitter,
   Keyboard,
   Pressable,
   ScrollView,
@@ -74,13 +76,15 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
+import { copilotMapBlocker } from '../components/CopilotOfflineMap';
+import { coPilotHost } from '../services/copilot/CoPilotHost';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
   services,
   onTrucks,
   onServices,
-  onSettings,
   active = true,
   onNavigationActiveChange,
 }: {
@@ -95,6 +99,12 @@ export function PlanningScreen({
     trucks = useStore(services.trucks),
     location = useStore(services.location);
   const { settings } = useStore(services.settings);
+  const copilot = useCopilotState();
+  const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
+  const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
+
+  // Native onboarding (including the EULA) needs an unobstructed viewport.
+  const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
   );
@@ -125,6 +135,8 @@ export function PlanningScreen({
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
+  const [plannedStart, setPlannedStart] = useState<Stop | null>(null);
+  const [selectingStart, setSelectingStart] = useState(false);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
@@ -250,7 +262,29 @@ export function PlanningScreen({
     searchStore.cancel();
     setAppendPlan(null);
     setSheet(null);
+    setSelectingStart(false);
   }
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      'SemiTraxCoPilotScreenChanged',
+      (event: unknown) => {
+        if (!event || typeof event !== 'object' ||
+            !('navigationScreen' in event) || typeof event.navigationScreen !== 'boolean') return;
+        // Search, trip planning, POIs and settings all belong to CoPilot while
+        // its own screen is open. Keep the map mounted and preserve its trip.
+        setNativeSettingsOpen(!event.navigationScreen);
+        if (!event.navigationScreen) {
+          gpsRequest.current?.abort();
+          searchStore.cancel();
+          setAppendPlan(null);
+          setSheet(null);
+          setSelectingStart(false);
+        }
+      },
+    );
+    return () => subscription.remove();
+  }, [searchStore]);
+
   function openAddStop() {
     const current = services.routes.getSnapshot();
     if (
@@ -326,6 +360,10 @@ export function PlanningScreen({
     );
   }
   async function startNavigation() {
+    if (plannedStart) {
+      setError("This is a route preview from your chosen start. Select Current location and recalculate before starting live navigation.");
+      return;
+    }
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
     const truck = services.trucks.getSnapshot().selected;
@@ -345,7 +383,7 @@ export function PlanningScreen({
       refreshNavigationState();
       if (result === 'unavailable')
         setError(
-          'CoPilot provisioning required. Your truck route is ready, but turn-by-turn navigation cannot start until the licensed CoPilot runtime and maps are provisioned.',
+          'Turn-by-turn connection unavailable in this build. Your route is a planning preview. Re-entering your IDs or downloading maps will not complete the missing guidance connection.',
         );
       if (result === 'stop-unconfirmed') {
         setStopUnconfirmed(true);
@@ -443,9 +481,9 @@ export function PlanningScreen({
     }
     const controller = new AbortController();
     gpsRequest.current = controller;
-    setAcquiringGps(true);
+    setAcquiringGps(!plannedStart);
     try {
-      await services.location.requestFreshFix(controller.signal);
+      if (!plannedStart) await services.location.requestFreshFix(controller.signal);
       await waitForRouteForeground(controller.signal);
       // A driver may edit/sign out while GPS is being acquired. Never send the old profile.
       const selected = services.trucks.getSnapshot().selected;
@@ -464,7 +502,7 @@ export function PlanningScreen({
       setAcquiringGps(false);
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
-    if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
+    if (await services.routes.calculate(plannedStart ?? origin(), plan, truck, alternatives)) {
       // Store only what the driver typed, never temporary provider geometry or a route.
       if (query.trim())
         void saveRecent(services.settings, items =>
@@ -527,6 +565,33 @@ export function PlanningScreen({
       setError(errorMessage(e));
     }
   }
+  async function openCoPilotSettings() {
+    closeSheet();
+    try {
+      await coPilotHost().mapCommand('settings');
+      setNativeSettingsOpen(true);
+    } catch {
+      setError('CoPilot settings are unavailable until map setup is complete.');
+    }
+  }
+  async function closeCoPilotSettings() {
+    try {
+      await coPilotHost().mapCommand('map');
+      setNativeSettingsOpen(false);
+    } catch {
+      Alert.alert('CoPilot map', 'The map could not reopen. Please try again.');
+    }
+  }
+  const closeNativeSettings = useRef(closeCoPilotSettings);
+  closeNativeSettings.current = closeCoPilotSettings;
+  useEffect(() => {
+    if (!active || !nativeSettingsOpen) return;
+    const listener = BackHandler.addEventListener('hardwareBackPress', () => {
+      void closeNativeSettings.current();
+      return true;
+    });
+    return () => listener.remove();
+  }, [active, nativeSettingsOpen]);
   function menuAction(action: NavigationMenuAction) {
     if (action === 'weather') {
       closeSheet();
@@ -608,8 +673,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'audio') {
-      closeSheet();
-      onSettings?.();
+      void openCoPilotSettings();
       return;
     }
     if (action === 'report') {
@@ -732,8 +796,15 @@ export function PlanningScreen({
   );
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
-      <View style={styles.map}>
+      {nativeSettingsOpen && (
+        <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
+          <DriverButton title="Back to SemiTraX map" secondary onPress={() => { void closeCoPilotSettings(); }} />
+        </View>
+      )}
+      <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>
         <CopilotTruckMap
+          settingsOpen={nativeSettingsOpen}
+          onSettings={() => { void openCoPilotSettings(); }}
           command={mapCommand}
           route={routes.route}
           plan={routes.plan}
@@ -750,8 +821,8 @@ export function PlanningScreen({
           pois={pois.filter(
             poi => !hiddenCategories.includes(poi.category as PlaceCategory),
           )}
-          bottomInset={bottomHeight}
-          topInset={topHeight + 12}
+          bottomInset={nativeSetupVisible ? 0 : bottomHeight}
+          topInset={nativeSetupVisible ? 0 : topHeight + 12}
           onCoordinate={point => {
             if (
               busy ||
@@ -775,7 +846,7 @@ export function PlanningScreen({
         />
       </View>
       <View
-        style={styles.top}
+        style={[styles.top, nativeSetupVisible && styles.hiddenForNativeSetup]}
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
@@ -869,16 +940,18 @@ export function PlanningScreen({
       <View
         testID="map-bottom-panel"
         onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
-        style={
+        style={[
           routes.route
             ? styles.routeBottom
             : [
                 styles.bottom,
                 expanded ? styles.expandedBottom : styles.collapsedBottom,
                 { backgroundColor: palette.card },
-              ]
-        }
+              ],
+          nativeSetupVisible && styles.hiddenForNativeSetup,
+        ]}
       >
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.routePanelContent}>
         <WeatherStatus
           driving={navigationSession}
           detailsRequest={weatherDetailsRequest}
@@ -1003,10 +1076,7 @@ export function PlanningScreen({
                 style={[styles.handle, { backgroundColor: palette.border }]}
               />
             </Pressable>
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.bottomContent}
-            >
+            <View style={styles.bottomContent}>
               {feedback}
               <Pressable
                 accessibilityRole="button"
@@ -1051,9 +1121,10 @@ export function PlanningScreen({
                     : 'Location off'}
                 </Text>
               )}
-            </ScrollView>
+            </View>
           </>
         )}
+        </ScrollView>
       </View>
       {active && sheet === 'filter' && (
         <DriverSheet title="Places Filter" onClose={closeSheet}>
@@ -1124,7 +1195,7 @@ export function PlanningScreen({
           )}
           <DriverCopy>
             {routes.diagnostic.providerDetailAvailable
-              ? 'Provider warning identifiers are available. Their specific road restriction is not yet classified.'
+              ? 'Provider warning identifiers are available above. A warning does not authorize travel on a restricted road.'
               : 'The backend did not supply detailed provider warning evidence.'}
             {
               ' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'
@@ -1194,9 +1265,35 @@ export function PlanningScreen({
       )}
       {active && sheet === 'search' && (
         <DriverSheet
-          title={appendPlan ? 'Add Stop' : 'Set destination'}
+          title={selectingStart ? 'Choose starting location' : appendPlan ? 'Add Stop' : 'Set destination'}
           onClose={() => closeSheet()}
         >
+          {!appendPlan && (
+            <>
+              <DriverCopy>From: {plannedStart?.name ?? 'Current location'}</DriverCopy>
+              <DriverButton
+                title={selectingStart ? 'Choose destination instead' : 'Choose starting location'}
+                secondary
+                disabled={stopEditingDisabled}
+                onPress={() => {
+                  setSelectingStart(value => !value);
+                  searchStore.clear();
+                  setDetail(null);
+                }}
+              />
+              {(plannedStart || selectingStart) && (
+                <DriverButton title="Use Current location" secondary disabled={stopEditingDisabled}
+                  onPress={() => {
+                    setPlannedStart(null);
+                    setSelectingStart(false);
+                    searchStore.clear();
+                    setDetail(null);
+                    services.routes.clear();
+                  }} />
+              )}
+              {selectingStart && <DriverCopy>Search any city or full address, including the state or country. This start is for route planning; live navigation uses your current location.</DriverCopy>}
+            </>
+          )}
           {appendPlan && (
             <DriverCopy>
               Choose the next stop after {appendPlan.destination.name}. Your
@@ -1415,12 +1512,20 @@ export function PlanningScreen({
               {feedback}
               <DriverButton
                 title={
-                  appendPlan
+                  selectingStart ? 'Use as starting location' : appendPlan
                     ? 'Add Stop & recalculate'
                     : 'Set final destination'
                 }
-                disabled={stopEditingDisabled || !trucks.selected}
+                disabled={stopEditingDisabled || (!selectingStart && !trucks.selected)}
                 onPress={() => {
+                  if (selectingStart) {
+                    setPlannedStart(detail);
+                    setSelectingStart(false);
+                    setDetail(null);
+                    searchStore.clear();
+                    services.routes.clear();
+                    return;
+                  }
                   void run(() =>
                     appendPlan
                       ? appendSelectedStop(detail)
@@ -1438,7 +1543,7 @@ export function PlanningScreen({
                   }}
                 />
               )}
-              {routes.plan && !appendPlan && (
+              {routes.plan && !appendPlan && !selectingStart && (
                 <DriverButton
                   title="Add stop to current route"
                   secondary
@@ -1519,7 +1624,7 @@ export function PlanningScreen({
                 }}
               />
               <DriverButton
-                title="Recalculate from current location"
+                title={plannedStart ? "Recalculate from chosen start" : "Recalculate from current location"}
                 disabled={pending}
                 onPress={() => {
                   void run(() => calculate(routes.plan!));
@@ -1641,7 +1746,7 @@ export function PlanningScreen({
           <Text style={[styles.panelStatus, { color: palette.muted }]}>
             {navigationSession
               ? 'Quit Nav stops guidance after confirmation and retains the route. Cancel Route clears it.'
-              : 'Route preview only. Start Navigation checks CoPilot licensing and maps.'}
+              : 'Route preview only. Start Navigation requires a connected truck-guidance engine.'}
           </Text>
         </NavigationPanel>
       )}
@@ -1649,6 +1754,7 @@ export function PlanningScreen({
   );
 }
 const styles = StyleSheet.create({
+  hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
   removeRecent: {
     minWidth: 48,
@@ -1658,7 +1764,9 @@ const styles = StyleSheet.create({
   },
   maneuverOverlay: { flex: 1, marginRight: 62 },
   previewOverlay: { marginRight: 0 },
+  routePanelContent: { gap: 8 },
   routeBottom: {
+    maxHeight: '42%',
     position: 'absolute',
     left: 12,
     right: 12,

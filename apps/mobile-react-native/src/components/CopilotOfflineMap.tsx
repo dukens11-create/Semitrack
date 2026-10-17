@@ -27,7 +27,12 @@ export function copilotMapBlocker(state: CopilotState): string | null {
     !state.maps.installed.length
   )
     return 'Install and verify the selected licensed CoPilot offline map before opening it.';
-  if (state.error)
+  // A verified map can mount while the route engine is still starting.
+  // Mounting the renderer never grants route/guidance readiness.
+  const waitingForRouteEngine =
+    state.error === 'COPILOT_NOT_READY' &&
+    state.operation === 'ready-to-add-stops';
+  if (state.error && !waitingForRouteEngine)
     return 'CoPilot reported a setup or route error. Resolve it before opening the offline map.';
   return null;
 }

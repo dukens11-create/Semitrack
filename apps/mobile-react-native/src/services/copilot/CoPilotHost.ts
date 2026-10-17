@@ -1,6 +1,31 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  nativeDisplay?: {
+    status: string;
+    deviceUtcOffsetMinutes: number;
+    headingDisplayEnabled?: boolean;
+    speedLimitOnMap?: boolean;
+    poiAlertsEnabled?: boolean;
+    poiAlertDistance?: string;
+    poiAlertCategoryCount?: number;
+    poiDisplayedCategoryCount?: number;
+    etaMinutesFromNow?: number;
+  };
+  appStorage?: {
+    status: 'AVAILABLE' | 'UNAVAILABLE';
+    availableBytes?: number;
+    totalBytes?: number;
+  };
+  mapDownload?: {
+    response: string;
+    callback: string;
+    status: string;
+    stage: string;
+    attempts: number;
+    cellularAllowed: boolean;
+    initialMapSignalReceived: boolean;
+  };
   savedCompanyMatches: boolean;
   savedDeviceMatches: boolean;
   credentialHook: string;
@@ -29,6 +54,7 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  guidanceSnapshot?(): Promise<unknown>;
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;
   repairAssignedSetup?(): Promise<void>;
   readonly automaticAssignedSetup?: boolean;
@@ -39,7 +65,12 @@ export interface CoPilotHost {
   ): Promise<void>;
   prepareDevice(): Promise<unknown>;
   mapInventory(): Promise<unknown>;
+  licensedMapCatalog?(): Promise<
+    { name: string; installed: boolean; downloadStatus?: string }[]
+  >;
+  downloadLicensedRegions?(names: string[], cellular: boolean): Promise<string>;
   downloadSelectedMap(): Promise<string>;
+  downloadSelectedMapUsingCellular?(): Promise<string>;
   setMapAppearance(night: boolean): Promise<void>;
   mapCommand(command: string): Promise<void>;
   drawRoutePreview(

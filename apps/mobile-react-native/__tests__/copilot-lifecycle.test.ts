@@ -641,16 +641,42 @@ test.each([
 test('Trimble server failure retries only within the bounded recovery window', async () => {
   jest.useFakeTimers();
   const h = harness();
-  h.port.licenseState = jest
-    .fn()
-    .mockRejectedValue({
-      code: 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER',
-    });
+  h.port.licenseState = jest.fn().mockRejectedValue({
+    code: 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER',
+  });
   await h.lifecycle.start();
   await h.event('onCPStartup');
   await jest.advanceTimersByTimeAsync(60000);
   expect(h.port.licenseState).toHaveBeenCalledTimes(7);
   expect(h.lifecycle.snapshot().copilotReady).toBe(false);
   expect(h.port.mapState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
+
+test('delayed route readiness recovers without a second SDK callback', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.readyToAddStops = jest
+    .fn()
+    .mockResolvedValueOnce(false)
+    .mockResolvedValue(true);
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  await jest.advanceTimersByTimeAsync(5000);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  expect(h.port.startNative).toHaveBeenCalledTimes(1);
+  h.lifecycle.dispose();
+});
+test('route readiness retries stop at the limit without granting navigation', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.readyToAddStops = jest.fn().mockResolvedValue(false);
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(h.port.readyToAddStops).toHaveBeenCalledTimes(7);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  expect(jest.getTimerCount()).toBe(0);
   h.lifecycle.dispose();
 });

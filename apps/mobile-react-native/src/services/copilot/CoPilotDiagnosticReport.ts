@@ -1,6 +1,32 @@
 import { z } from 'zod';
 import { amsLoginFailures } from './CopilotLicenseDiagnostics';
 
+export const mapDownloadResponses = [
+  'NOT_REQUESTED',
+  'NOT_RECEIVED',
+  'NATIVE_EXCEPTION',
+  'BLOCKED',
+  'FAILURE_PREPROCESSING',
+  'WAITING_ON_STORAGE_SPACE',
+  'INSTALLED',
+  'SUCCESS',
+  'FAILURE_INVALID_CONNECTION',
+  'FAILURE_INVALID_ARGUMENT',
+  'FAILURE_MANAGER_BUSY',
+  'FAILURE_VALIDATION',
+  'FAILURE_VERSION',
+  'FAILURE_INSTALLED',
+  'FAILURE_DOWNLOADING',
+  'FAILURE_DOWNLOADED',
+  'FAILURE_PAUSED',
+  'FAILURE_CANCELLED',
+  'FAILURE_UNLICENSED',
+  'FAILURE_ENQUEUE',
+  'FAILURE_INSUFFICIENT_DISK_SPACE',
+  'FAILURE_PREINSTALLED',
+  'FAILURE_MAPUPTODATE',
+  'FAILED_GENERIC_ERROR',
+];
 const responses = [
   'NOT_RECEIVED',
   'SUCCESS',
@@ -40,7 +66,79 @@ const fixedCode = (allowed: readonly string[]) =>
     );
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const snapshot = z.object({
-  reportBuild: fixedCode(['ams-trace-v1']),
+  reportBuild: fixedCode([
+    'ams-trace-v1',
+    'ams-trace-v2',
+    'ams-testasset-v2',
+    'maps-diag-v3',
+    'maps-storage-v4',
+  ]),
+  nativeDisplay: z.object({
+    status: fixedCode(['AVAILABLE', 'PARTIAL', 'NOT_STARTED']),
+    deviceUtcOffsetMinutes: z.number().int().min(-840).max(840),
+    headingDisplayEnabled: z.boolean().optional(),
+    speedLimitOnMap: z.boolean().optional(),
+    poiAlertsEnabled: z.boolean().optional(),
+    poiAlertDistance: fixedCode([
+      'TWOTENTHS_MILE', 'HALF_MILE', 'ONE_MILE', 'THREE_MILES', 'TEN_MILES',
+      'TWENTYFIVE_MILES', 'HALF_KILOMETER', 'ONE_KILOMETER', 'TWO_KILOMETERS',
+      'FIVE_KILOMETERS', 'SIXTEEN_KILOMETERS', 'FORTY_KILOMETERS',
+    ]).optional(),
+    poiAlertCategoryCount: count.optional(),
+    poiDisplayedCategoryCount: count.optional(),
+    etaMinutesFromNow: z.number().finite().optional(),
+  }).optional(),
+  appStorage: z
+    .union([
+      z
+        .object({
+          status: z.literal('AVAILABLE'),
+          availableBytes: count,
+          totalBytes: count,
+        })
+        .refine(value => value.availableBytes <= value.totalBytes),
+      z.object({ status: z.literal('UNAVAILABLE') }),
+    ])
+    .optional(),
+  mapDownload: z
+    .object({
+      response: fixedCode(mapDownloadResponses),
+      callback: fixedCode(mapDownloadResponses),
+      status: fixedCode([
+        'STATUS_UNKNOWN',
+        'DOWNLOADING',
+        'SUCCEEDED',
+        'CANCELLED',
+        'FAILED',
+        'PAUSED',
+        'NOT_INITIATED',
+        'WAITING_ON_STORAGE_SPACE',
+        'INSTALLATION_STARTED',
+        'INSTALLATION_FINISHED',
+      ]),
+      stage: fixedCode([
+        'NOT_REQUESTED',
+        'IDENTITY_CHECK',
+        'FOREGROUND_CHECK',
+        'ROUTE_CHECK',
+        'LICENSE_CHECK',
+        'INVENTORY_CHECK',
+        'REGION_CHECK',
+        'NETWORK_POLICY',
+        'SDK_REQUEST',
+        'CATALOG_IDENTITY_CHECK',
+        'CATALOG_SDK_REQUEST',
+        'SDK_RESPONSE',
+        'APP_REQUEST_BUSY',
+        'CATALOG_REQUEST_FAILED',
+        'CATALOG_VALIDATION_FAILED',
+        'COMPLETE',
+      ]),
+      attempts: count,
+      cellularAllowed: z.boolean(),
+      initialMapSignalReceived: z.boolean(),
+    })
+    .optional(),
   androidApi: count.optional(),
   sdkVersion: z
     .unknown()

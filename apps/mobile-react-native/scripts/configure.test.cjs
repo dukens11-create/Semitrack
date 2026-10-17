@@ -38,12 +38,23 @@ test('debug generation allowlists public fields and supports runtime diagnostics
   assert.deepEqual([...result.text.matchAll(/export const (\w+)/g)].map(m=>m[1]),['apiUrl','mapboxToken','configurationDiagnostics']);
 });
 test('release disables diagnostics even if requested',()=>{
-  const result=generate(['--release','--diagnostics'],{SEMITRAX_API_URL:'https://api.example.test'});
+  const result=generate(['--release','--diagnostics'],{SEMITRAX_API_URL:'https://api.example.test',MAPBOX_PUBLIC_TOKEN:'pk.synthetic'});
   assert.equal(result.status,0);
   assert.match(result.text,/configurationDiagnostics = false/);
 });
 test('private Mapbox configuration cannot overwrite a safe artifact',()=>{
   const result=generate(['--require-api-url'],{SEMITRAX_API_URL:'https://api.example.test',MAPBOX_PUBLIC_TOKEN:'sk.synthetic'});
+  assert.notEqual(result.status,0);
+  assert.equal(result.text,'previous configuration');
+});
+
+test('public map token reaches the bundled configuration',()=>{
+  const result=generate(['--require-api-url'],{SEMITRAX_API_URL:'https://api.example.test',MAPBOX_PUBLIC_TOKEN:'pk.synthetic'});
+  assert.equal(result.status,0);
+  assert.match(result.text,/mapboxToken = "pk.synthetic"/);
+});
+test('release without a public map token preserves the previous artifact',()=>{
+  const result=generate(['--release'],{SEMITRAX_API_URL:'https://api.example.test'});
   assert.notEqual(result.status,0);
   assert.equal(result.text,'previous configuration');
 });

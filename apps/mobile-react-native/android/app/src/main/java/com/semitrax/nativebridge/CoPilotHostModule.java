@@ -25,6 +25,8 @@ import com.alk.cpik.CopilotMgr;
 import com.alk.cpik.ConfigurationSetting;
 import com.alk.cpik.Coordinate;
 import com.alk.cpik.Stop;
+import com.alk.cpik.POICategory;
+import com.alk.cpik.POISettings;
 import com.alk.cpik.guidance.GuidanceSettings;
 import com.alk.cpik.guidance.GuidanceMgr;
 import com.alk.cpik.licensing.FeatureStatus;
@@ -44,6 +46,7 @@ import com.alk.cpik.ui.MapImageInfoList;
 import com.alk.cpik.ui.MapImageSet;
 import com.alk.cpik.ui.UIListener;
 import com.alk.cpik.ui.UIMgr;
+import com.alk.cpik.route.RouteMgr;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -89,10 +92,21 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
   private MapImageSet markerSet;
+  private volatile String mapDownloadResponse = "NOT_REQUESTED";
+  private volatile String mapDownloadCallback = "NOT_RECEIVED";
+  private volatile String mapDownloadStatus = "NOT_INITIATED";
+  private volatile String mapDownloadStage = "NOT_REQUESTED";
+  private volatile boolean mapCellularAllowed;
+  private volatile int mapDownloadAttempts;
+  private volatile boolean initialMapSignalReceived;
+  private final CoPilotGuidanceTelemetry guidanceTelemetry;
 
   public CoPilotHostModule(ReactApplicationContext context) {
     super(context);
     this.context = context;
+    guidanceTelemetry = new CoPilotGuidanceTelemetry(main,
+        () -> started && connected && !invalidated,
+        value -> emitMap("SemiTraxCoPilotGuidance", value));
     context.addLifecycleEventListener(this);
   }
   @Override public String getName() { return "SemiTraxCoPilotHost"; }
@@ -108,7 +122,26 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     if (!invalidated && context.hasActiveReactInstance())
       context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(event, value);
   }
+  private final java.util.concurrent.ConcurrentHashMap<MapRegion, String> regionDownloadStatus = new java.util.concurrent.ConcurrentHashMap<>();
   private final MapDataListener mapListener = new MapDataListener() {
+    @Override public void onReadyToDownloadInitialMapData() {
+      initialMapSignalReceived = true;
+    }
+    @Override public void onMapDownloadResponse(MapDownloadResponse response, List<MapRegion> regions, boolean initial) {
+      // Retain only SDK enums; catalog downloads may be outside California.
+      try {
+        if (regions != null && !regions.isEmpty() && response != null)
+          mapDownloadCallback = response.name();
+      } catch (Exception ignored) {}
+    }
+    @Override public void onMapdataUpdate(MapInfo info, MapDataListener.DownloadStatus status) {
+      try {
+        if (info != null && info.getRegion() != null && status != null) {
+          regionDownloadStatus.put(info.getRegion(), status.name());
+          mapDownloadStatus = status.name();
+        }
+      } catch (Exception ignored) {}
+    }
     @Override public void onMapLocationPicked(Stop stop) {
       if (!started || stop == null || stop.getAddressObject() == null) return;
       Coordinate coordinate = stop.getAddressObject().getCoordinate();
@@ -119,7 +152,22 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       emitMap("SemiTraxCoPilotMapPicked", point);
     }
   };
+  private void publishNativeScreen(boolean navigationScreen) {
+    if (invalidated) return;
+    WritableMap result = Arguments.createMap();
+    result.putBoolean("navigationScreen", navigationScreen);
+    emitMap("SemiTraxCoPilotScreenChanged", result);
+  }
   private final UIListener uiListener = new UIListener() {
+    @Override public void onShowNavigationScreen(MapDrawer.MapViewType type) {
+      publishNativeScreen(true);
+    }
+    @Override public void onLeaveNavigationScreen() {
+      publishNativeScreen(false);
+    }
+    @Override public void onStartingPoiWizard() {
+      publishNativeScreen(false);
+    }
     @Override public void onMapImageTouchEvent(MapImageInfo info) {
       if (!started || info == null) return;
       WritableMap result = Arguments.createMap();
@@ -170,7 +218,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       credentialHookAt = System.nanoTime();
       credentialHookState = decision.name();
       hookMatchedAssigned = decision == CoPilotCredentialPolicy.Decision.SUPPLY_ASSIGNED &&
-          CoPilotEnrollmentPolicy.isAssigned(assigned.getCompanyID(), assigned.getAssetID());
+          CoPilotEnrollmentPolicy.COMPANY.equals(assigned.getCompanyID()) &&
+          CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(assigned.getAssetID());
       // isActive may be true before the configuration native pointer is usable.
       // Do not suppress authentication because a configuration API is not ready.
       // Apply Device ID synchronously in the documented onCPStartup callback.
@@ -188,11 +237,14 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     assignedIdentity = configuration == null ? null :
         CoPilotCredentialPolicy.assignedInfo(configuration.getString("device"), configuration.getString("company"));
   }
+  private String assignedSdkDevice() {
+    return CoPilotEnrollmentPolicy.sdkDevice(BuildConfig.SEMITRAX_TEST_ASSET, assignedIdentity.getAssetID());
+  }
   private void configureAssignedDevice() throws Exception {
     if (assignedIdentity == null || !CopilotMgr.isActive())
       throw new IllegalStateException("DEVICE_CONFIGURATION_UNAVAILABLE");
     trace(CoPilotLoginTrace.Event.DEVICE_WRITE_REQUEST);
-    CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedIdentity.getAssetID()));
+    CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(ConfigurationSetting.DEVICE_ID, assignedSdkDevice()));
     trace(CoPilotLoginTrace.Event.DEVICE_WRITE_RETURNED);
     deviceWriteAt = System.nanoTime();
     deviceConfigurationStatus = "WAITING_FOR_READBACK";
@@ -204,7 +256,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     try {
       String actual = CopilotMgr.getConfigurationSetting(ConfigurationSetting.DEVICE_ID).getStringValue();
       long elapsedMs = (System.nanoTime() - deviceWriteAt) / 1000000;
-      CoPilotDeviceReadbackPolicy.Result result = CoPilotDeviceReadbackPolicy.evaluate(assignedIdentity.getAssetID(), actual, elapsedMs);
+      CoPilotDeviceReadbackPolicy.Result result = CoPilotDeviceReadbackPolicy.evaluate(assignedSdkDevice(), actual, elapsedMs);
       deviceReadbackKind = actual == null ? "NO_STRING_VALUE" : actual.isEmpty() ? "EMPTY"
           : result == CoPilotDeviceReadbackPolicy.Result.VERIFIED ? "MATCH" : "DIFFERENT";
       deviceConfigured = result == CoPilotDeviceReadbackPolicy.Result.VERIFIED;
@@ -255,7 +307,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         // before publishing startup or allowing JS to schedule any map download.
         try { CopilotMgr.allowCellularDataForMapDownloads(false); }
         catch (Exception e) { rejectWaiters("COPILOT_MAP_POLICY_FAILED"); release(); return; }
-        // Map/preview integration does not authorize restored or new live guidance.
+        // Keep startup suspended until the verified native CoPilot screen is opened.
         try {
           if (context.getLifecycleState() != LifecycleState.RESUMED ||
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
@@ -334,6 +386,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     }
   };
   private void release() {
+    guidanceTelemetry.stop();
     trace(CoPilotLoginTrace.Event.SERVICE_RELEASED);
     main.removeCallbacks(startupTimeout);
     main.removeCallbacks(deviceReadbackCheck);
@@ -398,7 +451,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (CoPilotEnrollmentPolicy.shouldEnroll(BuildConfig.SEMITRAX_ASSIGNED_SAMSUNG,
             Build.MODEL, configuration != null, binding || started)) {
           JSONObject assigned = new JSONObject().put("company", CoPilotEnrollmentPolicy.COMPANY)
-              .put("device", CoPilotEnrollmentPolicy.DEVICE).put("region", CoPilotEnrollmentPolicy.REGION);
+              .put("device", CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET)).put("region", CoPilotEnrollmentPolicy.REGION);
           writeStored(assigned);
           configuration = assigned;
         }
@@ -419,7 +472,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         JSONObject saved = readStored();
         WritableMap result = Arguments.createMap();
         result.putBoolean("savedCompanyMatches", saved != null && CoPilotEnrollmentPolicy.COMPANY.equals(saved.getString("company")));
-        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.DEVICE.equalsIgnoreCase(saved.getString("device")));
+        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(saved.getString("device")));
         result.putString("credentialHook", credentialHookState);
         result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
         result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);
@@ -430,7 +483,27 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
-        result.putString("reportBuild", "ams-trace-v1");
+        result.putString("reportBuild", "maps-storage-v4");
+        WritableMap storage = Arguments.createMap();
+        try {
+          android.os.StatFs filesystem = new android.os.StatFs(context.getFilesDir().getAbsolutePath());
+          storage.putString("status", "AVAILABLE");
+          storage.putDouble("availableBytes", filesystem.getAvailableBytes());
+          storage.putDouble("totalBytes", filesystem.getTotalBytes());
+        } catch (Exception ignored) {
+          storage.putString("status", "UNAVAILABLE");
+        }
+        result.putMap("appStorage", storage);
+        result.putMap("nativeDisplay", nativeDisplayDiagnostics());
+        WritableMap download = Arguments.createMap();
+        download.putString("response", mapDownloadResponse);
+        download.putString("callback", mapDownloadCallback);
+        download.putString("status", mapDownloadStatus);
+        download.putString("stage", mapDownloadStage);
+        download.putInt("attempts", mapDownloadAttempts);
+        download.putBoolean("cellularAllowed", mapCellularAllowed);
+        download.putBoolean("initialMapSignalReceived", initialMapSignalReceived);
+        result.putMap("mapDownload", download);
         result.putInt("androidApi", Build.VERSION.SDK_INT);
         result.putBoolean("engineStarted", started);
         result.putBoolean("serviceBound", binding);
@@ -498,6 +571,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           LicenseListener.registerListener(hook);
           listenersRegistered = true;
         }
+        guidanceTelemetry.start();
         // The vendor RN module also owns a default global hook. Reclaim the
         // singleton immediately before every bind, after all RN modules exist.
         credentialHookState = "NOT_CALLED";
@@ -627,21 +701,146 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       } catch (Exception e) { promise.reject("COPILOT_INVENTORY_FAILED", "Installed-map verification is unavailable."); }
     });
   }
-  @ReactMethod public void downloadSelectedMap(Promise promise) {
+  @ReactMethod public void licensedMapCatalog(Promise promise) {
     main.post(() -> {
       try {
         requireIdentity();
+        if (!LicenseMgr.isLicensingReady()) throw new IllegalStateException();
+        WritableArray catalog = Arguments.createArray();
+        List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
+        if (licensed != null) for (MapRegion region : licensed) {
+          WritableMap row = Arguments.createMap();
+          row.putString("name", region.name());
+          boolean present = false;
+          for (MapInfo map : installed()) if (map.getRegion() == region) present = true;
+          row.putBoolean("installed", present);
+          row.putString("downloadStatus", regionDownloadStatus.getOrDefault(region, "NOT_INITIATED"));
+          catalog.pushMap(row);
+        }
+        promise.resolve(catalog);
+      } catch (Exception e) { promise.reject("COPILOT_CATALOG_FAILED", "Licensed map catalog is unavailable. Retry device setup."); }
+    });
+  }
+  private final java.util.concurrent.atomic.AtomicBoolean catalogRequest = new java.util.concurrent.atomic.AtomicBoolean(false);
+  @ReactMethod public void downloadLicensedRegions(ReadableArray names, boolean cellular, Promise promise) {
+    main.post(() -> {
+      String failureMessage = "CoPilot device setup could not be verified. Open Details and check setup.";
+      try {
+        ++mapDownloadAttempts;
+        mapDownloadResponse = "NOT_RECEIVED";
+        mapDownloadStage = "CATALOG_IDENTITY_CHECK";
+        requireIdentity();
+        mapDownloadStage = "FOREGROUND_CHECK";
+        failureMessage = "Keep SemiTraX open while requesting maps.";
+        if (context.getLifecycleState() != LifecycleState.RESUMED) throw new IllegalStateException();
+        mapDownloadStage = "ROUTE_CHECK";
+        failureMessage = "CoPilot still has a destination, even if guidance has not started. Cancel the trip in CoPilot, then retry the download.";
+        if (RouteMgr.hasDestination()) throw new IllegalStateException();
+        mapDownloadStage = "LICENSE_CHECK";
+        failureMessage = "CoPilot navigation and heavy-duty truck licensing could not be verified. Open Details and check setup.";
+        if (!LicenseMgr.isLicensingReady() || !feature(LicenseFeature.FULL_NAVIGATION) || !feature(LicenseFeature.TRUCK_HEAVY_DUTY))
+          throw new IllegalStateException();
+        mapDownloadStage = "REGION_CHECK";
+        failureMessage = "The selected map region could not be verified against the current license. Refresh licensed maps and select an available region.";
+        List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
+        ArrayList<MapRegion> requested = new ArrayList<>();
+        for (int i = 0; i < names.size(); i++) {
+          mapDownloadStage = "REGION_CHECK";
+          failureMessage = "The selected map region could not be verified against the current license. Refresh licensed maps and select an available region.";
+          MapRegion target = MapRegion.valueOf(names.getString(i));
+          if (licensed == null || !licensed.contains(target)) throw new IllegalStateException();
+          mapDownloadStage = "INVENTORY_CHECK";
+          failureMessage = "Installed maps could not be checked. Refresh the map list before retrying.";
+          boolean present = false;
+          for (MapInfo map : installed()) if (map.getRegion() == target) present = true;
+          if (!present && !requested.contains(target)) requested.add(target);
+        }
+        if (requested.isEmpty()) { mapDownloadResponse = "INSTALLED"; mapDownloadStage = "COMPLETE"; promise.resolve("INSTALLED"); return; }
+        if (!catalogRequest.compareAndSet(false, true)) { mapDownloadResponse = "FAILURE_MANAGER_BUSY"; mapDownloadStage = "APP_REQUEST_BUSY"; promise.resolve("FAILURE_MANAGER_BUSY"); return; }
+        try {
+          mapDownloadStage = "NETWORK_POLICY";
+          failureMessage = "CoPilot could not apply the mobile-data preference. Retry the map request.";
+          CopilotMgr.allowCellularDataForMapDownloads(cellular);
+          mapCellularAllowed = cellular;
+          mapDownloadStage = "CATALOG_SDK_REQUEST";
+          failureMessage = "CoPilot could not prepare the map download. Share diagnostics from Details.";
+          UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+          // downloadMap performs a synchronous web request; keep it off the UI thread.
+          new Thread(() -> {
+            try {
+              // Add to installed maps; keep every map component enabled.
+              MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
+              mapDownloadResponse = response.name();
+              mapDownloadStage = "SDK_RESPONSE";
+              promise.resolve(response.name());
+            } catch (Exception e) {
+              mapDownloadResponse = "NATIVE_EXCEPTION";
+              mapDownloadStage = "CATALOG_REQUEST_FAILED";
+              promise.reject("COPILOT_DOWNLOAD_FAILED", "Map request failed. Check connection and storage.");
+            } finally { catalogRequest.set(false); }
+          }, "CoPilotMapCatalog").start();
+        } catch (Exception e) { catalogRequest.set(false); throw e; }
+      } catch (Exception e) { mapDownloadResponse = "BLOCKED"; promise.reject("COPILOT_DOWNLOAD_BLOCKED", failureMessage); }
+    });
+  }
+  @ReactMethod public void downloadSelectedMap(Promise promise) {
+    downloadSelectedMap(false, promise);
+  }
+  @ReactMethod public void downloadSelectedMapUsingCellular(Promise promise) {
+    downloadSelectedMap(true, promise);
+  }
+  private void downloadSelectedMap(boolean allowCellular, Promise promise) {
+    main.post(() -> {
+      try {
+        ++mapDownloadAttempts;
+        mapDownloadResponse = "NOT_RECEIVED";
+        mapDownloadStage = "IDENTITY_CHECK";
+        requireIdentity();
+        mapDownloadStage = "FOREGROUND_CHECK";
         if (context.getLifecycleState() != LifecycleState.RESUMED) throw new IllegalStateException("FOREGROUND_REQUIRED");
+        mapDownloadStage = "LICENSE_CHECK";
         if (!LicenseMgr.isLicensingReady() || !feature(LicenseFeature.FULL_NAVIGATION) || !feature(LicenseFeature.TRUCK_HEAVY_DUTY))
           throw new IllegalStateException("LICENSE_REQUIRED");
-        if (selectedInstalled() != null) { promise.resolve("INSTALLED"); return; }
+        mapDownloadStage = "INVENTORY_CHECK";
+        if (selectedInstalled() != null) { mapDownloadResponse = "INSTALLED"; mapDownloadStage = "COMPLETE"; promise.resolve("INSTALLED"); return; }
+        mapDownloadStage = "REGION_CHECK";
         List<MapRegion> licensed = MapDataMgr.getLicensedMapList();
         if (licensed == null || !licensed.contains(region())) throw new IllegalStateException("REGION_UNLICENSED");
-        // SDK validates storage and network; cellular downloads are explicitly disabled.
+        // Cellular is allowed only by the explicit mobile-data action in setup.
+        mapDownloadStage = "NETWORK_POLICY";
+        CopilotMgr.allowCellularDataForMapDownloads(allowCellular);
+        mapCellularAllowed = allowCellular;
+        // A finished download switches into installed data only while CoPilot is idle.
+        // Keep its internal navigation window available during setup; do not start or clear a route.
+        if (!RouteMgr.hasDestination()) UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+        // Preserve an accepted transfer across JS retries/foreground transitions.
+        if ("DOWNLOADING".equals(mapDownloadStatus) || "SUCCEEDED".equals(mapDownloadStatus)
+            || "INSTALLATION_STARTED".equals(mapDownloadStatus)) {
+          promise.resolve("DOWNLOADING".equals(mapDownloadStatus) ? "FAILURE_DOWNLOADING" : "FAILURE_DOWNLOADED");
+          return;
+        }
+        // SDK validates storage and network.
         // Initial-install mode only when verified inventory is empty: no existing map is overwritten.
-        MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), installed().isEmpty());
-        promise.resolve(response.name());
-      } catch (Exception e) { promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, Wi-Fi and sufficient storage."); }
+        mapDownloadStage = "SDK_REQUEST";
+        final boolean initialInstall = installed().isEmpty();
+        if (!catalogRequest.compareAndSet(false, true)) {
+          mapDownloadResponse = "FAILURE_MANAGER_BUSY";
+          mapDownloadStage = "APP_REQUEST_BUSY";
+          promise.resolve(mapDownloadResponse);
+          return;
+        }
+        new Thread(() -> {
+          try {
+            MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), initialInstall);
+            mapDownloadResponse = response.name();
+            mapDownloadStage = "SDK_RESPONSE";
+            promise.resolve(response.name());
+          } catch (Exception e) {
+            mapDownloadResponse = "NATIVE_EXCEPTION";
+            promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download request failed.");
+          } finally { catalogRequest.set(false); }
+        }, "CoPilotInitialMap").start();
+      } catch (Exception e) { mapDownloadResponse = "NATIVE_EXCEPTION"; promise.reject("COPILOT_DOWNLOAD_FAILED", "Map download requires verified licensing, an allowed internet connection and sufficient storage."); }
     });
   }
   private void requireMap() throws Exception {
@@ -667,12 +866,119 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       catch (Exception e) { promise.reject("COPILOT_MAP_UNAVAILABLE", "CoPilot map setup is incomplete."); }
     });
   }
+  // One-time defaults; subsequent driver changes in CoPilot remain authoritative.
+  private void prepareNativeDisplay() throws Exception {
+    android.content.SharedPreferences prefs =
+        context.getSharedPreferences(STORE, Context.MODE_PRIVATE);
+    if (!prefs.getBoolean("nativeHeadingV1", false)) {
+      try {
+        CopilotMgr.setConfigurationSetting(ConfigurationSetting.create(
+            ConfigurationSetting.CHEVRON_DISPLAY, ConfigurationSetting.CHEVRON_DISPLAY_HEADING));
+        if (Integer.valueOf(ConfigurationSetting.CHEVRON_DISPLAY_HEADING).equals(
+            CopilotMgr.getConfigurationSetting(ConfigurationSetting.CHEVRON_DISPLAY).getIntegerValue()))
+          prefs.edit().putBoolean("nativeHeadingV1", true).apply();
+      } catch (Exception ignored) { /* POI setup is independent of heading support. */ }
+    }
+    if (prefs.getBoolean("nativePlacesV1", false)) return;
+    List<POICategory> categories = CopilotMgr.getPOICategories();
+    if (categories == null || categories.isEmpty()) return;
+    POISettings current = CopilotMgr.getPOIAlertSettings();
+    List<POICategory> alerts = new ArrayList<>();
+    if (current.getPOIAlertCategories() != null) alerts.addAll(current.getPOIAlertCategories());
+    boolean found = false;
+    for (POICategory category : categories) {
+      int id = category.getID();
+      // Documented SDK categories: truck services/repair, parking/rest, fuel.
+      if (id != 48 && id != 70 && id != 34 && id != 22) continue;
+      found = true;
+      category.setDisplayOnMap(true);
+      boolean present = false;
+      for (POICategory selected : alerts) {
+        if (selected.getID() == id) { present = true; break; }
+      }
+      if (!present) alerts.add(category);
+    }
+    if (!found) return; // Catalog may not be ready; retry on next map entry.
+    // Pass the complete catalog to preserve the visibility of other categories.
+    CopilotMgr.updatePOICategoriesDisplayStatus(categories);
+    POISettings settings = new POISettings();
+    settings.setPOIAlertEnabled(true);
+    settings.setPOIAlertCategories(alerts);
+    if (!current.getPOIAlertEnabled()) {
+      settings.setPOIAlertLocation(POISettings.POIAlertLocation.ON_ROUTE);
+      settings.setPOIAlertDistance(POISettings.POIAlertDistance.THREE_MILES);
+    }
+    CopilotMgr.setPOIAlertSettings(settings);
+    POISettings verified = CopilotMgr.getPOIAlertSettings();
+    if (!verified.getPOIAlertEnabled())
+      throw new IllegalStateException("POI settings not accepted");
+    for (POICategory expected : alerts) {
+      boolean present = false;
+      for (POICategory actual : verified.getPOIAlertCategories())
+        if (actual.getID() == expected.getID()) { present = true; break; }
+      if (!present) throw new IllegalStateException("POI category not accepted");
+    }
+    prefs.edit().putBoolean("nativePlacesV1", true).apply();
+  }
+
+  private WritableMap nativeDisplayDiagnostics() {
+    WritableMap value = Arguments.createMap();
+    value.putString("status", started ? "AVAILABLE" : "NOT_STARTED");
+    value.putInt("deviceUtcOffsetMinutes",
+        java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000);
+    if (!started) return value;
+    try {
+      value.putBoolean("headingDisplayEnabled",
+          Integer.valueOf(ConfigurationSetting.CHEVRON_DISPLAY_HEADING).equals(
+              CopilotMgr.getConfigurationSetting(ConfigurationSetting.CHEVRON_DISPLAY).getIntegerValue()));
+    } catch (Exception ignored) {}
+    try {
+      value.putBoolean("speedLimitOnMap", GuidanceSettings.isSpeedLimitOnMap());
+      POISettings settings = CopilotMgr.getPOIAlertSettings();
+      value.putBoolean("poiAlertsEnabled", settings.getPOIAlertEnabled());
+      value.putString("poiAlertDistance", settings.getPOIAlertDistance().name());
+      value.putInt("poiAlertCategoryCount", settings.getPOIAlertCategories().size());
+      int displayed = 0;
+      for (POICategory category : CopilotMgr.getPOICategories())
+        if (category.isDisplayedOnMap()) displayed++;
+      value.putInt("poiDisplayedCategoryCount", displayed);
+    } catch (Exception ignored) { value.putString("status", "PARTIAL"); }
+    try {
+      // Relative value avoids exporting destinations, coordinates or trip dates.
+      if (RouteMgr.hasDestination()) {
+        java.util.Date eta = GuidanceMgr.getETA();
+        value.putDouble("etaMinutesFromNow",
+            (eta.getTime() - System.currentTimeMillis()) / 60000.0);
+      }
+    } catch (Exception ignored) { /* ETA is unavailable without a calculated route. */ }
+    return value;
+  }
+
   @ReactMethod public void mapCommand(String command, Promise promise) {
     main.post(() -> {
       try {
         requireMap();
         MapDrawer drawer = UIMgr.getMapDrawer();
         switch (command) {
+          case "native-map":
+            // Opening the native navigation screen hands control to CoPilot.
+            // Merely enabling GPS does not undo startup suspension.
+            if (context.getLifecycleState() != LifecycleState.RESUMED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+              throw new IllegalStateException("VISIBLE_PRECISE_LOCATION_REQUIRED");
+            CopilotMgr.enableGPS();
+            GuidanceMgr.suspendNavigation(false);
+            drawer.lockToChevron();
+            GuidanceSettings.setSpeedLimitOnMap(true);
+            drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
+            UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+            // Optional display configuration must never block the native map.
+            try { prepareNativeDisplay(); } catch (Exception ignored) {}
+            break;
+          case "copilot-menu": UIMgr.showDialog(UIMgr.Dialog.DRIVING_MENU); break;
+          case "trip-plan": UIMgr.showDialog(UIMgr.Dialog.PREVIEW_TRIP_PLAN_DIALOG); break;
+          case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
+          case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
           case "recenter": drawer.lockToChevron(); break;
           case "north-up": drawer.setMapOrientation(MapDrawer.MapOrientation.NORTH_UP); break;
           case "heading-up": drawer.setMapOrientation(MapDrawer.MapOrientation.HEADING_UP); break;
@@ -683,6 +989,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         promise.resolve(null);
       } catch (Exception e) { promise.reject("COPILOT_MAP_COMMAND_FAILED", "CoPilot map control is unavailable."); }
     });
+  }
+  @ReactMethod public void guidanceSnapshot(Promise promise) {
+    main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }
   @ReactMethod public void drawRoutePreview(ReadableArray points, Promise promise) {
     main.post(() -> {

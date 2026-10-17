@@ -1,3 +1,4 @@
+import { CoPilotMapCatalog } from '../components/CoPilotMapCatalog';
 import React, { useEffect, useRef, useState } from 'react';
 import type { Services } from '../app/services';
 import { Page, Heading, Copy, Button } from '../components/ui';
@@ -63,6 +64,7 @@ export function OfflineMapsScreen({ services }: { services: Services }) {
         Map installation does not enable live guidance. Truck-profile and route
         coverage verification are still required.
       </Copy>
+      <CoPilotMapCatalog />
       <CoPilotDeviceSetup />
       <Copy>{connection}</Copy>
       <Button

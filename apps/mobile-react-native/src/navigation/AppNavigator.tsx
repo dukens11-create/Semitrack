@@ -14,11 +14,11 @@ import {
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { Services } from '../app/services';
 import { DriverIcon, type DriverIconName } from '../components/DriverIcon';
-import { driverColors, useDriverPalette } from '../components/DriverUI';
+import { useDriverPalette } from '../components/DriverUI';
 import { DriverDashboardScreen } from '../screens/DriverDashboardScreen';
 import { TripsScreen, DocumentsScreen } from '../screens/DriverLibraryScreens';
 import { MoreScreen } from '../screens/MoreScreen';
-import { PlanningScreen } from '../screens/PlanningScreen';
+import { CoPilotNavigationScreen } from '../screens/CoPilotNavigationScreen';
 import { TruckProfileScreen } from '../screens/TruckProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { ServicesScreen } from '../screens/ServicesScreen';
@@ -53,7 +53,6 @@ export function DriverShell({
   const p = useDriverPalette();
   const [tab, setTab] = useState(1);
   const [visited, setVisited] = useState([1]);
-  const [fullNavigation, setFullNavigation] = useState(false);
   const focused = useIsFocused();
   function select(index: number, confirmed = false) {
     if (
@@ -108,13 +107,9 @@ export function DriverShell({
                 onTrucks={() => open('Trucks')}
               />
             ) : index === 1 ? (
-              <PlanningScreen
-                active={focused && tab === 1}
-                onNavigationActiveChange={setFullNavigation}
+              <CoPilotNavigationScreen
                 services={services}
-                onTrucks={() => open('Trucks')}
-                onServices={() => open('Services')}
-                onSettings={() => open('Settings')}
+                active={focused && tab === 1}
               />
             ) : index === 2 ? (
               <TripsScreen services={services} onMap={() => select(1)} />
@@ -133,7 +128,7 @@ export function DriverShell({
           </View>
         ))}
       </View>
-      {!(tab === 1 && fullNavigation) && (
+      {
         <View
           accessibilityRole="tablist"
           style={[
@@ -159,7 +154,7 @@ export function DriverShell({
                 <DriverIcon
                   name={index === tab ? item.active : item.icon}
                   size={25}
-                  color={index === tab ? '#FF6B2C' : p.muted}
+                  color={index === tab ? (p.dark ? '#8DD8FF' : '#075985') : p.muted}
                 />
               </View>
               <Text
@@ -167,7 +162,7 @@ export function DriverShell({
                   styles.label,
                   index === tab && styles.selectedLabel,
                   {
-                    color: index === tab ? driverColors.orange : p.muted,
+                    color: index === tab ? (p.dark ? '#8DD8FF' : '#075985') : p.muted,
                   },
                 ]}
               >
@@ -176,7 +171,7 @@ export function DriverShell({
             </Pressable>
           ))}
         </View>
-      )}
+      }
     </View>
   );
 }
@@ -273,7 +268,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  selected: { backgroundColor: '#FF6B2C29' },
+  selected: { backgroundColor: '#38BDF829' },
   selectedLabel: { fontWeight: '900' },
   label: { fontSize: 11, fontWeight: '700' },
 });

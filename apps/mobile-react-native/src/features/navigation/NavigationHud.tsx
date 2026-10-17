@@ -107,7 +107,7 @@ export function NavigationHud({
         <Text
           accessibilityLabel={'Destination: ' + (destination ?? 'Truck route')}
           style={[styles.previewDestination, { color: palette.text }]}
-          numberOfLines={2}
+          numberOfLines={1}
         >
           {destination ?? 'Truck route'}
         </Text>
@@ -292,7 +292,7 @@ export function NavigationHud({
           )}
         </>
       )}
-      {(placement === 'all' || placement === 'dashboard') && (
+      {!preview && (placement === 'all' || placement === 'dashboard') && (
         <View style={styles.instruments}>
           <View
             style={[styles.speedCard, palette.dark && styles.nightSpeedCard]}

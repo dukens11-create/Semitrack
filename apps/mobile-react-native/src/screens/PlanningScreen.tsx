@@ -920,6 +920,10 @@ export function PlanningScreen({
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
+        <View style={styles.mapBrandBar}>
+          <Text style={styles.mapWordmark}>SemiTra<Text style={styles.mapBrandX}>X</Text></Text>
+          <Text style={styles.mapBrandTagline}>TRUCK NAVIGATION</Text>
+        </View>
         {savedEngineTrip && <DriverButton title="Resume engine trip" onPress={() => { void run(async () => {
           const host = coPilotHost();
           if (!host.resumeEngineTrip) throw new Error('Engine trip controls unavailable.');
@@ -942,6 +946,8 @@ export function PlanningScreen({
               state={navigation}
               fix={location.fix}
               metric={settings?.units === 'metric'}
+              onMore={() => setSheet('navigation')}
+              onReview={() => setSheet('route')}
               placement="maneuver"
             />
           </View>
@@ -1850,6 +1856,10 @@ export function PlanningScreen({
   );
 }
 const styles = StyleSheet.create({
+  mapBrandBar: { backgroundColor: '#172433', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, alignItems: 'center', marginBottom: 6 },
+  mapWordmark: { color: '#FFFFFF', fontSize: 25, fontWeight: '900', fontStyle: 'italic' },
+  mapBrandX: { color: '#FF6B2C', fontSize: 29 },
+  mapBrandTagline: { color: '#FFFFFF', fontSize: 8, letterSpacing: 3 },
   hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
   removeRecent: {

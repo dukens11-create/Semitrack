@@ -111,6 +111,7 @@ export function NavigationHud({
         { backgroundColor: palette.card, borderColor: palette.border },
       ]}
     >
+      <View style={styles.destinationRow}>
       <View style={styles.previewIcon}>
         <DriverIcon name="route_rounded" size={23} />
       </View>
@@ -127,6 +128,13 @@ export function NavigationHud({
           Trimble estimate · Guidance has not started
         </Text>
       </View>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Review route and stops" onPress={onReview} style={[styles.previewMetrics, { borderColor: palette.border }]}>
+        <View style={styles.metricCell}><Text style={[styles.metricValue, { color: palette.text }]}>{distance}</Text><Text style={[styles.metricLabel, { color: palette.muted }]}>Distance</Text></View>
+        <View style={styles.metricCell}><Text style={[styles.metricValue, { color: palette.text }]}>{duration}</Text><Text style={[styles.metricLabel, { color: palette.muted }]}>Drive time</Text></View>
+        <View style={styles.metricCell}><Text style={[styles.metricValue, { color: palette.text }]}>{new Date(Date.now() + route.durationSeconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</Text><Text style={[styles.metricLabel, { color: palette.muted }]}>Estimated arrival</Text></View>
+      </Pressable>
+      {onMore && <Pressable accessibilityRole="button" accessibilityLabel="Navigation Controls" onPress={onMore} style={{ alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center', paddingHorizontal: 12 }}><Text style={{ color: palette.actionText, fontWeight: '700' }}>Route options ···</Text></Pressable>}
     </View>
   );
   const maneuver = (
@@ -350,7 +358,7 @@ export function NavigationHud({
           )}
         </View>
       )}
-      {placement !== 'maneuver' && summary}
+      {placement !== 'maneuver' && !(preview && placement === 'dashboard') && summary}
       {placement === 'all' && (
         <View style={[styles.detailCopy, { backgroundColor: palette.card }]}>
           {destination && (
@@ -380,9 +388,12 @@ export function NavigationHud({
   );
 }
 const styles = StyleSheet.create({
+  destinationRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  previewMetrics: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, marginTop: 3 },
+  metricCell: { flex: 1, alignItems: 'center' },
+  metricValue: { fontSize: 16, fontWeight: '800' },
+  metricLabel: { fontSize: 10, marginTop: 3 },
   previewCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 11,
     padding: 10,
     borderRadius: 14,

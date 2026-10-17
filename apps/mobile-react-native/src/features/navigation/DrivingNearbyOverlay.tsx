@@ -210,14 +210,14 @@ export function DrivingNearbyOverlay({
                   { backgroundColor: p.card, borderColor: p.border },
                 ]}
               >
-                <PoiCategoryPicture category={row.category} size={24} />
+                <PoiCategoryPicture category={row.category} size={28} />
                 <View style={styles.copy}>
                   <Text
                     style={[styles.label, { color: p.muted }]}
                     numberOfLines={1}
                   >
                     {row.category === 'truck_stop'
-                      ? `Truck ${row.slot + 1}`
+                      ? `Truck stop ${row.slot + 1}`
                       : label}
                   </Text>
                   <Text
@@ -239,8 +239,8 @@ export function DrivingNearbyOverlay({
   );
 }
 const styles = StyleSheet.create({
-  panel: { gap: 6 },
-  narrow: { width: 112 },
+  panel: { borderRadius: 16, overflow: 'hidden', elevation: 3 },
+  narrow: { width: 132 },
   wide: { width: 230, maxWidth: '100%' },
   header: {
     flexDirection: 'row',
@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 8,
     minHeight: 44,
-    borderRadius: 12,
+    borderRadius: 0,
   },
   headerCopy: { flex: 1 },
   heading: { fontSize: 12, fontWeight: '800' },
@@ -269,11 +269,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     minHeight: 48,
-    marginBottom: 6,
-    borderRadius: 10,
+    marginBottom: 0,
+    borderRadius: 0,
     paddingHorizontal: 7,
     paddingVertical: 3,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   copy: { flex: 1 },
   label: { fontSize: 10, lineHeight: 12 },

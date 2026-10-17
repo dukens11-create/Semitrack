@@ -107,6 +107,7 @@ test('settings retain control of the native view and ignore planner coordinate p
   expect(mockHost.drawMarkers).not.toHaveBeenCalled();
   await act(async () => screen.update(render(false)));
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
+  expect(mockHost.setMapAppearance).not.toHaveBeenCalled();
 });
 
 test('active guidance never invokes the native preview cleanup', async () => {

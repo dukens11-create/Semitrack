@@ -54,6 +54,7 @@ export function CopilotTruckMap({
   const palette = useDriverPalette();
   const allowed = copilotMapBlocker(state) === null;
   const [appearanceReady, setAppearanceReady] = useState(false);
+  const appliedAppearance = useRef<boolean | undefined>(undefined);
   const [error, setError] = useState('');
   const [northUp, setNorthUp] = useState(true);
   const previousCommand = useRef<number | undefined>(undefined);
@@ -86,15 +87,21 @@ export function CopilotTruckMap({
   markerPositions.current = markers.positions;
   useEffect(() => {
     if (!allowed) {
+      appliedAppearance.current = undefined;
       setAppearanceReady(false);
       return;
     }
     if (settingsOpen) return;
+    // Returning from CoPilot settings must preserve the native map style and
+    // day/night selection. Apply only a new SemiTraX theme or a new engine.
+    if (appliedAppearance.current === palette.dark) return;
+    appliedAppearance.current = undefined;
     let active = true;
     void coPilotHost()
       .setMapAppearance(palette.dark)
       .then(() => {
         if (!active) return;
+        appliedAppearance.current = palette.dark;
         setAppearanceReady(true);
         setError('');
       })

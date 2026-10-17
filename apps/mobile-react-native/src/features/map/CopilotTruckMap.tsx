@@ -31,6 +31,8 @@ export interface CopilotMapProps {
   progressOffset?: number;
   topInset?: number;
   bottomInset?: number;
+  settingsOpen?: boolean;
+  onSettings?: () => void;
 }
 let nextMarkerId = 1;
 /** Backend geometry is a dashed planning overlay, never a native guidance route. */
@@ -45,6 +47,8 @@ export function CopilotTruckMap({
   progressOffset,
   topInset = 56,
   bottomInset = 0,
+  settingsOpen = false,
+  onSettings,
 }: CopilotMapProps) {
   const state = useCopilotState();
   const palette = useDriverPalette();
@@ -199,11 +203,21 @@ export function CopilotTruckMap({
       ) : (
         <CopilotOfflineMap state={state} />
       )}
-      {allowed && appearanceReady && state.readyToAddStops && (
+      {allowed && appearanceReady && state.readyToAddStops && !settingsOpen && (
         <View
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"
         >
+          {onSettings && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="CoPilot settings"
+              style={[styles.button, { backgroundColor: palette.card }]}
+              onPress={onSettings}
+            >
+              <Text style={[styles.symbol, { color: palette.text }]}>⚙</Text>
+            </Pressable>
+          )}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Recenter / follow truck"

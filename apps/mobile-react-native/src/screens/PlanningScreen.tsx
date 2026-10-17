@@ -34,6 +34,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  BackHandler,
   Keyboard,
   Pressable,
   ScrollView,
@@ -76,13 +77,13 @@ import {
 } from '../features/poi/PoiPresentation';
 import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { copilotMapBlocker } from '../components/CopilotOfflineMap';
+import { coPilotHost } from '../services/copilot/CoPilotHost';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
   services,
   onTrucks,
   onServices,
-  onSettings,
   active = true,
   onNavigationActiveChange,
 }: {
@@ -98,8 +99,10 @@ export function PlanningScreen({
     location = useStore(services.location);
   const { settings } = useStore(services.settings);
   const copilot = useCopilotState();
+  const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false);
+  const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
   // Native onboarding (including the EULA) needs an unobstructed viewport.
-  const nativeSetupVisible = copilotMapBlocker(copilot) === null && !copilot.readyToAddStops;
+  const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
   );
@@ -532,6 +535,33 @@ export function PlanningScreen({
       setError(errorMessage(e));
     }
   }
+  async function openCoPilotSettings() {
+    closeSheet();
+    try {
+      await coPilotHost().mapCommand('settings');
+      setNativeSettingsOpen(true);
+    } catch {
+      setError('CoPilot settings are unavailable until map setup is complete.');
+    }
+  }
+  async function closeCoPilotSettings() {
+    try {
+      await coPilotHost().mapCommand('map');
+      setNativeSettingsOpen(false);
+    } catch {
+      Alert.alert('CoPilot map', 'The map could not reopen. Please try again.');
+    }
+  }
+  const closeNativeSettings = useRef(closeCoPilotSettings);
+  closeNativeSettings.current = closeCoPilotSettings;
+  useEffect(() => {
+    if (!active || !nativeSettingsOpen) return;
+    const listener = BackHandler.addEventListener('hardwareBackPress', () => {
+      void closeNativeSettings.current();
+      return true;
+    });
+    return () => listener.remove();
+  }, [active, nativeSettingsOpen]);
   function menuAction(action: NavigationMenuAction) {
     if (action === 'weather') {
       closeSheet();
@@ -613,8 +643,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'audio') {
-      closeSheet();
-      onSettings?.();
+      void openCoPilotSettings();
       return;
     }
     if (action === 'report') {
@@ -737,8 +766,15 @@ export function PlanningScreen({
   );
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
-      <View style={styles.map}>
+      {nativeSettingsOpen && (
+        <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
+          <DriverButton title="Back to SemiTraX map" secondary onPress={() => { void closeCoPilotSettings(); }} />
+        </View>
+      )}
+      <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>
         <CopilotTruckMap
+          settingsOpen={nativeSettingsOpen}
+          onSettings={() => { void openCoPilotSettings(); }}
           command={mapCommand}
           route={routes.route}
           plan={routes.plan}

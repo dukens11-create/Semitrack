@@ -1144,7 +1144,13 @@ test('navigation menu connects real map commands, settings, report UI and confir
   );
   await press('Navigation Controls');
   await press('Audio Settings');
-  expect(settings).toHaveBeenCalledTimes(1);
+  expect(settings).not.toHaveBeenCalled();
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('settings');
+  expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+  expect(StyleSheet.flatten(screen.root.findByProps({ testID: 'map-bottom-panel' }).props.style).display).toBe('none');
+  await press('Back to SemiTraX map');
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('map');
+  expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(false);
   await press('Navigation Controls');
   await press('Report');
   expect(report).toHaveBeenCalledTimes(1);

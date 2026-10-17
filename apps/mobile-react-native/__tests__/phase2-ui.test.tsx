@@ -2089,6 +2089,12 @@ test('engine handoff reviews its truck, preserves stop order and keeps native co
     ]);
     expect(services.guidance.startNavigation).not.toHaveBeenCalled();
     expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    await act(async () => {
+      DeviceEventEmitter.emit('SemiTraxCoPilotScreenChanged', { navigationScreen: true });
+    });
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    expect(screen.root.findByType(CopilotTruckMap).props.topInset).toBe(0);
+    expect(screen.root.findByType(CopilotTruckMap).props.bottomInset).toBe(0);
     await press('Back to planner');
     expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
     await press('Back to planner');

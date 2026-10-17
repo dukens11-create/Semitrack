@@ -217,7 +217,7 @@ test('POI badges need fresh sourced ahead evidence and a real fresh fix; no samp
   expect(screen.toJSON()).toBeNull();
 });
 
-test('preview keeps the compact destination without live guidance instruments', async () => {
+test('preview keeps the compact destination with GPS instruments and no invented limit', async () => {
   jest.spyOn(Date, 'now').mockReturnValue(now);
   const destination = 'Reno Junction, California, United States';
   await act(async () => {
@@ -236,10 +236,29 @@ test('preview keeps the compact destination without live guidance instruments', 
   expect(text()).toContain(destination);
   expect(text()).toContain('Trimble estimate');
   expect(text()).toContain('Guidance has not started');
-  expect(text()).not.toContain('LIMIT');
-  expect(text()).not.toContain('MPH');
-  expect(text()).not.toContain('--');
+  expect(text()).toContain('TRUCK LIMIT');
+  expect(text()).toContain('MPH');
+  expect(text()).toContain('--');
   expect(text()).toContain('39');
   expect(text()).not.toContain('375 ft');
   expect(text()).not.toContain('Provider speed limit');
+});
+
+test('preview exposes GPS speed and an estimated arrival without inventing guidance', async () => {
+  jest.spyOn(Date, 'now').mockReturnValue(now);
+  await act(async () => {
+    screen = create(
+      <NavigationHud
+        route={route()}
+        state={{ phase: 'idle' }}
+        fix={fix}
+        placement="dashboard"
+      />,
+    );
+  });
+  expect(text()).toContain('39');
+  expect(text()).toContain('MPH');
+  expect(text()).toContain('TRUCK LIMIT');
+  expect(text()).toContain('Planning estimate · Trimble · ETA');
+  expect(text()).not.toContain('I-80 West');
 });

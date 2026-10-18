@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedCommit
 )
 $ErrorActionPreference = 'Stop'
-$package = 'com.semitrax.app.recovery.hybrid'
+$package = 'com.semitrax.app.hybridtest392'
 $sdk = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 $adb = Join-Path $sdk 'platform-tools\adb.exe'
 if (!(Test-Path -LiteralPath $adb)) { throw 'Android platform-tools not found.' }
@@ -39,22 +39,31 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not check the connected phone.' }
 $connected = @($devices | Where-Object { $_ -match '^\S+\s+device$' })
 if ($connected.Count -ne 1) { throw 'Connect one unlocked phone and accept USB debugging.' }
 $serial = ($connected[0] -split '\s+')[0]
-$paths = & $adb -s $serial shell pm path $package
-if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the installed Hybrid app.' }
-$base = @($paths | Where-Object { $_ -match '^package:.*/base\.apk\s*$' })
-if ($base.Count -ne 1) { throw 'Installed Hybrid base APK was not found. Stop and verify the correct app; do not uninstall.' }
+$packages = & $adb -s $serial shell pm list packages $package
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect installed packages.' }
+$base = @()
+if (@($packages | Where-Object { $_.Trim() -eq "package:$package" }).Count -eq 1) {
+    $paths = & $adb -s $serial shell pm path $package
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the installed test app.' }
+    $base = @($paths | Where-Object { $_ -match '^package:.*/base\.apk\s*$' })
+    if ($base.Count -ne 1) { throw 'Could not identify installed test APK. No changes made.' }
+}
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('SemiTraX-cert-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
-    $installed = Join-Path $temp 'installed.apk'
-    & $adb -s $serial pull ($base[0].Substring(8).Trim()) $installed
-    if ($LASTEXITCODE -ne 0) { throw 'Could not read the installed APK certificate.' }
-    if ((Read-Certificate $installed) -ne (Read-Certificate $apk.FullName)) {
-        throw 'Signing certificates differ. The original Hybrid signing key must be recovered. DO NOT uninstall or clear data: that can lose the licensed setup and offline maps.'
+    # Verify the new APK even for a first installation.
+    $newCertificate = Read-Certificate $apk.FullName
+    if ($base.Count -eq 1) {
+        $installed = Join-Path $temp 'installed.apk'
+        & $adb -s $serial pull ($base[0].Substring(8).Trim()) $installed
+        if ($LASTEXITCODE -ne 0) { throw 'Could not read the installed APK certificate.' }
+        if ((Read-Certificate $installed) -ne $newCertificate) {
+            throw 'Signing certificates differ. The existing test app signing key must be recovered. DO NOT uninstall or clear data: that can lose the licensed setup and offline maps.'
+        }
     }
     & $adb -s $serial install --no-streaming -r $apk.FullName
     if ($LASTEXITCODE -ne 0) { throw 'Installation failed. Do not uninstall or clear data. Copy the error for review.' }
-    Write-Host "Installed Hybrid build $ExpectedCommit. Open Details and verify version 392 and the commit." -ForegroundColor Green
+    Write-Host "Installed SemiTraX Test 392 build $ExpectedCommit. Open Details and verify version 392 and the commit." -ForegroundColor Green
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
 }

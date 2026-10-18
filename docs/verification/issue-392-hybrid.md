@@ -1,6 +1,6 @@
 # Hybrid issue 392 repair
 
-Target: `com.semitrax.app.recovery.hybrid`, versionCode **392**, versionName **0.1.392**.
+Current alongside-test target: `com.semitrax.app.hybridtest392`, versionCode **392**, versionName **0.1.392**.
 Base: `codex/sept27-mapbox-engine` / b56071e. No Flutter/migration app changes.
 
 ## Actual execution path
@@ -57,7 +57,7 @@ device and permission/support for the headless engine + Mapbox display integrati
 ## Preservation and installation
 
 No device enrollment, saved ID, licensing calls, map deletion, application-data wipe or regional
-map selection was changed. This APK uses the same Hybrid applicationId. Earlier Hybrid builds
+map selection was changed. The original issue-392 APK used the same Hybrid applicationId; the current alongside-test build uses a separate package as documented below. Earlier Hybrid builds
 used a workflow without a restored signing key, so certificate continuity is **not established**.
 Compare the installed base APK certificate with the new artifact before `adb install -r`.
 If different, STOP: recover the original signing key; do not uninstall or clear app data.
@@ -103,3 +103,16 @@ full mobile checks, compile Android, verify package identity and the persistent
 signing certificate, and upload the APK. This does not remove any license,
 offline map or truck-routing safety gate. The historical Flutter source is
 not used by the Hybrid build. The Trimble blockers above remain unresolved.
+
+
+### Separate test installation after confirmed signing mismatch
+
+The original installed Hybrid certificate did not match the persistent key.
+The user approved an alongside test app. Current output is now
+`com.semitrax.app.hybridtest392`, launcher label **SemiTraX Test 392**.
+The installer exclusively targets this new package, supports first installation,
+and verifies the existing certificate on later updates. It never uninstalls,
+clears data, or imports enrollment/maps from `com.semitrax.app.recovery.hybrid`.
+CoPilot uses internal application storage. Test activation and offline maps
+are separate and may require Trimble authorization. No automatic enrollment
+transfer is attempted. Start/Resume retain all existing safety gates.

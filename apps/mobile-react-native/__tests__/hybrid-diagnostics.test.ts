@@ -19,7 +19,7 @@ const native = {
   buildIdentity: {
     commit: 'a'.repeat(40),
     builtAt: '2026-10-18T17:00:00Z',
-    packageName: 'com.semitrax.app.recovery.hybrid',
+    packageName: 'com.semitrax.app.hybridtest392',
     variant: 'debug',
     versionCode: 392,
     versionName: '0.1.392',

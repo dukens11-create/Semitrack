@@ -70,7 +70,7 @@ const snapshot = z.object({
     .object({
       commit: z.string().regex(/^(?:[a-f0-9]{40}|local-unverified)$/),
       builtAt: z.string().datetime(),
-      packageName: z.literal('com.semitrax.app.recovery.hybrid'),
+      packageName: z.literal('com.semitrax.app.hybridtest392'),
       variant: z.literal('debug'),
       versionCode: count,
       versionName: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+$/),

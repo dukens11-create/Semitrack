@@ -42,7 +42,7 @@ android {
  }
  buildTypes {
   debug {
-  applicationIdSuffix ".recovery.hybrid"
+  applicationIdSuffix ".hybridtest392"
   manifestPlaceholders = [usesCleartextTraffic:"true"]
   buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
  }

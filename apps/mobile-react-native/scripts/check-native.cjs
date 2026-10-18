@@ -25,7 +25,7 @@ assert(appDelegate.includes('RCTLinkingManager.application(app, open: url, optio
 const manifest=read('android/app/src/main/AndroidManifest.xml');
 assert(manifest.includes('FOREGROUND_SERVICE_LOCATION')&&manifest.includes('foregroundServiceType="location"'),'Missing Android location FGS contract');
 const gradle=read('android/app/build.gradle');
-assert(gradle.includes('applicationId "com.semitrax.app"')&&gradle.includes('applicationIdSuffix ".recovery.hybrid"'),'Android identity mismatch');
+assert(gradle.includes('applicationId "com.semitrax.app"')&&gradle.includes('applicationIdSuffix ".hybridtest392"'),'Android identity mismatch');
 assert(gradle.includes('configureSemiTraxRelease')&&!gradle.includes('signingConfig signingConfigs.debug'),'Unsafe release configuration');
 const pbx=read('ios/SemiTrax.xcodeproj/project.pbxproj');
 // Parse the OpenStep dictionary, ignoring comments rather than treating them as references.

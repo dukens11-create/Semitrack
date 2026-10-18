@@ -45,7 +45,7 @@ jobs:
           apk=android/app/build/outputs/apk/debug/app-debug.apk
           aapt_bin=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
           "$aapt_bin" dump badging "$apk" > android/app/build/outputs/apk/debug/package-identity.txt
-          grep -q "name='com.semitrax.app.recovery.hybrid'" android/app/build/outputs/apk/debug/package-identity.txt
+          grep -q "name='com.semitrax.app.hybridtest392'" android/app/build/outputs/apk/debug/package-identity.txt
           signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
           "$signer" verify --print-certs "$apk" > android/app/build/outputs/apk/debug/signing-certificate.txt
           node scripts/verify-test-certificate.cjs android/app/build/outputs/apk/debug/signing-certificate.txt
@@ -56,9 +56,9 @@ jobs:
           cp scripts/install-hybrid.ps1 android/app/build/outputs/apk/debug/install-hybrid.ps1
           git rev-parse HEAD > android/app/build/outputs/apk/debug/build-commit.txt
           date -u +%FT%TZ > android/app/build/outputs/apk/debug/build-time.txt
-          echo 'Hybrid; versionCode 392; compare installed signing certificate before adb install -r. Never uninstall or clear data.' > android/app/build/outputs/apk/debug/install-safety.txt
+          echo 'Separate SemiTraX Test 392 app; versionCode 392; original Hybrid app is preserved. Test activation and maps are separate. Never uninstall or clear data.' > android/app/build/outputs/apk/debug/install-safety.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: semitrax-hybrid-issue392-${{ github.run_number }}
+          name: semitrax-test392-${{ github.run_number }}
           path: apps/mobile-react-native/android/app/build/outputs/apk/debug/
           if-no-files-found: error

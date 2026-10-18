@@ -867,7 +867,12 @@ export function PlanningScreen({
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {mapboxProof && engineTripOpen && (
-        <React.Suspense fallback={<DriverCopy>Opening navigation map…</DriverCopy>}><EngineMapboxProof token={mapboxToken} onClose={() => setMapboxProof(false)} /></React.Suspense>
+        <React.Suspense fallback={<DriverCopy>Opening navigation map…</DriverCopy>}><EngineMapboxProof token={mapboxToken} fix={location.fix} nearbyService={services.poi} onPoi={poi => {
+          setMapboxProof(false);
+          setSelectedMapPoi(poi);
+          setDetail({id: poi.id, name: poi.name, lat: poi.latitude, lng: poi.longitude});
+          setSheet('search');
+        }} onClose={() => setMapboxProof(false)} /></React.Suspense>
       )}
       {nativeSettingsOpen && (
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>

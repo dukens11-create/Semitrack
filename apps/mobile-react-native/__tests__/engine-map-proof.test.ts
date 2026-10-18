@@ -30,3 +30,11 @@ test('rejects invalid route coordinates and missing revision', () => {
   expect(engineMapSnapshotSchema.safeParse({...sample, routeCoordinates: [[200, 39], [0, 0]]}).success).toBe(false);
   expect(engineMapSnapshotSchema.safeParse({...sample, routeRevision: undefined}).success).toBe(false);
 });
+test('truck limit and compass require fresh engine data and never borrow the road limit', () => {
+  const live = {...sample, heading: 90, truckSpeedLimitMph: 55, roadSpeedLimitMph: 65};
+  expect(engineMapProof(live, now).truckSpeedLimitMph).toBe(55);
+  expect(engineMapProof(live, now).compass).toBe('E');
+  expect(engineMapProof({...live, truckSpeedLimitMph: undefined}, now).truckSpeedLimitMph).toBeUndefined();
+  expect(engineMapProof(live, now + 5001).truckSpeedLimitMph).toBeUndefined();
+  expect(engineMapProof(live, now + 5001).compass).toBeUndefined();
+});

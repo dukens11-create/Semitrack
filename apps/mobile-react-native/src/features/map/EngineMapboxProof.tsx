@@ -3,9 +3,17 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
 import { engineMapProof } from './engineMapProof';
 import { useEngineMapSnapshot } from './useEngineMapSnapshot';
+import {DrivingNearbyOverlay} from '../navigation/DrivingNearbyOverlay';
+import type {Poi, PoiService} from '../poi/PoiService';
+import type {LocationFix} from '../../services/location/LocationService';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
-/** Isolated read-only proof. Trip start/end/profile/voice remain owned by CoPilot. */
-export function EngineMapboxProof({ token, onClose }: { token: string; onClose: () => void }) {
+/** Live engine display. Native trip controls retain ownership of start/end/profile/voice. */
+export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi }: { token: string; onClose: () => void; nearbyService?: Pick<PoiService, 'nearby'>; fix?: LocationFix | null; onPoi?: (poi: Poi) => void }) {
+  const insets = useSafeAreaInsets();
+  const [follow, setFollow] = useState(true);
+  const [zoom, setZoom] = useState(14);
+  const [mapHeight, setMapHeight] = useState(0);
   const { sample, now } = useEngineMapSnapshot();
   const [ready, setReady] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -21,26 +29,27 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
   }, [token]);
   const data = engineMapProof(sample, now);
   useEffect(() => {
-    if (loaded && data.position) camera.current?.setCamera({
-      centerCoordinate: data.position, zoomLevel: 14,
+    if (loaded && follow && data.position) camera.current?.setCamera({
+      centerCoordinate: data.position, zoomLevel: zoom,
       heading: data.heading ?? 0, animationDuration: 500,
     });
-  }, [loaded, data.position, data.heading]);
+  }, [loaded, follow, zoom, data.position, data.heading]);
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
-      <View style={styles.screen}>
+      <View style={[styles.screen, {paddingTop: insets.top, paddingBottom: insets.bottom}]}>
         <View style={styles.header}>
           <Text style={styles.title}>SemiTraX Navigation</Text>
           <Text style={styles.copy}>{data.status}</Text>
           <Text style={styles.turn}>{data.instruction || 'Waiting for engine guidance.'}</Text>
           {!!data.nextRoad && <Text style={styles.copy}>{data.turnDistance} · {data.nextRoad}</Text>}
         </View>
-        <View style={styles.map}>
+        <View style={styles.map} onLayout={event => setMapHeight(event.nativeEvent.layout.height)}>
           {ready && <Mapbox.MapView
             style={styles.fill}
+            onTouchStart={() => setFollow(false)}
             styleURL={satellite ? Mapbox.StyleURL.SatelliteStreet : Mapbox.StyleURL.Street}
             onDidFinishLoadingMap={() => { setLoaded(true); setMapError(''); }}
-            onMapLoadingError={() => { setLoaded(false); setMapError('Mapbox map failed to load. Trip controls.'); }}
+            onMapLoadingError={() => { setLoaded(false); setMapError('Map unavailable. Check your connection or open Trip controls.'); }}
           >
             <Mapbox.Camera ref={camera} defaultSettings={{ centerCoordinate: [-119.8, 39.5], zoomLevel: 4 }} />
             {data.coordinates && <Mapbox.ShapeSource id="engine-route" shape={{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: data.coordinates } }}>
@@ -51,9 +60,18 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
             </Mapbox.ShapeSource>}
           </Mapbox.MapView>}
           {!!mapError && <View style={styles.error}><Text>{mapError}</Text></View>}
-          <Pressable accessibilityRole="button" accessibilityLabel="Toggle satellite map" style={styles.satellite} onPress={() => { setLoaded(false); setSatellite(value => !value); }}>
-            <Text style={styles.copy}>{satellite ? 'Street' : 'Satellite'}</Text>
-          </Pressable>
+          <View style={styles.controls}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Toggle satellite map" style={styles.control} onPress={() => { setLoaded(false); setSatellite(value => !value); }}><Text style={styles.copy}>{satellite ? 'Street' : 'Satellite'}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Compass north up" style={styles.control} onPress={() => {setFollow(false); camera.current?.setCamera({heading: 0, animationDuration: 300});}}><Text style={styles.title}>{data.compass ?? '—'}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Zoom in" style={styles.control} onPress={() => {const next = Math.min(19, zoom + 1); setZoom(next); camera.current?.setCamera({zoomLevel: next, animationDuration: 300});}}><Text style={styles.title}>＋</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Zoom out" style={styles.control} onPress={() => {const next = Math.max(3, zoom - 1); setZoom(next); camera.current?.setCamera({zoomLevel: next, animationDuration: 300});}}><Text style={styles.title}>−</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Follow truck" style={styles.control} onPress={() => setFollow(true)}><Text style={styles.copy}>{follow ? 'Following' : 'Recenter'}</Text></Pressable>
+          </View>
+          {nearbyService && mapHeight > 240 && <View pointerEvents="box-none" style={styles.nearby}><DrivingNearbyOverlay service={nearbyService} fix={fix ?? null} active availableHeight={Math.min(280, mapHeight - 100)} onSelect={onPoi}/></View>}
+          <View style={styles.speed}>
+            <View><Text style={styles.copy}>TRUCK LIMIT</Text><Text style={styles.speedNumber}>{data.truckSpeedLimitMph === undefined ? '—' : Math.round(data.truckSpeedLimitMph)}</Text></View>
+            <View><Text style={styles.copy}>MPH</Text><Text style={styles.speedNumber}>{data.speedMph === undefined ? '—' : Math.round(data.speedMph)}</Text></View>
+          </View>
         </View>
         <View style={styles.footer}>
           <Text style={styles.metrics}>
@@ -73,15 +91,19 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
 const stylesRoute = { lineColor: '#168BE8', lineWidth: 6, lineCap: 'round', lineJoin: 'round' } as const;
 const stylesPosition = { circleRadius: 9, circleColor: '#FF6B2C', circleStrokeColor: '#FFFFFF', circleStrokeWidth: 3 };
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#FFFFFF' },
+  screen: { flex: 1, backgroundColor: '#172433' },
   header: { backgroundColor: '#172433', padding: 16, gap: 6 },
   title: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
   copy: { color: '#FFFFFF', fontSize: 13 },
   turn: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
   map: { flex: 1 }, fill: { flex: 1 },
   error: { position: 'absolute', top: 70, left: 12, right: 12, backgroundColor: '#FFFFFF', padding: 12 },
-  satellite: { position: 'absolute', right: 12, top: 12, padding: 12, backgroundColor: '#172433', borderRadius: 12 },
-  footer: { padding: 16, gap: 10 },
+  controls: {position: 'absolute', right: 8, top: 8, gap: 6},
+  control: {minHeight: 44, minWidth: 60, padding: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#172433', borderRadius: 10},
+  nearby: {position: 'absolute', left: 8, top: 8, right: 86, alignItems: 'flex-start'},
+  speed: {position: 'absolute', bottom: 36, left: 8, backgroundColor: '#172433', borderRadius: 14, padding: 12, flexDirection: 'row', gap: 20},
+  speedNumber: {fontSize: 30, fontWeight: '800', color: '#FFFFFF'},
+  footer: { padding: 12, gap: 8, backgroundColor: '#FFFFFF' },
   metrics: { color: '#172433', fontSize: 20, fontWeight: '800' },
   button: { minHeight: 48, backgroundColor: '#FF6B2C', padding: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });

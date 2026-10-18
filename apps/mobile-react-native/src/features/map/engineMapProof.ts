@@ -19,6 +19,8 @@ export function engineMapProof(sample: EngineMapSnapshot | undefined, now: numbe
     position: current && sample.latitude !== undefined && sample.longitude !== undefined
       ? [sample.longitude, sample.latitude] as [number, number] : undefined,
     heading: current ? sample.heading : undefined,
+    compass: current ? telemetry.heading : undefined,
+    truckSpeedLimitMph: current ? telemetry.truckSpeedLimitMph : undefined,
     instruction: ready ? sample.instruction : undefined,
     nextRoad: ready ? sample.nextRoad : undefined,
     turnDistance: ready ? sample.turnDistance : undefined,

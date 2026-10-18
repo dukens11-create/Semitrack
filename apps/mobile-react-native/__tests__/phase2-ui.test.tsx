@@ -90,7 +90,7 @@ jest.mock('@react-navigation/native-stack', () => ({
 }));
 jest.mock('react-native-safe-area-context', () => {
   const { View: NativeView } = require('react-native');
-  return { SafeAreaView: NativeView };
+  return { SafeAreaView: NativeView, useSafeAreaInsets: () => ({top: 0, bottom: 0, left: 0, right: 0}) };
 });
 jest.mock('react-native/Libraries/Utilities/useColorScheme', () => ({
   __esModule: true,

@@ -916,11 +916,11 @@ export function PlanningScreen({
         />
       </View>
       <View
-        style={[styles.top, nativeSetupVisible && styles.hiddenForNativeSetup]}
+        style={[styles.top, routes.route && styles.routeTop, nativeSetupVisible && styles.hiddenForNativeSetup]}
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
-        <View style={styles.mapBrandBar}>
+        <View style={[styles.mapBrandBar, routes.route && styles.routeBrandBar]}>
           <Text style={styles.mapWordmark}>SemiTra<Text style={styles.mapBrandX}>X</Text></Text>
           <Text style={styles.mapBrandTagline}>TRUCK NAVIGATION</Text>
         </View>
@@ -946,7 +946,6 @@ export function PlanningScreen({
               state={navigation}
               fix={location.fix}
               metric={settings?.units === 'metric'}
-              onMore={() => setSheet('navigation')}
               onReview={() => setSheet('route')}
               compactPreview
               placement="maneuver"
@@ -1088,7 +1087,7 @@ export function PlanningScreen({
               accessibilityRole="button"
               accessibilityLabel="Review route truck profile"
               onPress={onTrucks}
-              style={[styles.truckChip, { backgroundColor: palette.card }]}
+              style={[styles.truckChip, styles.routeTruckChip, { backgroundColor: palette.input }]}
             >
               <DriverIcon name="local_shipping_rounded" size={18} />
               <Text style={[styles.chipText, { color: palette.text }]} numberOfLines={2}>
@@ -1118,6 +1117,11 @@ export function PlanningScreen({
               </View>
             )}
             {!navigationSession && (
+              <Pressable accessibilityRole="button" accessibilityLabel="Navigation Controls" onPress={() => setSheet('navigation')} style={styles.previewCancelAction}>
+                <Text style={[styles.cancelText, { color: palette.actionText }]}>Route options</Text>
+              </Pressable>
+            )}
+            {!navigationSession && (
               <View style={styles.primaryRouteActions}>
                 {!navigationSession && (
                   <Pressable
@@ -1139,7 +1143,7 @@ export function PlanningScreen({
                   onPress={confirmCancelRoute}
                   style={[
                     styles.cancelAction,
-                    { backgroundColor: palette.input },
+                    styles.previewCancelAction,
                   ]}
                 >
                   <Text style={[styles.cancelText, { color: palette.text }]}>
@@ -1858,10 +1862,14 @@ export function PlanningScreen({
   );
 }
 const styles = StyleSheet.create({
-  mapBrandBar: { backgroundColor: '#172433', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, alignItems: 'center', marginBottom: 6 },
-  mapWordmark: { color: '#FFFFFF', fontSize: 25, fontWeight: '900', fontStyle: 'italic' },
+  routeTop: { flexDirection: 'column', alignItems: 'stretch' },
+  routeBrandBar: { backgroundColor: '#FFFFFF', marginBottom: 0 },
+  routeTruckChip: { maxWidth: '100%', width: '100%', elevation: 0, borderRadius: 10, paddingVertical: 8 },
+  previewCancelAction: { backgroundColor: 'transparent', borderWidth: 0, padding: 4, minHeight: 44 },
+  mapBrandBar: { backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, alignItems: 'center', marginBottom: 6 },
+  mapWordmark: { color: '#172433', fontSize: 25, fontWeight: '900', fontStyle: 'italic' },
   mapBrandX: { color: '#FF6B2C', fontSize: 29 },
-  mapBrandTagline: { color: '#FFFFFF', fontSize: 8, letterSpacing: 3 },
+  mapBrandTagline: { color: '#172433', fontSize: 8, letterSpacing: 3 },
   hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
   removeRecent: {
@@ -1871,7 +1879,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   maneuverOverlay: { flex: 1, marginRight: 62 },
-  previewOverlay: { marginRight: 0 },
+  previewOverlay: { marginRight: 0, flex: 0, width: '100%' },
   routePanelContent: { gap: 8 },
   routeBottom: {
     padding: 12,
@@ -1888,7 +1896,7 @@ const styles = StyleSheet.create({
   routeActions: { flexDirection: 'row', gap: 8 },
   primaryRouteActions: { gap: 8 },
   startAction: {
-    flex: 1,
+    width: '100%',
     backgroundColor: '#FF6425',
     padding: 12,
     borderRadius: 14,

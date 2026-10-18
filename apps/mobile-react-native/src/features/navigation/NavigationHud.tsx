@@ -153,7 +153,7 @@ export function NavigationHud({
           <DriverIcon name="route_rounded" size={23} />
         </View>
         <View style={styles.grow}>
-          <Text style={styles.previewEyebrow}>ROUTE PREVIEW</Text>
+          <Text style={styles.previewEyebrow}>{compactPreview ? 'Destination' : 'ROUTE PREVIEW'}</Text>
           <Text
             accessibilityLabel={
               'Destination: ' + (destination ?? 'Truck route')
@@ -164,7 +164,7 @@ export function NavigationHud({
             {destination ?? 'Truck route'}
           </Text>
           <Text style={[styles.previewCaption, { color: palette.muted }]}>
-            Trimble estimate · Guidance has not started
+            {compactPreview ? 'Route preview · Guidance has not started' : 'Trimble estimate · Guidance has not started'}
           </Text>
         </View>
       </View>

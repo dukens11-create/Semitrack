@@ -32,5 +32,5 @@ test('raw native errors cannot leak into driver messages',()=>{
 test('control logging contains only allowed action/status',()=>{
  const log=jest.spyOn(console,'info').mockImplementation(()=>{});
  logHybridControl('END_ROUTE','CONFIRMED');
- expect(JSON.parse(log.mock.calls[0][0])).toEqual({event:'HYBRID_CONTROL',action:'END_ROUTE',stage:'CONFIRMED'});log.mockRestore();
+ expect(JSON.parse(log.mock.calls[0]![0])).toEqual({event:'HYBRID_CONTROL',action:'END_ROUTE',stage:'CONFIRMED'});log.mockRestore();
 });

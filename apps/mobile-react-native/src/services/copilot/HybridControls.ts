@@ -3,7 +3,7 @@ import {coPilotHost, type CoPilotHost} from './CoPilotHost';
 import {assessCopilotTruckProfile} from './CopilotTruckProfile';
 
 export type HybridAction = 'START_RESUME' | 'TRUCK_SETTINGS' | 'END_ROUTE' | 'BACK' | 'READINESS' | 'SYNC_PROFILE';
-export type HybridStage = 'PRESS' | 'NATIVE_CALL' | 'CONFIRMED' | 'FAILED' | 'BUSY';
+export type HybridStage = 'PRESS' | 'VALIDATING' | 'NATIVE_CALL' | 'CONFIRMED' | 'FAILED' | 'BUSY';
 export function logHybridControl(action: HybridAction, stage: HybridStage) {
   // Deliberately no locations, profile values, IDs, tokens or native exception text.
   console.info(JSON.stringify({event:'HYBRID_CONTROL',action,stage}));
@@ -33,10 +33,12 @@ export async function synchronizeHybridTruck(services: Services, host: CoPilotHo
 }
 export async function resumeHybridTrip(host: CoPilotHost) {
   if (!host.resumeEngineTrip) throw new HybridControlError('This APK does not contain the native resume control.');
+  logHybridControl('START_RESUME', 'NATIVE_CALL');
   await host.resumeEngineTrip();
 }
 export async function endHybridTrip(host: CoPilotHost, services: Services) {
   if (!host.endEngineTrip) throw new HybridControlError('This APK does not contain the native stop control.');
+  logHybridControl('END_ROUTE', 'NATIVE_CALL');
   await host.endEngineTrip();
   // Failed/timeout stops retain the planner/session for retry. Never clear before SDK confirmation.
   services.routes.clear();

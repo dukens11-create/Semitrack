@@ -37,7 +37,7 @@ export function HybridNavigation({services, plan, onClose}: {services: Services;
     if (name === 'END_ROUTE') ending.current = true;
     busy.current = true;
     setPending(true); setError('');
-    try { logHybridControl(name, 'NATIVE_CALL'); await action(); logHybridControl(name, 'CONFIRMED'); } catch (e) {setError(hybridError(e)); logHybridControl(name, 'FAILED');}
+    try { logHybridControl(name, 'VALIDATING'); await action(); logHybridControl(name, 'CONFIRMED'); } catch (e) {setError(hybridError(e)); logHybridControl(name, 'FAILED');}
     finally {if (generation === actionGeneration.current) {busy.current = false; ending.current = false; setPending(false);}}
   }
   async function start() {
@@ -53,6 +53,7 @@ export function HybridNavigation({services, plan, onClose}: {services: Services;
         if (!fix) throw new HybridControlError('Wait for a fresh precise GPS location.');
         if (!host.openEngineTrip) throw new Error('Navigation bridge unavailable.');
         attempted.current = true;
+        logHybridControl('START_RESUME','NATIVE_CALL');
         await host.openEngineTrip(profile.ticket, engineTripLocations({lat:fix.latitude,lng:fix.longitude},plan));
         setLive(true);
       });}},

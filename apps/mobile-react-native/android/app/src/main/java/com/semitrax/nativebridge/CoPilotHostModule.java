@@ -103,13 +103,13 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private void control(String action, String stage) {
     // Fixed identifiers only: no native exception text or trip/account data.
     if (controlTimeline.size() == 64) controlTimeline.removeFirst();
-    controlTimeline.addLast(new String[]{action, stage, Long.toString(android.os.SystemClock.elapsedRealtime() - controlCreatedAt)});
+    controlTimeline.addLast(new String[]{action, stage, Long.toString(android.os.SystemClock.elapsedRealtime() - controlCreatedAt), Boolean.toString(started), Boolean.toString(connected)});
     android.util.Log.i("SemiTraXHybrid", "{\"action\":\"" + action + "\",\"stage\":\"" + stage + "\"}");
   }
   @ReactMethod public void recordHybridControl(String action, String stage, Promise promise) {
     main.post(() -> {
       if (!java.util.Arrays.asList("START_RESUME", "TRUCK_SETTINGS", "END_ROUTE", "BACK", "READINESS", "SYNC_PROFILE").contains(action) ||
-          !java.util.Arrays.asList("PRESS", "NATIVE_CALL", "CONFIRMED", "FAILED", "BUSY").contains(stage)) {
+          !java.util.Arrays.asList("PRESS", "VALIDATING", "NATIVE_CALL", "CONFIRMED", "FAILED", "BUSY").contains(stage)) {
         promise.reject("INVALID_DIAGNOSTIC", "Invalid diagnostic event."); return;
       }
       control(action, stage); promise.resolve(null);
@@ -533,7 +533,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         for (String[] entry : controlTimeline) {
           WritableMap item = Arguments.createMap();
           item.putString("action", entry[0]); item.putString("stage", entry[1]);
-          item.putDouble("elapsedMs", Double.parseDouble(entry[2])); controls.pushMap(item);
+          item.putDouble("elapsedMs", Double.parseDouble(entry[2]));
+          item.putBoolean("engineStarted", Boolean.parseBoolean(entry[3]));
+          item.putBoolean("serviceConnected", Boolean.parseBoolean(entry[4])); controls.pushMap(item);
         }
         result.putArray("controlTimeline", controls);
         WritableMap storage = Arguments.createMap();

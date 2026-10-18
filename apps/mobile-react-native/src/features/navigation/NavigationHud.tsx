@@ -33,6 +33,7 @@ export function NavigationHud({
   placement = 'all',
   onMore,
   onReview,
+  compactPreview = false,
 }: {
   route: TruckRoute | null;
   destination?: string;
@@ -42,6 +43,7 @@ export function NavigationHud({
   placement?: 'all' | 'maneuver' | 'dashboard' | 'panel';
   onMore?: () => void;
   onReview?: () => void;
+  compactPreview?: boolean;
 }) {
   const palette = useDriverPalette();
   const { sample, now } = useCoPilotGuidance(
@@ -103,6 +105,41 @@ export function NavigationHud({
   const shield =
     /^(?:I[- ]|Interstate\s+)(\d+)\b/i.exec(g?.highway ?? road ?? '') ??
     /^(?:US[- ]|U\.S\.\s+)(\d+)\b/i.exec(g?.highway ?? road ?? '');
+  const previewMetrics = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Review route and stops"
+      onPress={onReview}
+      style={[styles.previewMetrics, { borderColor: palette.border }]}
+    >
+      <View style={styles.metricCell}>
+        <Text style={[styles.metricValue, { color: palette.text }]}>
+          {distance}
+        </Text>
+        <Text style={[styles.metricLabel, { color: palette.muted }]}>
+          Distance
+        </Text>
+      </View>
+      <View style={styles.metricCell}>
+        <Text style={[styles.metricValue, { color: palette.text }]}>
+          {duration}
+        </Text>
+        <Text style={[styles.metricLabel, { color: palette.muted }]}>
+          Drive time
+        </Text>
+      </View>
+      <View style={styles.metricCell}>
+        <Text style={[styles.metricValue, { color: palette.text }]}>
+          {new Date(
+            Date.now() + route.durationSeconds * 1000,
+          ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+        </Text>
+        <Text style={[styles.metricLabel, { color: palette.muted }]}>
+          Estimated arrival
+        </Text>
+      </View>
+    </Pressable>
+  );
   const previewCard = (
     <View
       testID="route-preview-card"
@@ -131,39 +168,7 @@ export function NavigationHud({
           </Text>
         </View>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Review route and stops"
-        onPress={onReview}
-        style={[styles.previewMetrics, { borderColor: palette.border }]}
-      >
-        <View style={styles.metricCell}>
-          <Text style={[styles.metricValue, { color: palette.text }]}>
-            {distance}
-          </Text>
-          <Text style={[styles.metricLabel, { color: palette.muted }]}>
-            Distance
-          </Text>
-        </View>
-        <View style={styles.metricCell}>
-          <Text style={[styles.metricValue, { color: palette.text }]}>
-            {duration}
-          </Text>
-          <Text style={[styles.metricLabel, { color: palette.muted }]}>
-            Drive time
-          </Text>
-        </View>
-        <View style={styles.metricCell}>
-          <Text style={[styles.metricValue, { color: palette.text }]}>
-            {new Date(
-              Date.now() + route.durationSeconds * 1000,
-            ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </Text>
-          <Text style={[styles.metricLabel, { color: palette.muted }]}>
-            Estimated arrival
-          </Text>
-        </View>
-      </Pressable>
+      {!compactPreview && previewMetrics}
       {onMore && (
         <Pressable
           accessibilityRole="button"
@@ -358,52 +363,56 @@ export function NavigationHud({
           )}
         </>
       )}
-      {(placement === 'all' || placement === 'dashboard') && (
-        <View style={styles.instruments}>
-          <View
-            style={[styles.speedCard, palette.dark && styles.nightSpeedCard]}
-          >
-            <View style={styles.limit}>
-              <Text style={styles.limitNumber}>{limit}</Text>
-              <Text style={styles.limitLabel}>
-                {g?.speedLimitMph === undefined ? 'TRUCK LIMIT' : 'LIMIT'}
+      {!(preview && compactPreview) &&
+        (placement === 'all' || placement === 'dashboard') && (
+          <View style={styles.instruments}>
+            <View
+              style={[styles.speedCard, palette.dark && styles.nightSpeedCard]}
+            >
+              <View style={styles.limit}>
+                <Text style={styles.limitNumber}>{limit}</Text>
+                <Text style={styles.limitLabel}>
+                  {g?.speedLimitMph === undefined ? 'TRUCK LIMIT' : 'LIMIT'}
+                </Text>
+              </View>
+              <View style={styles.speed}>
+                <Text style={styles.speedNumber}>{speed}</Text>
+                <Text style={styles.unit}>{metric ? 'KM/H' : 'MPH'}</Text>
+              </View>
+            </View>
+            {!data.gpsFresh && !telemetry.fresh && (
+              <Text style={[styles.grow, { color: palette.muted }]}>
+                Waiting for GPS
               </Text>
-            </View>
-            <View style={styles.speed}>
-              <Text style={styles.speedNumber}>{speed}</Text>
-              <Text style={styles.unit}>{metric ? 'KM/H' : 'MPH'}</Text>
-            </View>
-          </View>
-          {!data.gpsFresh && !telemetry.fresh && (
-            <Text style={[styles.grow, { color: palette.muted }]}>
-              Waiting for GPS
-            </Text>
-          )}
-          {road && (
-            <View style={[styles.roadBadge, { backgroundColor: palette.card }]}>
-              {shield && (
-                <View style={styles.shield}>
-                  <Text style={styles.shieldLabel}>
-                    {/^I|^Interstate/i.test(g?.highway ?? road)
-                      ? 'INTERSTATE'
-                      : 'US'}
-                  </Text>
-                  <Text style={styles.shieldNumber}>{shield[1]}</Text>
-                </View>
-              )}
-              <Text
-                style={[styles.currentRoad, { color: palette.text }]}
-                numberOfLines={1}
+            )}
+            {road && (
+              <View
+                style={[styles.roadBadge, { backgroundColor: palette.card }]}
               >
-                {road}
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
+                {shield && (
+                  <View style={styles.shield}>
+                    <Text style={styles.shieldLabel}>
+                      {/^I|^Interstate/i.test(g?.highway ?? road)
+                        ? 'INTERSTATE'
+                        : 'US'}
+                    </Text>
+                    <Text style={styles.shieldNumber}>{shield[1]}</Text>
+                  </View>
+                )}
+                <Text
+                  style={[styles.currentRoad, { color: palette.text }]}
+                  numberOfLines={1}
+                >
+                  {road}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
       {placement !== 'maneuver' &&
-        !(preview && placement === 'dashboard') &&
-        summary}
+        (preview && compactPreview
+          ? previewMetrics
+          : !(preview && placement === 'dashboard') && summary)}
       {placement === 'all' && (
         <View style={[styles.detailCopy, { backgroundColor: palette.card }]}>
           {destination && (

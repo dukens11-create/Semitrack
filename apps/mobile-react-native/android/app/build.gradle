@@ -27,7 +27,7 @@ android {
  }
  buildTypes {
   debug {
-  applicationIdSuffix ".migration.debug"
+  applicationIdSuffix ".recovery.september"
   manifestPlaceholders = [usesCleartextTraffic:"true"]
   buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
  }

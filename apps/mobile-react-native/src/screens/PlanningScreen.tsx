@@ -1903,7 +1903,7 @@ const styles = StyleSheet.create({
   maneuverOverlay: { flex: 1, marginRight: 62 },
   previewOverlay: { marginRight: 0, flex: 0, width: '100%' },
   routeScroll: { flexShrink: 1 },
-  routePanelContent: { gap: 6, paddingBottom: 4 }
+  routePanelContent: { gap: 6, paddingBottom: 4 },
   routeBottom: {
     padding: 12,
     borderTopLeftRadius: 24,

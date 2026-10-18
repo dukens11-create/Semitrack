@@ -1,3 +1,4 @@
+import { CopilotProvider } from '../services/copilot/CopilotProvider';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { safeLog } from '../services/telemetry/safeLog';
 import React, { useEffect, useState } from 'react';
@@ -122,7 +123,7 @@ export function AppRoot() {
     }
   }, [state]);
   const content = (
-    <ApplicationFrame>
+    <CopilotProvider><ApplicationFrame>
       <View style={styles.fill}>
         <AppErrorBoundary
           onFailure={() => {
@@ -145,7 +146,7 @@ export function AppRoot() {
           )}
         </AppErrorBoundary>
       </View>
-    </ApplicationFrame>
+    </ApplicationFrame></CopilotProvider>
   );
   return (
     <SafeAreaProvider>

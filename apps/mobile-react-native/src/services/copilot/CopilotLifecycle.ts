@@ -1,3 +1,7 @@
+import {
+  amsDiagnosticCodes,
+  retryAmsFailure,
+} from './CopilotLicenseDiagnostics';
 import type { CopilotConfiguration } from './CopilotConfiguration';
 import { CopilotP0Error } from './CopilotConfiguration';
 import { assessCopilotTruckProfile } from './CopilotTruckProfile';
@@ -49,6 +53,8 @@ export interface CopilotLifecyclePort {
   modules(): Record<string, boolean>;
   listen(event: string, callback: () => void): () => void;
   prepareProvisioning(): Promise<CopilotConfiguration | null>;
+  /** Reload exact SDK inventory version after startup or map installation. */
+  configuration?(): Promise<CopilotConfiguration | null>;
   startNative(): Promise<void>;
   licenseState(): Promise<{
     licensingReady: boolean;
@@ -59,6 +65,7 @@ export interface CopilotLifecyclePort {
   readyToAddStops(): Promise<boolean>;
 }
 export const copilotEvents = [
+  'onDeviceConfigurationChecked',
   'onCPStartup',
   'onCPShutdown',
   'licenseMgtCredentialHook',
@@ -120,8 +127,11 @@ export class CopilotLifecycle {
   private removers: (() => void)[] = [];
   private config: CopilotConfiguration | null = null;
   private active = false;
+  private startupRejected = false;
   private generation = 0;
   private revision = 0;
+  private readinessRetries = 0;
+  private readinessTimer: ReturnType<typeof setTimeout> | undefined;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<void> = Promise.resolve();
   constructor(
@@ -153,8 +163,11 @@ export class CopilotLifecycle {
   async start(): Promise<void> {
     if (this.active) return;
     this.active = true;
+    this.startupRejected = false;
     this.state = initialCopilotState();
     this.config = null;
+    this.readinessRetries = 0;
+    clearTimeout(this.readinessTimer);
     const generation = ++this.generation;
     try {
       const modules = this.port.modules();
@@ -181,20 +194,55 @@ export class CopilotLifecycle {
         return;
       }
       this.startupTimer = setTimeout(() => {
-        if (this.active && !this.state.initialized)
+        if (
+          this.active &&
+          generation === this.generation &&
+          !this.state.initialized
+        ) {
+          this.startupRejected = true;
+          ++this.revision;
           this.fail('COPILOT_NOT_INITIALIZED', 'startup-timeout');
+        }
       }, 30000);
       await this.port.startNative();
       // A void bind call is not initialization evidence. Await onCPStartup.
-    } catch {
-      if (this.active && generation === this.generation)
-        this.fail('COPILOT_NOT_INITIALIZED', 'startup');
+    } catch (error) {
+      if (this.active && generation === this.generation) {
+        this.startupRejected = true;
+        ++this.revision;
+        clearTimeout(this.startupTimer);
+        // Only allow known native codes; never expose SDK text or account identifiers.
+        const nativeCode = (error as { code?: unknown } | null)?.code;
+        const safeCodes = [
+          'COPILOT_STARTUP_TIMEOUT',
+          'COPILOT_VIEW_UNAVAILABLE',
+          'COPILOT_MAP_POLICY_FAILED',
+          'COPILOT_GUIDANCE_SUSPEND_FAILED',
+          'COPILOT_FOREGROUND_FAILED',
+          'COPILOT_SERVICE_DISCONNECTED',
+          'COPILOT_INVALID_BINDING',
+          'COPILOT_NATIVE_STARTUP_FAILED',
+          'COPILOT_SECURE_RESTORE_FAILED',
+          'COPILOT_PRECISE_LOCATION_REQUIRED',
+          'COPILOT_FOREGROUND_ACTIVITY_REQUIRED',
+          'COPILOT_DEVICE_SETUP_REQUIRED',
+        ];
+        this.fail(
+          'COPILOT_NOT_INITIALIZED',
+          typeof nativeCode === 'string' && safeCodes.includes(nativeCode)
+            ? nativeCode
+            : 'startup',
+        );
+      }
     }
   }
   private event(event: string) {
-    if (!this.active) return;
+    if (!this.active || this.startupRejected) return;
     this.publish({ lastEvent: event });
     if (event === 'onCPShutdown') {
+      // A shutdown ends this native startup attempt. Only a fresh lifecycle
+      // start may accept a subsequent onCPStartup callback.
+      this.startupRejected = true;
       ++this.revision;
       clearTimeout(this.startupTimer);
       this.publish({
@@ -219,14 +267,23 @@ export class CopilotLifecycle {
     ) {
       this.publish({
         warning:
-          'CoPilot reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
+          'SemiTraX reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
       });
     }
     if (event === 'onFailedRouteCalculation' || event === 'onRouteSyncError') {
+      // Cancel any in-flight license/map refresh. Its delayed results must not
+      // restore READY after a safety-critical route failure.
+      ++this.revision;
       this.fail('COPILOT_ROUTE_FAILED', event);
       return;
     }
+    // Only onCPStartup establishes initialization. Native callbacks arriving
+    // before startup must not query licensing or mark CoPilot ready.
+    if (!this.state.initialized && event !== 'onCPStartup') return;
     if (!this.config) return;
+    // Duplicate startup notifications are not evidence that an existing
+    // failed route has become safe. Only the first startup can initialize.
+    if (event === 'onCPStartup' && this.state.initialized) return;
     if (event === 'onCPStartup') {
       clearTimeout(this.startupTimer);
       this.publish({
@@ -239,12 +296,14 @@ export class CopilotLifecycle {
     if (
       [
         'onCPStartup',
+        'onDeviceConfigurationChecked',
         'onLicensingReady',
         'onLicenseMgtLogin',
         'onFeatureActivated',
         'onReadyToAddStops',
         'onMapdataUpdate',
         'onMapDownloadResponse',
+        'onReadyToDownloadInitialMapData',
       ].includes(event)
     ) {
       // Invalidate readiness immediately; never retain READY while rechecking maps/licenses.
@@ -257,9 +316,27 @@ export class CopilotLifecycle {
       this.queue = this.queue.then(() => this.refresh(revision));
     }
   }
+  private retryReadiness(revision: number) {
+    if (this.readinessRetries >= 6 || this.readinessTimer) return;
+    ++this.readinessRetries;
+    this.readinessTimer = setTimeout(() => {
+      this.readinessTimer = undefined;
+      if (
+        !this.active ||
+        this.startupRejected ||
+        revision !== this.revision ||
+        !this.state.initialized
+      )
+        return;
+      this.queue = this.queue.then(() => this.refresh(revision));
+    }, 5000);
+  }
   private async refresh(revision: number): Promise<void> {
     const current = () => this.active && revision === this.revision;
     if (!current() || !this.config) return;
+    clearTimeout(this.readinessTimer);
+    this.readinessTimer = undefined;
+    let stage = 'license-verification';
     try {
       const license = await this.port.licenseState();
       if (!current()) return;
@@ -273,8 +350,20 @@ export class CopilotLifecycle {
           'COPILOT_LICENSE_PROVISIONING_REQUIRED',
           'license-entitlements',
         );
+        if (!license.licensingReady) this.retryReadiness(revision);
         return;
       }
+      stage = 'map-version-inventory';
+      if (this.port.configuration) {
+        const configuration = await this.port.configuration();
+        if (!current()) return;
+        if (!configuration) {
+          this.fail('COPILOT_LICENSE_PROVISIONING_REQUIRED', 'secure-restore');
+          return;
+        }
+        this.config = configuration;
+      }
+      stage = 'installed-map-inventory';
       const maps = await this.port.mapState(this.config);
       if (!current()) return;
       this.publish({ maps, mapsReady: maps.mapsReady });
@@ -282,11 +371,13 @@ export class CopilotLifecycle {
         this.fail('COPILOT_MAP_DATA_REQUIRED', 'installed-licensed-maps');
         return;
       }
+      stage = 'route-manager-readiness';
       const readyToAddStops = await this.port.readyToAddStops();
       if (!current()) return;
       this.publish({ readyToAddStops });
       if (!this.state.initialized || !readyToAddStops) {
         this.fail('COPILOT_NOT_READY', 'ready-to-add-stops');
+        this.retryReadiness(revision);
         return;
       }
       // Readiness refresh must not erase a route/guidance failure.
@@ -295,10 +386,53 @@ export class CopilotLifecycle {
         this.state.error === 'COPILOT_GUIDANCE_UNAVAILABLE'
       )
         return;
+      clearTimeout(this.readinessTimer);
+      this.readinessTimer = undefined;
       this.publish({ phase: 'READY', error: null, operation: null });
-    } catch {
-      if (current()) this.fail('COPILOT_NOT_READY', 'readiness-query');
+    } catch (error) {
+      const nativeCode = (error as { code?: unknown } | null)?.code;
+      const safeCodes = [
+        ...amsDiagnosticCodes,
+        'COPILOT_IDENTITY_UNVERIFIED',
+        'COPILOT_LICENSE_QUERY_FAILED',
+        'COPILOT_AMS_ENGINE_NOT_STARTED',
+        'COPILOT_AMS_IDENTITY_QUERY_FAILED',
+        'COPILOT_AMS_IDENTITY_MISSING',
+        'COPILOT_AMS_COMPANY_MISMATCH',
+        'COPILOT_AMS_DEVICE_MISMATCH',
+        'COPILOT_INVENTORY_FAILED',
+        'COPILOT_SECURE_RESTORE_FAILED',
+        'CONFIGURATION_INVALID',
+      ];
+      if (current()) {
+        this.fail(
+          'COPILOT_NOT_READY',
+          typeof nativeCode === 'string' && safeCodes.includes(nativeCode)
+            ? `${stage}: ${nativeCode}`
+            : stage,
+        );
+        if (
+          stage !== 'route-manager-readiness' &&
+          nativeCode !== 'CONFIGURATION_INVALID' &&
+          nativeCode !== 'COPILOT_SECURE_RESTORE_FAILED' &&
+          retryAmsFailure(nativeCode)
+        )
+          this.retryReadiness(revision);
+      }
     }
+  }
+  /** Explicit inventory query; never synthesizes an SDK startup/download event. */
+  async recheck(preserveVerifiedMap = false): Promise<void> {
+    if (!this.active || this.startupRejected || !this.state.initialized) return;
+    const revision = ++this.revision;
+    // A foreground check need not detach the already verified native renderer.
+    // Route permission is still suspended until the fresh checks finish.
+    this.publish({
+      mapsReady: preserveVerifiedMap && this.state.mapsReady,
+      readyToAddStops: false,
+    });
+    this.queue = this.queue.then(() => this.refresh(revision));
+    await this.queue;
   }
   validateTruckProfile(profile: unknown) {
     const assessment = assessCopilotTruckProfile(profile);
@@ -322,9 +456,12 @@ export class CopilotLifecycle {
   }
   dispose() {
     this.active = false;
+    this.startupRejected = false;
     ++this.generation;
     ++this.revision;
     clearTimeout(this.startupTimer);
+    clearTimeout(this.readinessTimer);
+    this.readinessTimer = undefined;
     for (const remove of this.removers.splice(0)) remove();
     // Removing JS observers must not repeatedly stop/restart the native service.
   }

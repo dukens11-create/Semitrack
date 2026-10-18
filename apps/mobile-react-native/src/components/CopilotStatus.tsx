@@ -1,42 +1,21 @@
 import { useDriverPalette } from './DriverUI';
-import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
 import {
-  CopilotLifecycle,
-  initialCopilotState,
-} from '../services/copilot/CopilotLifecycle';
-import { createCopilotRuntime } from '../services/copilot/CopilotRuntime';
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { CoPilotDeviceSetup } from './CoPilotDeviceSetup';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
 
 /** Non-blocking status; backend setup/authentication remains independent. */
 export function CopilotStatus() {
   const p = useDriverPalette();
-  const [state, setState] = useState(initialCopilotState);
+  const state = useCopilotState();
   const [details, setDetails] = useState(false);
-  useEffect(() => {
-    const lifecycle = new CopilotLifecycle(createCopilotRuntime(), next => {
-      setState(next);
-      if (__DEV__)
-        console.info(
-          '[SemiTraX CoPilot]',
-          JSON.stringify({
-            phase: next.phase,
-            error: next.error,
-            operation: next.operation,
-            modules: next.modules,
-            initialized: next.initialized,
-            licensingReady: next.licensingReady,
-            fullNavigationLicensed: next.fullNavigationLicensed,
-            heavyTruckLicensed: next.heavyTruckLicensed,
-            mapsReady: next.mapsReady,
-            readyToAddStops: next.readyToAddStops,
-            copilotReady: next.copilotReady,
-            lastEvent: next.lastEvent,
-          }),
-        );
-    });
-    void lifecycle.start();
-    return () => lifecycle.dispose();
-  }, []);
   if (state.warning)
     return (
       <View
@@ -50,24 +29,24 @@ export function CopilotStatus() {
       </View>
     );
   const label = state.copilotReady
-    ? 'CoPilot setup checked · Navigation not started'
+    ? 'SemiTraX setup checked'
     : state.phase === 'NOT_STARTED' || state.phase === 'STARTING'
-    ? 'CoPilot setup pending'
+    ? 'SemiTraX setup pending'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'CoPilot maps required'
+    ? 'SemiTraX maps required'
     : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
-    ? 'CoPilot provisioning required'
-    : 'CoPilot turn-by-turn unavailable';
+    ? 'SemiTraX provisioning required'
+    : 'SemiTraX turn-by-turn unavailable';
   const message = state.copilotReady
-    ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
+    ? 'SemiTraX setup checks passed. Use the SemiTraX screen for the current trip and guidance status.'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'Navigation is unavailable until licensed CoPilot maps are installed and verified.'
-    : 'CoPilot turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
+    ? 'Navigation is unavailable until licensed SemiTraX maps are installed and verified.'
+    : 'SemiTraX turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
   return (
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={label + '. View CoPilot status'}
+        accessibilityLabel={label + '. View SemiTraX status'}
         onPress={() => setDetails(true)}
         style={[styles.status, { backgroundColor: p.canvas }]}
       >
@@ -92,13 +71,21 @@ export function CopilotStatus() {
       >
         <View style={styles.scrim}>
           <View style={[styles.card, { backgroundColor: p.card }]}>
-            <Text style={[styles.title, { color: p.text }]}>
-              CoPilot navigation
-            </Text>
-            <Text style={[styles.message, { color: p.muted }]}>{message}</Text>
+            <ScrollView
+              contentContainerStyle={styles.detailContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={[styles.title, { color: p.text }]}>
+                SemiTraX navigation
+              </Text>
+              <Text style={[styles.message, { color: p.muted }]}>
+                {message}
+              </Text>
+              <CoPilotDeviceSetup />
+            </ScrollView>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close CoPilot status"
+              accessibilityLabel="Close SemiTraX status"
               onPress={() => setDetails(false)}
               style={styles.close}
             >
@@ -139,7 +126,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#00000088',
   },
-  card: { padding: 24, borderRadius: 20, backgroundColor: '#172534', gap: 16 },
+  card: {
+    padding: 24,
+    borderRadius: 20,
+    backgroundColor: '#172534',
+    gap: 16,
+    maxHeight: '90%',
+  },
+  detailContent: { gap: 16 },
   title: { color: 'white', fontSize: 20, fontWeight: '700' },
   message: { color: '#C5CFD8', fontSize: 15, lineHeight: 22 },
   close: { alignSelf: 'flex-end', padding: 12 },

@@ -1,3 +1,4 @@
+import { coPilotHost } from '../../services/copilot/CoPilotHost';
 import NativePlatform from './NativeSemiTraxPlatform';
 import type { TruckProfile } from '../../models/contracts';
 import { requireRepresentableCopilotTruckProfile } from '../../services/copilot/CopilotTruckProfile';
@@ -7,6 +8,14 @@ import {
 } from '../../services/guidance/NavigationEngine';
 /** Native transport boundary only. Activation requires a separately reviewed CoPilot adapter. */
 export class NativeGuidanceAdapter extends UnavailableNavigationEngine {
+  override async stopNavigation() {
+    let host;
+    try { host = coPilotHost(); } catch { return; }
+    if (await host.hasEngineTrip?.()) {
+      if (!host.endEngineTrip) throw new GuidanceUnavailableError();
+      await host.endEngineTrip();
+    }
+  }
   override async setTruckProfile(profile: TruckProfile) {
     // Surface every unrepresentable restriction before any future CPIK mutation.
     requireRepresentableCopilotTruckProfile(profile);

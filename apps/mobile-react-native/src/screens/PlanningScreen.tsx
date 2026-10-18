@@ -1,3 +1,5 @@
+import { coPilotHost } from '../services/copilot/CoPilotHost';
+import { HybridNavigation } from '../features/map/HybridNavigation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
   beginRouteDiagnostic,
@@ -101,6 +103,7 @@ export function PlanningScreen({
   );
   const searchState = useStore(searchStore);
   const { query, results, pois } = searchState;
+  const [enginePlan, setEnginePlan] = useState<StopPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [truckLoading, setTruckLoading] = useState(true);
   const [truckLoadFailed, setTruckLoadFailed] = useState(false);
@@ -146,7 +149,7 @@ export function PlanningScreen({
     navigation.phase === 'navigating' ||
     navigation.phase === 'paused' ||
     navigation.phase === 'rerouting';
-  const navigationSession = navigationActive || navigation.phase === 'arrived';
+  const navigationSession = !!enginePlan || navigationActive || navigation.phase === 'arrived';
   const palette = useDriverPalette();
   useEffect(() => {
     onNavigationActiveChange?.(active && navigationSession);
@@ -330,6 +333,14 @@ export function PlanningScreen({
   async function startNavigation() {
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
+    let nativeHost;
+    try { nativeHost = coPilotHost(); } catch { /* Unsupported platforms retain the unavailable adapter. */ }
+    if (nativeHost?.openEngineTrip) {
+      origin();
+      closeSheet();
+      setEnginePlan(current.plan);
+      return;
+    }
     const truck = services.trucks.getSnapshot().selected;
     if (!truck) throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     const generation = operation.current;
@@ -734,7 +745,8 @@ export function PlanningScreen({
     </>
   );
   return (
-    <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
+    <View style={[styles.screen, { backgroundColor: palette.canvas }]} >
+      {enginePlan && <HybridNavigation services={services} plan={enginePlan} onClose={() => setEnginePlan(null)}/>}
       <View style={styles.map}>
         <TruckMap
           token={services.environment.mapboxToken}

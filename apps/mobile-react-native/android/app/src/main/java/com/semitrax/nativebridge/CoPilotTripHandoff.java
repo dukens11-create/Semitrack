@@ -18,7 +18,14 @@ final class CoPilotTripHandoff {
   private volatile String destinationId;
   private volatile boolean awaitingStops;
   private boolean registered;
+  private volatile boolean calculating, calculated, failed;
   private final RouteListener listener = new RouteListener() {
+    @Override public void onStartRouteCalculation() { if (destinationId != null) { calculating = true; calculated = false; } }
+    @Override public void onCompleteRouteCalculation() {
+      try {
+        if (calculating && ownsDestination()) { calculated = true; calculating = false; }
+      } catch (Exception ignored) { failed = true; }
+    }
     @Override public void onStopsAdded(StopList stops) {
       // Ignore callbacks from other trips, including late callbacks from an earlier handoff.
       for (Stop stop : stops) {
@@ -31,7 +38,7 @@ final class CoPilotTripHandoff {
       }
     }
     @Override public void onFailedRouteCalculation(int leg, Stop stop) {
-      if (stop != null && destinationId != null && destinationId.equals(stop.getID())) awaitingStops = false;
+      if (stop != null && destinationId != null && destinationId.equals(stop.getID())) { awaitingStops = false; failed = true; }
     }
   };
 
@@ -78,11 +85,22 @@ final class CoPilotTripHandoff {
     if (!registered) { RouteListener.registerListener(listener); registered = true; }
     destinationId = stops.get(stops.size() - 1).getID();
     awaitingStops = true;
+    calculated = false; calculating = false; failed = false;
     // The first point is the explicit GPS origin, so the SDK cannot consume the first via stop as origin.
     // SemiTraX owns the driving UI; SDK owns calculation and guidance.
     RouteMgr.addStops(RouteEnums.AddStopPurpose.NEW_TRIP, stops, RouteEnums.RoutePreviewMode.NO_PREVIEW);
     ticket = null;
   }
+  boolean ownsDestination() throws Exception {
+    if (destinationId == null) return false;
+    com.alk.cpik.StopList stops = RouteMgr.getStopList();
+    return stops != null && !stops.isEmpty() && destinationId.equals(stops.get(stops.size()-1).getID());
+  }
+  boolean confirmed() throws Exception { return calculated && !failed && !awaitingStops && ownsDestination(); }
+  boolean failed() { return failed; }
+  boolean pendingStops() { return awaitingStops; }
+  void invalidateReview() { ticket = null; profile = null; }
+  void stopped() { destinationId = null; awaitingStops = false; calculating = false; calculated = false; failed = false; invalidateReview(); }
   boolean canReturnToPlanner() throws Exception {
     return !awaitingStops && !RouteMgr.hasDestination();
   }

@@ -308,6 +308,12 @@ test('real route preview retains visible Start and fails closed on unavailable g
   await act(async () => {
     screen = create(<PlanningScreen services={services} />);
   });
+  const start = button('Start Navigation');
+  const cancel = button('Cancel Route');
+  const panel = screen.root.findByProps({ testID: 'map-bottom-panel' });
+  for (const scroll of panel.findAllByType(ScrollView)) {
+    expect(scroll.findAll(node => node === start || node === cancel)).toHaveLength(0);
+  }
   await press('Review route and stops');
   expect(content()).toContain('planning estimates');
   expect(content()).toContain('No alternatives were returned');

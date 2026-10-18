@@ -107,7 +107,7 @@ test('settings retain control of the native view and ignore planner coordinate p
   expect(mockHost.drawMarkers).not.toHaveBeenCalled();
   await act(async () => screen.update(render(false)));
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
-  expect(mockHost.setMapAppearance).not.toHaveBeenCalled();
+  expect(mockHost.setMapAppearance).toHaveBeenCalledTimes(1);
 });
 
 test('active guidance never invokes the native preview cleanup', async () => {
@@ -144,4 +144,26 @@ test('failed orientation command does not change the compass state', async () =>
     'heading-up',
     'heading-up',
   ]);
+});
+
+
+test('native map stays mounted while appearance prepares and while settings owns it', async () => {
+  let finish!: () => void;
+  mockHost.setMapAppearance.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const render = (settingsOpen: boolean) => <CopilotTruckMap route={null} plan={null} fix={null} pois={[]} settingsOpen={settingsOpen} />;
+  await act(async () => { screen = create(render(false)); });
+  const native = screen.root.findByType('VerifiedCoPilotMap' as never);
+  await act(async () => { finish(); });
+  expect(screen.root.findByType('VerifiedCoPilotMap' as never)).toBe(native);
+  await act(async () => { screen.update(render(true)); });
+  expect(screen.root.findByType('VerifiedCoPilotMap' as never)).toBe(native);
+});
+
+test('preview failure is retryable and success removes the stale error', async () => {
+  mockHost.drawRoutePreview.mockRejectedValueOnce(new Error('not ready'));
+  await act(async () => { screen = create(<CopilotTruckMap route={null} plan={null} fix={null} pois={[]} />); });
+  const retry = screen.root.findByProps({accessibilityLabel: 'Retry route preview'});
+  await act(async () => { retry.props.onPress(); });
+  expect(mockHost.drawRoutePreview).toHaveBeenCalledTimes(2);
+  expect(screen.root.findAllByProps({accessibilityLabel: 'Retry route preview'})).toHaveLength(0);
 });

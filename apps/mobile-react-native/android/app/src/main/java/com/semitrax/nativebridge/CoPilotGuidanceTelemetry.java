@@ -66,6 +66,11 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
     position = null; positionReceivedAt = 0; roadLimit = truckLimit = null;
     routeStatus = "unknown";
   }
+  void clearRoute() {
+    generation++; routeRevision++; routeStatus = "none";
+    roadLimit = truckLimit = null;
+    sink.accept(snapshot());
+  }
   private void dispatch(Runnable action) {
     final long ticket = generation;
     main.post(() -> {

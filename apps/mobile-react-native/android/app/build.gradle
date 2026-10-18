@@ -19,12 +19,25 @@ android {
   applicationId "com.semitrax.app"
   minSdkVersion rootProject.ext.minSdkVersion
   targetSdkVersion rootProject.ext.targetSdkVersion
-  versionCode 1
-  versionName "0.1.0"
+  versionCode 392
+  versionName "0.1.392"
+  buildConfigField "String", "SEMITRAX_BUILD_COMMIT", '"' + (System.getenv("GITHUB_SHA") ?: "local-unverified").replaceAll('[^a-zA-Z0-9-]', '') + '"'
+  buildConfigField "String", "SEMITRAX_BUILD_TIME", '"' + java.time.Instant.now().toString() + '"'
   // NDK r27 opt-in for source-built libraries. Prebuilt .so files still need
   // independent inspection; this cannot repair a vendor's 4 KB binary.
   externalNativeBuild {
    cmake { arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" }
+  }
+ }
+ signingConfigs {
+  debug {
+   def persistentKey = System.getenv("SEMITRAX_TEST_KEYSTORE_PATH")
+   if (persistentKey) {
+    storeFile file(persistentKey)
+    storePassword "android"
+    keyAlias "androiddebugkey"
+    keyPassword "android"
+   }
   }
  }
  buildTypes {

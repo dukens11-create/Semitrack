@@ -459,12 +459,12 @@ test('old-route weather failure cannot clear new-route observations or strand re
     screen = create(render());
   });
   await act(async () => control('Weather details').props.onPress());
-  await act(async () => control('Refresh current weather').props.onPress());
+  expect(routeWeather).toHaveBeenCalledTimes(1);
   expect(control('Loading weather…').props.accessibilityState.busy).toBe(true);
   current = { ...current, selectedRouteId: 'new-weather-route' };
   await act(async () => screen!.update(render()));
+  expect(routeWeather).toHaveBeenCalledTimes(2);
   expect(control('Refresh current weather').props.disabled).toBe(false);
-  await act(async () => control('Refresh current weather').props.onPress());
   await act(async () => old.reject(new Error('old request failed')));
   expect(
     screen!.root

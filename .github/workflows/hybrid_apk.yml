@@ -1,7 +1,5 @@
-name: SemiTraX Hybrid integration APK
+name: Legacy Hybrid recovery (manual only)
 on:
-  push:
-    branches: [codex/sept27-mapbox-engine]
   workflow_dispatch:
 permissions:
   contents: read

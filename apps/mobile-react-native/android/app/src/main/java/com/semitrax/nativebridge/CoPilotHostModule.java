@@ -95,6 +95,36 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private boolean binding, connected, invalidated, mapPrepared;
   private final CoPilotTripHandoff tripHandoff = new CoPilotTripHandoff();
   private volatile boolean tripPreparing;
+  private int tripGeneration;
+  private Promise pendingTrip;
+  private boolean stoppingTrip;
+  private final long controlCreatedAt = android.os.SystemClock.elapsedRealtime();
+  private final java.util.ArrayDeque<String[]> controlTimeline = new java.util.ArrayDeque<>();
+  private void control(String action, String stage) {
+    // Fixed identifiers only: no native exception text or trip/account data.
+    if (controlTimeline.size() == 64) controlTimeline.removeFirst();
+    controlTimeline.addLast(new String[]{action, stage, Long.toString(android.os.SystemClock.elapsedRealtime() - controlCreatedAt), Boolean.toString(started), Boolean.toString(connected)});
+    android.util.Log.i("SemiTraXHybrid", "{\"action\":\"" + action + "\",\"stage\":\"" + stage + "\"}");
+  }
+  @ReactMethod public void recordHybridControl(String action, String stage, Promise promise) {
+    main.post(() -> {
+      if (!java.util.Arrays.asList("START_RESUME", "TRUCK_SETTINGS", "END_ROUTE", "BACK", "READINESS", "SYNC_PROFILE").contains(action) ||
+          !java.util.Arrays.asList("PRESS", "VALIDATING", "NATIVE_CALL", "CONFIRMED", "FAILED", "BUSY").contains(stage)) {
+        promise.reject("INVALID_DIAGNOSTIC", "Invalid diagnostic event."); return;
+      }
+      control(action, stage); promise.resolve(null);
+    });
+  }
+  private void requireSyncedTruck() {
+    // CPIK 10.28 has no axle/trailer-count API. Never certify a partial profile.
+    throw new IllegalStateException("TRUCK_RESTRICTIONS_UNREPRESENTABLE");
+  }
+  @ReactMethod public void applyTruckProfile(ReadableMap profile, Promise promise) {
+    main.post(() -> {
+      control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
+      promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE", "Trimble must confirm a supported axle/trailer profile mapping. No profile was changed.");
+    });
+  }
   private volatile boolean started;
   private boolean listenersRegistered;
   private final List<Promise> startupWaiters = new ArrayList<>();
@@ -490,7 +520,24 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         result.putBoolean("canRepairTypo", canRepairAssignedTypo(saved));
         result.putBoolean("restartRequired", assignedRepairPendingRestart);
         trace(CoPilotLoginTrace.Event.REPORT_REQUEST);
-        result.putString("reportBuild", "maps-storage-v4");
+        result.putString("reportBuild", "hybrid-issue392-v1");
+        WritableMap identity = Arguments.createMap();
+        identity.putString("commit", BuildConfig.SEMITRAX_BUILD_COMMIT);
+        identity.putString("builtAt", BuildConfig.SEMITRAX_BUILD_TIME);
+        identity.putString("packageName", context.getPackageName());
+        identity.putString("variant", BuildConfig.BUILD_TYPE);
+        identity.putInt("versionCode", BuildConfig.VERSION_CODE);
+        identity.putString("versionName", BuildConfig.VERSION_NAME);
+        result.putMap("buildIdentity", identity);
+        WritableArray controls = Arguments.createArray();
+        for (String[] entry : controlTimeline) {
+          WritableMap item = Arguments.createMap();
+          item.putString("action", entry[0]); item.putString("stage", entry[1]);
+          item.putDouble("elapsedMs", Double.parseDouble(entry[2]));
+          item.putBoolean("engineStarted", Boolean.parseBoolean(entry[3]));
+          item.putBoolean("serviceConnected", Boolean.parseBoolean(entry[4])); controls.pushMap(item);
+        }
+        result.putArray("controlTimeline", controls);
         WritableMap storage = Arguments.createMap();
         try {
           android.os.StatFs filesystem = new android.os.StatFs(context.getFilesDir().getAbsolutePath());
@@ -966,40 +1013,55 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
 
   @ReactMethod public void endEngineTrip(Promise promise) {
     main.post(() -> {
+      control("END_ROUTE", "REQUEST");
+      if (stoppingTrip) { promise.reject("ENGINE_STOP_UNCONFIRMED", "Stop confirmation pending."); return; }
+      stoppingTrip = true;
+      ++tripGeneration; tripPreparing = false; tripHandoff.invalidateReview();
+      if (pendingTrip != null) { pendingTrip.reject("ENGINE_TRIP_CANCELLED", "Start cancelled."); pendingTrip = null; }
+      // Ending must remain possible if licensing/maps/readiness later become unavailable.
       try {
-        requireMap();
-        if (tripPreparing) throw new IllegalStateException("Wait for trip preparation to finish.");
+        if (!started || !connected || invalidated) throw new IllegalStateException();
         GuidanceMgr.suspendNavigation(true);
+        control("END_ROUTE", "NATIVE_CALL");
         RouteMgr.removeAllStops();
-        if (RouteMgr.hasDestination()) throw new IllegalStateException("Engine stop not confirmed. Retry End Route.");
-        promise.resolve(null);
-      } catch (Exception e) { promise.reject("ENGINE_STOP_UNCONFIRMED", e.getMessage()); }
+        pollStopped(promise, android.os.SystemClock.elapsedRealtime() + 15000);
+      } catch (Exception e) { stoppingTrip = false; control("END_ROUTE", "FAILED"); promise.reject("ENGINE_STOP_UNCONFIRMED", "Stop not confirmed. Retry End Route."); }
     });
+  }
+  private void pollStopped(Promise promise, long deadline) {
+    try {
+      if (invalidated || !started || !connected) throw new IllegalStateException();
+      if (!tripHandoff.pendingStops() && !RouteMgr.hasDestination() && RouteMgr.getStopList().isEmpty()) {
+        tripHandoff.stopped(); guidanceTelemetry.clearRoute(); stoppingTrip = false;
+        control("END_ROUTE", "CONFIRMED"); promise.resolve(null); return;
+      }
+      if (android.os.SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException();
+      // An accepted addStops may finish after cancellation. Keep guidance suspended and remove late stops.
+      GuidanceMgr.suspendNavigation(true); RouteMgr.removeAllStops();
+      main.postDelayed(() -> pollStopped(promise, deadline), 250);
+    } catch (Exception e) { stoppingTrip = false; control("END_ROUTE", "FAILED"); promise.reject("ENGINE_STOP_UNCONFIRMED", "Stop not confirmed. Retry End Route."); }
   }
   @ReactMethod public void hasEngineTrip(Promise promise) {
     main.post(() -> {
-      try { requireMap(); promise.resolve(RouteMgr.hasDestination()); }
+      try { if (!started || !connected || invalidated) throw new IllegalStateException(); promise.resolve(RouteMgr.hasDestination()); }
       catch (Exception e) { promise.reject("ENGINE_TRIP_UNAVAILABLE", "Engine trip status unavailable."); }
     });
   }
   @ReactMethod public void resumeEngineTrip(Promise promise) {
     main.post(() -> {
+      control("RESUME", "REQUEST");
       try {
-        requireMap();
-        if (tripPreparing || !RouteMgr.hasDestination() ||
-            RouteMgr.getActiveVehicleRoutingProfile().getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY ||
-            context.getLifecycleState() != LifecycleState.RESUMED ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-          throw new IllegalStateException("A saved heavy-duty truck trip and precise location permission are required.");
-        UIMgr.getMapDrawer().clearDashedLine();
-        if (markerSet != null) UIMgr.getMapDrawer().removeImageSet(markerSet);
-        UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
-        UIMgr.getMapDrawer().lockToChevron();
-        CopilotMgr.enableGPS();
-        GuidanceMgr.suspendNavigation(false);
-        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
-        promise.resolve(null);
-      } catch (Exception e) { promise.reject("ENGINE_TRIP_UNAVAILABLE", e.getMessage()); }
+        requireMap(); requireTripForeground(); requireSyncedTruck();
+        if (tripPreparing || stoppingTrip || !RouteMgr.hasDestination() ||
+            RouteMgr.getActiveVehicleRoutingProfile().getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
+          throw new IllegalStateException();
+        control("RESUME", "NATIVE_CALL");
+        CopilotMgr.enableGPS(); GuidanceMgr.suspendNavigation(false);
+        control("RESUME", "CONFIRMED"); promise.resolve(null);
+      } catch (Exception e) {
+        control("RESUME", "FAILED");
+        promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(e.getMessage()) ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE" : "ENGINE_TRIP_UNAVAILABLE", "Resume requires verified truck profile, licensing, maps and GPS.");
+      }
     });
   }
   @ReactMethod public void reviewEngineTripProfile(Promise promise) {
@@ -1025,7 +1087,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         requireMap();
         requireTripForeground();
-        if (tripPreparing) throw new IllegalStateException("A trip is already being prepared.");
+        requireSyncedTruck();
+        control("START", "REQUEST");
+        if (stoppingTrip || tripPreparing) throw new IllegalStateException("A trip is already being prepared.");
         tripHandoff.validate(ticket);
         int count = locations.size();
         if (count < 2 || count > 27) throw new IllegalArgumentException("Invalid trip stop count.");
@@ -1038,30 +1102,52 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           if (names[i] == null || names[i].trim().isEmpty()) throw new IllegalArgumentException("Stop name required.");
         }
         tripPreparing = true;
+        final int generation = ++tripGeneration;
+        pendingTrip = promise;
         new Thread(() -> {
           try {
             com.alk.cpik.StopList stops = tripHandoff.geocode(ticket, points, names);
             main.post(() -> {
               try {
-                requireMap(); requireTripForeground();
+                if (generation != tripGeneration || invalidated) return;
+                requireMap(); requireTripForeground(); requireSyncedTruck();
                 tripHandoff.validate(ticket);
                 UIMgr.getMapDrawer().clearDashedLine();
                 if (markerSet != null) UIMgr.getMapDrawer().removeImageSet(markerSet);
                 UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
                 CopilotMgr.enableGPS();
+                control("START", "NATIVE_CALL");
                 tripHandoff.submit(ticket, stops);
                 GuidanceMgr.suspendNavigation(false);
-                // Means native preview was requested, not that guidance has started.
-                promise.resolve(null);
-              } catch (Exception e) { promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); }
-              finally { tripPreparing = false; }
+                // Submission is not confirmation: await this trip's stops and calculation callbacks.
+                pollStarted(promise, generation, android.os.SystemClock.elapsedRealtime() + 60000);
+              } catch (Exception e) { failStart(promise, generation, "ENGINE_TRIP_FAILED"); }
             });
           } catch (Exception e) {
-            main.post(() -> { tripPreparing = false; promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); });
+            main.post(() -> failStart(promise, generation, "ENGINE_TRIP_FAILED"));
           }
         }, "SemiTraXTripGeocode").start();
-      } catch (Exception e) { promise.reject("ENGINE_TRIP_FAILED", e.getMessage()); }
+      } catch (Exception e) { control("START", "FAILED"); promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(e.getMessage()) ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE" : "ENGINE_TRIP_FAILED", "Start requires a verified profile, licenses, maps and GPS."); }
     });
+  }
+  private void failStart(Promise promise, int generation, String code) {
+    if (generation != tripGeneration) return;
+    tripPreparing = false; pendingTrip = null;
+    try { GuidanceMgr.suspendNavigation(true); } catch (Exception ignored) {}
+    control("START", "FAILED"); promise.reject(code, "Route not confirmed. End Route before retrying.");
+  }
+  private void pollStarted(Promise promise, int generation, long deadline) {
+    if (generation != tripGeneration) return;
+    try {
+      requireMap(); requireTripForeground();
+      if (tripHandoff.failed()) { failStart(promise, generation, "ENGINE_TRIP_FAILED"); return; }
+      if (tripHandoff.confirmed()) {
+        tripPreparing = false; pendingTrip = null;
+        control("START", "CONFIRMED"); promise.resolve(null); return;
+      }
+      if (android.os.SystemClock.elapsedRealtime() >= deadline) { failStart(promise, generation, "ENGINE_TRIP_TIMEOUT"); return; }
+      main.postDelayed(() -> pollStarted(promise, generation, deadline), 250);
+    } catch (Exception e) { failStart(promise, generation, "ENGINE_TRIP_FAILED"); }
   }
   private void requireTripForeground() throws Exception {
     if (invalidated || context.getLifecycleState() != LifecycleState.RESUMED ||
@@ -1076,9 +1162,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (tripPreparing || !tripHandoff.canReturnToPlanner())
           throw new IllegalStateException("Use Trip controls to finish or cancel the engine trip before returning to the planner.");
         GuidanceMgr.suspendNavigation(true);
-        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
         promise.resolve(null);
-      } catch (Exception e) { promise.reject("ENGINE_TRIP_ACTIVE", e.getMessage()); }
+      } catch (Exception e) { promise.reject("ENGINE_TRIP_ACTIVE", "End Route before returning to planner."); }
     });
   }
   @ReactMethod public void mapCommand(String command, Promise promise) {
@@ -1318,6 +1403,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @Override public void onHostDestroy() { main.post(() -> { rejectWaiters("COPILOT_HOST_DESTROYED"); release(); }); }
   @Override public void invalidate() {
     invalidated = true;
+    ++tripGeneration;
+    if (pendingTrip != null) { pendingTrip.reject("ENGINE_TRIP_CANCELLED", "Session closed."); pendingTrip = null; }
     context.removeLifecycleEventListener(this);
     main.post(() -> {
       rejectWaiters("COPILOT_HOST_DESTROYED"); release();

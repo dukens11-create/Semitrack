@@ -1,6 +1,15 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  buildIdentity?: {
+    commit: string;
+    builtAt: string;
+    packageName: string;
+    variant: string;
+    versionCode: number;
+    versionName: string;
+  };
+  controlTimeline?: { action: string; stage: string; elapsedMs: number }[];
   nativeDisplay?: {
     status: string;
     deviceUtcOffsetMinutes: number;
@@ -54,6 +63,8 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  recordHybridControl?(action: string, stage: string): Promise<void>;
+  applyTruckProfile?(profile: unknown): Promise<void>;
   endEngineTrip?(): Promise<void>;
   hasEngineTrip?(): Promise<boolean>;
   resumeEngineTrip?(): Promise<void>;

@@ -34,8 +34,11 @@ export function WeatherStatus({
   const [raw, setRaw] = useState<Record<string, unknown>>(),
     [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false),
+    [failed, setFailed] = useState(false),
     [now, setNow] = useState(Date.now());
   const request = useRef<AbortController | null>(null);
+  const lastAttempt = useRef(0);
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     if (detailsRequest > 0) setOpen(true);
   }, [detailsRequest]);
@@ -44,6 +47,7 @@ export function WeatherStatus({
     request.current = null;
     setRaw(undefined);
     setBusy(false);
+    lastAttempt.current = 0;
     return () => {
       request.current?.abort();
     };
@@ -52,33 +56,43 @@ export function WeatherStatus({
     const timer = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (fix && Date.now() - lastAttempt.current >= 300000)
+      void refreshRef.current();
+  }, [fix, route, now]);
   const data = weatherPresentation(raw, fix, Math.max(now, Date.now())),
     unit = temperatureUnit(settings),
     alerts =
       data.status === 'CURRENT' ? activeWeatherAlerts(raw?.alerts, now) : [];
   async function refresh() {
-    if (request.current || !route || !services.poi.routeWeather) return;
+    if (
+      request.current ||
+      (!services.poi.currentWeather && (!route || !services.poi.routeWeather))
+    )
+      return;
     const current = services.location.getFreshFix();
     if (!current) {
       setRaw(undefined);
       return;
     }
+    lastAttempt.current = Date.now();
     const controller = new AbortController();
     request.current = controller;
     setBusy(true);
+    setFailed(false);
     try {
-      const items = await services.poi.routeWeather(
-        route,
-        current,
-        controller.signal,
-      );
-      if (
-        !controller.signal.aborted &&
-        services.routes.getSnapshot().route === route
-      )
-        setRaw(items.find(item => item.label === 'Current route location'));
+      const observation = services.poi.currentWeather
+        ? await services.poi.currentWeather(current, controller.signal)
+        : (
+            await services.poi.routeWeather(route!, current, controller.signal)
+          ).find(item => item.label === 'Current route location');
+      if (!controller.signal.aborted && request.current === controller)
+        setRaw(observation);
     } catch {
-      if (!controller.signal.aborted) setRaw(undefined);
+      if (!controller.signal.aborted) {
+        setRaw(undefined);
+        setFailed(true);
+      }
     } finally {
       if (request.current === controller && !controller.signal.aborted) {
         request.current = null;
@@ -87,12 +101,15 @@ export function WeatherStatus({
       }
     }
   }
+  refreshRef.current = refresh;
   return (
     <View>
-      {!driving && (
+      {
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Weather details"
+          accessibilityLabel={
+            driving ? 'Current driving weather details' : 'Weather details'
+          }
           onPress={() => setOpen(true)}
           style={[
             styles.status,
@@ -104,10 +121,14 @@ export function WeatherStatus({
               ? temperatureText(data.tempF, unit) + ' · ' + data.condition
               : data.status === 'STALE'
               ? 'Weather · stale'
+              : busy
+              ? 'Weather · loading…'
+              : failed
+              ? 'Weather · connection error'
               : 'Weather · unavailable'}
           </Text>
         </Pressable>
-      )}
+      }
       {alerts.map(alert => (
         <Pressable
           key={alert.title}
@@ -134,12 +155,18 @@ export function WeatherStatus({
                 String(data.observedAt)
               : data.status === 'STALE'
               ? 'Weather is stale or no longer near your location. Refresh before relying on it.'
-              : 'Current weather is unavailable. No temperature is assumed.'}
+              : raw?.reasonCode === 'WEATHER_PROVIDER_NOT_CONFIGURED'
+              ? 'Weather service is not configured on the server. SemiTraX support must connect the weather provider.'
+              : failed
+              ? 'Weather could not be reached. Check your connection and retry; offline weather is unavailable.'
+              : !fix
+              ? 'Enable location to load current weather.'
+              : 'Current weather is unavailable. Try refreshing.'}
           </DriverCopy>
           <DriverCopy>
             Area observation, not a road-surface report or arrival-time
             forecast. Weather requires a configured backend provider and a fresh
-            position on an accepted route.
+            position. Current weather does not require a route.
           </DriverCopy>
           {alerts.length ? (
             alerts.map(alert => (
@@ -156,7 +183,7 @@ export function WeatherStatus({
           <DriverButton
             title={busy ? 'Loading weather…' : 'Refresh current weather'}
             loading={busy}
-            disabled={!route}
+            disabled={!fix}
             onPress={() => {
               void refresh();
             }}

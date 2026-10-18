@@ -35,16 +35,14 @@ export function CoPilotDeviceSetup() {
     useState<CoPilotSetupDiagnostics | null>(null);
   useEffect(() => {
     let live = true;
-    if (automatic) {
-      try {
-        void coPilotHost()
-          .setupDiagnostics?.()
-          .then(value => {
-            if (live) setDiagnostics(value);
-          })
-          .catch(() => {});
-      } catch {}
-    }
+    try {
+      void coPilotHost()
+        .setupDiagnostics?.()
+        .then(value => {
+          if (live) setDiagnostics(value);
+        })
+        .catch(() => {});
+    } catch {}
     return () => {
       live = false;
     };
@@ -134,6 +132,11 @@ export function CoPilotDeviceSetup() {
   }
   return (
     <View style={styles.container}>
+      {diagnostics?.buildIdentity && (
+        <Text selectable style={{ color: palette.text }}>
+          {`Hybrid ${diagnostics.buildIdentity.versionName} (${diagnostics.buildIdentity.versionCode})\n${diagnostics.buildIdentity.packageName} · ${diagnostics.buildIdentity.variant}\nCommit ${diagnostics.buildIdentity.commit}\nBuilt ${diagnostics.buildIdentity.builtAt}`}
+        </Text>
+      )}
       <Text style={{ color: palette.muted }}>
         Use the Company ID and Device ID assigned to this phone. Setup is saved
         securely and restored automatically. California maps use Wi-Fi by

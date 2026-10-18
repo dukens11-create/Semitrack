@@ -10,7 +10,7 @@ import {CoPilotVoiceControls} from '../../components/CoPilotVoiceControls';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 /** Live engine display. Native trip controls retain ownership of start/end/profile/voice. */
-export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi }: { token: string; onClose: () => void; nearbyService?: Pick<PoiService, 'nearby'>; fix?: LocationFix | null; onPoi?: (poi: Poi) => void }) {
+export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi, weather }: { token: string; onClose: () => void; nearbyService?: Pick<PoiService, 'nearby'>; fix?: LocationFix | null; onPoi?: (poi: Poi) => void; weather?: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   const [selectedPoi, setSelectedPoi] = useState<Poi>();
   const [follow, setFollow] = useState(true);
@@ -84,6 +84,7 @@ export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi }:
             {' · '}{data.etaAt === undefined ? 'ETA —' : new Date(data.etaAt).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}
             {' · '}{data.speedMph === undefined ? '— mph' : Math.round(data.speedMph) + ' mph'}
           </Text>
+          {weather}
           <CoPilotVoiceControls />
           <Pressable accessibilityRole="button" accessibilityLabel="Trip controls" onPress={onClose} style={styles.button}>
             <Text style={styles.title}>Trip controls</Text>

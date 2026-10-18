@@ -1,0 +1,64 @@
+name: SemiTraX Hybrid issue 392 APK
+on:
+  push:
+    branches: [codex/issue-392-hybrid, codex/sept27-mapbox-engine]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hybrid-issue392-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile-react-native
+    env:
+      SEMITRAX_API_URL: https://semitrax-api.onrender.com
+      MAPBOX_PUBLIC_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Restore persistent certificate (never replace an installed signing identity)
+        env:
+          SEMITRAX_TEST_KEYSTORE_BASE64: ${{ secrets.SEMITRAX_TEST_KEYSTORE_BASE64 }}
+          SEMITRAX_TEST_CERT_SHA256: ${{ vars.SEMITRAX_TEST_CERT_SHA256 }}
+        run: bash scripts/restore-test-signing.sh
+      - run: node --test scripts/verify-test-certificate.test.cjs
+      - run: npm ci
+      - run: npm run check
+      - name: Build repaired Hybrid APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
+      - name: Verify separate package
+        run: |
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          aapt_bin=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+          "$aapt_bin" dump badging "$apk" > android/app/build/outputs/apk/debug/package-identity.txt
+          grep -q "name='com.semitrax.app.recovery.hybrid'" android/app/build/outputs/apk/debug/package-identity.txt
+          signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          "$signer" verify --print-certs "$apk" > android/app/build/outputs/apk/debug/signing-certificate.txt
+          node scripts/verify-test-certificate.cjs android/app/build/outputs/apk/debug/signing-certificate.txt
+          sha256sum "$apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
+      - name: Record native source and build identity
+        run: |
+          cp scripts/install-hybrid.ps1 android/app/build/outputs/apk/debug/install-hybrid.ps1
+          git rev-parse HEAD > android/app/build/outputs/apk/debug/build-commit.txt
+          date -u +%FT%TZ > android/app/build/outputs/apk/debug/build-time.txt
+          echo 'Hybrid; versionCode 392; compare installed signing certificate before adb install -r. Never uninstall or clear data.' > android/app/build/outputs/apk/debug/install-safety.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semitrax-hybrid-issue392-${{ github.run_number }}
+          path: apps/mobile-react-native/android/app/build/outputs/apk/debug/
+          if-no-files-found: error

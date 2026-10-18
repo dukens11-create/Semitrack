@@ -97,10 +97,10 @@ export function WeatherStatus({
   refreshRef.current = refresh;
   return (
     <View>
-      {!driving && (
+      {(
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Weather details"
+          accessibilityLabel={driving ? 'Current driving weather details' : 'Weather details'}
           onPress={() => setOpen(true)}
           style={[
             styles.status,

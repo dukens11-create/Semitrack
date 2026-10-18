@@ -123,8 +123,37 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   @ReactMethod public void applyTruckProfile(ReadableMap profile, Promise promise) {
     main.post(() -> {
-      control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
-      promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE", "Trimble must confirm a supported axle/trailer profile mapping. No profile was changed.");
+      try {
+        // Read-only comparison against the ACTIVE CoPilot truck profile. Never claim
+        // that dimensions are synchronized merely because JS supplied matching data.
+        if (profile == null) throw new IllegalArgumentException("TRUCK_PROFILE_REQUIRED");
+        requireMap();
+        com.alk.cpik.route.VehicleRoutingProfile active = RouteMgr.getActiveVehicleRoutingProfile();
+        if (active == null || active.getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
+          throw new IllegalStateException("HEAVY_DUTY_PROFILE_REQUIRED");
+        com.alk.cpik.route.VehicleDimensions dims = active.getVehicleDimensions();
+        String[] keys = {"heightInches", "widthInches", "lengthInches", "weightLbs"};
+        int[] actual = {dims.getHeight().getInches(), dims.getWidth().getInches(),
+            dims.getLength().getInches(), dims.getTotalWeight().getPounds()};
+        for (int i = 0; i < keys.length; i++) {
+          if (!profile.hasKey(keys[i]) || profile.isNull(keys[i]) || profile.getType(keys[i]) != com.facebook.react.bridge.ReadableType.Number ||
+              profile.getDouble(keys[i]) <= 0 || profile.getDouble(keys[i]) != actual[i])
+            throw new IllegalStateException("TRUCK_DIMENSIONS_MISMATCH");
+        }
+        control("SYNC_PROFILE", "DIMENSIONS_MATCH_UNVERIFIED_AXLES_TRAILERS");
+        // Axle/trailer counts remain unverified in CPIK 10.28. Keep guidance fail-closed.
+        promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE",
+            "CoPilot dimensions match, but axle and trailer restrictions are not verified. Navigation remains blocked.");
+      } catch (Exception e) {
+        control("SYNC_PROFILE", "FAILED");
+        String reason = e.getMessage();
+        String code = "TRUCK_DIMENSIONS_MISMATCH".equals(reason) ? "TRUCK_DIMENSIONS_MISMATCH"
+            : "HEAVY_DUTY_PROFILE_REQUIRED".equals(reason) ? "HEAVY_DUTY_PROFILE_REQUIRED"
+            : "TRUCK_PROFILE_REQUIRED".equals(reason) ? "TRUCK_PROFILE_REQUIRED"
+            : "MAP_UNVERIFIED".equals(reason) ? "COPILOT_MAP_OR_LICENSE_UNVERIFIED"
+            : "TRUCK_PROFILE_READBACK_UNAVAILABLE";
+        promise.reject(code, "Could not verify the active CoPilot heavy-duty truck profile. No settings were changed.");
+      }
     });
   }
   private volatile boolean started;
@@ -510,8 +539,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         JSONObject saved = readStored();
         WritableMap result = Arguments.createMap();
-        result.putBoolean("savedCompanyMatches", saved != null && CoPilotEnrollmentPolicy.COMPANY.equals(saved.getString("company")));
-        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(saved.getString("device")));
+        // Blank reference IDs mean this build has no pinned enrollment identity.
+        // A false match against a blank reference is NOT evidence of a wrong saved ID.
+        String referenceCompany = CoPilotEnrollmentPolicy.COMPANY;
+        String referenceDevice = CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET);
+        boolean referenceConfigured = referenceCompany != null && !referenceCompany.trim().isEmpty()
+            && referenceDevice != null && !referenceDevice.trim().isEmpty();
+        result.putBoolean("enrollmentReferenceConfigured", referenceConfigured);
+        result.putString("enrollmentReferenceStatus", referenceConfigured ? "CONFIGURED" : "NOT_CONFIGURED");
+        result.putBoolean("savedSetupPresent", saved != null);
+        result.putBoolean("savedCompanyMatches", referenceConfigured && saved != null && referenceCompany.equals(saved.getString("company")));
+        result.putBoolean("savedDeviceMatches", referenceConfigured && saved != null && referenceDevice.equalsIgnoreCase(saved.getString("device")));
         result.putString("credentialHook", credentialHookState);
         result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
         result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);
@@ -1065,8 +1103,19 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         CopilotMgr.enableGPS(); GuidanceMgr.suspendNavigation(false);
         control("RESUME", "CONFIRMED"); promise.resolve(null);
       } catch (Exception e) {
+        // Preserve the precise fail-closed reason for the React Native UI.
+        // Do not leak SDK exception messages or account identifiers.
+        String reason = e.getMessage();
+        String code = "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(reason)
+            ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE"
+            : "MAP_UNVERIFIED".equals(reason) ? "COPILOT_MAP_OR_LICENSE_UNVERIFIED"
+            : "ENGINE_TRIP_UNAVAILABLE";
         control("RESUME", "FAILED");
-        promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(e.getMessage()) ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE" : "ENGINE_TRIP_UNAVAILABLE", "Resume requires verified truck profile, licensing, maps and GPS.");
+        promise.reject(code, "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(code)
+            ? "CoPilot cannot yet verify required axle and trailer restrictions. Truck navigation remains blocked."
+            : "COPILOT_MAP_OR_LICENSE_UNVERIFIED".equals(code)
+                ? "Verify CoPilot navigation and heavy-duty licenses and installed California maps."
+                : "Resume requires a verified truck route, precise GPS, and an active CoPilot trip.");
       }
     });
   }
@@ -1084,6 +1133,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         value.putInt("widthInches", dims.getWidth().getInches());
         value.putInt("lengthInches", dims.getLength().getInches());
         value.putInt("weightLbs", dims.getTotalWeight().getPounds());
+        // These are SDK readbacks, not proof of axle/trailer enforcement.
+        value.putBoolean("heavyDutyProfileVerified", true);
+        value.putBoolean("axleCountVerified", false);
+        value.putBoolean("trailerCountVerified", false);
+        value.putBoolean("truckRestrictionsVerified", false);
         promise.resolve(value);
       } catch (Exception e) { promise.reject("ENGINE_PROFILE_UNAVAILABLE", e.getMessage()); }
     });

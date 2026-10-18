@@ -7,6 +7,7 @@ on:
       - codex/semitrax-auth-audit-20261014
       - codex/copilot-poi-catalog
       - codex/copilot-engine-trip
+      - codex/mapbox-copilot-proof
   workflow_dispatch:
     inputs:
       test_asset:
@@ -26,7 +27,7 @@ jobs:
         working-directory: apps/mobile-react-native
     env:
       SEMITRAX_API_URL: https://semitrax-api.onrender.com
-      SEMITRAX_TEST_ASSET: ${{ github.event_name == 'push' && github.ref_name == 'codex/semitrax-auth-audit-20261014' || inputs.test_asset || false }}
+      SEMITRAX_TEST_ASSET: ${{ github.event_name == 'push' && (github.ref_name == 'codex/semitrax-auth-audit-20261014' || github.ref_name == 'codex/mapbox-copilot-proof') || inputs.test_asset || false }}
       MAPBOX_PUBLIC_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
       MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
     steps:

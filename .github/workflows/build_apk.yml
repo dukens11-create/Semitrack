@@ -1,8 +1,33 @@
 name: Build Release APK
 
 on:
+# The root Flutter project is separate from apps/mobile-react-native.
+# Workflow-only edits can be checked explicitly with workflow_dispatch.
+  workflow_dispatch:
   push:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'assets/**'
+      - 'plugins/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
   pull_request:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'integration_test/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'assets/**'
+      - 'plugins/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'analysis_options.yaml'
 
 jobs:
   build:

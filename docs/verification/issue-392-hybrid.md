@@ -91,3 +91,17 @@ The first CI attempt caught a strict test indexing type error; corrected before 
 checksum, APK package/version and installed signing certificate before using `adb install -r`.
 It never clears data, uninstalls, or copies private app data. PowerShell/physical-device execution
 has not been performed in this environment.
+
+
+### PR CI routing correction
+
+The root `build_apk.yml` previously ran Flutter for every repository change.
+PR #393 changes the separate Hybrid project, not the root Flutter app; its
+Flutter check failed at dependency resolution because the licensed
+`plugins/here_sdk` package is absent. Automatic Flutter builds now watch the
+root Flutter source, tests, native projects, assets, plugins and dependency
+files. Manual dispatch remains available, including for workflow-only changes.
+The Flutter dependency and its license requirements remain unchanged.
+The Hybrid workflow continues to run its full tests and Android compilation
+on every push to this repair branch. This correction does not supply the
+missing HERE SDK or resolve the documented Trimble authorization blockers.

@@ -19,6 +19,7 @@ const SetupContext = createContext({
   cellularAllowed: false,
   allowCellularDownload: async () => {},
   retry: async () => {},
+  refresh: async () => {},
   configure: async (_company: string, _device: string) => {},
 });
 export const useCopilotState = () => useContext(StateContext);
@@ -173,6 +174,11 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
           cellularAllowed,
           allowCellularDownload,
           retry: retrySaved,
+          refresh: async () => {
+            if (!latest.current.initialized) { await retrySaved(); return; }
+            await lifecycle.current?.recheck(true);
+            synchronize();
+          },
           configure,
         }}
       >

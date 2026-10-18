@@ -423,6 +423,7 @@ export class CopilotLifecycle {
   }
   /** Explicit inventory query; never synthesizes an SDK startup/download event. */
   async recheck(preserveVerifiedMap = false): Promise<void> {
+    this.readinessRetries = 0;
     if (!this.active || this.startupRejected || !this.state.initialized) return;
     const revision = ++this.revision;
     // A foreground check need not detach the already verified native renderer.

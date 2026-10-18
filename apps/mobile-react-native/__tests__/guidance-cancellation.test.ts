@@ -17,6 +17,7 @@ function fixture(phase: NavigationState['phase'] = 'idle') {
     initialize: jest.fn(async () => ({ available: true })),
     setTruckProfile: jest.fn(async () => {}),
     setRoute: jest.fn(async () => {}),
+    abortNavigationPreparation: jest.fn(async () => {}),
     startNavigation: jest.fn(async () => {
       state = { phase: 'navigating', routeId: 'test-route' };
     }),
@@ -33,7 +34,7 @@ function fixture(phase: NavigationState['phase'] = 'idle') {
   });
   return { engine, session: new GuidanceSession(engine) };
 }
-test('preview cancellation does not initialize or stop CoPilot', async () => {
+test('preview cancellation does not initialize or stop SemiTraX', async () => {
   const { engine, session } = fixture();
   expect(await session.cancel()).toBe(true);
   expect(engine.initialize).not.toHaveBeenCalled();
@@ -50,7 +51,7 @@ test('unavailable startup cancels without ever calling stop', async () => {
   expect(engine.startNavigation).not.toHaveBeenCalled();
   expect(engine.stopNavigation).not.toHaveBeenCalled();
 });
-test('failed startup cancels without stop when guidance never started', async () => {
+test('failed startup releases preparation without stopping an unrelated session', async () => {
   const { engine, session } = fixture();
   engine.startNavigation.mockRejectedValue(
     new Error('provider startup rejected'),
@@ -60,6 +61,7 @@ test('failed startup cancels without stop when guidance never started', async ()
   ).rejects.toThrow();
   await session.cancel();
   expect(engine.stopNavigation).not.toHaveBeenCalled();
+  expect(engine.abortNavigationPreparation).toHaveBeenCalledTimes(1);
 });
 test.each(['navigating', 'paused', 'rerouting', 'arrived'] as const)(
   '%s cancellation stops the real session once and suppresses late events',
@@ -134,6 +136,51 @@ test('stop failure stays explicit and blocks another start until cleanup succeed
     'stop-unconfirmed',
   );
   expect(engine.startNavigation).not.toHaveBeenCalled();
+  expect(await session.cancel()).toBe(true);
+  expect(await session.start(route(), plan, truck, () => true)).toBe('started');
+});
+
+test('cancel during route loading cleans up after the pending handoff settles', async () => {
+  const { engine, session } = fixture();
+  const wait = deferred<void>();
+  const reached = deferred<void>();
+  engine.setRoute.mockImplementation(async () => {
+    reached.resolve();
+    await wait.promise;
+  });
+  const start = session.start(route(), plan, truck, () => true);
+  await reached.promise;
+  const cancel = session.cancel();
+  expect(engine.abortNavigationPreparation).not.toHaveBeenCalled();
+  wait.resolve();
+  expect(await start).toBe('cancelled');
+  expect(await cancel).toBe(true);
+  expect(engine.startNavigation).not.toHaveBeenCalled();
+  expect(engine.abortNavigationPreparation).toHaveBeenCalledTimes(1);
+});
+test('partially failed route handoff releases owned preparation', async () => {
+  const { engine, session } = fixture();
+  engine.setRoute.mockRejectedValueOnce(new Error('native route failed'));
+  await expect(session.start(route(), plan, truck, () => true)).rejects.toThrow(
+    'native route failed',
+  );
+  expect(engine.abortNavigationPreparation).toHaveBeenCalledTimes(1);
+  expect(engine.startNavigation).not.toHaveBeenCalled();
+  expect(session.acceptsEvents).toBe(false);
+});
+test('failed preparation cleanup blocks the next start until cancellation succeeds', async () => {
+  const { engine, session } = fixture();
+  engine.setRoute.mockRejectedValueOnce(new Error('native route failed'));
+  engine.abortNavigationPreparation.mockRejectedValueOnce(
+    new Error('cleanup failed'),
+  );
+  expect(await session.start(route(), plan, truck, () => true)).toBe(
+    'stop-unconfirmed',
+  );
+  expect(await session.start(route(), plan, truck, () => true)).toBe(
+    'stop-unconfirmed',
+  );
+  expect(engine.setRoute).toHaveBeenCalledTimes(1);
   expect(await session.cancel()).toBe(true);
   expect(await session.start(route(), plan, truck, () => true)).toBe('started');
 });

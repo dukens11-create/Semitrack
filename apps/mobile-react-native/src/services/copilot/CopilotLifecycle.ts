@@ -267,7 +267,7 @@ export class CopilotLifecycle {
     ) {
       this.publish({
         warning:
-          'CoPilot reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
+          'SemiTraX reported a commercial road restriction. Stop safely and review the restriction before proceeding.',
       });
     }
     if (event === 'onFailedRouteCalculation' || event === 'onRouteSyncError') {
@@ -377,6 +377,7 @@ export class CopilotLifecycle {
       this.publish({ readyToAddStops });
       if (!this.state.initialized || !readyToAddStops) {
         this.fail('COPILOT_NOT_READY', 'ready-to-add-stops');
+        this.retryReadiness(revision);
         return;
       }
       // Readiness refresh must not erase a route/guidance failure.
@@ -421,10 +422,15 @@ export class CopilotLifecycle {
     }
   }
   /** Explicit inventory query; never synthesizes an SDK startup/download event. */
-  async recheck(): Promise<void> {
+  async recheck(preserveVerifiedMap = false): Promise<void> {
     if (!this.active || this.startupRejected || !this.state.initialized) return;
     const revision = ++this.revision;
-    this.publish({ mapsReady: false, readyToAddStops: false });
+    // A foreground check need not detach the already verified native renderer.
+    // Route permission is still suspended until the fresh checks finish.
+    this.publish({
+      mapsReady: preserveVerifiedMap && this.state.mapsReady,
+      readyToAddStops: false,
+    });
     this.queue = this.queue.then(() => this.refresh(revision));
     await this.queue;
   }

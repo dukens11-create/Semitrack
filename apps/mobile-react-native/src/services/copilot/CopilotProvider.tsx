@@ -1,3 +1,4 @@
+import { testCoPilotVoice } from './CoPilotVoice';
 import React, {
   createContext,
   useCallback,
@@ -15,6 +16,8 @@ import { coPilotHost, selectedMapInstalled } from './CoPilotHost';
 const StateContext = createContext(initialCopilotState());
 const SetupContext = createContext({
   downloadStatus: '',
+  cellularAllowed: false,
+  allowCellularDownload: async () => {},
   retry: async () => {},
   configure: async (_company: string, _device: string) => {},
 });
@@ -22,7 +25,15 @@ export const useCopilotState = () => useContext(StateContext);
 export const useCopilotSetup = () => useContext(SetupContext);
 export function CopilotProvider({ children }: React.PropsWithChildren) {
   const [state, setState] = useState(initialCopilotState);
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (!state.copilotReady || greeted.current || AppState.currentState !== 'active') return;
+    greeted.current = true;
+    void testCoPilotVoice().catch(() => {});
+  }, [state.copilotReady]);
   const [downloadStatus, setDownloadStatus] = useState('');
+  const [cellularAllowed, setCellularAllowed] = useState(false);
+  const cellular = useRef(false);
   const latest = useRef(state);
   const lifecycle = useRef<CopilotLifecycle | null>(null);
   const download = useRef<AutomaticMapDownload | null>(null);
@@ -57,7 +68,15 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       {
         active: () => live.current && active.current,
         installed: selectedMapInstalled,
-        download: () => coPilotHost().downloadSelectedMap(),
+        progress: async () =>
+          (await coPilotHost().setupDiagnostics?.())?.mapDownload?.status,
+        download: () => {
+          const host = coPilotHost();
+          if (!cellular.current) return host.downloadSelectedMap();
+          if (!host.downloadSelectedMapUsingCellular)
+            throw new Error('Update SemiTraX to download over mobile data.');
+          return host.downloadSelectedMapUsingCellular();
+        },
         refresh: async () => {
           await lifecycle.current?.recheck();
         },
@@ -68,6 +87,19 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     );
     void download.current.tick();
   }, []);
+  const allowCellularDownload = useCallback(async () => {
+    if (!live.current || !active.current) return;
+    if (!coPilotHost().downloadSelectedMapUsingCellular)
+      throw new Error('Update SemiTraX to download over mobile data.');
+    cellular.current = true;
+    setCellularAllowed(true);
+    download.current?.stop();
+    download.current = null;
+    setDownloadStatus(
+      'Mobile data allowed for this app session. Checking offline map…',
+    );
+    synchronize();
+  }, [synchronize]);
   const retry = useCallback(async () => {
     if (!live.current) return;
     download.current?.stop();
@@ -85,7 +117,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
     await next.start();
     const result = next.snapshot();
     if (!result.initialized) {
-      throw new Error('CoPilot startup did not complete.');
+      throw new Error('SemiTraX startup did not complete.');
     }
   }, [synchronize]);
   const retrySaved = useCallback(async () => {
@@ -94,7 +126,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       (await location.permissionStatus()) !== 'granted' &&
       (await location.permission(false)) !== 'granted'
     )
-      throw new Error('Precise location is required for CoPilot startup.');
+      throw new Error('Precise location is required for SemiTraX startup.');
     await retry();
   }, [retry]);
   const configure = useCallback(
@@ -104,7 +136,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
         (await location.permissionStatus()) !== 'granted' &&
         (await location.permission(false)) !== 'granted'
       )
-        throw new Error('Precise location is required for CoPilot startup.');
+        throw new Error('Precise location is required for SemiTraX startup.');
       // Invoked by explicit setup action; native storage never returns the IDs.
       await coPilotHost().configureDevice(
         company.trim(),
@@ -122,7 +154,7 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
       active.current = next === 'active';
       if (active.current) {
         if (latest.current.initialized)
-          void lifecycle.current?.recheck().then(synchronize);
+          void lifecycle.current?.recheck(true).then(synchronize);
         else void retry().catch(() => {});
       } else synchronize();
     });
@@ -136,7 +168,13 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
   return (
     <StateContext.Provider value={state}>
       <SetupContext.Provider
-        value={{ downloadStatus, retry: retrySaved, configure }}
+        value={{
+          downloadStatus,
+          cellularAllowed,
+          allowCellularDownload,
+          retry: retrySaved,
+          configure,
+        }}
       >
         {children}
       </SetupContext.Provider>

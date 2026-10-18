@@ -59,6 +59,8 @@ export interface NavigationEngine {
   pauseNavigation(): Promise<void>;
   resumeNavigation(): Promise<void>;
   stopNavigation(): Promise<void>;
+  /** Release only the route/profile preparation owned by this adapter. */
+  abortNavigationPreparation(): Promise<void>;
   addStop(stop: Stop): Promise<void>;
   removeStop(id: string): Promise<void>;
   reroute(route: TruckRoute, plan: StopPlan): Promise<void>;
@@ -96,6 +98,9 @@ export class UnavailableNavigationEngine implements NavigationEngine {
   }
   async stopNavigation() {
     /* Idempotent when no engine exists. */
+  }
+  async abortNavigationPreparation() {
+    /* No native preparation is owned by an unavailable engine. */
   }
   async addStop(_stop: Stop) {
     throw new GuidanceUnavailableError();

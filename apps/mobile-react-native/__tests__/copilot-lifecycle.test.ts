@@ -335,7 +335,7 @@ test('shutdown invalidates readiness and subscription cleanup prevents later upd
   h.lifecycle.dispose();
   expect(h.callbacks.size).toBe(0);
 });
-test('native startup event after shutdown cannot silently reactivate CoPilot', async () => {
+test('native startup event after shutdown cannot silently reactivate SemiTraX', async () => {
   const h = harness();
   await h.lifecycle.start();
   await h.event('onCPStartup');
@@ -641,16 +641,88 @@ test.each([
 test('Trimble server failure retries only within the bounded recovery window', async () => {
   jest.useFakeTimers();
   const h = harness();
-  h.port.licenseState = jest
-    .fn()
-    .mockRejectedValue({
-      code: 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER',
-    });
+  h.port.licenseState = jest.fn().mockRejectedValue({
+    code: 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER',
+  });
   await h.lifecycle.start();
   await h.event('onCPStartup');
   await jest.advanceTimersByTimeAsync(60000);
   expect(h.port.licenseState).toHaveBeenCalledTimes(7);
   expect(h.lifecycle.snapshot().copilotReady).toBe(false);
   expect(h.port.mapState).not.toHaveBeenCalled();
+  h.lifecycle.dispose();
+});
+
+test('delayed route readiness recovers without a second SDK callback', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.readyToAddStops = jest
+    .fn()
+    .mockResolvedValueOnce(false)
+    .mockResolvedValue(true);
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  await jest.advanceTimersByTimeAsync(5000);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  expect(h.port.startNative).toHaveBeenCalledTimes(1);
+  h.lifecycle.dispose();
+});
+test('route readiness retries stop at the limit without granting navigation', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  h.port.readyToAddStops = jest.fn().mockResolvedValue(false);
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(h.port.readyToAddStops).toHaveBeenCalledTimes(7);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(false);
+  expect(jest.getTimerCount()).toBe(0);
+  h.lifecycle.dispose();
+});
+
+test('foreground refresh keeps verified map mounted but suspends route permission', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  h.changed.mockClear();
+  const refresh = h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    mapsReady: true,
+    readyToAddStops: false,
+    copilotReady: false,
+  });
+  await refresh;
+  expect(h.changed.mock.calls.every(([state]) => state.mapsReady)).toBe(true);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  h.lifecycle.dispose();
+});
+test('foreground refresh still blocks revoked licenses and missing maps', async () => {
+  const h = harness();
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  (h.port.licenseState as jest.Mock).mockResolvedValueOnce({
+    licensingReady: true,
+    fullNavigationLicensed: false,
+    heavyTruckLicensed: true,
+  });
+  await h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    copilotReady: false,
+    fullNavigationLicensed: false,
+    error: 'COPILOT_LICENSE_PROVISIONING_REQUIRED',
+  });
+  (h.port.mapState as jest.Mock).mockResolvedValueOnce({
+    licensed: [1],
+    installed: [],
+    mapsReady: false,
+    updateStatus: 'UNKNOWN',
+  });
+  await h.lifecycle.recheck(true);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    copilotReady: false,
+    mapsReady: false,
+    error: 'COPILOT_MAP_DATA_REQUIRED',
+  });
   h.lifecycle.dispose();
 });

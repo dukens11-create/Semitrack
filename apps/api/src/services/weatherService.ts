@@ -11,6 +11,22 @@ const coordinate = z.object({
   lat: z.number().finite().min(-90).max(90),
   lng: z.number().finite().min(-180).max(180),
 });
+export const currentWeatherSchema = coordinate.extend({
+  accuracy: z.number().finite().min(0).max(100),
+  timestamp: z.number().finite(),
+});
+export async function getCurrentWeather(input: unknown, now = Date.now()) {
+  const fix = currentWeatherSchema.parse(input);
+  if (now - fix.timestamp > 15000 || fix.timestamp > now + 5000)
+    return { status: "UNAVAILABLE", reason: "A fresh location is required." };
+  if (!env.openWeatherApiKey)
+    return { status: "UNAVAILABLE", reasonCode: "WEATHER_PROVIDER_NOT_CONFIGURED" };
+  try {
+    return { label: "Current location", ...(await getWeatherAtPoint(fix)) };
+  } catch {
+    return { status: "UNAVAILABLE", reason: "Weather provider is unavailable." };
+  }
+}
 export const routeWeatherSchema = z.object({
   route: z.array(coordinate).min(2).max(20000),
   currentLocation: coordinate.extend({

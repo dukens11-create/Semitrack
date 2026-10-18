@@ -1,8 +1,10 @@
-import { sanitizeRestrictionDiagnostic } from './restrictionDiagnostic';
+import { sanitizeRestrictionDiagnostic, restrictionMessage } from './restrictionDiagnostic';
 import { safeDriverError } from '../../errors/driverErrors';
 const codes = {
   TRIMBLE_RESTRICTION_WARNING: 'UNCLASSIFIED_PROVIDER_WARNING',
   TRIMBLE_RESTRICTION_UNSUPPORTED: 'UNSUPPORTED_AVOIDANCE',
+  TRIMBLE_ROUTE_PATH_DISABLED: 'CONFIGURATION',
+  TRIMBLE_ROUTE_PATH_REQUIRED: 'PROVIDER_ENTITLEMENT',
   TRIMBLE_API_KEY_MISSING: 'CONFIGURATION',
   TRIMBLE_CONFIGURATION_INVALID: 'CONFIGURATION',
   TRIMBLE_AUTHORIZATION_FAILED: 'PROVIDER_AUTHENTICATION',
@@ -101,7 +103,7 @@ export function routeDiagnostic(error: unknown) {
     httpStatus: status,
     message: fields.length
       ? fields.join(', ') + ' needs attention. Use actual truck measurements.'
-      : safeDriverError(error),
+      : (providerDetail && restrictionMessage(providerDetail.providerWarningTypes)) || safeDriverError(error),
     providerDetailAvailable: providerDetail !== null,
     ...(providerDetail ? { providerDetail } : {}),
   };

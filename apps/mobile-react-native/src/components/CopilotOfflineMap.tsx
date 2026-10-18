@@ -12,23 +12,28 @@ import { useDriverPalette } from './DriverUI';
 
 export function copilotMapBlocker(state: CopilotState): string | null {
   if (Platform.OS !== 'android' || !state.modules.CopilotView)
-    return 'The CoPilot map renderer is unavailable in this build.';
+    return 'The SemiTraX map renderer is unavailable in this build.';
   if (!state.initialized)
-    return 'CoPilot must finish secure setup and native startup before its offline map can open.';
+    return 'SemiTraX must finish secure setup and native startup before its offline map can open.';
   if (
     !state.licensingReady ||
     !state.fullNavigationLicensed ||
     !state.heavyTruckLicensed
   )
-    return 'Verify this device’s Full Navigation and Heavy-Duty Truck licenses before opening the CoPilot map.';
+    return 'Verify this device’s Full Navigation and Heavy-Duty Truck licenses before opening the SemiTraX map.';
   if (
     !state.mapsReady ||
     !state.maps?.mapsReady ||
     !state.maps.installed.length
   )
-    return 'Install and verify the selected licensed CoPilot offline map before opening it.';
-  if (state.error)
-    return 'CoPilot reported a setup or route error. Resolve it before opening the offline map.';
+    return 'Install and verify the selected licensed SemiTraX offline map before opening it.';
+  // A verified map can mount while the route engine is still starting.
+  // Mounting the renderer never grants route/guidance readiness.
+  const waitingForRouteEngine =
+    state.error === 'COPILOT_NOT_READY' &&
+    state.operation === 'ready-to-add-stops';
+  if (state.error && !waitingForRouteEngine)
+    return 'SemiTraX reported a setup or route error. Resolve it before opening the offline map.';
   return null;
 }
 
@@ -40,7 +45,7 @@ function VerifiedMap() {
   return (
     <NativeMap
       style={styles.map}
-      accessibilityLabel="Trimble CoPilot offline map"
+      accessibilityLabel="Trimble SemiTraX offline map"
     />
   );
 }
@@ -54,7 +59,7 @@ export function CopilotOfflineMap({ state }: { state: CopilotState }) {
       {blocker ? (
         <View style={styles.blocker} accessibilityRole="alert">
           <Text style={[styles.title, { color: p.text }]}>
-            CoPilot map setup required
+            SemiTraX map setup required
           </Text>
           <Text style={{ color: p.text }}>{blocker}</Text>
         </View>

@@ -61,9 +61,9 @@ export function amsSetupExplanation(operation: string | null): string | null {
     case 'COPILOT_AMS_LOGIN_NO_RESPONSE':
       return 'The native credential hook supplied saved setup, but no login response arrived within the recovery window. Report this stage for native SDK investigation.';
     case 'COPILOT_AMS_IDENTITY_MISSING':
-      return 'CoPilot has started, but Account Manager login is not confirmed. Saved setup alone does not confirm activation.';
+      return 'SemiTraX has started, but Account Manager login is not confirmed. Saved setup alone does not confirm activation.';
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_CANT_REACH_SERVER':
-      return 'CoPilot could not reach Trimble’s activation server. Keep an internet connection available; the app retries automatically.';
+      return 'SemiTraX could not reach Trimble’s activation server. Keep an internet connection available; the app retries automatically.';
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_INVALID_CREDS':
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_ASSET_DOESNOT_EXIST':
       return 'Trimble rejected the assigned login. Verify this phone’s Company ID and Device ID in Account Manager.';
@@ -76,12 +76,12 @@ export function amsSetupExplanation(operation: string | null): string | null {
     case 'COPILOT_AMS_ACCOUNT_CHANGE_BLOCKED':
     case 'COPILOT_AMS_COMPANY_MISMATCH':
     case 'COPILOT_AMS_DEVICE_MISMATCH':
-      return 'CoPilot reports a different account identity. Existing licenses are preserved; account replacement is blocked.';
+      return 'SemiTraX reports a different account identity. Existing licenses are preserved; account replacement is blocked.';
     case 'COPILOT_AMS_DEVICE_CONFIGURATION_FAILED':
-      return 'CoPilot could not apply and verify the assigned Device ID setting. Restart the app and report this setup stage if it remains.';
+      return 'SemiTraX could not apply and verify the assigned Device ID setting. Restart the app and report this setup stage if it remains.';
     case 'COPILOT_AMS_HOOK_NOT_CALLED':
     case 'COPILOT_AMS_HOOK_QUERY_FAILED':
-      return 'CoPilot did not complete the native credential handoff. Restart the app and report this setup stage if it remains.';
+      return 'SemiTraX did not complete the native credential handoff. Restart the app and report this setup stage if it remains.';
     default:
       return null;
   }

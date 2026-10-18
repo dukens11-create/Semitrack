@@ -123,7 +123,7 @@ export function RoutePreview({
         </Text>
       ))}
       <DriverTitle small>Route instructions</DriverTitle>
-      <DriverCopy>Preview only — not live CoPilot maneuvers.</DriverCopy>
+      <DriverCopy>Preview only — not live SemiTraX maneuvers.</DriverCopy>
       {route.turnByTurn.map((step, index) => (
         <DriverCopy key={index}>
           {index + 1}. {step.instruction}

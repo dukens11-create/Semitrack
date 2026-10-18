@@ -1,5 +1,6 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  COPILOT_POI_UNAVAILABLE: 'SemiTraX place search is unavailable or still completing. Check offline map coverage and retry shortly.',
   PLACE_SEARCH_CONFIGURATION:
     'Address search is unavailable until a public map token is configured. Contact support with code PLACE_SEARCH_CONFIGURATION.',
   PLACE_SEARCH_UNAUTHORIZED:
@@ -29,6 +30,10 @@ const messages: Record<string, string> = {
   AUTH_EXPIRED: 'Please sign in again to continue.',
   PROVIDER_UNAVAILABLE:
     'The requested provider is temporarily unavailable. Please retry later.',
+  TRIMBLE_ROUTE_PATH_DISABLED:
+    'Truck routing is disabled in the server configuration. SemiTraX support must enable RoutePath requests.',
+  TRIMBLE_ROUTE_PATH_REQUIRED:
+    'Trimble did not supply the required road path. SemiTraX support must check the RoutePath entitlement.',
   TRIMBLE_API_KEY_MISSING:
     'Trimble truck routing is not configured. Contact SemiTraX support.',
   TRIMBLE_CONFIGURATION_INVALID:

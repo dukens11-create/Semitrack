@@ -4,6 +4,7 @@ import { OfflineMapsScreen } from '../src/screens/OfflineMapsScreen';
 import { ServicesScreen } from '../src/screens/ServicesScreen';
 import { SettingsScreen } from '../src/screens/SettingsScreen';
 import {
+  DeviceEventEmitter,
   ScrollView,
   StyleSheet,
   View,
@@ -59,8 +60,9 @@ const mockCoPilotHost = {
 jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockCoPilotHost,
 }));
+const mockCopilotState = { readyToAddStops: true };
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
-  useCopilotState: () => ({}),
+  useCopilotState: () => mockCopilotState,
   useCopilotSetup: () => ({
     downloadStatus: '',
     retry: async () => {},
@@ -123,7 +125,7 @@ function setup(selected: typeof truck | null = truck, fix: unknown = null) {
   const calculate = jest.fn().mockResolvedValue(true);
   const routes = Object.assign(
     new Store({ phase: 'idle', route: null, plan: null }),
-    { calculate },
+    { calculate, clear: jest.fn() },
   );
   const trucks = Object.assign(
     new Store({ profiles: selected ? [selected] : [], selected }),
@@ -199,28 +201,21 @@ afterEach(async () => {
   if (screen) await act(async () => screen.unmount());
   jest.clearAllMocks();
 });
-test('opens Map, offers all five tabs, and keeps planner state while switching tabs', async () => {
+test('opens the SemiTraX planner and retains its view across tabs', async () => {
   const { services } = setup();
   await act(async () => {
     screen = create(<DriverShell services={services} open={jest.fn()} />);
   });
   expect(button('Map').props.accessibilityState.selected).toBe(true);
-  for (const label of ['Home', 'Map', 'Trips', 'Docs', 'More'])
-    expect(button(label)).toBeDefined();
-  await press('Set destination for truck routes');
-  await act(async () =>
-    screen.root
-      .findByType(TextInput)
-      .props.onChangeText('retained destination'),
-  );
-  await press('Close Set destination');
+  expect(button('Set destination for truck routes')).toBeDefined();
+  const planner = screen.root.findByType(PlanningScreen);
   await press('Home');
   expect(content()).toContain('Ready to roll,');
+  expect(planner.props.active).toBe(false);
   await press('Map');
-  await press('Set destination for truck routes');
-  expect(screen.root.findByType(TextInput).props.value).toBe(
-    'retained destination',
-  );
+  expect(screen.root.findByType(PlanningScreen)).toBe(planner);
+  expect(planner.props.active).toBe(true);
+  expect(mockCoPilotHost.mapCommand).not.toHaveBeenCalledWith('native-map');
 });
 test('empty token shows honest map unavailable state without initializing or mounting Mapbox', async () => {
   await act(async () => {
@@ -313,13 +308,19 @@ test('real route preview retains visible Start and fails closed on unavailable g
   await act(async () => {
     screen = create(<PlanningScreen services={services} />);
   });
+  const start = button('Start Navigation');
+  const cancel = button('Cancel Route');
+  const panel = screen.root.findByProps({ testID: 'map-bottom-panel' });
+  for (const scroll of panel.findAllByType(ScrollView)) {
+    expect(scroll.findAll(node => node === start || node === cancel)).toHaveLength(0);
+  }
   await press('Review route and stops');
   expect(content()).toContain('planning estimates');
   expect(content()).toContain('No alternatives were returned');
   expect(button('Compare alternatives')).toBeDefined();
   expect(button('Start Navigation').props.disabled).toBe(false);
   await press('Start Navigation');
-  expect(content()).toContain('CoPilot provisioning required');
+  expect(content()).toContain('Turn-by-turn connection unavailable');
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test('busy search prevents duplicate provider calls and restores interaction after completion', async () => {
@@ -1143,7 +1144,13 @@ test('navigation menu connects real map commands, settings, report UI and confir
   );
   await press('Navigation Controls');
   await press('Audio Settings');
-  expect(settings).toHaveBeenCalledTimes(1);
+  expect(settings).not.toHaveBeenCalled();
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('settings');
+  expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+  expect(StyleSheet.flatten(screen.root.findByProps({ testID: 'map-bottom-panel' }).props.style).display).toBe('none');
+  await press('Back to SemiTraX map');
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('map');
+  expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(false);
   await press('Navigation Controls');
   await press('Report');
   expect(report).toHaveBeenCalledTimes(1);
@@ -1700,7 +1707,7 @@ test('More opens the existing offline display-map screen without implying offlin
     screen = create(<DriverShell services={services} open={open} />);
   });
   await press('More');
-  expect(content()).toContain('Offline truck routing requires CoPilot');
+  expect(content()).toContain('Offline truck routing requires SemiTraX');
   await press('Offline maps');
   expect(open).toHaveBeenCalledWith('Offline');
 });
@@ -1966,5 +1973,157 @@ test('background destination confirmation shows a safe pre-dispatch error and di
     );
   } finally {
     AppState.currentState = previous;
+  }
+});
+
+test('native onboarding clears planning overlays and restores them after readiness', async () => {
+  const { services } = setup();
+  mockCopilotState.readyToAddStops = false;
+  try {
+    await act(async () => {
+      screen = create(<PlanningScreen services={services} />);
+    });
+    const panel = () => screen.root.findByProps({ testID: 'map-bottom-panel' });
+    expect(StyleSheet.flatten(panel().props.style).display).toBe('none');
+    expect(button('Zoom in')).toBeUndefined();
+    mockCopilotState.readyToAddStops = true;
+    await act(async () => {
+      screen.update(<PlanningScreen services={services} />);
+    });
+    expect(StyleSheet.flatten(panel().props.style).display).not.toBe('none');
+    expect(button('Zoom in')).toBeDefined();
+  } finally {
+    mockCopilotState.readyToAddStops = true;
+  }
+});
+
+ test('chosen start routes from a provider address without requiring device GPS', async () => {
+  const { services, calculate } = setup();
+  const previousAppState = AppState.currentState;
+  AppState.currentState = 'active';
+  try {
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Set destination for truck routes');
+    await press('Choose starting location');
+    await selectRouteDestination();
+    await press('Use as starting location');
+    expect(content()).toContain('Real provider destination');
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(services.location.requestFreshFix).not.toHaveBeenCalled();
+    expect(calculate).toHaveBeenCalledWith(
+      expect.objectContaining({lat: 41, lng: -100}),
+      expect.any(Object), truck, 0,
+    );
+    await press('Set destination for truck routes');
+    await press('Use Current location');
+    await selectRouteDestination();
+    await press('Set final destination');
+    expect(services.location.requestFreshFix).toHaveBeenCalledTimes(1);
+    expect(calculate).toHaveBeenCalledTimes(1);
+  } finally { AppState.currentState = previousAppState; }
+});
+
+
+test('SemiTraX search and trip screens hide SemiTraX overlays without remounting the map', async () => {
+  const { services } = setup();
+  await act(async () => { screen = create(<PlanningScreen services={services} />); });
+  const map = screen.root.findByType(CopilotTruckMap);
+  await act(async () => {
+    DeviceEventEmitter.emit('SemiTraxCoPilotScreenChanged', { navigationScreen: false });
+  });
+  expect(screen.root.findByType(CopilotTruckMap)).toBe(map);
+  expect(map.props.settingsOpen).toBe(true);
+  expect(StyleSheet.flatten(screen.root.findByProps({testID: 'map-bottom-panel'}).props.style).display).toBe('none');
+  await press('Back to SemiTraX map');
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('map');
+  expect(map.props.settingsOpen).toBe(false);
+});
+
+test('native SemiTraX screen waits for onboarding and offers retry after control failure', async () => {
+  const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
+  mockCopilotState.readyToAddStops = false;
+  try {
+    await act(async () => { screen = create(<CoPilotNavigationScreen />); });
+    expect(mockCoPilotHost.mapCommand).not.toHaveBeenCalled();
+    mockCoPilotHost.mapCommand.mockRejectedValueOnce(new Error('unavailable'));
+    mockCopilotState.readyToAddStops = true;
+    await act(async () => screen.update(<CoPilotNavigationScreen />));
+    expect(content()).toContain('SemiTraX controls could not open');
+    await press('Retry SemiTraX controls');
+    expect(content()).not.toContain('SemiTraX controls could not open');
+    expect(mockCoPilotHost.mapCommand).toHaveBeenCalledTimes(2);
+  } finally {
+    mockCopilotState.readyToAddStops = true;
+  }
+});
+
+test('native map uses SemiTraX menu without duplicate SemiTraX controls', async () => {
+  const { services } = setup();
+  const { CoPilotNavigationScreen } = require('../src/screens/CoPilotNavigationScreen');
+  await act(async () => { screen = create(<CoPilotNavigationScreen services={services} active />); });
+  for (const title of ['SemiTraX tools', 'SemiTraX menu', 'Trip plan', 'SemiTraX settings', 'Return to map']) {
+    expect(screen.root.findAllByProps({accessibilityLabel: title})).toHaveLength(0);
+    expect(content()).not.toContain(title);
+  }
+  expect(mockCoPilotHost.mapCommand).toHaveBeenCalledWith('native-map');
+  expect(mockCoPilotHost.drawRoutePreview).not.toHaveBeenCalled();
+});
+
+test('engine handoff reviews its truck, preserves stop order and keeps native controls until trip ends', async () => {
+  const priorState = AppState.currentState;
+  AppState.currentState = 'active';
+  const native = mockCoPilotHost as typeof mockCoPilotHost & Partial<import('../src/services/copilot/CoPilotHost').CoPilotHost>;
+  const profile = { ticket: 'review-ticket', name: 'Duke', heightInches: 162, widthInches: 102, lengthInches: 636, weightLbs: 80000 };
+  native.reviewEngineTripProfile = jest.fn().mockResolvedValue(profile);
+  native.openEngineTrip = jest.fn().mockResolvedValue(undefined);
+  native.returnFromEngineTrip = jest.fn().mockRejectedValueOnce(new Error('Finish or cancel the engine trip first.')).mockResolvedValue(undefined);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  try {
+    const { services } = setup(truck, { latitude: 39, longitude: -119, timestamp: Date.now(), accuracy: 5 });
+    const plan = { stops: [{ id: 'fuel', name: 'Fuel', lat: 39.5, lng: -119 }], destination: { id: 'dest', name: 'Destination', lat: 40, lng: -120 } };
+    services.routes = new Store({ phase: 'preview', route: route(), plan }) as unknown as RouteStore;
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Start Navigation');
+    expect(native.openEngineTrip).not.toHaveBeenCalled();
+    expect(alert.mock.calls.at(-1)![1]).toContain('Duke');
+    await act(async () => { alert.mock.calls.at(-1)![2]!.find(b => b.text === 'Use this profile')!.onPress!(); });
+    expect(native.openEngineTrip).toHaveBeenCalledWith('review-ticket', [
+      { name: 'Current location', lat: 39, lng: -119 },
+      { name: 'Fuel', lat: 39.5, lng: -119 },
+      { name: 'Destination', lat: 40, lng: -120 },
+    ]);
+    expect(services.guidance.startNavigation).not.toHaveBeenCalled();
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    await act(async () => {
+      DeviceEventEmitter.emit('SemiTraxCoPilotScreenChanged', { navigationScreen: true });
+    });
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    expect(screen.root.findByType(CopilotTruckMap).props.topInset).toBe(0);
+    expect(screen.root.findByType(CopilotTruckMap).props.bottomInset).toBe(0);
+    await press('Back to planner');
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+    await press('Back to planner');
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(false);
+  } finally {
+    delete native.reviewEngineTripProfile; delete native.openEngineTrip; delete native.returnFromEngineTrip;
+    alert.mockRestore(); AppState.currentState = priorState;
+  }
+});
+
+test('a retained engine trip can reopen without a planner route or a second stop transfer', async () => {
+  const native = mockCoPilotHost as typeof mockCoPilotHost & Partial<import('../src/services/copilot/CoPilotHost').CoPilotHost>;
+  native.hasEngineTrip = jest.fn().mockResolvedValue(true);
+  native.resumeEngineTrip = jest.fn().mockResolvedValue(undefined);
+  native.openEngineTrip = jest.fn();
+  try {
+    const { services } = setup();
+    await act(async () => { screen = create(<PlanningScreen services={services} />); });
+    await press('Resume engine trip');
+    expect(native.resumeEngineTrip).toHaveBeenCalledTimes(1);
+    expect(native.openEngineTrip).not.toHaveBeenCalled();
+    expect(screen.root.findByType(CopilotTruckMap).props.settingsOpen).toBe(true);
+  } finally {
+    delete native.hasEngineTrip; delete native.resumeEngineTrip; delete native.openEngineTrip;
   }
 });

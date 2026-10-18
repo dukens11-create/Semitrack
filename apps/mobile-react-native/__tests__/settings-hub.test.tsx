@@ -246,7 +246,7 @@ test('failed autosave restores accepted choice, does not claim success, and allo
 test('unprovisioned navigation keeps stored ON preferences but never activates the provider', async () => {
   const { initialize, settings } = await setup();
   await press('Navigation');
-  expect(content()).toContain('CoPilot setup required');
+  expect(content()).toContain('SemiTraX setup required');
   expect(content()).toContain(
     'On when navigation becomes available · saved preference',
   );

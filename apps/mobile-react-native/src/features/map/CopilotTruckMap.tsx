@@ -1,7 +1,16 @@
+import { EnginePreferences } from '../../components/EnginePreferences';
+import { EngineTruckProfile } from '../../components/EngineTruckProfile';
+import { DriverIcon } from '../../components/DriverIcon';
+import { DrivingNearbyOverlay } from '../navigation/DrivingNearbyOverlay';
+import type { PoiService } from '../poi/PoiService';
+import { CoPilotPlaces } from '../../components/CoPilotPlaces';
+import { CoPilotVoiceControls } from '../../components/CoPilotVoiceControls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   DeviceEventEmitter,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -20,6 +29,8 @@ import { useCopilotState } from '../../services/copilot/CopilotProvider';
 import { coPilotHost } from '../../services/copilot/CoPilotHost';
 import { routeDisplayProgress } from '../navigation/routeDisplayProgress';
 export interface CopilotMapProps {
+  nearbyService?: Pick<PoiService, 'nearby'>;
+  active?: boolean;
   command?: { type: 'overview' | 'recenter'; id: number };
   route: TruckRoute | null;
   plan: StopPlan | null;
@@ -31,10 +42,16 @@ export interface CopilotMapProps {
   progressOffset?: number;
   topInset?: number;
   bottomInset?: number;
+  settingsOpen?: boolean;
+  onSettings?: () => void;
+  onSatellite?: () => void;
 }
 let nextMarkerId = 1;
 /** Backend geometry is a dashed planning overlay, never a native guidance route. */
 export function CopilotTruckMap({
+  nearbyService,
+  active: screenActive = true,
+  fix,
   command,
   route,
   plan,
@@ -45,16 +62,25 @@ export function CopilotTruckMap({
   progressOffset,
   topInset = 56,
   bottomInset = 0,
+  settingsOpen = false,
+  onSettings,
+  onSatellite,
 }: CopilotMapProps) {
+  const [mapHeight, setMapHeight] = useState(0);
+  const [moreControls, setMoreControls] = useState(false);
   const state = useCopilotState();
   const palette = useDriverPalette();
   const allowed = copilotMapBlocker(state) === null;
   const [appearanceReady, setAppearanceReady] = useState(false);
+  const appliedAppearance = useRef<boolean | undefined>(undefined);
+  const [resumeAttempt, setResumeAttempt] = useState(0);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [previewError, setPreviewError] = useState('');
   const [error, setError] = useState('');
   const [northUp, setNorthUp] = useState(true);
   const previousCommand = useRef<number | undefined>(undefined);
   const selected = useRef({ onPoi, onCoordinate, allowed: false });
-  selected.current = { onPoi, onCoordinate, allowed };
+  selected.current = { onPoi, onCoordinate, allowed: allowed && !settingsOpen };
   const geometry = useMemo(() => {
     const progress = routeDisplayProgress(
       route,
@@ -81,28 +107,50 @@ export function CopilotTruckMap({
   const markerPositions = useRef(markers.positions);
   markerPositions.current = markers.positions;
   useEffect(() => {
+    const subscription = AppState.addEventListener('change', next => {
+      if (next !== 'active' || !screenActive || settingsOpen || navigationActive) return;
+      appliedAppearance.current = undefined;
+      setAppearanceReady(false);
+      setResumeAttempt(value => value + 1);
+    });
+    return () => subscription.remove();
+  }, [screenActive, settingsOpen, navigationActive]);
+  useEffect(() => {
     if (!allowed) {
+      appliedAppearance.current = undefined;
       setAppearanceReady(false);
       return;
     }
+    if (settingsOpen) {
+      appliedAppearance.current = undefined;
+      setAppearanceReady(false);
+      return;
+    }
+    // Returning from CoPilot settings must preserve the native map style and
+    // day/night selection. Apply only a new SemiTraX theme or a new engine.
+    if (appliedAppearance.current === palette.dark) return;
+    appliedAppearance.current = undefined;
     let active = true;
     void coPilotHost()
       .setMapAppearance(palette.dark)
       .then(() => {
         if (!active) return;
+        appliedAppearance.current = palette.dark;
         setAppearanceReady(true);
         setError('');
       })
       .catch(() => {
         if (active) {
           setAppearanceReady(false);
-          setError('CoPilot map appearance could not be applied. Retry setup.');
+          setError(
+            'SemiTraX map appearance could not be applied. Retry setup.',
+          );
         }
       });
     return () => {
       active = false;
     };
-  }, [allowed, palette.dark]);
+  }, [allowed, palette.dark, settingsOpen, resumeAttempt]);
   useEffect(() => {
     const picked = DeviceEventEmitter.addListener(
       'SemiTraxCoPilotMapPicked',
@@ -129,22 +177,52 @@ export function CopilotTruckMap({
     };
   }, []);
   useEffect(() => {
-    if (!allowed || !appearanceReady) return;
+    if (
+      !allowed ||
+      !appearanceReady ||
+      !state.readyToAddStops ||
+      settingsOpen ||
+      navigationActive
+    )
+      return;
     let active = true;
     void coPilotHost()
       .drawRoutePreview(geometry)
+      .then(async () => {
+        if (!active) return;
+        setPreviewError('');
+        if (geometry.length < 2) return;
+        const longs = geometry.map(point => point[0]);
+        const lats = geometry.map(point => point[1]);
+        try {
+          await coPilotHost().mapFrame(
+            Math.min(...longs), Math.min(...lats),
+            Math.max(...longs), Math.max(...lats),
+          );
+        } catch {
+          if (active) setPreviewError('Route drawn. Overview could not be centered. Retry map.');
+        }
+      })
       .catch(() => {
         if (active)
-          setError(
-            'The planning route could not be displayed. Guidance has not started.',
+          setPreviewError(
+            'Route preview unavailable. Retry map or review route options.',
           );
       });
     return () => {
       active = false;
     };
-  }, [allowed, appearanceReady, geometry]);
+  }, [
+    allowed,
+    appearanceReady,
+    state.readyToAddStops,
+    geometry,
+    previewAttempt,
+    settingsOpen,
+    navigationActive,
+  ]);
   useEffect(() => {
-    if (!allowed || !appearanceReady) return;
+    if (!allowed || !appearanceReady || settingsOpen) return;
     let active = true;
     void coPilotHost()
       .drawMarkers(markers.values)
@@ -154,9 +232,9 @@ export function CopilotTruckMap({
     return () => {
       active = false;
     };
-  }, [allowed, appearanceReady, markers]);
+  }, [allowed, appearanceReady, markers, settingsOpen]);
   async function control(action: string) {
-    if (!allowed || !appearanceReady) return;
+    if (!allowed || !appearanceReady || settingsOpen) return false;
     try {
       if (action === 'overview' && geometry.length) {
         const longs = geometry.map(point => point[0]),
@@ -171,8 +249,10 @@ export function CopilotTruckMap({
         await coPilotHost().mapCommand(
           action === 'overview' ? 'recenter' : action,
         );
+      return true;
     } catch {
-      setError('CoPilot map control is unavailable. Retry setup.');
+      setError('SemiTraX map control is unavailable. Retry setup.');
+      return false;
     }
   }
   const currentControl = useRef(control);
@@ -181,76 +261,138 @@ export function CopilotTruckMap({
     if (
       !allowed ||
       !appearanceReady ||
+      settingsOpen ||
       !command ||
       previousCommand.current === command.id
     )
       return;
     previousCommand.current = command.id;
     void currentControl.current(command.type);
-  }, [allowed, appearanceReady, command]);
+  }, [allowed, appearanceReady, command, settingsOpen]);
   return (
-    <View style={styles.screen}>
-      {allowed && !appearanceReady ? (
+    <View
+      style={styles.screen}
+      onLayout={event => setMapHeight(event.nativeEvent.layout.height)}
+    >
+      <CopilotOfflineMap state={state} />
+      {allowed && !appearanceReady && !settingsOpen && (
         <View style={[styles.pending, { backgroundColor: palette.canvas }]}>
           <Text style={{ color: palette.text }}>
-            {error || 'Preparing CoPilot map…'}
+            {error || 'Preparing SemiTraX map…'}
           </Text>
         </View>
-      ) : (
-        <CopilotOfflineMap state={state} />
       )}
-      {allowed && appearanceReady && (
-        <View
+      {allowed && appearanceReady && state.readyToAddStops && !settingsOpen && (
+        <ScrollView
+          contentContainerStyle={styles.controlContent}
           style={[styles.controls, { top: topInset, bottom: bottomInset + 16 }]}
           pointerEvents="box-none"
         >
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="More map controls"
+            accessibilityState={{ expanded: moreControls }}
+            style={styles.button}
+            onPress={() => setMoreControls(value => !value)}
+          >
+            <Text style={styles.symbol}>•••</Text>
+          </Pressable>
+          {onSatellite && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Satellite map information — imagery not connected"
+              style={styles.button}
+              onPress={onSatellite}
+            >
+              <DriverIcon name="satellite" size={26} color="#FFFFFF" />
+            </Pressable>
+          )}
+          {moreControls && <EngineTruckProfile onEdit={onSettings} />}
+          {moreControls && <EnginePreferences />}
+          {moreControls && <CoPilotVoiceControls />}
+          {moreControls && <CoPilotPlaces />}
+          {moreControls && onSettings && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="SemiTraX settings"
+              style={styles.button}
+              onPress={onSettings}
+            >
+              <Text style={styles.symbol}>⚙</Text>
+            </Pressable>
+          )}
+          <Pressable
+            accessibilityRole="button"
             accessibilityLabel="Recenter / follow truck"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('recenter');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>◎</Text>
+            <Text style={styles.symbol}>◎</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Compass / north up"
-            style={[styles.button, { backgroundColor: palette.card }]}
-            onPress={() => {
+            style={styles.button}
+            onPress={async () => {
               const next = !northUp;
-              setNorthUp(next);
-              void control(next ? 'north-up' : 'heading-up');
+              if (await control(next ? 'north-up' : 'heading-up'))
+                setNorthUp(next);
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>
-              {northUp ? 'N' : '↑'}
-            </Text>
+            <Text style={styles.symbol}>{northUp ? 'N' : '↑'}</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Zoom in"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('zoom-in');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>+</Text>
+            <Text style={styles.symbol}>+</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Zoom out"
-            style={[styles.button, { backgroundColor: palette.card }]}
+            style={styles.button}
             onPress={() => {
               void control('zoom-out');
             }}
           >
-            <Text style={[styles.symbol, { color: palette.text }]}>−</Text>
+            <Text style={styles.symbol}>−</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       )}
-      {!!error && (
+      {nearbyService &&
+        allowed &&
+        appearanceReady &&
+        state.readyToAddStops &&
+        !settingsOpen && (
+          <View
+            pointerEvents="box-none"
+            style={[
+              styles.nearby,
+              {
+                top: topInset,
+                maxHeight: Math.max(
+                  42,
+                  mapHeight - topInset - bottomInset - 12,
+                ),
+              },
+            ]}
+          >
+            <DrivingNearbyOverlay
+              service={nearbyService}
+              fix={fix}
+              active={screenActive}
+              availableHeight={mapHeight - topInset - bottomInset - 12}
+              onSelect={onPoi}
+            />
+          </View>
+        )}
+      {!!(error || previewError) && !settingsOpen && (
         <View
           style={[
             styles.error,
@@ -258,7 +400,12 @@ export function CopilotTruckMap({
           ]}
           accessibilityRole="alert"
         >
-          <Text style={{ color: palette.text }}>{error}</Text>
+          <Text style={{ color: palette.text }}>{error || previewError}</Text>
+          {!!previewError && (
+            <Pressable accessibilityRole="button" accessibilityLabel="Retry route preview" onPress={() => setPreviewAttempt(value => value + 1)} style={styles.retry}>
+              <Text style={{ color: palette.actionText }}>Retry map</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -266,8 +413,15 @@ export function CopilotTruckMap({
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  nearby: {
+    position: 'absolute',
+    left: 10,
+    right: 72,
+    alignItems: 'flex-start',
+  },
+  retry: { minHeight: 44, justifyContent: 'center' },
   pending: {
-    flex: 1,
+    position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -275,17 +429,22 @@ const styles = StyleSheet.create({
   controls: {
     position: 'absolute',
     right: 12,
-    gap: 10,
+  },
+  controlContent: {
+    gap: 6,
     alignItems: 'flex-end',
   },
   button: {
+    backgroundColor: '#172433',
+    borderColor: '#425263',
+    borderWidth: 1,
     width: 48,
     minHeight: 48,
-    borderRadius: 14,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  symbol: { fontSize: 24, fontWeight: '700' },
+  symbol: { fontSize: 24, fontWeight: '700', color: '#FFFFFF' },
   error: {
     position: 'absolute',
     left: 12,

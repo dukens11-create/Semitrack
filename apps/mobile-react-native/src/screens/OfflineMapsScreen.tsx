@@ -1,3 +1,4 @@
+import { CoPilotMapCatalog } from '../components/CoPilotMapCatalog';
 import React, { useEffect, useRef, useState } from 'react';
 import type { Services } from '../app/services';
 import { Page, Heading, Copy, Button } from '../components/ui';
@@ -6,7 +7,7 @@ import { useCopilotState } from '../services/copilot/CopilotProvider';
 export function OfflineMapsScreen({ services }: { services: Services }) {
   const state = useCopilotState();
   const [connection, setConnection] = useState(
-    'Backend connectivity is separate from CoPilot map setup.',
+    'Backend connectivity is separate from SemiTraX map setup.',
   );
   const [busy, setBusy] = useState(false);
   const live = useRef(true);
@@ -25,12 +26,12 @@ export function OfflineMapsScreen({ services }: { services: Services }) {
       await services.api.request('GET', '/health');
       if (live.current)
         setConnection(
-          'SemiTraX API reachable. CoPilot licensing and maps are checked independently.',
+          'SemiTraX API reachable. SemiTraX licensing and maps are checked independently.',
         );
     } catch {
       if (live.current)
         setConnection(
-          'SemiTraX API unreachable. Verified CoPilot offline maps remain stored.',
+          'SemiTraX API unreachable. Verified SemiTraX offline maps remain stored.',
         );
     } finally {
       pending.current = false;
@@ -39,18 +40,18 @@ export function OfflineMapsScreen({ services }: { services: Services }) {
   }
   return (
     <Page>
-      <Heading>CoPilot offline maps</Heading>
+      <Heading>SemiTraX offline maps</Heading>
       <Copy>
         California coverage downloads automatically on Wi-Fi after this phone’s
         assigned license is verified. Keep SemiTraX open during setup.
       </Copy>
       <Copy>
         {state.mapsReady
-          ? 'California offline map verified in CoPilot inventory.'
+          ? 'California offline map verified in SemiTraX inventory.'
           : 'California offline map installation has not been verified.'}
       </Copy>
       <Copy>
-        Installed CoPilot packages: {state.maps?.installed.length ?? 0}
+        Installed SemiTraX packages: {state.maps?.installed.length ?? 0}
       </Copy>
       {state.maps?.installed.map(map => (
         <Copy
@@ -63,6 +64,7 @@ export function OfflineMapsScreen({ services }: { services: Services }) {
         Map installation does not enable live guidance. Truck-profile and route
         coverage verification are still required.
       </Copy>
+      <CoPilotMapCatalog />
       <CoPilotDeviceSetup />
       <Copy>{connection}</Copy>
       <Button

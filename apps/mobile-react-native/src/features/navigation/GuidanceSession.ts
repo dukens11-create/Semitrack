@@ -12,6 +12,7 @@ export class GuidanceSession {
   private generation = 0;
   private tail: Promise<unknown> = Promise.resolve();
   private started: boolean;
+  private prepared = false;
   private suppressed = false;
   constructor(private engine: NavigationEngine) {
     this.started = running(engine.getNavigationState());
@@ -37,17 +38,32 @@ export class GuidanceSession {
         'started' | 'unavailable' | 'cancelled' | 'stop-unconfirmed'
       > => {
         if (!valid()) return 'cancelled';
-        if (this.started) return 'stop-unconfirmed';
+        if (this.started || this.prepared) return 'stop-unconfirmed';
         this.suppressed = false;
         const capability = await this.engine.initialize();
         if (!valid()) return 'cancelled';
         if (!capability.available) return 'unavailable';
         await this.engine.setTruckProfile(truck);
         if (!valid()) return 'cancelled';
-        await this.engine.setRoute(route, plan);
-        if (!valid()) return 'cancelled';
-        await this.engine.startNavigation();
-        this.started = true;
+        // Claim cleanup before setRoute: a rejected handoff may already have
+        // changed native stops. A successful start is not required for cleanup.
+        this.prepared = true;
+        try {
+          await this.engine.setRoute(route, plan);
+          if (!valid()) {
+            this.suppressed = true;
+            return (await this.stopStarted())
+              ? 'cancelled'
+              : 'stop-unconfirmed';
+          }
+          await this.engine.startNavigation();
+          this.started = true;
+          this.prepared = false;
+        } catch (error) {
+          this.suppressed = true;
+          if (!(await this.stopStarted())) return 'stop-unconfirmed';
+          throw error;
+        }
         // A late native start must be stopped even if the route changed outside Cancel.
         if (!valid()) {
           this.suppressed = true;
@@ -74,10 +90,12 @@ export class GuidanceSession {
     return this.enqueue(() => this.stopStarted());
   }
   private async stopStarted(): Promise<boolean> {
-    if (!this.started) return true;
+    if (!this.started && !this.prepared) return true;
     try {
-      await this.engine.stopNavigation();
+      if (this.started) await this.engine.stopNavigation();
+      else await this.engine.abortNavigationPreparation();
       this.started = false;
+      this.prepared = false;
       return true;
     } catch {
       // Do not claim native guidance stopped; block future start until cleanup succeeds.

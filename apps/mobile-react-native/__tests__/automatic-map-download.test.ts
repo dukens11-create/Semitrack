@@ -81,3 +81,55 @@ test('foreground loss before inventory completes prevents download', async () =>
   await job.tick();
   expect(port.download).not.toHaveBeenCalled();
 });
+
+test.each(['FAILURE_MANAGER_BUSY', 'FAILURE_INVALID_CONNECTION'])(
+  'preserves exact %s after retries stop',
+  async response => {
+    jest.useFakeTimers();
+    const { port, report, job } = fixture();
+    port.download.mockResolvedValue(response);
+    await job.tick();
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining(response));
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining(response));
+    expect(port.refresh).not.toHaveBeenCalled();
+  },
+);
+
+test.each([
+  'DOWNLOADING',
+  'SUCCEEDED',
+  'INSTALLATION_STARTED',
+  'INSTALLATION_FINISHED',
+])(
+  'recreated controller observes %s without submitting another download or declaring readiness',
+  async status => {
+    jest.useFakeTimers();
+    const { port, report } = fixture();
+    const job = new AutomaticMapDownload(
+      { ...port, progress: async () => status },
+      report,
+    );
+    await job.tick();
+    await jest.advanceTimersByTimeAsync(15000);
+    expect(port.download).not.toHaveBeenCalled();
+    expect(port.refresh).not.toHaveBeenCalled();
+    port.installed.mockResolvedValue(true);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(port.refresh).toHaveBeenCalledTimes(1);
+    job.stop();
+  },
+);
+test('download success is displayed as pending installation', async () => {
+  const { port, report } = fixture();
+  const job = new AutomaticMapDownload(
+    { ...port, progress: async () => 'SUCCEEDED' },
+    report,
+  );
+  await job.tick();
+  expect(report).toHaveBeenLastCalledWith(
+    expect.stringContaining('Waiting for SemiTraX to install'),
+  );
+  expect(port.refresh).not.toHaveBeenCalled();
+  job.stop();
+});

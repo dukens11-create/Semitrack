@@ -1,3 +1,4 @@
+import { Alert } from './ThemedAlert';
 import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
 import React, { useEffect, useState } from 'react';
@@ -81,7 +82,7 @@ export function CoPilotDeviceSetup() {
       if (!host.repairAssignedSetup) throw new Error('Repair unavailable');
       await host.repairAssignedSetup();
       setMessage(
-        'Saved Company ID typo corrected. Use Android Settings → Apps → SemiTraX → Force stop, then reopen once to start a fresh CoPilot login. Maps and licenses are preserved.',
+        'Saved Company ID typo corrected. Use Android Settings → Apps → SemiTraX → Force stop, then reopen once to start a fresh SemiTraX login. Maps and licenses are preserved.',
       );
       setDiagnostics(await host.setupDiagnostics!());
     } catch {
@@ -105,11 +106,11 @@ export function CoPilotDeviceSetup() {
       setCompany('');
       setDevice('');
       setMessage(
-        'Device setup saved and CoPilot started. License and California map checks continue automatically.',
+        'Device setup saved and SemiTraX started. License and California map checks continue automatically.',
       );
     } catch {
       setMessage(
-        'CoPilot startup did not complete. See the setup stage below. Existing licenses and maps are preserved.',
+        'SemiTraX startup did not complete. See the setup stage below. Existing licenses and maps are preserved.',
       );
     } finally {
       setBusy(false);
@@ -135,8 +136,9 @@ export function CoPilotDeviceSetup() {
     <View style={styles.container}>
       <Text style={{ color: palette.muted }}>
         Use the Company ID and Device ID assigned to this phone. Setup is saved
-        securely and restored automatically. California maps download on Wi-Fi
-        while SemiTraX is open.
+        securely and restored automatically. California maps use Wi-Fi by
+        default. If you have no Wi-Fi, allow mobile data below and keep SemiTraX
+        open.
       </Text>
       {automatic && (
         <>
@@ -158,7 +160,7 @@ export function CoPilotDeviceSetup() {
       {manual && (
         <>
           <TextInput
-            accessibilityLabel="CoPilot Company ID"
+            accessibilityLabel="SemiTraX Company ID"
             placeholder="Company ID"
             placeholderTextColor={palette.muted}
             autoCapitalize="none"
@@ -172,7 +174,7 @@ export function CoPilotDeviceSetup() {
             ]}
           />
           <TextInput
-            accessibilityLabel="CoPilot Device ID"
+            accessibilityLabel="SemiTraX Device ID"
             placeholder="Device ID"
             placeholderTextColor={palette.muted}
             autoCapitalize="none"
@@ -187,7 +189,7 @@ export function CoPilotDeviceSetup() {
           />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Save CoPilot device setup"
+            accessibilityLabel="Save SemiTraX device setup"
             disabled={busy}
             onPress={() => {
               void configure();
@@ -202,7 +204,7 @@ export function CoPilotDeviceSetup() {
       )}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Retry saved CoPilot setup"
+        accessibilityLabel="Retry saved SemiTraX setup"
         disabled={busy}
         onPress={() => {
           void retry();
@@ -243,6 +245,18 @@ export function CoPilotDeviceSetup() {
           SDK readback: {diagnostics.deviceReadbackKind ?? 'Not reported'}.
         </Text>
       )}
+      {diagnostics?.appStorage && (
+        <Text style={{ color: palette.text }}>
+          {diagnostics.appStorage.status === 'AVAILABLE' &&
+          Number.isFinite(diagnostics.appStorage.availableBytes)
+            ? `Android storage available to SemiTraX: ${(
+                (diagnostics.appStorage.availableBytes ?? 0) / 1_000_000_000
+              ).toFixed(
+                2,
+              )} GB. This measures the app's storage volume; it does not confirm that a map download can start.`
+            : 'Android app storage could not be measured.'}
+        </Text>
+      )}
       {diagnostics?.canRepairTypo && !diagnostics.restartRequired && (
         <Pressable
           accessibilityRole="button"
@@ -275,6 +289,45 @@ export function CoPilotDeviceSetup() {
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           {amsSetupExplanation(state.operation)}
         </Text>
+      )}
+      {!state.mapsReady && state.licensingReady && (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Download SemiTraX maps using mobile data"
+            disabled={busy || setup.cellularAllowed}
+            style={styles.button}
+            onPress={() =>
+              Alert.alert(
+                'Download maps using mobile data?',
+                'Offline maps can use a large amount of data. Your carrier may charge for it. Mobile data will be allowed for this app session.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Allow mobile data',
+                    onPress: () => {
+                      void setup.allowCellularDownload().catch(() => {
+                        setMessage(
+                          'Could not enable mobile-data downloads. Update SemiTraX and try again.',
+                        );
+                      });
+                    },
+                  },
+                ],
+              )
+            }
+          >
+            <Text style={styles.buttonText}>
+              {setup.cellularAllowed
+                ? 'Mobile data allowed for maps'
+                : 'Download maps using mobile data'}
+            </Text>
+          </Pressable>
+          <Text style={{ color: palette.muted }}>
+            Navigation stays unavailable until the licensed offline map is
+            installed and verified.
+          </Text>
+        </>
       )}
       {!!setup.downloadStatus && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>

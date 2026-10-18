@@ -1,6 +1,31 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  nativeDisplay?: {
+    status: string;
+    deviceUtcOffsetMinutes: number;
+    headingDisplayEnabled?: boolean;
+    speedLimitOnMap?: boolean;
+    poiAlertsEnabled?: boolean;
+    poiAlertDistance?: string;
+    poiAlertCategoryCount?: number;
+    poiDisplayedCategoryCount?: number;
+    etaMinutesFromNow?: number;
+  };
+  appStorage?: {
+    status: 'AVAILABLE' | 'UNAVAILABLE';
+    availableBytes?: number;
+    totalBytes?: number;
+  };
+  mapDownload?: {
+    response: string;
+    callback: string;
+    status: string;
+    stage: string;
+    attempts: number;
+    cellularAllowed: boolean;
+    initialMapSignalReceived: boolean;
+  };
   savedCompanyMatches: boolean;
   savedDeviceMatches: boolean;
   credentialHook: string;
@@ -29,6 +54,24 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  hasEngineTrip?(): Promise<boolean>;
+  resumeEngineTrip?(): Promise<void>;
+  reviewEngineTripProfile?(): Promise<unknown>;
+  openEngineTrip?(
+    ticket: string,
+    locations: { lat: number; lng: number; name: string }[],
+  ): Promise<void>;
+  returnFromEngineTrip?(): Promise<void>;
+  searchNativePois?(
+    name: string,
+    ids: number[],
+    lat: number,
+    lng: number,
+  ): Promise<unknown>;
+  poiCatalog?(): Promise<unknown>;
+  setPoiCategoryVisible?(id: number, visible: boolean): Promise<unknown>;
+  guidanceSnapshot?(): Promise<unknown>;
+  guidanceMapSnapshot?(): Promise<unknown>;
   setupDiagnostics?(): Promise<CoPilotSetupDiagnostics>;
   repairAssignedSetup?(): Promise<void>;
   readonly automaticAssignedSetup?: boolean;
@@ -39,7 +82,12 @@ export interface CoPilotHost {
   ): Promise<void>;
   prepareDevice(): Promise<unknown>;
   mapInventory(): Promise<unknown>;
+  licensedMapCatalog?(): Promise<
+    { name: string; installed: boolean; downloadStatus?: string }[]
+  >;
+  downloadLicensedRegions?(names: string[], cellular: boolean): Promise<string>;
   downloadSelectedMap(): Promise<string>;
+  downloadSelectedMapUsingCellular?(): Promise<string>;
   setMapAppearance(night: boolean): Promise<void>;
   mapCommand(command: string): Promise<void>;
   drawRoutePreview(
@@ -58,7 +106,7 @@ export interface CoPilotHost {
 export function coPilotHost(): CoPilotHost {
   const host = NativeModules.SemiTraxCoPilotHost as CoPilotHost | undefined;
   if (Platform.OS !== 'android' || !host)
-    throw new Error('CoPilot native host unavailable');
+    throw new Error('SemiTraX native host unavailable');
   return host;
 }
 const inventory = z.object({

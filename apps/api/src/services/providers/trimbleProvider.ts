@@ -200,6 +200,7 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
     },
     ReportingOptions: {
       UseTraffic: true,
+      IncludeDetailedWarning: true,
       IncludeVehicleRestrictedCleanupPoints: true,
     },
     ReportTypes: reportTypes,

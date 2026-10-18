@@ -329,7 +329,7 @@ export function SubscriptionScreen({ services }: { services: Services }) {
         />
       </DriverCard>
       <DriverCopy>
-        Subscriptions do not bypass truck restrictions or CoPilot licensing,
+        Subscriptions do not bypass truck restrictions or SemiTraX licensing,
         maps and provisioning requirements.
       </DriverCopy>
     </DriverPage>

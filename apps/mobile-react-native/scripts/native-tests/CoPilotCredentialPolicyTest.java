@@ -36,6 +36,11 @@ public final class CoPilotCredentialPolicyTest {
     expect(trace.snapshot().size() == CoPilotLoginTrace.LIMIT && trace.dropped() == 7,
         "native timeline is bounded and reports dropped entries");
     expect(trace.snapshot().get(0).sequence == 8, "retained sequence numbers expose truncated history");
+    expect("TestAsset".equals(CoPilotEnrollmentPolicy.asset(true)), "diagnostic build uses Finn's exact Asset ID");
+    expect(CoPilotEnrollmentPolicy.DEVICE.equals(CoPilotEnrollmentPolicy.asset(false)), "ordinary build retains original asset");
+    expect(CoPilotEnrollmentPolicy.DEVICE.equals(CoPilotEnrollmentPolicy.sdkDevice(true, "TestAsset")), "diagnostic asset preserves verified local Device ID");
+    expect("Other".equals(CoPilotEnrollmentPolicy.sdkDevice(true, "Other")), "saved non-test assignment retains its Device ID");
+    expect("TestAsset".equals(CoPilotEnrollmentPolicy.sdkDevice(false, "TestAsset")), "normal builds never apply diagnostic mapping");
     LicenseMgtInfo directInfo = CoPilotCredentialPolicy.assignedInfo("SemiTraX-Android-Test-01", "XGNKEA");
     expect("XGNKEA".equals(directInfo.getCompanyID()), "assigned Company ID retains its direct SDK field");
     expect("SemiTraX-Android-Test-01".equals(directInfo.getAssetID()), "assigned Asset ID retains its direct SDK field");

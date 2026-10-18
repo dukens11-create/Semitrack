@@ -1,3 +1,5 @@
+import { mapboxToken } from '../config/generated';
+import { PlaceLiveDetails } from '../features/poi/PlaceLiveDetails';
 import { navigationPresentation } from '../features/navigation/navigationPresentation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
 import {
@@ -34,6 +36,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  BackHandler,
+  DeviceEventEmitter,
   Keyboard,
   Pressable,
   ScrollView,
@@ -74,13 +78,17 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
+import { copilotMapBlocker } from '../components/CopilotOfflineMap';
+import { coPilotHost } from '../services/copilot/CoPilotHost';
+import { engineTripLocations, engineTripProfileSchema, engineTripProfileSummary } from '../services/copilot/EngineTrip';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
+const EngineMapboxProof = React.lazy(() => import('../features/map/EngineMapboxProof').then(module => ({ default: module.EngineMapboxProof })));
 export function PlanningScreen({
   services,
   onTrucks,
   onServices,
-  onSettings,
   active = true,
   onNavigationActiveChange,
 }: {
@@ -95,6 +103,32 @@ export function PlanningScreen({
     trucks = useStore(services.trucks),
     location = useStore(services.location);
   const { settings } = useStore(services.settings);
+  const copilot = useCopilotState();
+  const [nativeSettingsRequested, setNativeSettingsOpen] = useState(false);
+  const [mapboxProof, setMapboxProof] = useState(false);
+  const [engineTripOpen, setEngineTripOpen] = useState(false);
+  // Native map callbacks describe the SDK screen, not ownership of the trip.
+  // Keep planner controls and preview drawing suspended throughout the handoff.
+  const nativeSettingsOpen = nativeSettingsRequested || engineTripOpen;
+  const [savedEngineTrip, setSavedEngineTrip] = useState(false);
+  const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
+
+  // Native onboarding (including the EULA) needs an unobstructed viewport.
+  const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
+  useEffect(() => {
+    if (!active || !copilot.readyToAddStops || engineTripOpen) return;
+    let current = true;
+    const check = () => {
+      try {
+        void coPilotHost().hasEngineTrip?.().then(value => {
+          if (current) setSavedEngineTrip(value === true);
+        }).catch(() => { if (current) setSavedEngineTrip(false); });
+      } catch { setSavedEngineTrip(false); }
+    };
+    check();
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') check(); });
+    return () => { current = false; sub.remove(); };
+  }, [active, copilot.readyToAddStops, engineTripOpen]);
   const [searchStore] = useState(
     () => new DestinationSearchStore(services.search, services.poi),
   );
@@ -125,6 +159,9 @@ export function PlanningScreen({
   const [weatherDetailsRequest, setWeatherDetailsRequest] = useState(0);
   const [hiddenCategories, setHiddenCategories] = useState<PlaceCategory[]>([]);
   const [detail, setDetail] = useState<Stop | null>(null);
+  const [selectedMapPoi, setSelectedMapPoi] = useState<import('../features/poi/PoiService').Poi | null>(null);
+  const [plannedStart, setPlannedStart] = useState<Stop | null>(null);
+  const [selectingStart, setSelectingStart] = useState(false);
   const [appendPlan, setAppendPlan] = useState<StopPlan | null>(null);
   const searched = searchState.phase === 'ready';
   const [expanded, setExpanded] = useState(false);
@@ -147,9 +184,9 @@ export function PlanningScreen({
   const navigationSession = navigationActive || navigation.phase === 'arrived';
   const palette = useDriverPalette();
   useEffect(() => {
-    onNavigationActiveChange?.(active && navigationSession);
+    onNavigationActiveChange?.(active && (navigationSession || engineTripOpen));
     return () => onNavigationActiveChange?.(false);
-  }, [active, navigationSession, onNavigationActiveChange]);
+  }, [active, navigationSession, engineTripOpen, onNavigationActiveChange]);
   useEffect(() => {
     let mounted = true;
     void services.trucks
@@ -250,7 +287,29 @@ export function PlanningScreen({
     searchStore.cancel();
     setAppendPlan(null);
     setSheet(null);
+    setSelectingStart(false);
   }
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      'SemiTraxCoPilotScreenChanged',
+      (event: unknown) => {
+        if (!event || typeof event !== 'object' ||
+            !('navigationScreen' in event) || typeof event.navigationScreen !== 'boolean') return;
+        // Search, trip planning, POIs and settings all belong to CoPilot while
+        // its own screen is open. Keep the map mounted and preserve its trip.
+        setNativeSettingsOpen(!event.navigationScreen);
+        if (!event.navigationScreen) {
+          gpsRequest.current?.abort();
+          searchStore.cancel();
+          setAppendPlan(null);
+          setSheet(null);
+          setSelectingStart(false);
+        }
+      },
+    );
+    return () => subscription.remove();
+  }, [searchStore]);
+
   function openAddStop() {
     const current = services.routes.getSnapshot();
     if (
@@ -326,8 +385,46 @@ export function PlanningScreen({
     );
   }
   async function startNavigation() {
+    if (plannedStart) {
+      setError("This is a route preview from your chosen start. Select Current location and recalculate before starting live navigation.");
+      return;
+    }
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
+    let host: ReturnType<typeof coPilotHost> | undefined;
+    try { host = coPilotHost(); } catch { /* Older builds retain the unavailable-guidance path. */ }
+    if (host?.reviewEngineTripProfile && host.openEngineTrip && host.returnFromEngineTrip) {
+      const tripHost = host;
+      origin(); // Require a fresh app GPS fix before offering the handoff.
+      let reviewed;
+      try { reviewed = engineTripProfileSchema.parse(await host.reviewEngineTripProfile()); }
+      catch {
+        setError('Review the Heavy-Duty Truck profile in engine settings. Finish or cancel any existing engine trip before preparing a new one.');
+        return;
+      }
+      if (services.routes.getSnapshot().route !== current.route || services.routes.getSnapshot().plan !== current.plan) return;
+      Alert.alert('SemiTraX truck navigation',
+        `${engineTripProfileSummary(reviewed)}\n\nUse this engine profile, including its hazmat and routing preferences, for this trip. Saved planner truck settings are separate. The engine will calculate the route; review it and tap Go.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Review settings', onPress: () => { void openCoPilotSettings(); } },
+          { text: 'Use this profile', onPress: () => { void run(async () => {
+            if (services.routes.getSnapshot().route !== current.route || services.routes.getSnapshot().plan !== current.plan || AppState.currentState !== 'active') return;
+            const points = engineTripLocations(origin(), current.plan!);
+            closeSheet();
+            setEngineTripOpen(true);
+            setNativeSettingsOpen(true);
+            setStartingNavigation(true);
+            try {
+              await tripHost.openEngineTrip!(reviewed.ticket, points);
+            } catch {
+              // A rejected handoff can already have reached native code. Keep engine controls visible.
+              Alert.alert('SemiTraX trip', 'The engine could not confirm the trip handoff. Check GPS and the truck profile in Trip controls. If a trip is present, cancel it before returning to the planner.');
+            } finally { setStartingNavigation(false); }
+          }); } },
+        ]);
+      return;
+    }
     const truck = services.trucks.getSnapshot().selected;
     if (!truck) throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     const generation = operation.current;
@@ -345,7 +442,7 @@ export function PlanningScreen({
       refreshNavigationState();
       if (result === 'unavailable')
         setError(
-          'CoPilot provisioning required. Your truck route is ready, but turn-by-turn navigation cannot start until the licensed CoPilot runtime and maps are provisioned.',
+          'Turn-by-turn connection unavailable in this build. Your route is a planning preview. Re-entering your IDs or downloading maps will not complete the missing guidance connection.',
         );
       if (result === 'stop-unconfirmed') {
         setStopUnconfirmed(true);
@@ -443,9 +540,9 @@ export function PlanningScreen({
     }
     const controller = new AbortController();
     gpsRequest.current = controller;
-    setAcquiringGps(true);
+    setAcquiringGps(!plannedStart);
     try {
-      await services.location.requestFreshFix(controller.signal);
+      if (!plannedStart) await services.location.requestFreshFix(controller.signal);
       await waitForRouteForeground(controller.signal);
       // A driver may edit/sign out while GPS is being acquired. Never send the old profile.
       const selected = services.trucks.getSnapshot().selected;
@@ -464,7 +561,7 @@ export function PlanningScreen({
       setAcquiringGps(false);
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
-    if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
+    if (await services.routes.calculate(plannedStart ?? origin(), plan, truck, alternatives)) {
       // Store only what the driver typed, never temporary provider geometry or a route.
       if (query.trim())
         void saveRecent(services.settings, items =>
@@ -527,6 +624,39 @@ export function PlanningScreen({
       setError(errorMessage(e));
     }
   }
+  async function openCoPilotSettings() {
+    closeSheet();
+    try {
+      await coPilotHost().mapCommand('settings');
+      setNativeSettingsOpen(true);
+    } catch {
+      setError('SemiTraX settings are unavailable until map setup is complete.');
+    }
+  }
+  async function closeCoPilotSettings() {
+    try {
+      if (engineTripOpen) {
+        const host = coPilotHost();
+        if (!host.returnFromEngineTrip) throw new Error('Engine trip controls unavailable.');
+        await host.returnFromEngineTrip();
+        setEngineTripOpen(false);
+        setSavedEngineTrip(false);
+      } else await coPilotHost().mapCommand('map');
+      setNativeSettingsOpen(false);
+    } catch {
+      Alert.alert('SemiTraX map', engineTripOpen ? 'Use Trip controls to finish or cancel the engine trip before returning to the planner. If preparation has not finished, wait for the engine response.' : 'The map could not reopen. Please try again.');
+    }
+  }
+  const closeNativeSettings = useRef(closeCoPilotSettings);
+  closeNativeSettings.current = closeCoPilotSettings;
+  useEffect(() => {
+    if (!active || !nativeSettingsOpen) return;
+    const listener = BackHandler.addEventListener('hardwareBackPress', () => {
+      void closeNativeSettings.current();
+      return true;
+    });
+    return () => listener.remove();
+  }, [active, nativeSettingsOpen]);
   function menuAction(action: NavigationMenuAction) {
     if (action === 'weather') {
       closeSheet();
@@ -534,7 +664,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
-      setError('Satellite imagery is unavailable on the CoPilot offline map.');
+      setError('Satellite imagery is unavailable on the SemiTraX offline map.');
       closeSheet();
       return;
     }
@@ -555,7 +685,7 @@ export function PlanningScreen({
       if (navigationSession || startingNavigation) {
         Alert.alert(
           'Live rerouting unavailable',
-          'Live truck-safe rerouting requires the licensed CoPilot rerouting integration. Your current route is retained. End navigation to review a new Trimble route from your current location.',
+          'Live truck-safe rerouting requires the licensed SemiTraX rerouting integration. Your current route is retained. End navigation to review a new Trimble route from your current location.',
         );
         return;
       }
@@ -608,8 +738,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'audio') {
-      closeSheet();
-      onSettings?.();
+      void openCoPilotSettings();
       return;
     }
     if (action === 'report') {
@@ -732,8 +861,25 @@ export function PlanningScreen({
   );
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
-      <View style={styles.map}>
+      {mapboxProof && engineTripOpen && (
+        <React.Suspense fallback={<DriverCopy>Opening Mapbox test…</DriverCopy>}><EngineMapboxProof token={mapboxToken} onClose={() => setMapboxProof(false)} /></React.Suspense>
+      )}
+      {nativeSettingsOpen && (
+        <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
+          {engineTripOpen && !startingNavigation && <DriverButton title="Mapbox engine test" secondary onPress={() => setMapboxProof(true)} />}
+          {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
+          <View style={ds.row}>
+            {engineTripOpen && <View style={ds.grow}><DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} /></View>}
+            <View style={ds.grow}><DriverButton title={engineTripOpen ? 'Back to planner' : 'Back to SemiTraX map'} disabled={startingNavigation} secondary onPress={() => { void closeCoPilotSettings(); }} /></View>
+          </View>
+        </View>
+      )}
+      <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>
         <CopilotTruckMap
+          nearbyService={services.poi}
+          active={active && sheet === null}
+          settingsOpen={nativeSettingsOpen}
+          onSettings={() => { void openCoPilotSettings(); }}
           command={mapCommand}
           route={routes.route}
           plan={routes.plan}
@@ -750,8 +896,8 @@ export function PlanningScreen({
           pois={pois.filter(
             poi => !hiddenCategories.includes(poi.category as PlaceCategory),
           )}
-          bottomInset={bottomHeight}
-          topInset={topHeight + 12}
+          bottomInset={nativeSetupVisible ? 0 : bottomHeight}
+          topInset={nativeSetupVisible ? 0 : topHeight + 12}
           onCoordinate={point => {
             if (
               busy ||
@@ -763,7 +909,9 @@ export function PlanningScreen({
             setSheet('search');
             void searchStore.reverse(point);
           }}
+          onSatellite={() => Alert.alert('Satellite map', 'Satellite imagery is not connected to this SemiTraX offline map.')}
           onPoi={poi => {
+            setSelectedMapPoi(poi);
             setDetail({
               id: poi.id,
               name: poi.name,
@@ -775,10 +923,23 @@ export function PlanningScreen({
         />
       </View>
       <View
-        style={styles.top}
+        style={[styles.top, routes.route && styles.routeTop, nativeSetupVisible && styles.hiddenForNativeSetup]}
         pointerEvents="box-none"
         onLayout={event => setTopHeight(event.nativeEvent.layout.height)}
       >
+        <View style={[styles.mapBrandBar, routes.route && styles.routeBrandBar]}>
+          <Text style={styles.mapWordmark}>SemiTra<Text style={styles.mapBrandX}>X</Text></Text>
+          <Text style={styles.mapBrandTagline}>TRUCK NAVIGATION</Text>
+        </View>
+        {savedEngineTrip && <DriverButton title="Resume engine trip" onPress={() => { void run(async () => {
+          const host = coPilotHost();
+          if (!host.resumeEngineTrip) throw new Error('Engine trip controls unavailable.');
+          closeSheet();
+          setEngineTripOpen(true);
+          setNativeSettingsOpen(true);
+          try { await host.resumeEngineTrip(); }
+          catch (e) { Alert.alert('SemiTraX trip', errorMessage(e)); }
+        }); }} />}
         {routes.route ? (
           <View
             style={[
@@ -792,6 +953,8 @@ export function PlanningScreen({
               state={navigation}
               fix={location.fix}
               metric={settings?.units === 'metric'}
+              onReview={() => setSheet('route')}
+              compactPreview
               placement="maneuver"
             />
           </View>
@@ -869,16 +1032,18 @@ export function PlanningScreen({
       <View
         testID="map-bottom-panel"
         onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
-        style={
+        style={[
           routes.route
-            ? styles.routeBottom
+            ? [styles.routeBottom, { backgroundColor: palette.card }]
             : [
                 styles.bottom,
                 expanded ? styles.expandedBottom : styles.collapsedBottom,
                 { backgroundColor: palette.card },
-              ]
-        }
+              ],
+          nativeSetupVisible && styles.hiddenForNativeSetup,
+        ]}
       >
+        <ScrollView keyboardShouldPersistTaps="handled" style={styles.routeScroll} contentContainerStyle={styles.routePanelContent}>
         <WeatherStatus
           driving={navigationSession}
           detailsRequest={weatherDetailsRequest}
@@ -918,12 +1083,27 @@ export function PlanningScreen({
               state={navigation}
               fix={location.fix}
               metric={settings?.units === 'metric'}
+              compactPreview
               placement="dashboard"
               onMore={() => setSheet('navigation')}
               onReview={
                 !navigationSession ? () => setSheet('route') : undefined
               }
             />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Review route truck profile"
+              onPress={onTrucks}
+              style={[styles.truckChip, styles.routeTruckChip, { backgroundColor: palette.input }]}
+            >
+              <DriverIcon name="local_shipping_rounded" size={18} />
+              <Text style={[styles.chipText, { color: palette.text }]} numberOfLines={2}>
+                {trucks.selected
+                  ? `${trucks.selected.name} · ${trucks.selected.heightFt} ft H · ${trucks.selected.lengthFt} ft L · ${trucks.selected.weightLbs.toLocaleString()} lb`
+                  : 'Truck profile required'}
+                {navigationSession ? ' · Review restrictions' : ' · Planning profile'}
+              </Text>
+            </Pressable>
             {!navigationSession && routes.plan && (
               <View style={styles.routeActions}>
                 <View style={ds.grow}>
@@ -944,35 +1124,9 @@ export function PlanningScreen({
               </View>
             )}
             {!navigationSession && (
-              <View style={styles.routeActions}>
-                {!navigationSession && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Start Navigation"
-                    accessibilityState={{ disabled: pending }}
-                    disabled={pending}
-                    onPress={() => {
-                      void run(startNavigation);
-                    }}
-                    style={[styles.startAction, pending && styles.disabled]}
-                  >
-                    <Text style={styles.startText}>Start Navigation</Text>
-                  </Pressable>
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancel Route"
-                  onPress={confirmCancelRoute}
-                  style={[
-                    styles.cancelAction,
-                    { backgroundColor: palette.input },
-                  ]}
-                >
-                  <Text style={[styles.cancelText, { color: palette.text }]}>
-                    Cancel Route
-                  </Text>
-                </Pressable>
-              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Navigation Controls" onPress={() => setSheet('navigation')} style={styles.previewCancelAction}>
+                <Text style={[styles.cancelText, { color: palette.actionText }]}>Route options</Text>
+              </Pressable>
             )}
             <RouteAdvisories
               key={
@@ -1003,10 +1157,7 @@ export function PlanningScreen({
                 style={[styles.handle, { backgroundColor: palette.border }]}
               />
             </Pressable>
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.bottomContent}
-            >
+            <View style={styles.bottomContent}>
               {feedback}
               <Pressable
                 accessibilityRole="button"
@@ -1051,9 +1202,43 @@ export function PlanningScreen({
                     : 'Location off'}
                 </Text>
               )}
-            </ScrollView>
+            </View>
           </>
         )}
+        </ScrollView>
+        {routes.route && (<>
+            {!navigationSession && (
+              <View style={styles.primaryRouteActions}>
+                {!navigationSession && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start Navigation"
+                    accessibilityState={{ disabled: pending }}
+                    disabled={pending}
+                    onPress={() => {
+                      void run(startNavigation);
+                    }}
+                    style={[styles.startAction, pending && styles.disabled]}
+                  >
+                    <Text style={styles.startText}>Start Navigation</Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel Route"
+                  onPress={confirmCancelRoute}
+                  style={[
+                    styles.cancelAction,
+                    styles.previewCancelAction,
+                  ]}
+                >
+                  <Text style={[styles.cancelText, { color: palette.text }]}>
+                    Cancel Route
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+        </>)}
       </View>
       {active && sheet === 'filter' && (
         <DriverSheet title="Places Filter" onClose={closeSheet}>
@@ -1124,7 +1309,7 @@ export function PlanningScreen({
           )}
           <DriverCopy>
             {routes.diagnostic.providerDetailAvailable
-              ? 'Provider warning identifiers are available. Their specific road restriction is not yet classified.'
+              ? 'Provider warning identifiers are available above. A warning does not authorize travel on a restricted road.'
               : 'The backend did not supply detailed provider warning evidence.'}
             {
               ' No addresses, truck identifiers, credentials or raw provider text are included. The route remains blocked.'
@@ -1194,9 +1379,35 @@ export function PlanningScreen({
       )}
       {active && sheet === 'search' && (
         <DriverSheet
-          title={appendPlan ? 'Add Stop' : 'Set destination'}
+          title={selectingStart ? 'Choose starting location' : appendPlan ? 'Add Stop' : 'Set destination'}
           onClose={() => closeSheet()}
         >
+          {!appendPlan && (
+            <>
+              <DriverCopy>From: {plannedStart?.name ?? 'Current location'}</DriverCopy>
+              <DriverButton
+                title={selectingStart ? 'Choose destination instead' : 'Choose starting location'}
+                secondary
+                disabled={stopEditingDisabled}
+                onPress={() => {
+                  setSelectingStart(value => !value);
+                  searchStore.clear();
+                  setDetail(null);
+                }}
+              />
+              {(plannedStart || selectingStart) && (
+                <DriverButton title="Use Current location" secondary disabled={stopEditingDisabled}
+                  onPress={() => {
+                    setPlannedStart(null);
+                    setSelectingStart(false);
+                    searchStore.clear();
+                    setDetail(null);
+                    services.routes.clear();
+                  }} />
+              )}
+              {selectingStart && <DriverCopy>Search any city or full address, including the state or country. This start is for route planning; live navigation uses your current location.</DriverCopy>}
+            </>
+          )}
           {appendPlan && (
             <DriverCopy>
               Choose the next stop after {appendPlan.destination.name}. Your
@@ -1334,7 +1545,7 @@ export function PlanningScreen({
           {categories(true)}
           <CorridorRecords items={searchState.advisories ?? []} />
           <DriverCopy>
-            Addresses: Mapbox. Truck places: SemiTraX place provider. Neither
+            Addresses: Mapbox. Android truck places: CoPilot offline catalog. Along-route places are nearby results filtered against the planned road path; distances are estimates. Neither
             result verifies a truck entrance.
           </DriverCopy>
           {searchState.phase === 'waiting' && (
@@ -1404,10 +1615,13 @@ export function PlanningScreen({
                 onPress={() => setDetail(null)}
               />
               <DriverTitle small>{detail.name}</DriverTitle>
-              {pois.find(poi => poi.id === detail.id) && (
+              {(selectedMapPoi?.id === detail.id || pois.find(poi => poi.id === detail.id)) && (
                 <DriverCopy>
-                  {poiDetails(pois.find(poi => poi.id === detail.id)!)}
+                  {poiDetails(selectedMapPoi?.id === detail.id ? selectedMapPoi : pois.find(poi => poi.id === detail.id)!)}
                 </DriverCopy>
+              )}
+              {selectedMapPoi?.id === detail.id && (
+                <PlaceLiveDetails poi={selectedMapPoi} service={services.poi} route={routes.route} fix={location.fix} />
               )}
               <DriverCopy>
                 Confirm the destination and truck access before departure.
@@ -1415,12 +1629,20 @@ export function PlanningScreen({
               {feedback}
               <DriverButton
                 title={
-                  appendPlan
+                  selectingStart ? 'Use as starting location' : appendPlan
                     ? 'Add Stop & recalculate'
                     : 'Set final destination'
                 }
-                disabled={stopEditingDisabled || !trucks.selected}
+                disabled={stopEditingDisabled || (!selectingStart && !trucks.selected)}
                 onPress={() => {
+                  if (selectingStart) {
+                    setPlannedStart(detail);
+                    setSelectingStart(false);
+                    setDetail(null);
+                    searchStore.clear();
+                    services.routes.clear();
+                    return;
+                  }
                   void run(() =>
                     appendPlan
                       ? appendSelectedStop(detail)
@@ -1438,7 +1660,7 @@ export function PlanningScreen({
                   }}
                 />
               )}
-              {routes.plan && !appendPlan && (
+              {routes.plan && !appendPlan && !selectingStart && (
                 <DriverButton
                   title="Add stop to current route"
                   secondary
@@ -1519,7 +1741,7 @@ export function PlanningScreen({
                 }}
               />
               <DriverButton
-                title="Recalculate from current location"
+                title={plannedStart ? "Recalculate from chosen start" : "Recalculate from current location"}
                 disabled={pending}
                 onPress={() => {
                   void run(() => calculate(routes.plan!));
@@ -1544,7 +1766,7 @@ export function PlanningScreen({
           />
           <DriverCopy>
             Start Navigation stays available even before provisioning. If the
-            licensed CoPilot runtime or maps are unavailable, SemiTraX will fail
+            licensed SemiTraX runtime or maps are unavailable, SemiTraX will fail
             closed and keep this route in preview mode instead of starting fake
             or passenger-car guidance.
           </DriverCopy>
@@ -1641,7 +1863,7 @@ export function PlanningScreen({
           <Text style={[styles.panelStatus, { color: palette.muted }]}>
             {navigationSession
               ? 'Quit Nav stops guidance after confirmation and retains the route. Cancel Route clears it.'
-              : 'Route preview only. Start Navigation checks CoPilot licensing and maps.'}
+              : 'Route preview only. Start Navigation requires a connected truck-guidance engine.'}
           </Text>
         </NavigationPanel>
       )}
@@ -1649,6 +1871,15 @@ export function PlanningScreen({
   );
 }
 const styles = StyleSheet.create({
+  routeTop: { flexDirection: 'column', alignItems: 'stretch' },
+  routeBrandBar: { backgroundColor: '#FFFFFF', marginBottom: 0 },
+  routeTruckChip: { maxWidth: '100%', width: '100%', elevation: 0, borderRadius: 10, paddingVertical: 8 },
+  previewCancelAction: { backgroundColor: 'transparent', borderWidth: 0, padding: 4, minHeight: 44 },
+  mapBrandBar: { backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, alignItems: 'center', marginBottom: 6 },
+  mapWordmark: { color: '#172433', fontSize: 19, fontWeight: '900', fontStyle: 'italic' },
+  mapBrandX: { color: '#FF6B2C', fontSize: 22 },
+  mapBrandTagline: { color: '#172433', fontSize: 8, letterSpacing: 3 },
+  hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
   removeRecent: {
     minWidth: 48,
@@ -1657,8 +1888,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   maneuverOverlay: { flex: 1, marginRight: 62 },
-  previewOverlay: { marginRight: 0 },
+  previewOverlay: { marginRight: 0, flex: 0, width: '100%' },
+  routeScroll: { flexShrink: 1 },
+  routePanelContent: { gap: 8 },
   routeBottom: {
+    padding: 12,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '40%',
     position: 'absolute',
     left: 12,
     right: 12,
@@ -1667,8 +1904,9 @@ const styles = StyleSheet.create({
   },
   routeFeedback: { borderRadius: 12 },
   routeActions: { flexDirection: 'row', gap: 8 },
+  primaryRouteActions: { gap: 0, flexShrink: 0 },
   startAction: {
-    flex: 1,
+    width: '100%',
     backgroundColor: '#FF6425',
     padding: 12,
     borderRadius: 14,

@@ -29,24 +29,24 @@ export function CopilotStatus() {
       </View>
     );
   const label = state.copilotReady
-    ? 'CoPilot setup checked · Navigation not started'
+    ? 'SemiTraX setup checked'
     : state.phase === 'NOT_STARTED' || state.phase === 'STARTING'
-    ? 'CoPilot setup pending'
+    ? 'SemiTraX setup pending'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'CoPilot maps required'
+    ? 'SemiTraX maps required'
     : state.error === 'COPILOT_LICENSE_PROVISIONING_REQUIRED'
-    ? 'CoPilot provisioning required'
-    : 'CoPilot turn-by-turn unavailable';
+    ? 'SemiTraX provisioning required'
+    : 'SemiTraX turn-by-turn unavailable';
   const message = state.copilotReady
-    ? 'CoPilot setup checks passed. Active truck navigation still requires verification.'
+    ? 'SemiTraX setup checks passed. Use the SemiTraX screen for the current trip and guidance status.'
     : state.error === 'COPILOT_MAP_DATA_REQUIRED'
-    ? 'Navigation is unavailable until licensed CoPilot maps are installed and verified.'
-    : 'CoPilot turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
+    ? 'Navigation is unavailable until licensed SemiTraX maps are installed and verified.'
+    : 'SemiTraX turn-by-turn has not passed provisioning, maps and startup acceptance. License status is unverified; this is not a confirmed license rejection. Truck-route planning has its own status.';
   return (
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={label + '. View CoPilot status'}
+        accessibilityLabel={label + '. View SemiTraX status'}
         onPress={() => setDetails(true)}
         style={[styles.status, { backgroundColor: p.canvas }]}
       >
@@ -76,7 +76,7 @@ export function CopilotStatus() {
               keyboardShouldPersistTaps="handled"
             >
               <Text style={[styles.title, { color: p.text }]}>
-                CoPilot navigation
+                SemiTraX navigation
               </Text>
               <Text style={[styles.message, { color: p.muted }]}>
                 {message}
@@ -85,7 +85,7 @@ export function CopilotStatus() {
             </ScrollView>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Close CoPilot status"
+              accessibilityLabel="Close SemiTraX status"
               onPress={() => setDetails(false)}
               style={styles.close}
             >

@@ -1,7 +1,7 @@
 import type { LocationFix } from '../../services/location/LocationService';
 import { freshFix } from '../navigation/navigationPresentation';
 export const OFFLINE_DISPLAY_NOTICE =
-  'Offline Mapbox display only. Downloads do not provide offline truck routing, CoPilot maps, live traffic, POIs or guidance.';
+  'Offline Mapbox display only. Downloads do not provide offline truck routing, SemiTraX maps, live traffic, POIs or guidance.';
 export function offlineBounds(
   fix: LocationFix | null,
   now = Date.now(),

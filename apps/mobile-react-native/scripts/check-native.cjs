@@ -116,3 +116,10 @@ const truckConstant = profileSource.match(/vehicleTypeConstantName: '([A-Z_]+)'/
 const vehicleTypeSource = read('node_modules/trimble-maps-cpik-react-native-library/android/src/main/java/com/alk/cpik/react/route/VehicleTypeModule.java');
 assert(truckConstant === 'TRUCK_HEAVY_DUTY' && vehicleTypeSource.includes('VehicleType.' + truckConstant + '.ordinal()'), 'Truck constant is not exported by the installed CPIK bridge');
 console.log('PASS: Android/iOS bridge code generation and source/configuration wiring. This is not native compilation or device validation.');
+
+const nativeMapCommand = copilotHost.slice(copilotHost.indexOf('case "native-map":'), copilotHost.indexOf('case "copilot-menu":'));
+assert(nativeMapCommand.includes('GuidanceMgr.suspendNavigation(false);'), 'Native CoPilot screen must resume position updates after startup suspension');
+assert(nativeMapCommand.includes('drawer.lockToChevron();'), 'Native CoPilot screen must follow the vehicle');
+assert(nativeMapCommand.indexOf('ACCESS_FINE_LOCATION') < nativeMapCommand.indexOf('suspendNavigation(false)'), 'Native resume requires precise location permission');
+const mapCommands = copilotHost.slice(copilotHost.indexOf('@ReactMethod public void mapCommand'), copilotHost.indexOf('@ReactMethod public void drawRoutePreview'));
+assert(mapCommands.indexOf('requireMap();') < mapCommands.indexOf('suspendNavigation(false)'), 'Resume must retain verified map and licensing gates');

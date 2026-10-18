@@ -231,7 +231,7 @@ test.each(['day', 'night'] as const)(
     expect(control('Stops')).toBeDefined();
     expect(control('Cancel Route')).toBeDefined();
     await press('Start Navigation');
-    expect(text()).toContain('CoPilot provisioning required');
+    expect(text()).toContain('Turn-by-turn connection unavailable');
     expect(services.guidance.startNavigation).not.toHaveBeenCalled();
   },
 );

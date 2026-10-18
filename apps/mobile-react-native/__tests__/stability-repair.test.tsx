@@ -459,7 +459,7 @@ test('old-route weather failure cannot clear new-route observations or strand re
     screen = create(render());
   });
   await act(async () => control('Weather details').props.onPress());
-  await act(async () => control('Refresh current weather').props.onPress());
+  expect(routeWeather).toHaveBeenCalledTimes(1);
   expect(control('Loading weather…').props.accessibilityState.busy).toBe(true);
   current = { ...current, selectedRouteId: 'new-weather-route' };
   await act(async () => screen!.update(render()));
@@ -474,4 +474,24 @@ test('old-route weather failure cannot clear new-route observations or strand re
       .join(' '),
   ).toContain('20°C');
   expect(control('Refresh current weather').props.disabled).toBe(false);
+});
+
+
+test('current weather loads automatically without a route and does not refetch every GPS update', async () => {
+  const gps = {latitude: 40, longitude: -100, accuracy: 5, timestamp: Date.now(), heading: null, speed: 0};
+  const currentWeather = jest.fn().mockResolvedValue({
+    status: 'AREA_OBSERVATION', tempF: 68, condition: 'Clear', provider: 'test',
+    providerPoint: {lat: 40, lng: -100}, observedAt: new Date().toISOString(),
+  });
+  const services = {
+    settings: new Store({settings: initial}),
+    location: {getFreshFix: () => gps},
+    routes: {getSnapshot: () => ({route: null})},
+    poi: {currentWeather},
+  } as unknown as Services;
+  await act(async () => { screen = create(<WeatherStatus services={services} route={null} fix={gps} />); });
+  expect(currentWeather).toHaveBeenCalledTimes(1);
+  expect(screen!.root.findAllByType(Text).map(n => n.props.children).flat().join(' ')).toContain('20°C');
+  await act(async () => screen!.update(<WeatherStatus services={services} route={null} fix={{...gps, timestamp: Date.now()}} />));
+  expect(currentWeather).toHaveBeenCalledTimes(1);
 });

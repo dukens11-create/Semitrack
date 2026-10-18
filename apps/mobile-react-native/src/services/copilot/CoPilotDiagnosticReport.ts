@@ -66,28 +66,80 @@ const fixedCode = (allowed: readonly string[]) =>
     );
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const snapshot = z.object({
+  buildIdentity: z
+    .object({
+      commit: z.string().regex(/^(?:[a-f0-9]{40}|local-unverified)$/),
+      builtAt: z.string().datetime(),
+      packageName: z.literal('com.semitrax.app.recovery.hybrid'),
+      variant: z.literal('debug'),
+      versionCode: count,
+      versionName: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+$/),
+    })
+    .optional(),
+  controlTimeline: z
+    .array(
+      z.object({
+        action: fixedCode([
+          'START_RESUME',
+          'TRUCK_SETTINGS',
+          'END_ROUTE',
+          'BACK',
+          'READINESS',
+          'SYNC_PROFILE',
+          'START',
+          'RESUME',
+        ]),
+        stage: fixedCode([
+          'PRESS',
+          'VALIDATING',
+          'NATIVE_CALL',
+          'CONFIRMED',
+          'FAILED',
+          'BUSY',
+          'REQUEST',
+          'BLOCKED_UNSUPPORTED_RESTRICTIONS',
+        ]),
+        elapsedMs: count,
+        engineStarted: z.boolean(),
+        serviceConnected: z.boolean(),
+      }),
+    )
+    .max(64)
+    .optional(),
   reportBuild: fixedCode([
     'ams-trace-v1',
     'ams-trace-v2',
     'ams-testasset-v2',
     'maps-diag-v3',
     'maps-storage-v4',
+    'hybrid-issue392-v1',
   ]),
-  nativeDisplay: z.object({
-    status: fixedCode(['AVAILABLE', 'PARTIAL', 'NOT_STARTED']),
-    deviceUtcOffsetMinutes: z.number().int().min(-840).max(840),
-    headingDisplayEnabled: z.boolean().optional(),
-    speedLimitOnMap: z.boolean().optional(),
-    poiAlertsEnabled: z.boolean().optional(),
-    poiAlertDistance: fixedCode([
-      'TWOTENTHS_MILE', 'HALF_MILE', 'ONE_MILE', 'THREE_MILES', 'TEN_MILES',
-      'TWENTYFIVE_MILES', 'HALF_KILOMETER', 'ONE_KILOMETER', 'TWO_KILOMETERS',
-      'FIVE_KILOMETERS', 'SIXTEEN_KILOMETERS', 'FORTY_KILOMETERS',
-    ]).optional(),
-    poiAlertCategoryCount: count.optional(),
-    poiDisplayedCategoryCount: count.optional(),
-    etaMinutesFromNow: z.number().finite().optional(),
-  }).optional(),
+  nativeDisplay: z
+    .object({
+      status: fixedCode(['AVAILABLE', 'PARTIAL', 'NOT_STARTED']),
+      deviceUtcOffsetMinutes: z.number().int().min(-840).max(840),
+      headingDisplayEnabled: z.boolean().optional(),
+      speedLimitOnMap: z.boolean().optional(),
+      poiAlertsEnabled: z.boolean().optional(),
+      poiAlertDistance: fixedCode([
+        'TWOTENTHS_MILE',
+        'HALF_MILE',
+        'ONE_MILE',
+        'THREE_MILES',
+        'TEN_MILES',
+        'TWENTYFIVE_MILES',
+        'HALF_KILOMETER',
+        'ONE_KILOMETER',
+        'TWO_KILOMETERS',
+        'FIVE_KILOMETERS',
+        'SIXTEEN_KILOMETERS',
+        'FORTY_KILOMETERS',
+      ]).optional(),
+      poiAlertCategoryCount: count.optional(),
+      poiDisplayedCategoryCount: count.optional(),
+      etaMinutesFromNow: z.number().finite().optional(),
+    })
+    .optional(),
   appStorage: z
     .union([
       z

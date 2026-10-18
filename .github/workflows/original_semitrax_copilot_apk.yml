@@ -53,6 +53,7 @@ jobs:
           echo "$GITHUB_SHA" > android/app/build/outputs/apk/debug/build-commit.txt
       - name: Record native source and build identity
         run: |
+          cp scripts/install-hybrid.ps1 android/app/build/outputs/apk/debug/install-hybrid.ps1
           git rev-parse HEAD > android/app/build/outputs/apk/debug/build-commit.txt
           date -u +%FT%TZ > android/app/build/outputs/apk/debug/build-time.txt
           echo 'Hybrid; versionCode 392; compare installed signing certificate before adb install -r. Never uninstall or clear data.' > android/app/build/outputs/apk/debug/install-safety.txt

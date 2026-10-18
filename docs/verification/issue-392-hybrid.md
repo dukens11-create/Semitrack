@@ -68,7 +68,7 @@ A successful build does not prove an in-place update or on-device navigation.
 The backend addition needs deployment to the intended `semitrax-api` service after code review.
 `OPENWEATHER_API_KEY` remains server-only. Render connector has no selected workspace in this
 session, so active deployment/key configuration and a real authenticated weather response could
-not be verified. No production environment variables or deploys were changed.
+not be verified. An unauthenticated probe of `/weather/current` returned HTTP 401, confirming reachability but not provider health. No production environment variables or deploys were changed.
 
 ## Physical acceptance still required
 
@@ -78,3 +78,16 @@ check diagnostics, background/foreground, stop during calculation, retry failed 
 weather online/offline. After the Trimble mapping blocker is resolved, validate actual truck
 profile readback, licensed start/resume, geometry/turns/rerouting, and native stop on device.
 Do not merge or claim truck guidance verified until these checks and CI pass.
+
+## Validation record
+
+Local full mobile check: 903 tests passed across 62 suites, TypeScript and lint passed,
+native Android/iOS wiring check passed, 9 tooling tests passed, Java handoff contract test passed.
+Two subsequent diagnostics privacy/identity tests also pass (18 focused tests total).
+Backend: 320 passed, 43 skipped (database/infrastructure-gated), zero failed.
+The first CI attempt caught a strict test indexing type error; corrected before the new run.
+
+`install-hybrid.ps1` is included in the APK artifact. It checks the exact expected commit,
+checksum, APK package/version and installed signing certificate before using `adb install -r`.
+It never clears data, uninstalls, or copies private app data. PowerShell/physical-device execution
+has not been performed in this environment.

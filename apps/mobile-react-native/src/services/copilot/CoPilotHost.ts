@@ -1,8 +1,15 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
-  buildIdentity?: {commit: string; builtAt: string; packageName: string; variant: string; versionCode: number; versionName: string};
-  controlTimeline?: {action: string; stage: string; elapsedMs: number}[];
+  buildIdentity?: {
+    commit: string;
+    builtAt: string;
+    packageName: string;
+    variant: string;
+    versionCode: number;
+    versionName: string;
+  };
+  controlTimeline?: { action: string; stage: string; elapsedMs: number }[];
   nativeDisplay?: {
     status: string;
     deviceUtcOffsetMinutes: number;

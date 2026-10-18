@@ -65,7 +65,11 @@ export function WeatherStatus({
     alerts =
       data.status === 'CURRENT' ? activeWeatherAlerts(raw?.alerts, now) : [];
   async function refresh() {
-    if (request.current || (!services.poi.currentWeather && (!route || !services.poi.routeWeather))) return;
+    if (
+      request.current ||
+      (!services.poi.currentWeather && (!route || !services.poi.routeWeather))
+    )
+      return;
     const current = services.location.getFreshFix();
     if (!current) {
       setRaw(undefined);
@@ -79,14 +83,16 @@ export function WeatherStatus({
     try {
       const observation = services.poi.currentWeather
         ? await services.poi.currentWeather(current, controller.signal)
-        : (await services.poi.routeWeather(route!, current, controller.signal))
-            .find(item => item.label === 'Current route location');
-      if (
-        !controller.signal.aborted && request.current === controller
-      )
+        : (
+            await services.poi.routeWeather(route!, current, controller.signal)
+          ).find(item => item.label === 'Current route location');
+      if (!controller.signal.aborted && request.current === controller)
         setRaw(observation);
     } catch {
-      if (!controller.signal.aborted) {setRaw(undefined);setFailed(true);}
+      if (!controller.signal.aborted) {
+        setRaw(undefined);
+        setFailed(true);
+      }
     } finally {
       if (request.current === controller && !controller.signal.aborted) {
         request.current = null;
@@ -98,10 +104,12 @@ export function WeatherStatus({
   refreshRef.current = refresh;
   return (
     <View>
-      {(
+      {
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={driving ? 'Current driving weather details' : 'Weather details'}
+          accessibilityLabel={
+            driving ? 'Current driving weather details' : 'Weather details'
+          }
           onPress={() => setOpen(true)}
           style={[
             styles.status,
@@ -113,10 +121,14 @@ export function WeatherStatus({
               ? temperatureText(data.tempF, unit) + ' · ' + data.condition
               : data.status === 'STALE'
               ? 'Weather · stale'
-              : busy ? 'Weather · loading…' : failed ? 'Weather · connection error' : 'Weather · unavailable'}
+              : busy
+              ? 'Weather · loading…'
+              : failed
+              ? 'Weather · connection error'
+              : 'Weather · unavailable'}
           </Text>
         </Pressable>
-      )}
+      }
       {alerts.map(alert => (
         <Pressable
           key={alert.title}
@@ -145,8 +157,10 @@ export function WeatherStatus({
               ? 'Weather is stale or no longer near your location. Refresh before relying on it.'
               : raw?.reasonCode === 'WEATHER_PROVIDER_NOT_CONFIGURED'
               ? 'Weather service is not configured on the server. SemiTraX support must connect the weather provider.'
-              : failed ? 'Weather could not be reached. Check your connection and retry; offline weather is unavailable.'
-              : !fix ? 'Enable location to load current weather.'
+              : failed
+              ? 'Weather could not be reached. Check your connection and retry; offline weather is unavailable.'
+              : !fix
+              ? 'Enable location to load current weather.'
               : 'Current weather is unavailable. Try refreshing.'}
           </DriverCopy>
           <DriverCopy>

@@ -1065,8 +1065,19 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         CopilotMgr.enableGPS(); GuidanceMgr.suspendNavigation(false);
         control("RESUME", "CONFIRMED"); promise.resolve(null);
       } catch (Exception e) {
+        // Preserve the precise fail-closed reason for the React Native UI.
+        // Do not leak SDK exception messages or account identifiers.
+        String reason = e.getMessage();
+        String code = "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(reason)
+            ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE"
+            : "MAP_UNVERIFIED".equals(reason) ? "COPILOT_MAP_OR_LICENSE_UNVERIFIED"
+            : "ENGINE_TRIP_UNAVAILABLE";
         control("RESUME", "FAILED");
-        promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(e.getMessage()) ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE" : "ENGINE_TRIP_UNAVAILABLE", "Resume requires verified truck profile, licensing, maps and GPS.");
+        promise.reject(code, "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(code)
+            ? "CoPilot cannot yet verify required axle and trailer restrictions. Truck navigation remains blocked."
+            : "COPILOT_MAP_OR_LICENSE_UNVERIFIED".equals(code)
+                ? "Verify CoPilot navigation and heavy-duty licenses and installed California maps."
+                : "Resume requires a verified truck route, precise GPS, and an active CoPilot trip.");
       }
     });
   }

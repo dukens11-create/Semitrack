@@ -419,9 +419,11 @@ export function PlanningScreen({
             setStartingNavigation(true);
             try {
               await tripHost.openEngineTrip!(reviewed.ticket, points);
-            } catch {
-              // A rejected handoff can already have reached native code. Keep engine controls visible.
-              Alert.alert('SemiTraX trip', 'The engine could not confirm the trip handoff. Check GPS and the truck profile in Trip controls. If a trip is present, cancel it before returning to the planner.');
+            } catch (handoffError) {
+              // Native may already own a trip. Never retry automatically.
+              const reason = errorMessage(handoffError);
+              setError('CoPilot trip handoff not confirmed: ' + reason);
+              Alert.alert('SemiTraX trip handoff not confirmed', reason + '\n\nOpen Trip controls to inspect or cancel an existing engine trip before retrying. Route preview is not active guidance.');
             } finally { setStartingNavigation(false); }
           }); } },
         ]);

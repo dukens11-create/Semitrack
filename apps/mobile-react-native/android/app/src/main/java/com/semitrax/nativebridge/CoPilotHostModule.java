@@ -123,8 +123,37 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   @ReactMethod public void applyTruckProfile(ReadableMap profile, Promise promise) {
     main.post(() -> {
-      control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
-      promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE", "Trimble must confirm a supported axle/trailer profile mapping. No profile was changed.");
+      try {
+        // Read-only comparison against the ACTIVE CoPilot truck profile. Never claim
+        // that dimensions are synchronized merely because JS supplied matching data.
+        if (profile == null) throw new IllegalArgumentException("TRUCK_PROFILE_REQUIRED");
+        requireMap();
+        com.alk.cpik.route.VehicleRoutingProfile active = RouteMgr.getActiveVehicleRoutingProfile();
+        if (active == null || active.getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
+          throw new IllegalStateException("HEAVY_DUTY_PROFILE_REQUIRED");
+        com.alk.cpik.route.VehicleDimensions dims = active.getVehicleDimensions();
+        String[] keys = {"heightInches", "widthInches", "lengthInches", "weightLbs"};
+        int[] actual = {dims.getHeight().getInches(), dims.getWidth().getInches(),
+            dims.getLength().getInches(), dims.getTotalWeight().getPounds()};
+        for (int i = 0; i < keys.length; i++) {
+          if (!profile.hasKey(keys[i]) || profile.isNull(keys[i]) || profile.getType(keys[i]) != com.facebook.react.bridge.ReadableType.Number ||
+              profile.getDouble(keys[i]) <= 0 || profile.getDouble(keys[i]) != actual[i])
+            throw new IllegalStateException("TRUCK_DIMENSIONS_MISMATCH");
+        }
+        control("SYNC_PROFILE", "DIMENSIONS_MATCH_UNVERIFIED_AXLES_TRAILERS");
+        // Axle/trailer counts remain unverified in CPIK 10.28. Keep guidance fail-closed.
+        promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE",
+            "CoPilot dimensions match, but axle and trailer restrictions are not verified. Navigation remains blocked.");
+      } catch (Exception e) {
+        control("SYNC_PROFILE", "FAILED");
+        String reason = e.getMessage();
+        String code = "TRUCK_DIMENSIONS_MISMATCH".equals(reason) ? "TRUCK_DIMENSIONS_MISMATCH"
+            : "HEAVY_DUTY_PROFILE_REQUIRED".equals(reason) ? "HEAVY_DUTY_PROFILE_REQUIRED"
+            : "TRUCK_PROFILE_REQUIRED".equals(reason) ? "TRUCK_PROFILE_REQUIRED"
+            : "MAP_UNVERIFIED".equals(reason) ? "COPILOT_MAP_OR_LICENSE_UNVERIFIED"
+            : "TRUCK_PROFILE_READBACK_UNAVAILABLE";
+        promise.reject(code, "Could not verify the active CoPilot heavy-duty truck profile. No settings were changed.");
+      }
     });
   }
   private volatile boolean started;
@@ -1104,6 +1133,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         value.putInt("widthInches", dims.getWidth().getInches());
         value.putInt("lengthInches", dims.getLength().getInches());
         value.putInt("weightLbs", dims.getTotalWeight().getPounds());
+        // These are SDK readbacks, not proof of axle/trailer enforcement.
+        value.putBoolean("heavyDutyProfileVerified", true);
+        value.putBoolean("axleCountVerified", false);
+        value.putBoolean("trailerCountVerified", false);
+        value.putBoolean("truckRestrictionsVerified", false);
         promise.resolve(value);
       } catch (Exception e) { promise.reject("ENGINE_PROFILE_UNAVAILABLE", e.getMessage()); }
     });

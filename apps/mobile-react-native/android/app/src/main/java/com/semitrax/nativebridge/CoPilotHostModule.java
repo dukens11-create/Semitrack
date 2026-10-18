@@ -116,7 +116,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     });
   }
   private void requireSyncedTruck() {
-    // CPIK 10.28 has no axle/trailer-count API. Never certify a partial profile.
+    // CPIK 10.28 has no verified axle/trailer-count mapping in this integration.
+    // Never certify a partial truck profile or bypass the heavy-duty safety gate.
+    control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
     throw new IllegalStateException("TRUCK_RESTRICTIONS_UNREPRESENTABLE");
   }
   @ReactMethod public void applyTruckProfile(ReadableMap profile, Promise promise) {
@@ -538,6 +540,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           item.putBoolean("serviceConnected", Boolean.parseBoolean(entry[4])); controls.pushMap(item);
         }
         result.putArray("controlTimeline", controls);
+        // This is a known code-level blocker, independent of SDK login or service binding.
+        // Report it explicitly rather than making a failed Start/Resume look like a dead button.
+        result.putString("truckRestrictionSync", "BLOCKED_UNSUPPORTED_AXLE_TRAILER_MAPPING");
+        result.putBoolean("truckRestrictionsVerified", false);
         WritableMap storage = Arguments.createMap();
         try {
           android.os.StatFs filesystem = new android.os.StatFs(context.getFilesDir().getAbsolutePath());

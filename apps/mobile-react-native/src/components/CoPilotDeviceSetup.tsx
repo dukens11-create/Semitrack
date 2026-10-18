@@ -35,16 +35,14 @@ export function CoPilotDeviceSetup() {
     useState<CoPilotSetupDiagnostics | null>(null);
   useEffect(() => {
     let live = true;
-    {
-      try {
-        void coPilotHost()
-          .setupDiagnostics?.()
-          .then(value => {
-            if (live) setDiagnostics(value);
-          })
-          .catch(() => {});
-      } catch {}
-    }
+    try {
+      void coPilotHost()
+        .setupDiagnostics?.()
+        .then(value => {
+          if (live) setDiagnostics(value);
+        })
+        .catch(() => {});
+    } catch {}
     return () => {
       live = false;
     };

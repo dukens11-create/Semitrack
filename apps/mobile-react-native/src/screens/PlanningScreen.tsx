@@ -861,9 +861,13 @@ export function PlanningScreen({
       )}
     </>
   );
+  // Do not automatically overlay a second Mapbox GL surface during the
+  // CoPilot engine handoff. The native CoPilot view must retain visibility
+  // while its trip and guidance callbacks initialize. The separate Mapbox
+  // proof screen remains available only via an explicit user action.
   React.useEffect(() => {
-    if (engineTripOpen && !nativeSettingsRequested && !startingNavigation) setMapboxProof(true);
-  }, [engineTripOpen, nativeSettingsRequested, startingNavigation]);
+    if (!engineTripOpen) setMapboxProof(false);
+  }, [engineTripOpen]);
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {mapboxProof && engineTripOpen && (

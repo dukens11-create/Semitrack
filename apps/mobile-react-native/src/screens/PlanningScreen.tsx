@@ -1903,12 +1903,12 @@ const styles = StyleSheet.create({
   maneuverOverlay: { flex: 1, marginRight: 62 },
   previewOverlay: { marginRight: 0, flex: 0, width: '100%' },
   routeScroll: { flexShrink: 1 },
-  routePanelContent: { gap: 8 },
+  routePanelContent: { gap: 6, paddingBottom: 4 }
   routeBottom: {
     padding: 12,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '40%',
+    maxHeight: '34%',
     position: 'absolute',
     left: 12,
     right: 12,

@@ -884,6 +884,29 @@ export function PlanningScreen({
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
           {engineTripOpen && !startingNavigation && <DriverButton title="Return to navigation map" secondary onPress={() => setMapboxProof(true)} />}
           {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
+          {engineTripOpen && (
+            <View style={ds.row}>
+              <View style={ds.grow}><DriverButton title="Start / Resume Navigation" disabled={startingNavigation} onPress={() => {
+                void (async () => {
+                  try {
+                    const host = coPilotHost();
+                    if (!host.resumeEngineTrip) throw new Error('CoPilot resume operation unavailable in this build.');
+                    await host.resumeEngineTrip();
+                    await host.mapCommand('native-map');
+                  } catch (e) { Alert.alert('Navigation could not start', errorMessage(e)); }
+                })();
+              }} /></View>
+              <View style={ds.grow}><DriverButton title="Truck settings" disabled={startingNavigation} secondary onPress={() => {
+                void coPilotHost().mapCommand('settings').catch(e => Alert.alert('Truck settings unavailable', errorMessage(e)));
+              }} /></View>
+            </View>
+          )}
+          {engineTripOpen && <DriverButton title="End Route" disabled={startingNavigation} secondary onPress={() => {
+            Alert.alert('End CoPilot route?', 'This will open the native trip controls. End or cancel the active route there before returning to the planner.', [
+              { text: 'Keep route', style: 'cancel' },
+              { text: 'Open trip controls', onPress: () => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('Trip controls unavailable', errorMessage(e))); } },
+            ]);
+          }} />}
           <View style={ds.row}>
             {engineTripOpen && <View style={ds.grow}><DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} /></View>}
             <View style={ds.grow}><DriverButton title={engineTripOpen ? 'Back to planner' : 'Back to SemiTraX map'} disabled={startingNavigation} secondary onPress={() => { void closeCoPilotSettings(); }} /></View>

@@ -1216,6 +1216,33 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void guidanceSnapshot(Promise promise) {
     main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }
+  /** Read-only Mapbox proof: the next 25 miles of the actual engine route. */
+  @ReactMethod public void guidanceMapSnapshot(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        WritableMap value = guidanceTelemetry.snapshot();
+        if (value.hasKey("routeStatus") && "ready".equals(value.getString("routeStatus"))
+            && RouteMgr.hasDestination()) {
+          java.util.List<Coordinate> points = GuidanceMgr.getRouteCoordinates(true, 25.0, 1.0);
+          if (points == null || points.size() > 20000) throw new IllegalStateException("ROUTE_GEOMETRY_UNAVAILABLE");
+          com.facebook.react.bridge.WritableArray coordinates = Arguments.createArray();
+          for (Coordinate point : points) {
+            if (point == null || !point.isValid() || !Double.isFinite(point.getLongitude()) || !Double.isFinite(point.getLatitude()))
+              throw new IllegalStateException("ROUTE_GEOMETRY_INVALID");
+            com.facebook.react.bridge.WritableArray pair = Arguments.createArray();
+            pair.pushDouble(point.getLongitude());
+            pair.pushDouble(point.getLatitude());
+            coordinates.pushArray(pair);
+          }
+          value.putArray("routeCoordinates", coordinates);
+        }
+        promise.resolve(value);
+      } catch (Exception e) {
+        promise.reject("ENGINE_MAP_SNAPSHOT_FAILED", "Engine route display data unavailable.");
+      }
+    });
+  }
   @ReactMethod public void drawRoutePreview(ReadableArray points, Promise promise) {
     main.post(() -> {
       try {

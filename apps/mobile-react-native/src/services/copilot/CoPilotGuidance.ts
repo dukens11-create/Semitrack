@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 /** Native samples only. Does not infer navigation started from a route or GPS fix. */
 export const guidanceSampleSchema = z.object({
+  routeRevision: z.number().int().nonnegative().optional(),
   sequence: z.number().int().nonnegative(),
   observedAt: z.number().finite().positive(),
   available: z.boolean(),

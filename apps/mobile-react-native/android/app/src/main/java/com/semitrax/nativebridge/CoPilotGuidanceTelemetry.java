@@ -30,10 +30,11 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
   private Integer roadLimit, truckLimit;
   private boolean limitImperial;
   private boolean positionImperial;
+  private long routeRevision;
   private String routeStatus = "unknown";
   private final RouteListener routes = new RouteListener() {
     @Override public void onStartRouteCalculation() {
-      dispatch(() -> routeStatus = "calculating");
+      dispatch(() -> { routeRevision++; routeStatus = "calculating"; });
     }
     @Override public void onCompleteRouteCalculation() {
       dispatch(() -> routeStatus = "ready");
@@ -97,6 +98,7 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
     WritableMap out = Arguments.createMap();
     long now = System.currentTimeMillis();
     out.putDouble("sequence", ++sequence);
+    out.putDouble("routeRevision", routeRevision);
     out.putDouble("observedAt", now);
     out.putBoolean("available", available.getAsBoolean());
     if (!available.getAsBoolean()) return out;

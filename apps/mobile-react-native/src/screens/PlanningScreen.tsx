@@ -1,3 +1,4 @@
+import { mapboxToken } from '../config/generated';
 import { PlaceLiveDetails } from '../features/poi/PlaceLiveDetails';
 import { navigationPresentation } from '../features/navigation/navigationPresentation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
@@ -83,6 +84,7 @@ import { coPilotHost } from '../services/copilot/CoPilotHost';
 import { engineTripLocations, engineTripProfileSchema, engineTripProfileSummary } from '../services/copilot/EngineTrip';
 import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
+const EngineMapboxProof = React.lazy(() => import('../features/map/EngineMapboxProof').then(module => ({ default: module.EngineMapboxProof })));
 export function PlanningScreen({
   services,
   onTrucks,
@@ -103,6 +105,7 @@ export function PlanningScreen({
   const { settings } = useStore(services.settings);
   const copilot = useCopilotState();
   const [nativeSettingsRequested, setNativeSettingsOpen] = useState(false);
+  const [mapboxProof, setMapboxProof] = useState(false);
   const [engineTripOpen, setEngineTripOpen] = useState(false);
   // Native map callbacks describe the SDK screen, not ownership of the trip.
   // Keep planner controls and preview drawing suspended throughout the handoff.
@@ -858,8 +861,12 @@ export function PlanningScreen({
   );
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
+      {mapboxProof && engineTripOpen && (
+        <React.Suspense fallback={<DriverCopy>Opening Mapbox test…</DriverCopy>}><EngineMapboxProof token={mapboxToken} onClose={() => setMapboxProof(false)} /></React.Suspense>
+      )}
       {nativeSettingsOpen && (
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
+          {engineTripOpen && !startingNavigation && <DriverButton title="Mapbox engine test" secondary onPress={() => setMapboxProof(true)} />}
           {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
           <View style={ds.row}>
             {engineTripOpen && <View style={ds.grow}><DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} /></View>}

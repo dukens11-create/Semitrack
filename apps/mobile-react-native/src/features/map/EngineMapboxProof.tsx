@@ -30,9 +30,9 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={styles.screen}>
         <View style={styles.header}>
-          <Text style={styles.title}>SemiTraX · Mapbox engine test</Text>
+          <Text style={styles.title}>SemiTraX Navigation</Text>
           <Text style={styles.copy}>{data.status}</Text>
-          <Text style={styles.turn}>{data.instruction || 'Start or manage the trip in engine controls.'}</Text>
+          <Text style={styles.turn}>{data.instruction || 'Waiting for engine guidance.'}</Text>
           {!!data.nextRoad && <Text style={styles.copy}>{data.turnDistance} · {data.nextRoad}</Text>}
         </View>
         <View style={styles.map}>
@@ -40,7 +40,7 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
             style={styles.fill}
             styleURL={satellite ? Mapbox.StyleURL.SatelliteStreet : Mapbox.StyleURL.Street}
             onDidFinishLoadingMap={() => { setLoaded(true); setMapError(''); }}
-            onMapLoadingError={() => { setLoaded(false); setMapError('Mapbox map failed to load. Return to engine controls.'); }}
+            onMapLoadingError={() => { setLoaded(false); setMapError('Mapbox map failed to load. Trip controls.'); }}
           >
             <Mapbox.Camera ref={camera} defaultSettings={{ centerCoordinate: [-119.8, 39.5], zoomLevel: 4 }} />
             {data.coordinates && <Mapbox.ShapeSource id="engine-route" shape={{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: data.coordinates } }}>
@@ -61,9 +61,9 @@ export function EngineMapboxProof({ token, onClose }: { token: string; onClose: 
             {' · '}{data.etaAt === undefined ? 'ETA —' : new Date(data.etaAt).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}
             {' · '}{data.speedMph === undefined ? '— mph' : Math.round(data.speedMph) + ' mph'}
           </Text>
-          <Text>Read-only test view. Returning keeps the engine trip running.</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Return to engine controls" onPress={onClose} style={styles.button}>
-            <Text style={styles.title}>Return to engine controls</Text>
+          <Text>Use Trip controls to manage or end navigation.</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Trip controls" onPress={onClose} style={styles.button}>
+            <Text style={styles.title}>Trip controls</Text>
           </Pressable>
         </View>
       </View>

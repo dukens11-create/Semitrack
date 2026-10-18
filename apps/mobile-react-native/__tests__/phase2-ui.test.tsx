@@ -33,7 +33,7 @@ import {
 import Mapbox from '@rnmapbox/maps';
 import { AppNavigator, DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
-import { CopilotTruckMap } from '../src/features/map/CopilotTruckMap';
+import { SemiTraxMap as CopilotTruckMap } from '../src/features/map/SemiTraxMap';
 import { TruckMap } from '../src/features/map/TruckMap';
 import { WeatherStatus } from '../src/features/weather/WeatherStatus';
 import { RoutePoiBadges } from '../src/features/navigation/RoutePoiBadges';
@@ -459,7 +459,7 @@ test('retained Map applies saved night preference without remounting', async () 
       </DriverPreferences>,
     );
   });
-  expect(mockCoPilotHost.setMapAppearance).toHaveBeenLastCalledWith(false);
+  expect(screen.root.findByType(Mapbox.MapView).props.styleURL).toBe(Mapbox.StyleURL.Street);
   const retainedMap = screen.root.findByType(CopilotTruckMap);
   const next = {
     ...services.settings.getSnapshot().settings!,
@@ -473,7 +473,7 @@ test('retained Map applies saved night preference without remounting', async () 
   await act(async () => {
     await services.settings.save(next);
   });
-  expect(mockCoPilotHost.setMapAppearance).toHaveBeenLastCalledWith(true);
+  expect(screen.root.findByType(Mapbox.MapView).props.styleURL).toBe(Mapbox.StyleURL.Dark);
   expect(screen.root.findByType(CopilotTruckMap)).toBe(retainedMap);
 });
 
@@ -970,8 +970,7 @@ test('active driving keeps optional weather, POI badges, satellite and duplicate
   await press('Close Weather');
   await press('Navigation Controls');
   await press('Satellite map');
-  expect(content()).toContain('Satellite imagery is unavailable');
-  expect(screen.root.findAllByType(Mapbox.MapView)).toHaveLength(0);
+  expect(screen.root.findByType(Mapbox.MapView).props.styleURL).toBe(Mapbox.StyleURL.SatelliteStreet);
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test.each(['preview', 'unavailable', 'failure'] as const)(
@@ -1079,15 +1078,11 @@ test('preview cancellation removes route geometry, stop markers and advisories w
   await act(async () => {
     screen = create(<PlanningScreen services={services} />);
   });
-  expect(
-    mockCoPilotHost.drawRoutePreview.mock.calls.at(-1)![0].length,
-  ).toBeGreaterThan(0);
-  expect(
-    mockCoPilotHost.drawMarkers.mock.calls.at(-1)![0].length,
-  ).toBeGreaterThan(0);
+  expect(screen.root.findByType(TruckMap).props.route).not.toBeNull();
+  expect(screen.root.findByType(TruckMap).props.plan).not.toBeNull();
   await confirmCancellation();
-  expect(mockCoPilotHost.drawRoutePreview).toHaveBeenLastCalledWith([]);
-  expect(mockCoPilotHost.drawMarkers).toHaveBeenLastCalledWith([]);
+  expect(screen.root.findByType(TruckMap).props.route).toBeNull();
+  expect(screen.root.findByType(TruckMap).props.plan).toBeNull();
   expect(screen.root.findByType(CopilotTruckMap).props.fix).toEqual(fix);
 });
 test('cancel does not wait for native stop, and late guidance events cannot restore navigation', async () => {
@@ -1515,7 +1510,7 @@ test('search failure never disables unrelated POI categories and releases the se
 });
 
 test.each(['day', 'night'] as const)(
-  'first native map style honors persisted %s without rendering the default style',
+  'first Mapbox map style honors persisted %s without rendering the default style',
   async mode => {
     mockCoPilotHost.setMapAppearance.mockClear();
     const { services } = setup();
@@ -1543,11 +1538,10 @@ test.each(['day', 'night'] as const)(
         settingsJson: null,
       }),
     );
-    expect(mockCoPilotHost.setMapAppearance).toHaveBeenCalledTimes(1);
-    expect(mockCoPilotHost.setMapAppearance).toHaveBeenCalledWith(
-      mode === 'night',
+    expect(mockCoPilotHost.setMapAppearance).not.toHaveBeenCalled();
+    expect(screen.root.findByType(Mapbox.MapView).props.styleURL).toBe(
+      mode === 'night' ? Mapbox.StyleURL.Dark : Mapbox.StyleURL.Street,
     );
-    expect(screen.root.findAllByType(Mapbox.MapView)).toHaveLength(0);
   },
 );
 
@@ -1978,6 +1972,7 @@ test('background destination confirmation shows a safe pre-dispatch error and di
 
 test('native onboarding clears planning overlays and restores them after readiness', async () => {
   const { services } = setup();
+  services.environment = {...services.environment, mapboxToken: 'pk.fixture'};
   mockCopilotState.readyToAddStops = false;
   try {
     await act(async () => {

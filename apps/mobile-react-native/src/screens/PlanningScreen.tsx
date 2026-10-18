@@ -82,9 +82,9 @@ import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { copilotMapBlocker } from '../components/CopilotOfflineMap';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
 import { engineTripLocations, engineTripProfileSchema, engineTripProfileSummary } from '../services/copilot/EngineTrip';
-import { CopilotTruckMap } from '../features/map/CopilotTruckMap';
+import {SemiTraxMap} from '../features/map/SemiTraxMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
-const EngineMapboxProof = React.lazy(() => import('../features/map/EngineMapboxProof').then(module => ({ default: module.EngineMapboxProof })));
+import {EngineMapboxProof} from '../features/map/EngineMapboxProof';
 export function PlanningScreen({
   services,
   onTrucks,
@@ -106,12 +106,14 @@ export function PlanningScreen({
   const copilot = useCopilotState();
   const [nativeSettingsRequested, setNativeSettingsOpen] = useState(false);
   const [mapboxProof, setMapboxProof] = useState(false);
+  const [satellite, setSatellite] = useState(false);
   const [engineTripOpen, setEngineTripOpen] = useState(false);
   // Native map callbacks describe the SDK screen, not ownership of the trip.
   // Keep planner controls and preview drawing suspended throughout the handoff.
   const nativeSettingsOpen = nativeSettingsRequested || engineTripOpen;
   const [savedEngineTrip, setSavedEngineTrip] = useState(false);
   const [nativeHeaderHeight, setNativeHeaderHeight] = useState(60);
+
 
   // Native onboarding (including the EULA) needs an unobstructed viewport.
   const nativeSetupVisible = nativeSettingsOpen || (copilotMapBlocker(copilot) === null && !copilot.readyToAddStops);
@@ -664,7 +666,7 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
-      setError('Satellite imagery is unavailable on the SemiTraX offline map.');
+      setSatellite(value => !value);
       closeSheet();
       return;
     }
@@ -859,14 +861,17 @@ export function PlanningScreen({
       )}
     </>
   );
+  React.useEffect(() => {
+    if (engineTripOpen && !nativeSettingsRequested && !startingNavigation) setMapboxProof(true);
+  }, [engineTripOpen, nativeSettingsRequested, startingNavigation]);
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {mapboxProof && engineTripOpen && (
-        <React.Suspense fallback={<DriverCopy>Opening Mapbox test…</DriverCopy>}><EngineMapboxProof token={mapboxToken} onClose={() => setMapboxProof(false)} /></React.Suspense>
+        <React.Suspense fallback={<DriverCopy>Opening navigation map…</DriverCopy>}><EngineMapboxProof token={mapboxToken} onClose={() => setMapboxProof(false)} /></React.Suspense>
       )}
       {nativeSettingsOpen && (
         <View onLayout={event => setNativeHeaderHeight(event.nativeEvent.layout.height)}>
-          {engineTripOpen && !startingNavigation && <DriverButton title="Mapbox engine test" secondary onPress={() => setMapboxProof(true)} />}
+          {engineTripOpen && !startingNavigation && <DriverButton title="Return to navigation map" secondary onPress={() => setMapboxProof(true)} />}
           {engineTripOpen && startingNavigation && <DriverCopy>Preparing your truck trip…</DriverCopy>}
           <View style={ds.row}>
             {engineTripOpen && <View style={ds.grow}><DriverButton title="Trip controls" disabled={startingNavigation} onPress={() => { void coPilotHost().mapCommand('copilot-menu').catch(e => Alert.alert('SemiTraX trip', errorMessage(e))); }} /></View>}
@@ -875,7 +880,10 @@ export function PlanningScreen({
         </View>
       )}
       <View style={[styles.map, nativeSettingsOpen && { top: nativeHeaderHeight }]}>
-        <CopilotTruckMap
+        <SemiTraxMap
+          token={services.environment.mapboxToken}
+          satellite={satellite}
+          onToggleSatellite={() => setSatellite(value => !value)}
           nearbyService={services.poi}
           active={active && sheet === null}
           settingsOpen={nativeSettingsOpen}
@@ -909,7 +917,7 @@ export function PlanningScreen({
             setSheet('search');
             void searchStore.reverse(point);
           }}
-          onSatellite={() => Alert.alert('Satellite map', 'Satellite imagery is not connected to this SemiTraX offline map.')}
+          
           onPoi={poi => {
             setSelectedMapPoi(poi);
             setDetail({

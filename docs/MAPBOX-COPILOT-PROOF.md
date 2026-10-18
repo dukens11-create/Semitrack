@@ -1,16 +1,16 @@
 # Mapbox display / CoPilot engine proof
 
-This branch adds an optional, read-only test view. It does not replace the normal map or transfer trip ownership to Mapbox.
+Mapbox now renders the normal browsing and planning map. The native engine remains mounted beneath it and owns trip preparation, truck profiles and guidance. Native setup and settings remain visible when needed.
 
 ## Entry
 
-Prepare a truck trip using the existing reviewed CoPilot profile and Start Navigation flow. In the engine view, select **Mapbox engine test**. To manage or end the trip, select **Return to engine controls**. Closing the test view does not stop the trip.
+Prepare a truck trip using the existing reviewed CoPilot profile and Start Navigation flow. After confirming Go in the engine, its navigation-screen callback opens the Mapbox driving view. To manage or end the trip, select **Trip controls**; **Return to navigation map** reopens Mapbox. Closing the test view does not stop the trip.
 
 ## Data path
 
 - CPIK 10.28.2-497 exposes `GuidanceMgr.getRouteCoordinates(true, 25.0, 1.0)` in the installed JAR. It supplies the next 25 miles of the active engine route at the finest supported granularity; this is not the entire trip.
 - Native snapshots include the engine route revision, current position, next instruction, ETA and remaining distance. No backend planning polyline is substituted.
-- Mapbox renders the route and engine position. Its street/satellite styles and attribution remain intact. Mapbox Directions/Navigation routing is not used.
+- During guidance Mapbox renders the route and engine position. The planning map uses the backend planning geometry only before the engine trip handoff. Its street/satellite styles and attribution remain intact. Mapbox Directions/Navigation routing is not used.
 - The native CoPilot view remains mounted underneath the React Native modal. No unverified headless lifecycle change is introduced. Existing engine voice and trip controls remain authoritative.
 - Route calculation events invalidate the displayed geometry immediately. Late results from previous revisions are discarded. GPS freshness and a five-second display snapshot limit suppress stale guidance.
 

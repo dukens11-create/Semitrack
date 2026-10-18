@@ -7,6 +7,7 @@ import { CoPilotPlaces } from '../../components/CoPilotPlaces';
 import { CoPilotVoiceControls } from '../../components/CoPilotVoiceControls';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   DeviceEventEmitter,
   Pressable,
   ScrollView,
@@ -72,6 +73,9 @@ export function CopilotTruckMap({
   const allowed = copilotMapBlocker(state) === null;
   const [appearanceReady, setAppearanceReady] = useState(false);
   const appliedAppearance = useRef<boolean | undefined>(undefined);
+  const [resumeAttempt, setResumeAttempt] = useState(0);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [previewError, setPreviewError] = useState('');
   const [error, setError] = useState('');
   const [northUp, setNorthUp] = useState(true);
   const previousCommand = useRef<number | undefined>(undefined);
@@ -103,12 +107,25 @@ export function CopilotTruckMap({
   const markerPositions = useRef(markers.positions);
   markerPositions.current = markers.positions;
   useEffect(() => {
+    const subscription = AppState.addEventListener('change', next => {
+      if (next !== 'active' || !screenActive || settingsOpen || navigationActive) return;
+      appliedAppearance.current = undefined;
+      setAppearanceReady(false);
+      setResumeAttempt(value => value + 1);
+    });
+    return () => subscription.remove();
+  }, [screenActive, settingsOpen, navigationActive]);
+  useEffect(() => {
     if (!allowed) {
       appliedAppearance.current = undefined;
       setAppearanceReady(false);
       return;
     }
-    if (settingsOpen) return;
+    if (settingsOpen) {
+      appliedAppearance.current = undefined;
+      setAppearanceReady(false);
+      return;
+    }
     // Returning from CoPilot settings must preserve the native map style and
     // day/night selection. Apply only a new SemiTraX theme or a new engine.
     if (appliedAppearance.current === palette.dark) return;
@@ -133,7 +150,7 @@ export function CopilotTruckMap({
     return () => {
       active = false;
     };
-  }, [allowed, palette.dark, settingsOpen]);
+  }, [allowed, palette.dark, settingsOpen, resumeAttempt]);
   useEffect(() => {
     const picked = DeviceEventEmitter.addListener(
       'SemiTraxCoPilotMapPicked',
@@ -172,20 +189,24 @@ export function CopilotTruckMap({
     void coPilotHost()
       .drawRoutePreview(geometry)
       .then(async () => {
-        if (!active || geometry.length < 2) return;
+        if (!active) return;
+        setPreviewError('');
+        if (geometry.length < 2) return;
         const longs = geometry.map(point => point[0]);
         const lats = geometry.map(point => point[1]);
-        await coPilotHost().mapFrame(
-          Math.min(...longs),
-          Math.min(...lats),
-          Math.max(...longs),
-          Math.max(...lats),
-        );
+        try {
+          await coPilotHost().mapFrame(
+            Math.min(...longs), Math.min(...lats),
+            Math.max(...longs), Math.max(...lats),
+          );
+        } catch {
+          if (active) setPreviewError('Route drawn. Overview could not be centered. Retry map.');
+        }
       })
       .catch(() => {
         if (active)
-          setError(
-            'The planning route could not be displayed. Guidance has not started.',
+          setPreviewError(
+            'Route preview unavailable. Retry map or review route options.',
           );
       });
     return () => {
@@ -196,6 +217,7 @@ export function CopilotTruckMap({
     appearanceReady,
     state.readyToAddStops,
     geometry,
+    previewAttempt,
     settingsOpen,
     navigationActive,
   ]);
@@ -252,14 +274,13 @@ export function CopilotTruckMap({
       style={styles.screen}
       onLayout={event => setMapHeight(event.nativeEvent.layout.height)}
     >
-      {allowed && !appearanceReady ? (
+      <CopilotOfflineMap state={state} />
+      {allowed && !appearanceReady && !settingsOpen && (
         <View style={[styles.pending, { backgroundColor: palette.canvas }]}>
           <Text style={{ color: palette.text }}>
             {error || 'Preparing SemiTraX map…'}
           </Text>
         </View>
-      ) : (
-        <CopilotOfflineMap state={state} />
       )}
       {allowed && appearanceReady && state.readyToAddStops && !settingsOpen && (
         <ScrollView
@@ -371,7 +392,7 @@ export function CopilotTruckMap({
             />
           </View>
         )}
-      {!!error && (
+      {!!(error || previewError) && !settingsOpen && (
         <View
           style={[
             styles.error,
@@ -379,7 +400,12 @@ export function CopilotTruckMap({
           ]}
           accessibilityRole="alert"
         >
-          <Text style={{ color: palette.text }}>{error}</Text>
+          <Text style={{ color: palette.text }}>{error || previewError}</Text>
+          {!!previewError && (
+            <Pressable accessibilityRole="button" accessibilityLabel="Retry route preview" onPress={() => setPreviewAttempt(value => value + 1)} style={styles.retry}>
+              <Text style={{ color: palette.actionText }}>Retry map</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -393,8 +419,9 @@ const styles = StyleSheet.create({
     right: 72,
     alignItems: 'flex-start',
   },
+  retry: { minHeight: 44, justifyContent: 'center' },
   pending: {
-    flex: 1,
+    position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,

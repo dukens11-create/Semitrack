@@ -861,6 +861,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         requireMap();
         GuidanceSettings.setMapMode(night ? GuidanceSettings.MapMode.NIGHT : GuidanceSettings.MapMode.DAY);
+        // The SDK retains its last dialog. A map style alone does not dismiss
+        // an itinerary/settings screen. Restore the actual map before overlays.
+        UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
         MapDrawer drawer = UIMgr.getMapDrawer();
         drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS);
         if (!mapPrepared) {

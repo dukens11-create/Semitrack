@@ -232,8 +232,9 @@ export function DrivingNearbyOverlay({
                     {row.miles === undefined
                       ? '—'
                       : `${row.miles.toFixed(1)} mi`}
-                    {exits && exit ? ` · Exit ${exit}` : ''}
+
                   </Text>
+                  {exits && exit && <Text style={[styles.label, { color: p.muted }]}>Exit {exit}</Text>}
                 </View>
               </Pressable>
             );
@@ -268,7 +269,7 @@ const styles = StyleSheet.create({
   north: { fontSize: 8, color: '#E45438', lineHeight: 10, fontWeight: '800' },
   needle: { fontSize: 19, lineHeight: 20, fontWeight: '800' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  gridCell: { width: 112 },
+  gridCell: { width: 112, flexDirection: 'column', alignItems: 'flex-start', paddingVertical: 6 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -280,7 +281,7 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  copy: { flex: 1 },
+  copy: { flexShrink: 1 },
   label: { fontSize: 10, lineHeight: 12 },
   name: { fontSize: 12, lineHeight: 15, fontWeight: '600' },
   distance: { fontSize: 18, lineHeight: 23, fontWeight: '800' },

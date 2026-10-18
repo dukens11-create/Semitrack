@@ -1036,7 +1036,7 @@ export function PlanningScreen({
           nativeSetupVisible && styles.hiddenForNativeSetup,
         ]}
       >
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.routePanelContent}>
+        <ScrollView keyboardShouldPersistTaps="handled" style={styles.routeScroll} contentContainerStyle={styles.routePanelContent}>
         <WeatherStatus
           driving={navigationSession}
           detailsRequest={weatherDetailsRequest}
@@ -1121,37 +1121,6 @@ export function PlanningScreen({
                 <Text style={[styles.cancelText, { color: palette.actionText }]}>Route options</Text>
               </Pressable>
             )}
-            {!navigationSession && (
-              <View style={styles.primaryRouteActions}>
-                {!navigationSession && (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Start Navigation"
-                    accessibilityState={{ disabled: pending }}
-                    disabled={pending}
-                    onPress={() => {
-                      void run(startNavigation);
-                    }}
-                    style={[styles.startAction, pending && styles.disabled]}
-                  >
-                    <Text style={styles.startText}>Start Navigation</Text>
-                  </Pressable>
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancel Route"
-                  onPress={confirmCancelRoute}
-                  style={[
-                    styles.cancelAction,
-                    styles.previewCancelAction,
-                  ]}
-                >
-                  <Text style={[styles.cancelText, { color: palette.text }]}>
-                    Cancel Route
-                  </Text>
-                </Pressable>
-              </View>
-            )}
             <RouteAdvisories
               key={
                 routes.route.selectedRouteId +
@@ -1230,6 +1199,39 @@ export function PlanningScreen({
           </>
         )}
         </ScrollView>
+        {routes.route && (<>
+            {!navigationSession && (
+              <View style={styles.primaryRouteActions}>
+                {!navigationSession && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Start Navigation"
+                    accessibilityState={{ disabled: pending }}
+                    disabled={pending}
+                    onPress={() => {
+                      void run(startNavigation);
+                    }}
+                    style={[styles.startAction, pending && styles.disabled]}
+                  >
+                    <Text style={styles.startText}>Start Navigation</Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel Route"
+                  onPress={confirmCancelRoute}
+                  style={[
+                    styles.cancelAction,
+                    styles.previewCancelAction,
+                  ]}
+                >
+                  <Text style={[styles.cancelText, { color: palette.text }]}>
+                    Cancel Route
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+        </>)}
       </View>
       {active && sheet === 'filter' && (
         <DriverSheet title="Places Filter" onClose={closeSheet}>
@@ -1867,8 +1869,8 @@ const styles = StyleSheet.create({
   routeTruckChip: { maxWidth: '100%', width: '100%', elevation: 0, borderRadius: 10, paddingVertical: 8 },
   previewCancelAction: { backgroundColor: 'transparent', borderWidth: 0, padding: 4, minHeight: 44 },
   mapBrandBar: { backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 14, alignItems: 'center', marginBottom: 6 },
-  mapWordmark: { color: '#172433', fontSize: 25, fontWeight: '900', fontStyle: 'italic' },
-  mapBrandX: { color: '#FF6B2C', fontSize: 29 },
+  mapWordmark: { color: '#172433', fontSize: 19, fontWeight: '900', fontStyle: 'italic' },
+  mapBrandX: { color: '#FF6B2C', fontSize: 22 },
   mapBrandTagline: { color: '#172433', fontSize: 8, letterSpacing: 3 },
   hiddenForNativeSetup: { display: 'none' },
   recentList: { maxHeight: 220 },
@@ -1880,12 +1882,13 @@ const styles = StyleSheet.create({
   },
   maneuverOverlay: { flex: 1, marginRight: 62 },
   previewOverlay: { marginRight: 0, flex: 0, width: '100%' },
+  routeScroll: { flexShrink: 1 },
   routePanelContent: { gap: 8 },
   routeBottom: {
     padding: 12,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '42%',
+    maxHeight: '40%',
     position: 'absolute',
     left: 12,
     right: 12,
@@ -1894,7 +1897,7 @@ const styles = StyleSheet.create({
   },
   routeFeedback: { borderRadius: 12 },
   routeActions: { flexDirection: 'row', gap: 8 },
-  primaryRouteActions: { gap: 8 },
+  primaryRouteActions: { gap: 0, flexShrink: 0 },
   startAction: {
     width: '100%',
     backgroundColor: '#FF6425',

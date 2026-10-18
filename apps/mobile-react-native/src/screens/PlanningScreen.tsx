@@ -1051,7 +1051,7 @@ export function PlanningScreen({
             >
               {feedback}
             </View>
-            {!navigationSession && (
+            {!navigationSession && false && (
               <RoutePoiBadges
                 pois={pois.filter(
                   poi =>

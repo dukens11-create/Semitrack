@@ -510,8 +510,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       try {
         JSONObject saved = readStored();
         WritableMap result = Arguments.createMap();
-        result.putBoolean("savedCompanyMatches", saved != null && CoPilotEnrollmentPolicy.COMPANY.equals(saved.getString("company")));
-        result.putBoolean("savedDeviceMatches", saved != null && CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET).equalsIgnoreCase(saved.getString("device")));
+        // Blank reference IDs mean this build has no pinned enrollment identity.
+        // A false match against a blank reference is NOT evidence of a wrong saved ID.
+        String referenceCompany = CoPilotEnrollmentPolicy.COMPANY;
+        String referenceDevice = CoPilotEnrollmentPolicy.asset(BuildConfig.SEMITRAX_TEST_ASSET);
+        boolean referenceConfigured = referenceCompany != null && !referenceCompany.trim().isEmpty()
+            && referenceDevice != null && !referenceDevice.trim().isEmpty();
+        result.putBoolean("enrollmentReferenceConfigured", referenceConfigured);
+        result.putString("enrollmentReferenceStatus", referenceConfigured ? "CONFIGURED" : "NOT_CONFIGURED");
+        result.putBoolean("savedSetupPresent", saved != null);
+        result.putBoolean("savedCompanyMatches", referenceConfigured && saved != null && referenceCompany.equals(saved.getString("company")));
+        result.putBoolean("savedDeviceMatches", referenceConfigured && saved != null && referenceDevice.equalsIgnoreCase(saved.getString("device")));
         result.putString("credentialHook", credentialHookState);
         result.putBoolean("hookMatchedAssigned", hookMatchedAssigned);
         result.putBoolean("callbackMatchedAssigned", callbackMatchedAssigned);

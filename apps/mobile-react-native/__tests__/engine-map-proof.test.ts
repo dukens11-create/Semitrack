@@ -1,4 +1,4 @@
-import { engineMapProof, engineMapSnapshotSchema, type EngineMapSnapshot } from '../src/features/map/engineMapProof';
+import { engineMapProof, laneDirectionSymbol, engineMapSnapshotSchema, type EngineMapSnapshot } from '../src/features/map/engineMapProof';
 const now = 1800000000000;
 const sample: EngineMapSnapshot = {
   sequence: 10, routeRevision: 3, observedAt: now, available: true,
@@ -37,4 +37,14 @@ test('truck limit and compass require fresh engine data and never borrow the roa
   expect(engineMapProof({...live, truckSpeedLimitMph: undefined}, now).truckSpeedLimitMph).toBeUndefined();
   expect(engineMapProof(live, now + 5001).truckSpeedLimitMph).toBeUndefined();
   expect(engineMapProof(live, now + 5001).compass).toBeUndefined();
+});
+
+test('lane order and exit are engine values and clear on recalculation', () => {
+  const value = {...sample, exitNumber: '21', laneDirections: ['LEFT', 'STRAIGHT', 'RIGHT']};
+  expect(engineMapProof(value, now).laneDirections).toEqual(['LEFT','STRAIGHT','RIGHT']);
+  expect(engineMapProof(value, now).exitNumber).toBe('21');
+  expect(engineMapProof({...value, routeStatus: 'calculating'}, now).laneDirections).toBeUndefined();
+  expect(engineMapProof(value, now + 5001).exitNumber).toBeUndefined();
+  expect(laneDirectionSymbol('STRAIGHT')).toBe('↑');
+  expect(laneDirectionSymbol('UNKNOWN')).toBe('—');
 });

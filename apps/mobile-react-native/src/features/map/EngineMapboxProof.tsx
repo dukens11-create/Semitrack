@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
-import { engineMapProof } from './engineMapProof';
+import { engineMapProof, laneDirectionSymbol } from './engineMapProof';
 import { useEngineMapSnapshot } from './useEngineMapSnapshot';
 import {DrivingNearbyOverlay} from '../navigation/DrivingNearbyOverlay';
 import type {Poi, PoiService} from '../poi/PoiService';
 import type {LocationFix} from '../../services/location/LocationService';
+import {CoPilotVoiceControls} from '../../components/CoPilotVoiceControls';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 
 /** Live engine display. Native trip controls retain ownership of start/end/profile/voice. */
@@ -41,6 +42,8 @@ export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi }:
           <Text style={styles.title}>SemiTraX Navigation</Text>
           <Text style={styles.copy}>{data.status}</Text>
           <Text style={styles.turn}>{data.instruction || 'Waiting for engine guidance.'}</Text>
+          {!!data.exitNumber && <Text style={styles.exit}>EXIT {data.exitNumber}</Text>}
+          {!!data.laneDirections?.length && <View accessibilityLabel="Lane directions from left to right" style={styles.lanes}>{data.laneDirections.map((code, index) => <Text key={index} accessibilityLabel={`Lane ${index + 1}: ${code.replace(/_/g, ' ')}`} style={styles.lane}>{laneDirectionSymbol(code)}</Text>)}</View>}
           {!!data.nextRoad && <Text style={styles.copy}>{data.turnDistance} · {data.nextRoad}</Text>}
         </View>
         <View style={styles.map} onLayout={event => setMapHeight(event.nativeEvent.layout.height)}>
@@ -79,7 +82,7 @@ export function EngineMapboxProof({ token, onClose, nearbyService, fix, onPoi }:
             {' · '}{data.etaAt === undefined ? 'ETA —' : new Date(data.etaAt).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}
             {' · '}{data.speedMph === undefined ? '— mph' : Math.round(data.speedMph) + ' mph'}
           </Text>
-          <Text>Use Trip controls to manage or end navigation.</Text>
+          <CoPilotVoiceControls />
           <Pressable accessibilityRole="button" accessibilityLabel="Trip controls" onPress={onClose} style={styles.button}>
             <Text style={styles.title}>Trip controls</Text>
           </Pressable>
@@ -95,6 +98,9 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#172433', padding: 16, gap: 6 },
   title: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
   copy: { color: '#FFFFFF', fontSize: 13 },
+  exit: {color: '#FFFFFF', backgroundColor: '#216746', paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start', fontWeight: '800'},
+  lanes: {flexDirection: 'row', flexWrap: 'wrap', gap: 4},
+  lane: {color: '#FFFFFF', fontSize: 24, minWidth: 28, textAlign: 'center', borderRightWidth: 1, borderRightColor: '#647181'},
   turn: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
   map: { flex: 1 }, fill: { flex: 1 },
   error: { position: 'absolute', top: 70, left: 12, right: 12, backgroundColor: '#FFFFFF', padding: 12 },

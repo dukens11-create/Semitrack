@@ -23,6 +23,8 @@ export function engineMapProof(sample: EngineMapSnapshot | undefined, now: numbe
     truckSpeedLimitMph: current ? telemetry.truckSpeedLimitMph : undefined,
     instruction: ready ? sample.instruction : undefined,
     nextRoad: ready ? sample.nextRoad : undefined,
+    exitNumber: ready ? sample.exitNumber : undefined,
+    laneDirections: ready ? sample.laneDirections : undefined,
     turnDistance: ready ? sample.turnDistance : undefined,
     remainingMeters: ready ? telemetry.remainingMeters : undefined,
     etaAt: ready ? telemetry.etaAt : undefined,
@@ -32,4 +34,10 @@ export function engineMapProof(sample: EngineMapSnapshot | undefined, now: numbe
       sample.routeStatus === 'arrived' ? 'Destination reached' :
       ready ? 'Engine route · next 25 miles' : 'No ready engine route',
   };
+}
+
+/** Unknown codes retain their lane position; never invent an arrow or recommendation. */
+export function laneDirectionSymbol(code: string): string {
+  const arrows: Record<string, string> = {STRAIGHT:'↑', LEFT:'←', RIGHT:'→', BEAR_LEFT:'↖', BEAR_RIGHT:'↗', SHARP_LEFT:'↰', SHARP_RIGHT:'↱', UTURN:'↶', RIGHTSIDE_UTURN:'↷'};
+  return arrows[code] ?? '—';
 }

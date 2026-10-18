@@ -7,6 +7,9 @@ import com.alk.cpik.guidance.GuidanceListener;
 import com.alk.cpik.guidance.GuidanceMgr;
 import com.alk.cpik.guidance.PositionInfo;
 import com.alk.cpik.guidance.TurnInstruction;
+import com.alk.cpik.guidance.Lane;
+import com.alk.cpik.guidance.LaneAssistInfo;
+import com.facebook.react.bridge.WritableArray;
 import com.alk.cpik.guidance.UnitsOfMeasure;
 import com.alk.cpik.route.RouteMgr;
 import com.alk.cpik.route.RouteListener;
@@ -148,7 +151,19 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
           out.putString("instruction", instruction.getGuidanceInstruction());
           out.putString("nextRoad", instruction.getStreetNameForNextTurn());
           out.putString("turnDistance", instruction.getDistanceToNextTurn());
+          out.putString("exitNumber", instruction.getExitNumber());
         }
+        // Optional lane data must not prevent the rest of the live snapshot.
+        try {
+          LaneAssistInfo assist = GuidanceMgr.getLaneAssist();
+          if (assist != null && assist.getLanes() != null && assist.getLanes().size() <= 16) {
+            WritableArray lanes = Arguments.createArray();
+            for (Lane lane : assist.getLanes()) {
+              lanes.pushString(lane != null && lane.getTurnCode() != null ? lane.getTurnCode().name() : "NONE");
+            }
+            out.putArray("laneDirections", lanes);
+          }
+        } catch (Exception ignored) {}
       }
     } catch (Exception ignored) { /* No fabricated route data while calculation is pending. */ }
     return out;

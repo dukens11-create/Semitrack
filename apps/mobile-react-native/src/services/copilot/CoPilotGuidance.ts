@@ -23,6 +23,8 @@ export const guidanceSampleSchema = z.object({
   instruction: z.string().nullable().optional(),
   nextRoad: z.string().nullable().optional(),
   turnDistance: z.string().nullable().optional(),
+  exitNumber: z.string().max(80).nullable().optional(),
+  laneDirections: z.array(z.string().max(64)).max(16).optional(),
 });
 export type CoPilotGuidanceSample = z.infer<typeof guidanceSampleSchema>;
 export function guidancePresentation(

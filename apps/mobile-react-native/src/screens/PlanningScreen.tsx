@@ -948,6 +948,7 @@ export function PlanningScreen({
               metric={settings?.units === 'metric'}
               onMore={() => setSheet('navigation')}
               onReview={() => setSheet('route')}
+              compactPreview
               placement="maneuver"
             />
           </View>
@@ -1027,7 +1028,7 @@ export function PlanningScreen({
         onLayout={event => setBottomHeight(event.nativeEvent.layout.height)}
         style={[
           routes.route
-            ? styles.routeBottom
+            ? [styles.routeBottom, { backgroundColor: palette.card }]
             : [
                 styles.bottom,
                 expanded ? styles.expandedBottom : styles.collapsedBottom,
@@ -1076,6 +1077,7 @@ export function PlanningScreen({
               state={navigation}
               fix={location.fix}
               metric={settings?.units === 'metric'}
+              compactPreview
               placement="dashboard"
               onMore={() => setSheet('navigation')}
               onReview={
@@ -1116,7 +1118,7 @@ export function PlanningScreen({
               </View>
             )}
             {!navigationSession && (
-              <View style={styles.routeActions}>
+              <View style={styles.primaryRouteActions}>
                 {!navigationSession && (
                   <Pressable
                     accessibilityRole="button"
@@ -1872,6 +1874,9 @@ const styles = StyleSheet.create({
   previewOverlay: { marginRight: 0 },
   routePanelContent: { gap: 8 },
   routeBottom: {
+    padding: 12,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     maxHeight: '42%',
     position: 'absolute',
     left: 12,
@@ -1881,6 +1886,7 @@ const styles = StyleSheet.create({
   },
   routeFeedback: { borderRadius: 12 },
   routeActions: { flexDirection: 'row', gap: 8 },
+  primaryRouteActions: { gap: 8 },
   startAction: {
     flex: 1,
     backgroundColor: '#FF6425',

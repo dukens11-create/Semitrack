@@ -262,3 +262,37 @@ test('preview exposes GPS speed and an estimated arrival without inventing guida
   expect(text()).toContain('Planning estimate · Trimble · ETA');
   expect(text()).not.toContain('I-80 West');
 });
+
+test('compact preview separates destination from bottom metrics without driving instruments', async () => {
+  await act(async () => {
+    screen = create(
+      <NavigationHud
+        route={route()}
+        destination="Depot"
+        state={{ phase: 'idle' }}
+        fix={fix}
+        placement="maneuver"
+        compactPreview
+      />,
+    );
+  });
+  expect(text()).toContain('Depot');
+  expect(text()).toContain('Guidance has not started');
+  expect(text()).not.toContain('Estimated arrival');
+  await act(async () => {
+    screen.update(
+      <NavigationHud
+        route={route()}
+        destination="Depot"
+        state={{ phase: 'idle' }}
+        fix={fix}
+        placement="dashboard"
+        compactPreview
+      />,
+    );
+  });
+  expect(text()).toContain('Estimated arrival');
+  expect(text()).toContain('Drive time');
+  expect(text()).not.toContain('TRUCK LIMIT');
+  expect(text()).not.toContain('MPH');
+});

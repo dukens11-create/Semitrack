@@ -93,15 +93,13 @@ It never clears data, uninstalls, or copies private app data. PowerShell/physica
 has not been performed in this environment.
 
 
-### PR CI routing correction
+### React Native only CI
 
-The root `build_apk.yml` previously ran Flutter for every repository change.
-PR #393 changes the separate Hybrid project, not the root Flutter app; its
-Flutter check failed at dependency resolution because the licensed
-`plugins/here_sdk` package is absent. Automatic Flutter builds now watch the
-root Flutter source, tests, native projects, assets, plugins and dependency
-files. Manual dispatch remains available, including for workflow-only changes.
-The Flutter dependency and its license requirements remain unchanged.
-The Hybrid workflow continues to run its full tests and Android compilation
-on every push to this repair branch. This correction does not supply the
-missing HERE SDK or resolve the documented Trimble authorization blockers.
+SemiTraX is the React Native application in `apps/mobile-react-native`, with
+its native Android CoPilot bridge. The obsolete root Flutter APK workflow
+(`.github/workflows/build_apk.yml`) is removed at the owner's request. No
+remaining GitHub workflow invokes Flutter or Dart. Hybrid builds still run
+full mobile checks, compile Android, verify package identity and the persistent
+signing certificate, and upload the APK. This does not remove any license,
+offline map or truck-routing safety gate. The historical Flutter source is
+not used by the Hybrid build. The Trimble blockers above remain unresolved.

@@ -10,10 +10,12 @@ Both enum constants were verified against the installed 10.28.2-497 cpik.jar usi
 
 - v11 download/install access is still pending from Trimble support case 02405327.
 - Truck profile synchronization remains blocked by unverified axle/trailer restriction mapping. No guard was removed.
-- The planning screen still uses its existing Mapbox rendering. This change replaces the live navigation map only; planner migration remains outstanding before claiming all Trimble routes use Trimble maps.
+- Route previews now render on CoPilot with native markers, overview and place-picking events. Mapbox remains for browsing when no route is selected. Satellite imagery is unavailable for route previews. The planner unmounts before the navigation session opens, so two screens cannot mount the shared SDK view.
 - No Android device or full Android toolchain is available in this workspace. Verify native compilation and on-device map mounting, return/reopen, rotation/background recovery, route preview/calculation callbacks, custom overlays and map controls after the profile blocker is resolved.
 - This is not a verified APK and has not been installed on the user's phone. Package identity, signing configuration, SDK version, credentials and downloaded maps are unchanged.
 
 ## Automated verification
 
 Run `npm run check` in apps/mobile-react-native. New component tests cover deferred map mounting, native map controls and display-setup failure. Existing trip safety and handoff tests remain required.
+
+The existing signed Android workflow also runs on fix/392-copilot-live-map. Its signing-certificate checks remain mandatory; no replacement signing identity is generated.

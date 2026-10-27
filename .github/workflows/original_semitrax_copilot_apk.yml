@@ -1,7 +1,7 @@
 name: SemiTraX Hybrid issue 392 APK
 on:
   push:
-    branches: [codex/issue-392-hybrid, codex/sept27-mapbox-engine]
+    branches: [codex/issue-392-hybrid, codex/sept27-mapbox-engine, fix/392-copilot-live-map]
   workflow_dispatch:
 permissions:
   contents: read

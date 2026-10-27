@@ -1174,7 +1174,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
                 tripHandoff.validate(ticket);
                 UIMgr.getMapDrawer().clearDashedLine();
                 if (markerSet != null) UIMgr.getMapDrawer().removeImageSet(markerSet);
-                UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
+                UIMgr.getMapDrawer().setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS);
                 CopilotMgr.enableGPS();
                 control("START", "NATIVE_CALL");
                 tripHandoff.submit(ticket, stops);
@@ -1232,6 +1232,12 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         requireMap();
         MapDrawer drawer = UIMgr.getMapDrawer();
         switch (command) {
+          case "embedded-navigation":
+            // SemiTraX owns overlays; rendering must never start/resume guidance.
+            UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW);
+            drawer.setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS);
+            drawer.lockToChevron();
+            break;
           case "native-map":
             // Opening the native navigation screen hands control to CoPilot.
             // Merely enabling GPS does not undo startup suspension.

@@ -88,7 +88,7 @@ final class CoPilotTripHandoff {
     calculated = false; calculating = false; failed = false;
     // The first point is the explicit GPS origin, so the SDK cannot consume the first via stop as origin.
     // SemiTraX owns the driving UI; SDK owns calculation and guidance.
-    RouteMgr.addStops(RouteEnums.AddStopPurpose.NEW_TRIP, stops, RouteEnums.RoutePreviewMode.NO_PREVIEW);
+    RouteMgr.addStops(RouteEnums.AddStopPurpose.NEW_TRIP, stops, RouteEnums.RoutePreviewMode.PREVIEW_TRIP_MAP_NO_WIDGET);
     ticket = null;
   }
   boolean ownsDestination() throws Exception {

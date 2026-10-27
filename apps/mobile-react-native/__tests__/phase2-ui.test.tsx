@@ -32,6 +32,7 @@ import {
 import Mapbox from '@rnmapbox/maps';
 import { AppNavigator, DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
+import {CopilotPlannerMap} from '../src/features/map/CopilotPlannerMap';
 import { TruckMap } from '../src/features/map/TruckMap';
 import { WeatherStatus } from '../src/features/weather/WeatherStatus';
 import { RoutePoiBadges } from '../src/features/navigation/RoutePoiBadges';
@@ -949,7 +950,8 @@ test('active driving keeps optional weather, POI badges, satellite and duplicate
   await press('Close Weather');
   await press('Navigation Controls');
   await press('Satellite map');
-  expect(screen.root.findByType(TruckMap).props.satellite).toBe(true);
+  expect(screen.root.findAllByType(TruckMap)).toHaveLength(0);
+  expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(1);
   expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test.each(['preview', 'unavailable', 'failure'] as const)(
@@ -1057,12 +1059,9 @@ test('preview cancellation removes route geometry, stop markers and advisories w
   await act(async () => {
     screen = create(<PlanningScreen services={services} />);
   });
-  expect(
-    screen.root.findAll(n => n.props.id === 'truck-route').length,
-  ).toBeGreaterThan(0);
-  expect(
-    screen.root.findAllByType(Mapbox.PointAnnotation).length,
-  ).toBeGreaterThan(0);
+  expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(1);
+  expect(screen.root.findByType(CopilotPlannerMap).props.route).not.toBeNull();
+  expect(screen.root.findByType(CopilotPlannerMap).props.plan).not.toBeNull();
   await confirmCancellation();
   expect(screen.root.findAll(n => n.props.id === 'truck-route')).toHaveLength(
     0,
@@ -1116,10 +1115,10 @@ test('navigation menu connects real map commands, settings, report UI and confir
   });
   await press('Navigation Controls');
   await press('Route Overview');
-  expect(screen.root.findByType(TruckMap).props.command.type).toBe('overview');
+  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe('overview');
   await press('Navigation Controls');
   await press('Recenter');
-  expect(screen.root.findByType(TruckMap).props.command.type).toBe('recenter');
+  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe('recenter');
   await press('Navigation Controls');
   await press('Audio Settings');
   expect(settings).toHaveBeenCalledTimes(1);

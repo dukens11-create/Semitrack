@@ -77,6 +77,7 @@ import {
   placeShortcuts,
   poiDetails,
 } from '../features/poi/PoiPresentation';
+import { CopilotPlannerMap } from '../features/map/CopilotPlannerMap';
 import { TruckMap } from '../features/map/TruckMap';
 import { RoutePreview } from '../features/routing/RoutePreview';
 export function PlanningScreen({
@@ -149,7 +150,8 @@ export function PlanningScreen({
     navigation.phase === 'navigating' ||
     navigation.phase === 'paused' ||
     navigation.phase === 'rerouting';
-  const navigationSession = !!enginePlan || navigationActive || navigation.phase === 'arrived';
+  const navigationSession =
+    !!enginePlan || navigationActive || navigation.phase === 'arrived';
   const palette = useDriverPalette();
   useEffect(() => {
     onNavigationActiveChange?.(active && navigationSession);
@@ -334,7 +336,11 @@ export function PlanningScreen({
     const current = services.routes.getSnapshot();
     if (!current.route || !current.plan) return;
     let nativeHost;
-    try { nativeHost = coPilotHost(); } catch { /* Unsupported platforms retain the unavailable adapter. */ }
+    try {
+      nativeHost = coPilotHost();
+    } catch {
+      /* Unsupported platforms retain the unavailable adapter. */
+    }
     if (nativeHost?.openEngineTrip) {
       origin();
       closeSheet();
@@ -547,6 +553,10 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
+      if (routes.route) {
+        setError('Satellite view is unavailable for Trimble route previews.');
+        return;
+      }
       setSatelliteOverride(v => !(v ?? mapPreferences(settings).satellite));
       closeSheet();
       return;
@@ -745,57 +755,97 @@ export function PlanningScreen({
     </>
   );
   return (
-    <View style={[styles.screen, { backgroundColor: palette.canvas }]} >
-      {enginePlan && <HybridNavigation services={services} plan={enginePlan} onClose={() => setEnginePlan(null)}/>}
-      <View style={styles.map}>
-        <TruckMap
-          token={services.environment.mapboxToken}
-          command={mapCommand}
-          route={routes.route}
-          plan={routes.plan}
-          fix={location.fix}
-          navigationActive={
-            navigation.phase === 'navigating' &&
-            navigation.routeId === routes.route?.selectedRouteId
-          }
-          maneuverMeters={livePresentation?.guidance?.maneuverMeters}
-          progressOffset={
-            livePresentation?.guidance?.maneuverMeters !== undefined
-              ? navigation.maneuverOffset
-              : undefined
-          }
-          satellite={satelliteOverride ?? mapPrefs.satellite}
-          onToggleSatellite={() =>
-            setSatelliteOverride(value => !(value ?? mapPrefs.satellite))
-          }
-          onAudio={() => menuAction('audio')}
-          autoZoom={mapPrefs.autoZoom}
-          pois={pois.filter(
-            poi => !hiddenCategories.includes(poi.category as PlaceCategory),
-          )}
-          bottomInset={bottomHeight}
-          topInset={topHeight + 12}
-          onCoordinate={point => {
-            if (
-              busy ||
-              routes.phase === 'calculating' ||
-              routes.phase === 'rerouting'
-            )
-              return;
-            setDetail(null);
-            setSheet('search');
-            void searchStore.reverse(point);
-          }}
-          onPoi={poi => {
-            setDetail({
-              id: poi.id,
-              name: poi.name,
-              lat: poi.latitude,
-              lng: poi.longitude,
-            });
-            setSheet('search');
-          }}
+    <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
+      {enginePlan && (
+        <HybridNavigation
+          services={services}
+          plan={enginePlan}
+          onClose={() => setEnginePlan(null)}
         />
+      )}
+      <View style={styles.map}>
+        {!enginePlan &&
+          (routes.route ? (
+            <CopilotPlannerMap
+              route={routes.route}
+              plan={routes.plan}
+              pois={pois.filter(
+                poi =>
+                  !hiddenCategories.includes(poi.category as PlaceCategory),
+              )}
+              command={mapCommand}
+              topInset={topHeight + 12}
+              bottomInset={bottomHeight}
+              onAudio={() => menuAction('audio')}
+              onCoordinate={point => {
+                if (
+                  busy ||
+                  routes.phase === 'calculating' ||
+                  routes.phase === 'rerouting'
+                )
+                  return;
+                setDetail(null);
+                setSheet('search');
+                void searchStore.reverse(point);
+              }}
+              onPoi={poi => {
+                setDetail({
+                  id: poi.id,
+                  name: poi.name,
+                  lat: poi.latitude,
+                  lng: poi.longitude,
+                });
+                setSheet('search');
+              }}
+            />
+          ) : (
+            <TruckMap
+              token={services.environment.mapboxToken}
+              command={mapCommand}
+              route={routes.route}
+              plan={routes.plan}
+              fix={location.fix}
+              navigationActive={false}
+              maneuverMeters={livePresentation?.guidance?.maneuverMeters}
+              progressOffset={
+                livePresentation?.guidance?.maneuverMeters !== undefined
+                  ? navigation.maneuverOffset
+                  : undefined
+              }
+              satellite={satelliteOverride ?? mapPrefs.satellite}
+              onToggleSatellite={() =>
+                setSatelliteOverride(value => !(value ?? mapPrefs.satellite))
+              }
+              onAudio={() => menuAction('audio')}
+              autoZoom={mapPrefs.autoZoom}
+              pois={pois.filter(
+                poi =>
+                  !hiddenCategories.includes(poi.category as PlaceCategory),
+              )}
+              bottomInset={bottomHeight}
+              topInset={topHeight + 12}
+              onCoordinate={point => {
+                if (
+                  busy ||
+                  routes.phase === 'calculating' ||
+                  routes.phase === 'rerouting'
+                )
+                  return;
+                setDetail(null);
+                setSheet('search');
+                void searchStore.reverse(point);
+              }}
+              onPoi={poi => {
+                setDetail({
+                  id: poi.id,
+                  name: poi.name,
+                  lat: poi.latitude,
+                  lng: poi.longitude,
+                });
+                setSheet('search');
+              }}
+            />
+          ))}
       </View>
       <View
         style={styles.top}

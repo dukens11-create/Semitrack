@@ -28,7 +28,7 @@ import {
   engineTripProfileSchema,
   engineTripProfileSummary,
 } from '../../services/copilot/EngineTrip';
-import { EngineMapboxProof } from './EngineMapboxProof';
+import { EngineCopilotMap } from './EngineCopilotMap';
 import type { Services } from '../../app/services';
 import type { StopPlan } from '../stops/StopPlan';
 import { useStore } from '../../hooks/useStore';
@@ -297,8 +297,7 @@ export function HybridNavigation({
           </ScrollView>
         )}
         {live && (
-          <EngineMapboxProof
-            token={services.environment.mapboxToken}
+          <EngineCopilotMap
             onClose={() => setLive(false)}
             nearbyService={services.poi}
             fix={location.fix}

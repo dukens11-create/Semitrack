@@ -1,5 +1,5 @@
 import * as controls from '../src/services/copilot/HybridControls';
-import {EngineMapboxProof} from '../src/features/map/EngineMapboxProof';
+import {EngineCopilotMap} from '../src/features/map/EngineCopilotMap';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { HybridNavigation } from '../src/features/map/HybridNavigation';
@@ -37,8 +37,8 @@ jest.mock('../src/screens/TruckProfileScreen', () => ({
 jest.mock('../src/features/weather/WeatherStatus', () => ({
   WeatherStatus: () => null,
 }));
-jest.mock('../src/features/map/EngineMapboxProof', () => ({
-  EngineMapboxProof: () => null,
+jest.mock('../src/features/map/EngineCopilotMap', () => ({
+  EngineCopilotMap: () => null,
 }));
 jest.mock('../src/components/ThemedAlert', () => ({
   Alert: { alert: (...args: unknown[]) => mockAlert(...args) },
@@ -154,7 +154,7 @@ test('existing trip invokes native resume before showing Mapbox', async () => {
     mockHost.resumeEngineTrip.mockResolvedValue(undefined);
     await press('Start / Resume Navigation');
     expect(mockHost.resumeEngineTrip).toHaveBeenCalledTimes(1);
-    expect(tree.root.findAllByType(EngineMapboxProof)).toHaveLength(1);
+    expect(tree.root.findAllByType(EngineCopilotMap)).toHaveLength(1);
   } finally { sync.mockRestore(); }
 });
 test('failed resume retains controls and does not open live Mapbox guidance', async () => {
@@ -163,7 +163,7 @@ test('failed resume retains controls and does not open live Mapbox guidance', as
     mockHost.hasEngineTrip.mockResolvedValue(true);
     mockHost.resumeEngineTrip.mockRejectedValue(new Error('sensitive native error'));
     await press('Start / Resume Navigation');
-    expect(tree.root.findAllByType(EngineMapboxProof)).toHaveLength(0);
+    expect(tree.root.findAllByType(EngineCopilotMap)).toHaveLength(0);
     expect(JSON.stringify(tree.toJSON())).not.toContain('sensitive native error');
   } finally { sync.mockRestore(); }
 });

@@ -237,7 +237,6 @@ test('all active unsupported restrictions are reported; none are silently discar
     assessCopilotTruckProfile({ ...truck, avoidHighways: true }).blockers,
   ).toEqual(
     expect.arrayContaining([
-      'axleCount',
       'trailerCount',
       'trailerType',
       'currentWeightLbs',
@@ -263,7 +262,7 @@ test.each([
     expect(result.conversionEvidence.hazmatConstantName).toBeUndefined();
   },
 );
-test('disabling avoidances or trailers cannot bypass unsupported axle configuration', () => {
+test('disabling avoidances or trailers cannot bypass unverified trailer mapping', () => {
   const simple = {
     ...truck,
     avoidHighways: false,
@@ -281,7 +280,18 @@ test('disabling avoidances or trailers cannot bypass unsupported axle configurat
   ).toBe('NONE');
   expect(
     failure(() => requireRepresentableCopilotTruckProfile(simple)).fields,
-  ).toEqual(['axleCount', 'trailerCount']);
+  ).toEqual(['trailerCount']);
+});
+test('axle count stays metadata while missing axle weight still blocks guidance', () => {
+  const input = { ...truck, axleCount: 5, weightPerAxleLbs: null };
+  const before = JSON.stringify(input);
+  const result = assessCopilotTruckProfile(input);
+  expect(copilotTruckFieldMatrix.axleCount.routing).toBe(false);
+  expect(result.blockers).not.toContain('axleCount');
+  expect(result.blockers).toContain('weightPerAxleLbs');
+  expect(result.blockers).toContain('trailerCount');
+  expect(result.canApply).toBe(false);
+  expect(JSON.stringify(input)).toBe(before);
 });
 test('unknown safety fields and malformed profiles are rejected', () => {
   expect(() =>

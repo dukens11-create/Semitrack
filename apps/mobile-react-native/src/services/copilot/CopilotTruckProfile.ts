@@ -55,9 +55,9 @@ export const copilotTruckFieldMatrix: Record<keyof TruckProfile, FieldRule> = {
     'One native totalWeight; gross/loaded policy must be reviewed',
   ),
   weightPerAxleLbs: direct('dims.weightPerAxle: pounds; not a per-axle array'),
-  axleCount: unsupported(
-    'No field in the inspected RN bridge/native profile API',
-  ),
+  // CoPilot 10.19 release notes: axle count is not used by CoPilot routing.
+  // Keep fleet/toll metadata separate from the supported weight-per-axle input.
+  axleCount: metadata,
   tractorType: metadata,
   trailerType: unsupported(
     'No trailer type field in the inspected profile API',
@@ -106,9 +106,9 @@ export function assessCopilotTruckProfile(input: unknown) {
     throw new CopilotP0Error('TRUCK_PROFILE_INVALID', unknownFields);
   }
   const truck = parsed.data;
-  // Both fields are mandatory in SemiTraX; zero trailers does not establish a
-  // supported native representation for the vehicle's axle/trailer configuration.
-  const blockers: (keyof TruckProfile)[] = ['axleCount', 'trailerCount'];
+  // Trailer/length semantics still need a verified mapping. Axle count remains
+  // metadata and must not be confused with the required weight-per-axle input.
+  const blockers: (keyof TruckProfile)[] = ['trailerCount'];
   if (truck.trailerType) {
     blockers.push('trailerType');
   }

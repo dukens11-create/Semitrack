@@ -98,6 +98,15 @@ test('missing verified truck blocks native start with an actionable error', asyn
   expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
   expect(JSON.stringify(tree.toJSON())).toContain('save and verify');
 });
+test('engine readiness keeps refresh and setup visible without implying guidance readiness', async () => {
+  expect(mockReady).toBe(true);
+  expect(JSON.stringify(tree.toJSON())).toContain('Truck-profile verification is still required');
+  expect(tree.root.findAllByType(DriverButton).some(button => button.props.title === 'Open navigation setup')).toBe(true);
+  await press('Check readiness');
+  expect(mockRefresh).toHaveBeenCalledTimes(1);
+  expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
+  expect(mockHost.resumeEngineTrip).not.toHaveBeenCalled();
+});
 test('failed engine stop never closes the live session', async () => {
   mockHost.endEngineTrip.mockRejectedValue(new Error('Stop unconfirmed'));
   await press('End Route');

@@ -42,9 +42,44 @@ public class HandoffTest {
 }`,
 };
 try{
+ const host=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotHostModule.java'),'utf8');
+ const provisioning=host.slice(host.indexOf('  private WritableMap publicConfiguration()'),host.indexOf('  @ReactMethod public void configureDevice('));
+ if(!provisioning.includes('return result;'))throw new Error('Provisioning method was not found');
+ files['com/semitrax/nativebridge/ProvisioningTest.java']=`package com.semitrax.nativebridge;
+public class ProvisioningTest {
+ boolean started; int inventoryReads;
+ static final String STORE="test-reference";
+ static class WritableMap extends java.util.HashMap<String,Object> {
+  void putString(String k,String v){put(k,v);} void putInt(String k,int v){put(k,v);}
+  void putMap(String k,WritableMap v){put(k,v);}
+ }
+ static class Arguments {static WritableMap createMap(){return new WritableMap();}}
+ static class Configuration {String getString(String k){return "TEST_REGION";}}
+ Configuration configuration=new Configuration();
+ static class MapInfo {int getYear(){return 2026;} int getQuarter(){return 1;} String getVersion(){return "installed";}}
+ MapInfo selectedInstalled(){inventoryReads++;return new MapInfo();}
+ static class CopilotMgr {
+  static Version getVersionInfo(){throw new IllegalStateException("Engine not started");}
+ }
+ static class Version {String getAppVersion(){return "UNAVAILABLE";}}
+ ${provisioning}
+ static void check(boolean ok){if(!ok)throw new AssertionError("Provisioning must not depend on runtime SDK availability");}
+ public static void main(String[] args)throws Exception {
+  ProvisioningTest h=new ProvisioningTest();
+  WritableMap before=h.publicConfiguration();
+  check("11.3.0.2016".equals(before.get("sdkVersion")));
+  check(h.inventoryReads==0);
+  check("NOT_INSTALLED".equals(((WritableMap)before.get("mapVersion")).get("version")));
+  h.started=true; WritableMap after=h.publicConfiguration();
+  check("11.3.0.2016".equals(after.get("sdkVersion")));
+  check(h.inventoryReads==1);
+  check("installed".equals(((WritableMap)after.get("mapVersion")).get("version")));
+  System.out.println("PASS: cold provisioning before SDK startup and installed-map readback after startup");
+ }
+}`;
  files['com/semitrax/nativebridge/CoPilotTripHandoff.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotTripHandoff.java'),'utf8');
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.HandoffTest'],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}
+ else{for(const name of ['HandoffTest','ProvisioningTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

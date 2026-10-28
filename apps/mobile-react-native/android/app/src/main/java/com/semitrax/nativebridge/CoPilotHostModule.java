@@ -478,8 +478,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   private WritableMap publicConfiguration() throws Exception {
     WritableMap result = Arguments.createMap();
-    try { result.putString("sdkVersion", CopilotMgr.getVersionInfo().getAppVersion()); }
-    catch (Exception ignored) { result.putString("sdkVersion", "UNAVAILABLE"); }
+    // Provisioning is validated before startEngine. Runtime version lookup here
+    // would make startup depend on an engine that has not been started yet.
+    // This is the checksum-pinned build dependency, not runtime evidence.
+    // diagnosticReport continues to read the actual version only after startup.
+    result.putString("sdkVersion", "11.3.0.2016");
     result.putString("platform", "android");
     result.putString("environment", "development");
     result.putString("licensingMode", "ams-company");

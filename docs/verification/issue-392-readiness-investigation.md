@@ -32,4 +32,4 @@ No account identifiers, support-case details or private SDK download URLs are ne
 
 ## Scope of this patch
 
-This patch fixes control visibility, truthful driver messages and diagnostic ordering. It does not enable guidance or certify a truck-profile mapping. Tests cover ready and blocked control states, safe error export, diagnostic ordering, and preservation of the existing no-partial-profile-write behavior. Device validation remains required after building an APK.
+This patch fixes control visibility, truthful driver messages and diagnostic ordering. It also classifies axle count as retained metadata instead of reporting it as a missing routing restriction. Missing weight per axle still blocks synchronization; trailer and other unresolved restrictions still block, and the native guard is unchanged. It does not enable guidance or certify a truck-profile mapping. Tests cover ready and blocked control states, safe error export, diagnostic ordering, metadata preservation, and preservation of the existing no-partial-profile-write behavior. Device validation remains required after building an APK.

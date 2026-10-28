@@ -250,6 +250,16 @@ const snapshot = z.object({
     .optional(),
 });
 const readiness = z.object({
+  readyToAddStops: z.boolean().optional(),
+  error: fixedCode([
+    'COPILOT_NOT_INITIALIZED',
+    'COPILOT_LICENSE_PROVISIONING_REQUIRED',
+    'COPILOT_MAP_DATA_REQUIRED',
+    'COPILOT_NOT_READY',
+    'COPILOT_TRUCK_PROFILE_INVALID',
+    'COPILOT_ROUTE_FAILED',
+    'COPILOT_GUIDANCE_UNAVAILABLE',
+  ]).nullable().optional(),
   phase: fixedCode([
     'NOT_STARTED',
     'STARTING',
@@ -276,9 +286,10 @@ export function coPilotDiagnosticReport(
     'SEMITRAX_COPILOT_DIAG_V1',
     `Captured at (UTC): ${new Date().toISOString()}`,
     'Native SDK callback timeline and setup checks; not an internal server/network log.',
+    'Engine readiness does not certify truck-profile synchronization or active guidance.',
     'Elapsed times are milliseconds since this native host was created, oldest first.',
     'START_REUSED means a setup check reused the running engine; it did not send a fresh login.',
     'No credentials, account IDs, serial numbers, location or raw exception messages included.',
-    JSON.stringify({ native: data, readiness: checks }, null, 2),
+    JSON.stringify({ readiness: checks, native: data }, null, 2),
   ].join('\n\n');
 }

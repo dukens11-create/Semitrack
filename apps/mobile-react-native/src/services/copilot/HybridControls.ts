@@ -34,7 +34,7 @@ export function hybridError(error: unknown): string {
     error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
     case 'TRUCK_RESTRICTIONS_UNREPRESENTABLE':
-      return 'Truck synchronization is blocked: this SDK cannot verify axle count and trailer configuration. Trimble must confirm a supported SDK/profile mapping. Saved truck details have not been removed.';
+      return 'Truck synchronization is blocked in this build: the required truck-profile mapping has not been verified against the Trimble SDK. Saved truck details have not been removed.';
     case 'ENGINE_STOP_UNCONFIRMED':
       return 'The engine has not confirmed stopping. Keep this session open and retry End Route.';
     case 'ENGINE_TRIP_TIMEOUT':

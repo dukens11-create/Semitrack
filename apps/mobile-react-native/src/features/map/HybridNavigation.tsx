@@ -191,55 +191,52 @@ export function HybridNavigation({
               fix={location.fix}
             />
             <DriverCopy>
-              Truck profile synchronization requires verified support for every
-              restriction, including axles and trailers.
+              Truck guidance is blocked in this build until the truck-profile
+              integration is verified. Successful engine setup alone does not
+              enable guidance.
             </DriverCopy>
             <DriverCopy>
               {error ||
                 (state.readyToAddStops
-                  ? 'Review the engine truck profile before starting.'
+                  ? 'Engine setup is ready. Truck-profile verification is still required.'
                   : 'Navigation is waiting for the checks below.')}
             </DriverCopy>
-            {!state.readyToAddStops && (
-              <>
-                <DriverCopy>
-                  Engine: {state.initialized ? 'started' : 'not ready'} ·
-                  Navigation license:{' '}
-                  {state.fullNavigationLicensed ? 'verified' : 'not verified'} ·
-                  Truck license:{' '}
-                  {state.heavyTruckLicensed ? 'verified' : 'not verified'}
-                </DriverCopy>
-                <DriverCopy>
-                  Offline map:{' '}
-                  {state.mapsReady
-                    ? 'verified installed'
-                    : 'installation not verified'}
-                </DriverCopy>
-                {!!setup.downloadStatus && (
-                  <DriverCopy>{setup.downloadStatus}</DriverCopy>
-                )}
-                {!!state.operation && (
-                  <DriverCopy>Setup stage: {state.operation}</DriverCopy>
-                )}
-                {!!state.error && (
-                  <DriverCopy>Status: {state.error}</DriverCopy>
-                )}
-                <DriverButton
-                  title="Check readiness"
-                  disabled={pending}
-                  onPress={() => {
-                    void run(setup.refresh, 'READINESS');
-                  }}
-                />
-                <DriverButton
-                  title={
-                    showSetup ? 'Hide setup details' : 'Open navigation setup'
-                  }
-                  onPress={() => setShowSetup(value => !value)}
-                />
-                {showSetup && <CoPilotDeviceSetup />}
-              </>
+            <DriverCopy>
+              Engine: {state.initialized ? 'started' : 'not ready'} ·
+              Navigation license:{' '}
+              {state.fullNavigationLicensed ? 'verified' : 'not verified'} ·
+              Truck license:{' '}
+              {state.heavyTruckLicensed ? 'verified' : 'not verified'}
+            </DriverCopy>
+            <DriverCopy>
+              Offline map:{' '}
+              {state.mapsReady
+                ? 'verified installed'
+                : 'installation not verified'}
+            </DriverCopy>
+            {!!setup.downloadStatus && (
+              <DriverCopy>{setup.downloadStatus}</DriverCopy>
             )}
+            {!!state.operation && (
+              <DriverCopy>Setup stage: {state.operation}</DriverCopy>
+            )}
+            {!!state.error && (
+              <DriverCopy>Status: {state.error}</DriverCopy>
+            )}
+            <DriverButton
+              title="Check readiness"
+              disabled={pending}
+              onPress={() => {
+                void run(setup.refresh, 'READINESS');
+              }}
+            />
+            <DriverButton
+              title={
+                showSetup ? 'Hide setup details' : 'Open navigation setup'
+              }
+              onPress={() => setShowSetup(value => !value)}
+            />
+            {showSetup && <CoPilotDeviceSetup />}
             <DriverButton
               title="Start / Resume Navigation"
               disabled={pending}

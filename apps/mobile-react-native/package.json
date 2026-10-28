@@ -17,7 +17,8 @@
     "check:page-size": "node scripts/check-android-page-size.cjs",
     "test:tooling": "node --test scripts/check-android-page-size.test.cjs",
     "copilot:check": "node scripts/check-copilot-setup.cjs",
-    "test:hybrid-native": "node scripts/test-hybrid-handoff.cjs"
+    "test:hybrid-native": "node scripts/test-hybrid-handoff.cjs",
+    "prepare:copilot": "python3 scripts/prepare-copilot-v11.py"
   },
   "dependencies": {
     "@react-navigation/native": "7.3.18",
@@ -29,7 +30,7 @@
     "react-native-safe-area-context": "5.9.1",
     "react-native-screens": "4.27.0",
     "react-native-url-polyfill": "4.0.0",
-    "trimble-maps-cpik-react-native-library": "10.28.2-497",
+    "trimble-maps-cpik-react-native-library": "file:vendor/copilot",
     "zod": "3.25.76"
   },
   "devDependencies": {

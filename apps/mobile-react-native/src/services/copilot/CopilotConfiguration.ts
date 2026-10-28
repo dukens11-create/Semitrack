@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const copilotConfigurationSchema = z
   .object({
-    sdkVersion: z.literal('10.28.2.497'),
+    sdkVersion: z.literal('11.3.0.2016'),
     platform: z.enum(['android', 'ios']),
     environment: z.enum(['development', 'production']),
     licensingMode: z.enum([

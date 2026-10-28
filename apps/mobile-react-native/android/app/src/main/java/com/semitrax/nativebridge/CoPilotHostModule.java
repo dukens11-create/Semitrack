@@ -478,7 +478,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   }
   private WritableMap publicConfiguration() throws Exception {
     WritableMap result = Arguments.createMap();
-    result.putString("sdkVersion", "10.28.2.497");
+    try { result.putString("sdkVersion", CopilotMgr.getVersionInfo().getAppVersion()); }
+    catch (Exception ignored) { result.putString("sdkVersion", "UNAVAILABLE"); }
     result.putString("platform", "android");
     result.putString("environment", "development");
     result.putString("licensingMode", "ams-company");

@@ -8,7 +8,7 @@ import { truck } from './fixtures';
 
 // Unit fixtures only. These never represent real SDK callbacks or license grants.
 const config = parseCopilotConfiguration({
-  sdkVersion: '10.28.2.497',
+  sdkVersion: '11.3.0.2016',
   platform: 'android',
   environment: 'development',
   licensingMode: 'ams-company',

@@ -75,7 +75,7 @@ tasks.configureEach { task ->
  }
 }
 dependencies {
- compileOnly files("../../node_modules/trimble-maps-cpik-react-native-library/android/libs/cpik.jar", "../../node_modules/trimble-maps-cpik-react-native-library/android/libs/copilot.jar")
+ compileOnly files("../../node_modules/trimble-maps-cpik-react-native-library/android/libs/classes.jar")
  implementation("com.facebook.react:react-android")
  implementation("com.facebook.react:hermes-android")
 }

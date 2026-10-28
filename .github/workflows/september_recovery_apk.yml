@@ -27,6 +27,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Prepare verified licensed CoPilot v11 package
+        env:
+          SEMITRAX_COPILOT_SDK_URL: ${{ secrets.SEMITRAX_COPILOT_SDK_URL }}
+        run: python3 scripts/prepare-copilot-v11.py
       - run: npm ci
       - run: npm run check
       - name: Build separate historical app

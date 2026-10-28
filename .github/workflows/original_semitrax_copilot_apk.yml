@@ -1,7 +1,7 @@
 name: SemiTraX Hybrid issue 392 APK
 on:
   push:
-    branches: [codex/issue-392-hybrid, codex/sept27-mapbox-engine, fix/392-copilot-live-map]
+    branches: [codex/issue-392-hybrid, codex/sept27-mapbox-engine, fix/392-copilot-live-map, fix/392-copilot-v11]
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,6 +33,11 @@ jobs:
           SEMITRAX_TEST_CERT_SHA256: ${{ vars.SEMITRAX_TEST_CERT_SHA256 }}
         run: bash scripts/restore-test-signing.sh
       - run: node --test scripts/verify-test-certificate.test.cjs
+      - run: python3 scripts/test-prepare-copilot-v11.py
+      - name: Prepare verified licensed CoPilot v11 package
+        env:
+          SEMITRAX_COPILOT_SDK_URL: ${{ secrets.SEMITRAX_COPILOT_SDK_URL }}
+        run: python3 scripts/prepare-copilot-v11.py
       - run: npm ci
       - run: npm run check
       - name: Build repaired Hybrid APK

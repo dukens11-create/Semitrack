@@ -98,3 +98,6 @@ android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
 ios/Flutter/ephemeral/
 ios/Runner/GeneratedPluginRegistrant.h
 ios/Runner/GeneratedPluginRegistrant.m
+
+# Licensed SDK is prepared locally/CI, never published.
+apps/mobile-react-native/vendor/copilot/

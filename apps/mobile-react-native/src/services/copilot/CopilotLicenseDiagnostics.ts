@@ -51,8 +51,16 @@ export function retryAmsFailure(code: unknown): boolean {
     'COPILOT_AMS_HOOK_QUERY_FAILED',
   ].includes(code);
 }
-export function amsSetupExplanation(operation: string | null): string | null {
-  const code = operation?.split(': ')[1];
+export function amsSetupExplanation(
+  operation: string | null,
+  loginResponse?: string,
+): string | null {
+  // A generic entitlement failure can otherwise hide the actual SDK rejection.
+  // Only fixed, known responses are eligible; never render raw native messages.
+  const code = operation?.split(': ')[1] ??
+    (amsLoginFailures.some(value => value === loginResponse)
+      ? `COPILOT_AMS_LOGIN_${loginResponse}`
+      : undefined);
   switch (code) {
     case 'COPILOT_AMS_DEVICE_CONFIGURATION_PENDING':
       return 'CoPilot received the Device ID setting. Waiting briefly for the SDK to return the assigned value; verification is not complete.';
@@ -68,6 +76,7 @@ export function amsSetupExplanation(operation: string | null): string | null {
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_ASSET_DOESNOT_EXIST':
       return 'Trimble rejected the assigned login. Verify this phone’s Company ID and Device ID in Account Manager.';
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_DEVICE_LIMIT_REACHED':
+      return 'Trimble has reached the device limit for this assignment. An administrator must review its active devices and restore access for this phone. Map downloads cannot resolve this login failure. Keep the existing app data and maps.';
     case 'COPILOT_AMS_LOGIN_FAILED_AMS_IN_USE':
       return 'Trimble reports the assignment is already in use or its device limit is reached. An administrator must review the existing assignment.';
     case 'COPILOT_AMS_LOGIN_FAILED_LOGIN_NO_ACTIVE_LICENSES':

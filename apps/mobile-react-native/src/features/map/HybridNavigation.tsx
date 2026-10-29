@@ -1,3 +1,4 @@
+import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigation';
 import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
 import React, { useRef, useState } from 'react';
@@ -95,31 +96,37 @@ export function HybridNavigation({
         'Complete the license, offline-map and GPS checks below before starting.',
       );
     await synchronizeHybridTruck(services, host);
-    if (await host.hasEngineTrip?.()) {
-      await resumeHybridTrip(host);
-      setLive(true);
-      return;
-    }
-    const profile = engineTripProfileSchema.parse(
-      await host.reviewEngineTripProfile?.(),
-    );
+    const resuming = await host.hasEngineTrip?.();
+    const profile = resuming
+      ? null
+      : engineTripProfileSchema.parse(await host.reviewEngineTripProfile?.());
     Alert.alert(
-      'Confirm navigation truck',
-      `${engineTripProfileSummary(
-        profile,
-      )}\n\nThese are the engine’s active dimensions. Its hazmat and routing preferences also apply. Confirm they match your truck before starting.`,
+      'Confirm standard truck navigation',
+      `${
+        profile ? engineTripProfileSummary(profile) + '\n\n' : ''
+      }${standardTruckNotice}\n\nRouting uses your saved maximum weight. Confirm that this mode and the matched fleet profile are appropriate for this trip.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Start Navigation',
+          text: resuming ? 'Confirm and Resume' : 'Confirm and Start',
           onPress: () => {
             void run(async () => {
+              // Recheck saved settings and native readback after the driver confirmation.
+              await synchronizeHybridTruck(services, host);
+              if (!host.acceptStandardTruckMode)
+                throw new Error('Navigation confirmation bridge unavailable.');
+              await host.acceptStandardTruckMode();
+              if (resuming) {
+                await resumeHybridTrip(host);
+                setLive(true);
+                return;
+              }
               const fix = services.location.getFreshFix();
               if (!fix)
                 throw new HybridControlError(
                   'Wait for a fresh precise GPS location.',
                 );
-              if (!host.openEngineTrip)
+              if (!host.openEngineTrip || !profile)
                 throw new Error('Navigation bridge unavailable.');
               attempted.current = true;
               logHybridControl('START_RESUME', 'NATIVE_CALL');
@@ -165,7 +172,7 @@ export function HybridNavigation({
             />
             <DriverCopy>
               {error ||
-                'Save and verify your truck below. Engine synchronization remains blocked until Trimble confirms support for all required restrictions.'}
+                'Save and verify your truck below, then check that it matches the assigned fleet profile. Unsupported configurations remain blocked.'}
             </DriverCopy>
             <DriverButton
               title="Synchronize truck with engine"
@@ -192,19 +199,20 @@ export function HybridNavigation({
               fix={location.fix}
             />
             <DriverCopy>
-              Truck guidance is blocked in this build until the truck-profile
-              integration is verified. Successful engine setup alone does not
-              enable guidance.
+              SemiTraX controls the navigation screen. Trimble calculates the
+              truck route and supplies live directions. Start requires a
+              matching assigned fleet profile and confirmation of the standard
+              truck mode.
             </DriverCopy>
             <DriverCopy>
               {error ||
                 (state.readyToAddStops
-                  ? 'Engine setup is ready. Truck-profile verification is still required.'
+                  ? 'Engine setup is ready. Start will check your saved truck against the active fleet profile.'
                   : 'Navigation is waiting for the checks below.')}
             </DriverCopy>
             <DriverCopy>
-              Engine: {state.initialized ? 'started' : 'not ready'} ·
-              Navigation license:{' '}
+              Engine: {state.initialized ? 'started' : 'not ready'} · Navigation
+              license:{' '}
               {state.fullNavigationLicensed ? 'verified' : 'not verified'} ·
               Truck license:{' '}
               {state.heavyTruckLicensed ? 'verified' : 'not verified'}
@@ -221,9 +229,7 @@ export function HybridNavigation({
             {!!state.operation && (
               <DriverCopy>Setup stage: {state.operation}</DriverCopy>
             )}
-            {!!state.error && (
-              <DriverCopy>Status: {state.error}</DriverCopy>
-            )}
+            {!!state.error && <DriverCopy>Status: {state.error}</DriverCopy>}
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
             <DriverButton
               title="Check readiness"
@@ -233,9 +239,7 @@ export function HybridNavigation({
               }}
             />
             <DriverButton
-              title={
-                showSetup ? 'Hide setup details' : 'Open navigation setup'
-              }
+              title={showSetup ? 'Hide setup details' : 'Open navigation setup'}
               onPress={() => setShowSetup(value => !value)}
             />
             {showSetup && <CoPilotDeviceSetup />}

@@ -45,7 +45,7 @@ export function FleetTruckProfiles({ ready }: { ready: boolean }) {
       const active = await selectFleetTruckProfile(coPilotHost(), profile);
       setProfiles([{ ...active, ticket: '' }]);
       setMessage(
-        `${active.name} is active in CoPilot. Trailer-count and overall-length verification remain unresolved; guidance has not started.`,
+        `${active.name} is active in CoPilot. Use Start / Resume to check your saved truck and review the standard navigation mode. Guidance has not started.`,
       );
     } catch {
       setProfiles([]);

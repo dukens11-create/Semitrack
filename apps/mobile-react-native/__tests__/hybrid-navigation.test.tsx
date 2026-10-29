@@ -1,5 +1,5 @@
 import * as controls from '../src/services/copilot/HybridControls';
-import {EngineCopilotMap} from '../src/features/map/EngineCopilotMap';
+import { EngineCopilotMap } from '../src/features/map/EngineCopilotMap';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { HybridNavigation } from '../src/features/map/HybridNavigation';
@@ -7,6 +7,7 @@ import { DriverButton } from '../src/components/DriverUI';
 import type { Services } from '../src/app/services';
 const mockHost = {
   resumeEngineTrip: jest.fn(),
+  acceptStandardTruckMode: jest.fn(),
   hasEngineTrip: jest.fn(),
   reviewEngineTripProfile: jest.fn(),
   openEngineTrip: jest.fn(),
@@ -66,6 +67,7 @@ async function press(title: string) {
 beforeEach(async () => {
   jest.clearAllMocks();
   mockReady = true;
+  mockHost.acceptStandardTruckMode.mockResolvedValue(undefined);
   mockHost.hasEngineTrip.mockResolvedValue(false);
   mockHost.reviewEngineTripProfile.mockResolvedValue({
     ticket: 'review',
@@ -100,8 +102,14 @@ test('missing verified truck blocks native start with an actionable error', asyn
 });
 test('engine readiness keeps refresh and setup visible without implying guidance readiness', async () => {
   expect(mockReady).toBe(true);
-  expect(JSON.stringify(tree.toJSON())).toContain('Truck-profile verification is still required');
-  expect(tree.root.findAllByType(DriverButton).some(button => button.props.title === 'Open navigation setup')).toBe(true);
+  expect(JSON.stringify(tree.toJSON())).toContain(
+    'Start will check your saved truck',
+  );
+  expect(
+    tree.root
+      .findAllByType(DriverButton)
+      .some(button => button.props.title === 'Open navigation setup'),
+  ).toBe(true);
   await press('Check readiness');
   expect(mockRefresh).toHaveBeenCalledTimes(1);
   expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
@@ -155,39 +163,66 @@ test('truck editor does not require readyToAddStops', async () => {
   expect(JSON.stringify(tree.toJSON())).toContain('Back to SemiTraX controls');
 });
 
-
 test('existing trip invokes native resume before showing Mapbox', async () => {
-  const sync = jest.spyOn(controls, 'synchronizeHybridTruck').mockResolvedValue();
+  const sync = jest
+    .spyOn(controls, 'synchronizeHybridTruck')
+    .mockResolvedValue();
   try {
     mockHost.hasEngineTrip.mockResolvedValue(true);
     mockHost.resumeEngineTrip.mockResolvedValue(undefined);
     await press('Start / Resume Navigation');
+    expect(mockHost.resumeEngineTrip).not.toHaveBeenCalled();
+    await act(async () => {
+      mockAlert.mock.calls[0][2][1].onPress();
+    });
+    expect(mockHost.acceptStandardTruckMode).toHaveBeenCalledTimes(1);
     expect(mockHost.resumeEngineTrip).toHaveBeenCalledTimes(1);
     expect(tree.root.findAllByType(EngineCopilotMap)).toHaveLength(1);
-  } finally { sync.mockRestore(); }
+  } finally {
+    sync.mockRestore();
+  }
 });
 test('failed resume retains controls and does not open live Mapbox guidance', async () => {
-  const sync = jest.spyOn(controls, 'synchronizeHybridTruck').mockResolvedValue();
+  const sync = jest
+    .spyOn(controls, 'synchronizeHybridTruck')
+    .mockResolvedValue();
   try {
     mockHost.hasEngineTrip.mockResolvedValue(true);
-    mockHost.resumeEngineTrip.mockRejectedValue(new Error('sensitive native error'));
+    mockHost.resumeEngineTrip.mockRejectedValue(
+      new Error('sensitive native error'),
+    );
     await press('Start / Resume Navigation');
+    await act(async () => {
+      mockAlert.mock.calls[0][2][1].onPress();
+    });
     expect(tree.root.findAllByType(EngineCopilotMap)).toHaveLength(0);
-    expect(JSON.stringify(tree.toJSON())).not.toContain('sensitive native error');
-  } finally { sync.mockRestore(); }
+    expect(JSON.stringify(tree.toJSON())).not.toContain(
+      'sensitive native error',
+    );
+  } finally {
+    sync.mockRestore();
+  }
 });
 test('GPS is rechecked after confirmation and before native submission', async () => {
-  const sync = jest.spyOn(controls, 'synchronizeHybridTruck').mockResolvedValue();
+  const sync = jest
+    .spyOn(controls, 'synchronizeHybridTruck')
+    .mockResolvedValue();
   try {
     await press('Start / Resume Navigation');
-    await act(async () => { mockAlert.mock.calls[0][2][1].onPress(); });
+    await act(async () => {
+      mockAlert.mock.calls[0][2][1].onPress();
+    });
     expect(getFreshFix).toHaveBeenCalled();
     expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
-  } finally { sync.mockRestore(); }
+  } finally {
+    sync.mockRestore();
+  }
 });
 test('active engine trip blocks editing the truck profile', async () => {
   mockHost.hasEngineTrip.mockResolvedValue(true);
   await press('Truck settings');
   expect(JSON.stringify(tree.toJSON())).toContain('End Route before changing');
-  expect(JSON.stringify(tree.toJSON())).not.toContain('Back to SemiTraX controls');
+  expect(JSON.stringify(tree.toJSON())).not.toContain(
+    'Back to SemiTraX controls',
+  );
 });

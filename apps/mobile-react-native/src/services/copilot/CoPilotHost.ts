@@ -63,6 +63,8 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  readFleetTruckProfiles?(): Promise<unknown>;
+  selectFleetTruckProfile?(ticket: string): Promise<unknown>;
   recordHybridControl?(action: string, stage: string): Promise<void>;
   applyTruckProfile?(profile: unknown): Promise<void>;
   endEngineTrip?(): Promise<void>;

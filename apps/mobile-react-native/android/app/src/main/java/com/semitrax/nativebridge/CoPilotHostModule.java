@@ -115,8 +115,54 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       control(action, stage); promise.resolve(null);
     });
   }
+  private final CoPilotFleetProfiles fleetProfiles = new CoPilotFleetProfiles();
+  private WritableMap fleetProfileValue(com.alk.cpik.route.VehicleRoutingProfile profile, String ticket) {
+    com.alk.cpik.route.VehicleDimensions dims = profile.getVehicleDimensions();
+    WritableMap result = Arguments.createMap();
+    result.putString("ticket", ticket);
+    result.putString("name", profile.getName());
+    result.putString("source", "FLEET_PORTAL");
+    result.putInt("heightInches", dims.getHeight().getInches());
+    result.putInt("widthInches", dims.getWidth().getInches());
+    result.putInt("lengthInches", dims.getLength().getInches());
+    result.putInt("weightLbs", dims.getTotalWeight().getPounds());
+    result.putInt("weightPerAxleLbs", dims.getWeightPerAxle().getPounds());
+    com.alk.cpik.route.VehicleRoutingProfile active = RouteMgr.getActiveVehicleRoutingProfile();
+    result.putBoolean("active", CoPilotFleetProfiles.isFleetTruck(active)
+        && profile.getName().equals(active.getName()) && profile.equals_RoutingFieldsOnly(active));
+    result.putBoolean("truckRestrictionsVerified", false);
+    return result;
+  }
+  @ReactMethod public void readFleetTruckProfiles(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        com.facebook.react.bridge.WritableArray result = Arguments.createArray();
+        for (CoPilotFleetProfiles.Review review : fleetProfiles.read())
+          result.pushMap(fleetProfileValue(review.profile, review.ticket));
+        promise.resolve(result);
+      } catch (Exception e) { promise.reject("FLEET_READ_UNAVAILABLE", "Could not read downloaded fleet profiles."); }
+    });
+  }
+  @ReactMethod public void selectFleetTruckProfile(String ticket, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap(); requireTripForeground();
+        if (tripPreparing || stoppingTrip || tripHandoff.pendingStops())
+          throw new IllegalStateException("FLEET_TRIP_ACTIVE");
+        com.alk.cpik.route.VehicleRoutingProfile profile = fleetProfiles.select(ticket);
+        tripHandoff.invalidateReview();
+        promise.resolve(fleetProfileValue(profile, ""));
+      } catch (Exception e) {
+        String code = e.getMessage();
+        if (!java.util.Arrays.asList("FLEET_TRIP_ACTIVE", "FLEET_REVIEW_EXPIRED", "FLEET_PROFILE_CHANGED", "FLEET_SELECTION_UNCONFIRMED").contains(code))
+          code = "FLEET_SELECTION_UNCONFIRMED";
+        promise.reject(code, "Refresh fleet profiles before retrying. Navigation has not started.");
+      }
+    });
+  }
   private void requireSyncedTruck() {
-    // CPIK 10.28 has no verified axle/trailer-count mapping in this integration.
+    // CPIK 11.3 has no verified separate overall-length/trailer-count readback here.
     // Never certify a partial truck profile or bypass the heavy-duty safety gate.
     control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
     throw new IllegalStateException("TRUCK_RESTRICTIONS_UNREPRESENTABLE");

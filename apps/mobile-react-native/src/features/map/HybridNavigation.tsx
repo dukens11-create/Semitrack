@@ -1,3 +1,4 @@
+import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
 import React, { useRef, useState } from 'react';
 import { Modal, ScrollView, StyleSheet, View } from 'react-native';
@@ -223,6 +224,7 @@ export function HybridNavigation({
             {!!state.error && (
               <DriverCopy>Status: {state.error}</DriverCopy>
             )}
+            <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
             <DriverButton
               title="Check readiness"
               disabled={pending}

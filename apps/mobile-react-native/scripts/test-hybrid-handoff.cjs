@@ -13,9 +13,9 @@ const files={
  'com/alk/cpik/StopList.java':'package com.alk.cpik; public class StopList extends java.util.ArrayList<Stop> {}',
  'com/alk/cpik/StopBuilder.java':'package com.alk.cpik; public class StopBuilder {public static boolean restricted; String id; public static StopBuilder fromLatLon(Coordinate x){return new StopBuilder();} public StopBuilder setName(String x){return this;} public StopBuilder setID(String x){id=x;return this;} public StopList geocode(GeocodeSearchType t){StopList s=new StopList();s.add(new Stop(id));return s;}}',
  'com/alk/cpik/route/RouteEnums.java':'package com.alk.cpik.route; public class RouteEnums {public enum VehicleType {TRUCK_HEAVY_DUTY,CAR} public enum AddStopPurpose {NEW_TRIP} public enum RoutePreviewMode {PREVIEW_TRIP_MAP_NO_WIDGET}}',
- 'com/alk/cpik/route/VehicleRoutingProfile.java':'package com.alk.cpik.route; public class VehicleRoutingProfile {public RouteEnums.VehicleType type=RouteEnums.VehicleType.TRUCK_HEAVY_DUTY; public String name="truck"; public String getName(){return name;} public RouteEnums.VehicleType getVehicleType(){return type;} public boolean equals_RoutingFieldsOnly(VehicleRoutingProfile p){return name.equals(p.name)&&type==p.type;}}',
+ 'com/alk/cpik/route/VehicleRoutingProfile.java':'package com.alk.cpik.route; public class VehicleRoutingProfile {public RouteEnums.VehicleType type=RouteEnums.VehicleType.TRUCK_HEAVY_DUTY; public String name="truck"; public VehicleRoutingProfileSource source=VehicleRoutingProfileSource.FLEET_PORTAL; public int restriction=1; public VehicleRoutingProfileSource getVehicleRoutingProfileSource(){return source;} public String toString(){return name+type+source+restriction;} public String getName(){return name;} public RouteEnums.VehicleType getVehicleType(){return type;} public boolean equals_RoutingFieldsOnly(VehicleRoutingProfile p){return name.equals(p.name)&&type==p.type&&restriction==p.restriction;}}',
  'com/alk/cpik/route/RouteListener.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteListener {public static RouteListener current; public static void registerListener(RouteListener l){current=l;} public static void unregisterListener(RouteListener l){current=null;} public void onStopsAdded(StopList s){} public void onStopsDeleted(StopList s){} public void onStartRouteCalculation(){} public void onCompleteRouteCalculation(){} public void onFailedRouteCalculation(int l,Stop s){}}',
- 'com/alk/cpik/route/RouteMgr.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteMgr {public static VehicleRoutingProfile profile=new VehicleRoutingProfile(); public static StopList stops=new StopList(); public static boolean ready=true; public static VehicleRoutingProfile getActiveVehicleRoutingProfile(){return profile;} public static boolean hasDestination(){return !stops.isEmpty();} public static boolean isCopilotReadyToAddStops(){return ready;} public static StopList getStopList(){return stops;} public static void addStops(RouteEnums.AddStopPurpose p,StopList s,RouteEnums.RoutePreviewMode m){stops=s;}}',
+ 'com/alk/cpik/route/RouteMgr.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteMgr {public static VehicleRoutingProfile profile=new VehicleRoutingProfile(); public static StopList stops=new StopList(); public static boolean ready=true; public static boolean selectionWorks=true; public static java.util.List<VehicleRoutingProfile> profiles=new java.util.ArrayList<>(); public static java.util.List<VehicleRoutingProfile> getVehicleRoutingProfiles(){return profiles;} public static VehicleRoutingProfile getVehicleRoutingProfile(String name){for(VehicleRoutingProfile p:profiles)if(p.name.equals(name))return p;return null;} public static void setActiveVehicleRoutingProfile(VehicleRoutingProfile p){if(selectionWorks)profile=p;} public static VehicleRoutingProfile getActiveVehicleRoutingProfile(){return profile;} public static boolean hasDestination(){return !stops.isEmpty();} public static boolean isCopilotReadyToAddStops(){return ready;} public static StopList getStopList(){return stops;} public static void addStops(RouteEnums.AddStopPurpose p,StopList s,RouteEnums.RoutePreviewMode m){stops=s;}}',
  'com/semitrax/nativebridge/HandoffTest.java':`package com.semitrax.nativebridge;
 import com.alk.cpik.*; import com.alk.cpik.route.*;
 public class HandoffTest {
@@ -41,6 +41,30 @@ public class HandoffTest {
  }
 }`,
 };
+files['com/alk/cpik/route/VehicleRoutingProfileSource.java']='package com.alk.cpik.route; public enum VehicleRoutingProfileSource {DEFAULT,MANUAL,FLEET_PORTAL,API}';
+files['com/semitrax/nativebridge/CoPilotFleetProfiles.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotFleetProfiles.java'),'utf8');
+files['com/semitrax/nativebridge/FleetProfilesTest.java']=`package com.semitrax.nativebridge;
+import com.alk.cpik.*; import com.alk.cpik.route.*;
+public class FleetProfilesTest {
+ static void check(boolean x){if(!x)throw new AssertionError();}
+ interface Action {void run()throws Exception;}
+ static void denied(Action a)throws Exception{try{a.run();throw new AssertionError("unsafe selection");}catch(IllegalStateException expected){}}
+ public static void main(String[] args)throws Exception{
+  CoPilotFleetProfiles f=new CoPilotFleetProfiles();
+  VehicleRoutingProfile fleet=new VehicleRoutingProfile();fleet.name="assigned";
+  RouteMgr.profiles.add(fleet);
+  for(VehicleRoutingProfileSource source:new VehicleRoutingProfileSource[]{VehicleRoutingProfileSource.DEFAULT,VehicleRoutingProfileSource.MANUAL,VehicleRoutingProfileSource.API}){VehicleRoutingProfile p=new VehicleRoutingProfile();p.source=source;RouteMgr.profiles.add(p);}
+  VehicleRoutingProfile car=new VehicleRoutingProfile();car.type=RouteEnums.VehicleType.CAR;RouteMgr.profiles.add(car);
+  check(f.read().size()==1);
+  String ticket=f.read().get(0).ticket;fleet.restriction=2;denied(()->f.select(ticket));
+  String next=f.read().get(0).ticket;check(f.select(next)==fleet);check(RouteMgr.profile==fleet);denied(()->f.select(next));
+  String stale=f.read().get(0).ticket;f.read();denied(()->f.select(stale));
+  String trip=f.read().get(0).ticket;RouteMgr.stops.add(new Stop("trip"));denied(()->f.select(trip));RouteMgr.stops.clear();
+  String changed=f.read().get(0).ticket;fleet.source=VehicleRoutingProfileSource.MANUAL;denied(()->f.select(changed));fleet.source=VehicleRoutingProfileSource.FLEET_PORTAL;
+  String mismatch=f.read().get(0).ticket;RouteMgr.profile=car;RouteMgr.selectionWorks=false;denied(()->f.select(mismatch));
+  System.out.println("PASS: fleet origin, native profile preservation, changed/stale tickets, trip guard and selection readback");
+ }
+}`;
 try{
  const host=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotHostModule.java'),'utf8');
  const provisioning=host.slice(host.indexOf('  private WritableMap publicConfiguration()'),host.indexOf('  @ReactMethod public void configureDevice('));
@@ -81,5 +105,5 @@ public class ProvisioningTest {
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{for(const name of ['HandoffTest','ProvisioningTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
+ else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

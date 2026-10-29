@@ -976,7 +976,19 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           new Thread(() -> {
             try {
               // Add to installed maps; keep every map component enabled.
-              MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
+              MapDownloadResponse response = MapDownloadResponse.SUCCESS;
+              // Handle each selected region separately so a paused member can resume
+              // without restarting or cancelling other installed/in-flight maps.
+              for (MapRegion target : requested) {
+                MapDownloadResponse item = CoPilotMapDownload.request(
+                    () -> MapDataMgr.downloadMap(Collections.singletonList(target), Collections.emptyList(), false),
+                    () -> MapDataMgr.resumeMapDownload(target), MapDownloadResponse.FAILURE_PAUSED);
+                regionDownloadStatus.put(target, item.name());
+                if (item != MapDownloadResponse.SUCCESS && item != MapDownloadResponse.FAILURE_DOWNLOADING
+                    && item != MapDownloadResponse.FAILURE_DOWNLOADED && item != MapDownloadResponse.FAILURE_INSTALLED) {
+                  response = item; break;
+                }
+              }
               mapDownloadResponse = response.name();
               mapDownloadStage = "SDK_RESPONSE";
               promise.resolve(response.name());
@@ -1038,7 +1050,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         new Thread(() -> {
           try {
-            MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), initialInstall);
+            final MapRegion target = region();
+            MapDownloadResponse response = CoPilotMapDownload.request(
+                () -> MapDataMgr.downloadMap(Collections.singletonList(target), Collections.emptyList(), initialInstall),
+                () -> MapDataMgr.resumeMapDownload(target), MapDownloadResponse.FAILURE_PAUSED);
             mapDownloadResponse = response.name();
             mapDownloadStage = "SDK_RESPONSE";
             promise.resolve(response.name());

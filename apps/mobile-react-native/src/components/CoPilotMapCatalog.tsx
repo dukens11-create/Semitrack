@@ -28,7 +28,7 @@ export function CoPilotMapCatalog() {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
-    setMessage(download ? 'Sending map download request…' : 'Checking licensed and installed maps…');
+    setMessage(download ? 'Starting or resuming selected map downloads…' : 'Checking licensed and installed maps…');
     try {
       if (download) {
         const host = coPilotHost();
@@ -37,7 +37,11 @@ export function CoPilotMapCatalog() {
         const resultMessage = result === 'INSTALLED'
           ? 'Selected packages are installed.'
           : result === 'SUCCESS'
-          ? 'Download request accepted. Keep SemiTraX open; refresh installed maps to verify completion.'
+          ? 'Selected downloads were accepted or are already in progress. A paused download was resumed if possible. Keep SemiTraX open and refresh installed maps to verify completion.'
+          : result === 'FAILURE_PAUSED'
+          ? 'The SDK still reports this download paused after a resume attempt. Check free storage and connection, then retry. Existing maps are preserved.'
+          : result === 'FAILURE_INSUFFICIENT_DISK_SPACE' || result === 'WAITING_ON_STORAGE_SPACE'
+          ? 'More free storage is required before this download can continue. Existing maps are preserved.'
           : result === 'FAILURE_MANAGER_BUSY'
           ? 'CoPilot could not accept this request because its map manager is busy. No new download is confirmed. Existing maps are preserved. Share diagnostics so we can identify the blocked operation.'
           : 'SemiTraX download response: ' + result + '. Refresh before retrying.';
@@ -69,7 +73,7 @@ export function CoPilotMapCatalog() {
     <Copy>Allow mobile data for these downloads (large downloads may use substantial data).</Copy>
     <Switch accessibilityLabel="Allow mobile data for additional maps" value={cellular} disabled={busy} onValueChange={setCellular} />
     <Copy>{selected.length} map packages selected.</Copy>
-    <Button title="Download selected licensed maps" disabled={busy || !selected.length} onPress={() => { void run(true); }} />
+    <Button title="Download / resume selected maps" disabled={busy || !selected.length} onPress={() => { void run(true); }} />
     {regions.map(region => <Button
       key={region.name}
       title={(region.installed ? 'Installed: ' : selected.includes(region.name) ? 'Selected: ' : 'Select: ') + region.name.replace(/_/g, ' ') + (region.downloadStatus && region.downloadStatus !== 'NOT_INITIATED' ? ' · ' + region.downloadStatus.replace(/_/g, ' ') : '')}

@@ -41,6 +41,23 @@ public class HandoffTest {
  }
 }`,
 };
+files['com/semitrax/nativebridge/CoPilotMapDownload.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotMapDownload.java'),'utf8');
+files['com/semitrax/nativebridge/MapDownloadTest.java']=`package com.semitrax.nativebridge;
+public class MapDownloadTest {
+ static int downloads, resumes;
+ static String call(String result, String resumed) {
+  return CoPilotMapDownload.request(()->{downloads++;return result;},()->{resumes++;return resumed;},"FAILURE_PAUSED");
+ }
+ static void check(boolean value){if(!value)throw new AssertionError();}
+ public static void main(String[] args) {
+  check("SUCCESS".equals(call("FAILURE_PAUSED","SUCCESS"))); check(downloads==1 && resumes==1);
+  check("FAILURE_PAUSED".equals(call("FAILURE_PAUSED","FAILURE_PAUSED"))); check(resumes==2);
+  check("FAILURE_INSUFFICIENT_DISK_SPACE".equals(call("FAILURE_PAUSED","FAILURE_INSUFFICIENT_DISK_SPACE"))); check(resumes==3);
+  for(String status:new String[]{"SUCCESS","FAILURE_DOWNLOADING","FAILURE_DOWNLOADED","FAILURE_INSTALLED","FAILURE_MANAGER_BUSY","FAILURE_UNLICENSED","FAILURE_INSUFFICIENT_DISK_SPACE"}) check(status.equals(call(status,"SUCCESS")));
+  check(resumes==3); check(downloads==10);
+  System.out.println("PASS: paused map resumes once; active, installed, storage and license results preserved");
+ }
+}`;
 files['com/alk/cpik/route/VehicleRoutingProfileSource.java']='package com.alk.cpik.route; public enum VehicleRoutingProfileSource {DEFAULT,MANUAL,FLEET_PORTAL,API}';
 files['com/semitrax/nativebridge/CoPilotFleetProfiles.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotFleetProfiles.java'),'utf8');
 files['com/semitrax/nativebridge/FleetProfilesTest.java']=`package com.semitrax.nativebridge;
@@ -138,5 +155,5 @@ public class ProvisioningTest {
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
+ else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

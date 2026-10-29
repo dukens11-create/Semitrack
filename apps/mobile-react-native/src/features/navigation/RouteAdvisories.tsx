@@ -114,7 +114,7 @@ export function RouteAdvisories({
       {(expanded || projection.status === 'off-route') && (
         <DriverCopy>
           {projection.status === 'off-route'
-            ? 'GPS repeatedly away from planned route. Follow road signs; commercial rerouting requires licensed guidance.'
+            ? 'GPS repeatedly away from planned route. Guidance has not started; automatic rerouting is unavailable.'
             : notice}
         </DriverCopy>
       )}
@@ -177,8 +177,8 @@ export function RouteAdvisories({
       {!expanded && projection.status === 'off-route' && (
         <View style={[styles.notice, { backgroundColor: p.warningSurface }]}>
           <Text style={[styles.noticeText, { color: p.warningText }]}>
-            GPS is away from the planned route. Follow road signs; live
-            commercial rerouting requires licensed guidance.
+            GPS is away from the planned route. Guidance has not started;
+            automatic rerouting is unavailable.
           </Text>
         </View>
       )}

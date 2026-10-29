@@ -1,6 +1,11 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { DeviceEventEmitter } from 'react-native';
+import {
+  DeviceEventEmitter,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+} from 'react-native';
 import { CopilotPlannerMap } from '../src/features/map/CopilotPlannerMap';
 import { CopilotOfflineMap } from '../src/components/CopilotOfflineMap';
 import type { TruckRoute } from '../src/models/contracts';
@@ -103,4 +108,56 @@ test('unmount during appearance setup prevents late route and marker writes', as
   });
   expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
   expect(mockHost.drawMarkers).not.toHaveBeenCalled();
+});
+test('compact tools stay in the inset scroll area and retain accessible native actions', async () => {
+  const audio = jest.fn();
+  await act(async () => {
+    tree = create(
+      <CopilotPlannerMap
+        route={route}
+        plan={null}
+        pois={[]}
+        topInset={150}
+        bottomInset={280}
+        onAudio={audio}
+      />,
+    );
+  });
+  const tools = tree.root.findByType(ScrollView);
+  expect(StyleSheet.flatten(tools.props.style)).toMatchObject({
+    top: 166,
+    bottom: 300,
+  });
+  const buttons = React.Children.toArray(tools.props.children).filter(
+    (
+      child,
+    ): child is React.ReactElement<{ accessibilityLabel: string; onPress: () => void }> =>
+      React.isValidElement(child) && child.type === Pressable,
+  );
+  expect(buttons).toHaveLength(6);
+  for (const [label, command] of [
+    ['Recenter / follow truck', 'recenter'],
+    ['Compass / north up', 'north-up'],
+    ['Zoom in', 'zoom-in'],
+    ['Zoom out', 'zoom-out'],
+  ]) {
+    await act(async () => {
+      buttons
+        .find(button => button.props.accessibilityLabel === label)!
+        .props.onPress();
+    });
+    expect(mockHost.mapCommand).toHaveBeenLastCalledWith(command);
+  }
+  await act(async () => {
+    buttons
+      .find(button => button.props.accessibilityLabel === 'Route overview')!
+      .props.onPress();
+  });
+  expect(mockHost.mapFrame).toHaveBeenLastCalledWith(-120, 39, -119, 40);
+  act(() =>
+    buttons
+      .find(button => button.props.accessibilityLabel === 'Audio Settings')!
+      .props.onPress(),
+  );
+  expect(audio).toHaveBeenCalledTimes(1);
 });

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -11,6 +12,7 @@ import {
   copilotMapBlocker,
 } from '../../components/CopilotOfflineMap';
 import { useDriverPalette } from '../../components/DriverUI';
+import { DriverIcon, type DriverIconName } from '../../components/DriverIcon';
 import { useCopilotState } from '../../services/copilot/CopilotProvider';
 import { coPilotHost } from '../../services/copilot/CoPilotHost';
 import {
@@ -163,12 +165,27 @@ export function CopilotPlannerMap({
         : coPilotHost().mapCommand('recenter'),
     );
   }, [command, ready, blocker]);
-  const controls: [string, () => Promise<void>][] = [
-    ['Recenter / follow truck', () => coPilotHost().mapCommand('recenter')],
-    ['Route overview', overview],
-    ['Compass / north up', () => coPilotHost().mapCommand('north-up')],
-    ['Zoom in', () => coPilotHost().mapCommand('zoom-in')],
-    ['Zoom out', () => coPilotHost().mapCommand('zoom-out')],
+  const controls: [
+    string,
+    () => Promise<void>,
+    DriverIconName | null,
+    string,
+  ][] = [
+    [
+      'Recenter / follow truck',
+      () => coPilotHost().mapCommand('recenter'),
+      'my_location_rounded',
+      '',
+    ],
+    ['Route overview', overview, 'route_rounded', ''],
+    [
+      'Compass / north up',
+      () => coPilotHost().mapCommand('north-up'),
+      null,
+      'N↑',
+    ],
+    ['Zoom in', () => coPilotHost().mapCommand('zoom-in'), null, '+'],
+    ['Zoom out', () => coPilotHost().mapCommand('zoom-out'), null, '−'],
   ];
   return (
     <View style={styles.fill}>
@@ -188,24 +205,40 @@ export function CopilotPlannerMap({
           {error}
         </Text>
       )}
-      <View
+      <ScrollView
+        testID="copilot-map-tools"
+        accessibilityLabel="Map tools"
+        showsVerticalScrollIndicator
+        bounces={false}
+        contentContainerStyle={styles.controlContent}
         style={[
           styles.controls,
           { top: topInset + 16, bottom: bottomInset + 20 },
         ]}
       >
-        {controls.map(([label, action]) => (
+        {controls.map(([label, action, icon, symbol]) => (
           <Pressable
             key={label}
             accessibilityRole="button"
             accessibilityLabel={label}
             disabled={!ready || !!blocker}
+            accessibilityState={{ disabled: !ready || !!blocker }}
             onPress={() => {
               void run(action);
             }}
             style={[styles.button, { backgroundColor: palette.card }]}
           >
-            <Text style={{ color: palette.text }}>{label}</Text>
+            {icon ? (
+              <DriverIcon name={icon} size={28} color={palette.text} />
+            ) : (
+              <Text
+                accessible={false}
+                allowFontScaling={false}
+                style={[styles.symbol, { color: palette.text }]}
+              >
+                {symbol}
+              </Text>
+            )}
           </Pressable>
         ))}
         {onAudio && (
@@ -215,21 +248,26 @@ export function CopilotPlannerMap({
             onPress={onAudio}
             style={[styles.button, { backgroundColor: palette.card }]}
           >
-            <Text style={{ color: palette.text }}>Audio</Text>
+            <DriverIcon name="volume_up" size={28} color={palette.text} />
           </Pressable>
         )}
-      </View>
+      </ScrollView>
     </View>
   );
 }
 const styles = StyleSheet.create({
   fill: { flex: 1 },
-  controls: { position: 'absolute', right: 12, width: 86, gap: 8 },
+  controls: { position: 'absolute', right: 12, width: 52 },
+  controlContent: { gap: 8, paddingBottom: 4 },
+  symbol: { fontSize: 24, fontWeight: '700', textAlign: 'center' },
   button: {
-    minHeight: 48,
+    height: 48,
+    width: 48,
+    flexShrink: 0,
     padding: 8,
     borderRadius: 12,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   error: { position: 'absolute', left: 12, right: 110, padding: 12 },
 });

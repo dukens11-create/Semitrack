@@ -33,6 +33,14 @@ export function CoPilotDeviceSetup() {
   const [message, setMessage] = useState('');
   const [diagnostics, setDiagnostics] =
     useState<CoPilotSetupDiagnostics | null>(null);
+  const licensesVerified =
+    state.licensingReady &&
+    state.fullNavigationLicensed &&
+    state.heavyTruckLicensed;
+  const licensingExplanation = amsSetupExplanation(
+    state.operation,
+    licensesVerified ? undefined : diagnostics?.loginResponse,
+  );
   useEffect(() => {
     let live = true;
     try {
@@ -288,12 +296,12 @@ export function CoPilotDeviceSetup() {
             : ''}
         </Text>
       )}
-      {!!amsSetupExplanation(state.operation) && (
+      {!!licensingExplanation && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
-          {amsSetupExplanation(state.operation)}
+          {licensingExplanation}
         </Text>
       )}
-      {!state.mapsReady && state.licensingReady && (
+      {!state.mapsReady && licensesVerified && (
         <>
           <Pressable
             accessibilityRole="button"

@@ -1,3 +1,5 @@
+import { CoPilotMapCatalog } from '../../components/CoPilotMapCatalog';
+import { recordHybridFailure } from '../../services/copilot/HybridControlDiagnostics';
 import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigation';
 import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
@@ -49,6 +51,8 @@ export function HybridNavigation({
   const state = useCopilotState();
   const setup = useCopilotSetup();
   const [showSetup, setShowSetup] = useState(false);
+  const [showMaps, setShowMaps] = useState(false);
+  const controls = useRef<ScrollView>(null);
   const palette = useDriverPalette();
   const attempted = useRef(false);
   const location = useStore(services.location);
@@ -80,6 +84,9 @@ export function HybridNavigation({
       logHybridControl(name, 'CONFIRMED');
     } catch (e) {
       setError(hybridError(e));
+      recordHybridFailure(name, e);
+      controls.current?.scrollTo({ y: 0, animated: true });
+      Alert.alert('SemiTraX action could not complete', hybridError(e));
       logHybridControl(name, 'FAILED');
     } finally {
       if (generation === actionGeneration.current) {
@@ -188,6 +195,7 @@ export function HybridNavigation({
           </View>
         ) : (
           <ScrollView
+            ref={controls}
             style={{ backgroundColor: palette.canvas }}
             contentContainerStyle={styles.controls}
           >
@@ -220,7 +228,7 @@ export function HybridNavigation({
             <DriverCopy>
               Offline map:{' '}
               {state.mapsReady
-                ? 'verified installed'
+                ? 'setup region installed; use Manage offline maps for additional regions'
                 : 'installation not verified'}
             </DriverCopy>
             {!!setup.downloadStatus && (
@@ -230,6 +238,8 @@ export function HybridNavigation({
               <DriverCopy>Setup stage: {state.operation}</DriverCopy>
             )}
             {!!state.error && <DriverCopy>Status: {state.error}</DriverCopy>}
+            <DriverButton title={showMaps ? 'Hide offline maps' : 'Manage offline maps'} onPress={() => setShowMaps(value => !value)} />
+            {showMaps && <CoPilotMapCatalog />}
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
             <DriverButton
               title="Check readiness"

@@ -688,9 +688,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           item.putBoolean("serviceConnected", Boolean.parseBoolean(entry[4])); controls.pushMap(item);
         }
         result.putArray("controlTimeline", controls);
-        // This is a known code-level blocker, independent of SDK login or service binding.
-        // Report it explicitly rather than making a failed Start/Resume look like a dead button.
-        result.putString("truckRestrictionSync", "BLOCKED_UNSUPPORTED_AXLE_TRAILER_MAPPING");
+        // Standard mode does not certify separate axle/trailer/overall-length fields.
+        result.putString("truckRestrictionSync", "LIMITED_STANDARD_MODE_REQUIRES_PROFILE_CHECK");
         result.putBoolean("truckRestrictionsVerified", false);
         WritableMap storage = Arguments.createMap();
         try {

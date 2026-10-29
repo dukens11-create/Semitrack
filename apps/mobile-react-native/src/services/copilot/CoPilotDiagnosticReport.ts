@@ -1,3 +1,4 @@
+import { hybridFailureSnapshot } from './HybridControlDiagnostics';
 import { z } from 'zod';
 import { amsLoginFailures } from './CopilotLicenseDiagnostics';
 
@@ -290,6 +291,6 @@ export function coPilotDiagnosticReport(
     'Elapsed times are milliseconds since this native host was created, oldest first.',
     'START_REUSED means a setup check reused the running engine; it did not send a fresh login.',
     'No credentials, account IDs, serial numbers, location or raw exception messages included.',
-    JSON.stringify({ readiness: checks, native: data }, null, 2),
+    JSON.stringify({ lastControlFailure: hybridFailureSnapshot(), readiness: checks, native: data }, null, 2),
   ].join('\n\n');
 }

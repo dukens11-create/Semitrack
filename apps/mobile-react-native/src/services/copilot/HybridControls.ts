@@ -27,7 +27,9 @@ export function logHybridControl(action: HybridAction, stage: HybridStage) {
     /* Bridge may be unavailable; never block the control. */
   }
 }
-export class HybridControlError extends Error {}
+export class HybridControlError extends Error {
+  constructor(message: string, readonly code = 'UNCLASSIFIED_FAILURE') { super(message); }
+}
 export function hybridError(error: unknown): string {
   if (error instanceof HybridControlError) return error.message;
   const code =
@@ -66,6 +68,7 @@ export async function synchronizeHybridTruck(
   if (!truck)
     throw new HybridControlError(
       'Open Truck settings, save and verify the truck profile before starting.',
+      'TRUCK_NOT_SELECTED',
     );
   let request;
   try {
@@ -75,11 +78,13 @@ export async function synchronizeHybridTruck(
       e instanceof Error && !('issues' in e)
         ? e.message
         : 'The saved truck profile is invalid. Review Truck settings.',
+      e instanceof Error && !('issues' in e) ? 'STANDARD_TRUCK_SCOPE' : 'SAVED_TRUCK_INVALID',
     );
   }
   if (!host.verifyStandardTruckProfile)
     throw new HybridControlError(
       'This APK does not contain the truck-profile bridge. Install the matching Hybrid build.',
+      'PROFILE_BRIDGE_MISSING',
     );
   // Read-only matching. Never overwrite an assigned native fleet profile.
   await host.verifyStandardTruckProfile(request);

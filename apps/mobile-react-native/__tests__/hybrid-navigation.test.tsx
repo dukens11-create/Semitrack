@@ -99,6 +99,7 @@ test('missing verified truck blocks native start with an actionable error', asyn
   await press('Start / Resume Navigation');
   expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
   expect(JSON.stringify(tree.toJSON())).toContain('save and verify');
+  expect(mockAlert).toHaveBeenCalledWith('SemiTraX action could not complete', expect.stringContaining('save and verify'));
 });
 test('engine readiness keeps refresh and setup visible without implying guidance readiness', async () => {
   expect(mockReady).toBe(true);
@@ -225,4 +226,9 @@ test('active engine trip blocks editing the truck profile', async () => {
   expect(JSON.stringify(tree.toJSON())).not.toContain(
     'Back to SemiTraX controls',
   );
+});
+
+test('offline map manager is reachable from navigation controls', async () => {
+  await press('Manage offline maps');
+  expect(JSON.stringify(tree.toJSON())).toContain('Refresh licensed and installed maps');
 });

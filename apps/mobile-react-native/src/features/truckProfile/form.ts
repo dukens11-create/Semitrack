@@ -124,7 +124,19 @@ export function profileErrors(error: unknown): {
         message: 'Sign in again before updating your truck profile.',
         fields,
       };
-    if (error.retryable || error.status === 0)
+    if (error.status === 429)
+      return {
+        message:
+          'SemiTraX received too many requests. Wait a moment, then retry. Your profile was not confirmed.',
+        fields,
+      };
+    if (error.status >= 500)
+      return {
+        message:
+          'SemiTraX server is temporarily unavailable. Your profile was not confirmed. Try again shortly.',
+        fields,
+      };
+    if (error.status === 0)
       return {
         message:
           'Unable to reach SemiTraX. Your profile was not confirmed. Try again when connected.',

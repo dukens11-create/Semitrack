@@ -4,7 +4,7 @@ import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigat
 import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
 import React, { useRef, useState } from 'react';
-import { Modal, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { TruckProfileScreen } from '../../screens/TruckProfileScreen';
 import { WeatherStatus } from '../weather/WeatherStatus';
 import {
@@ -36,17 +36,18 @@ import { EngineCopilotMap } from './EngineCopilotMap';
 import type { Services } from '../../app/services';
 import type { StopPlan } from '../stops/StopPlan';
 import { useStore } from '../../hooks/useStore';
-import { Alert } from '../../components/ThemedAlert';
 
 /** Isolated live session: planner estimates never become live engine instructions. */
 export function HybridNavigation({
   services,
   plan,
   onClose,
+  autoStart = false,
 }: {
   services: Services;
   plan: StopPlan;
   onClose: () => void;
+  autoStart?: boolean;
 }) {
   const state = useCopilotState();
   const setup = useCopilotSetup();
@@ -55,6 +56,7 @@ export function HybridNavigation({
   const controls = useRef<ScrollView>(null);
   const palette = useDriverPalette();
   const attempted = useRef(false);
+  const startRequested = useRef(false);
   const location = useStore(services.location);
   const route = useStore(services.routes).route;
   const busy = useRef(false);
@@ -165,6 +167,12 @@ export function HybridNavigation({
   return (
     <Modal
       visible
+      onShow={() => {
+        if (autoStart && !startRequested.current) {
+          startRequested.current = true;
+          void run(start);
+        }
+      }}
       onRequestClose={() => {
         setLive(false);
         setSettings(false);
@@ -238,7 +246,10 @@ export function HybridNavigation({
               <DriverCopy>Setup stage: {state.operation}</DriverCopy>
             )}
             {!!state.error && <DriverCopy>Status: {state.error}</DriverCopy>}
-            <DriverButton title={showMaps ? 'Hide offline maps' : 'Manage offline maps'} onPress={() => setShowMaps(value => !value)} />
+            <DriverButton
+              title={showMaps ? 'Hide offline maps' : 'Manage offline maps'}
+              onPress={() => setShowMaps(value => !value)}
+            />
             {showMaps && <CoPilotMapCatalog />}
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
             <DriverButton

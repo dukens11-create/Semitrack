@@ -1,6 +1,7 @@
 import * as controls from '../src/services/copilot/HybridControls';
 import { EngineCopilotMap } from '../src/features/map/EngineCopilotMap';
 import React from 'react';
+import { Alert, Modal } from 'react-native';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { HybridNavigation } from '../src/features/map/HybridNavigation';
 import { DriverButton } from '../src/components/DriverUI';
@@ -41,9 +42,7 @@ jest.mock('../src/features/weather/WeatherStatus', () => ({
 jest.mock('../src/features/map/EngineCopilotMap', () => ({
   EngineCopilotMap: () => null,
 }));
-jest.mock('../src/components/ThemedAlert', () => ({
-  Alert: { alert: (...args: unknown[]) => mockAlert(...args) },
-}));
+jest.spyOn(Alert, 'alert').mockImplementation((...args) => mockAlert(...args));
 jest.mock('../src/hooks/useStore', () => ({ useStore: () => ({ fix: null }) }));
 let tree: ReactTestRenderer;
 const closed = jest.fn();
@@ -99,7 +98,10 @@ test('missing verified truck blocks native start with an actionable error', asyn
   await press('Start / Resume Navigation');
   expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
   expect(JSON.stringify(tree.toJSON())).toContain('save and verify');
-  expect(mockAlert).toHaveBeenCalledWith('SemiTraX action could not complete', expect.stringContaining('save and verify'));
+  expect(mockAlert).toHaveBeenCalledWith(
+    'SemiTraX action could not complete',
+    expect.stringContaining('save and verify'),
+  );
 });
 test('engine readiness keeps refresh and setup visible without implying guidance readiness', async () => {
   expect(mockReady).toBe(true);
@@ -230,5 +232,35 @@ test('active engine trip blocks editing the truck profile', async () => {
 
 test('offline map manager is reachable from navigation controls', async () => {
   await press('Manage offline maps');
-  expect(JSON.stringify(tree.toJSON())).toContain('Refresh licensed and installed maps');
+  expect(JSON.stringify(tree.toJSON())).toContain(
+    'Refresh licensed and installed maps',
+  );
+});
+
+test('planner Start runs checks once when its modal becomes visible', async () => {
+  await act(async () => {
+    tree.update(
+      <HybridNavigation
+        autoStart
+        services={services}
+        plan={{
+          stops: [],
+          destination: { id: 'd', name: 'Destination', lat: 39, lng: -119 },
+        }}
+        onClose={closed}
+      />,
+    );
+  });
+  await act(async () => {
+    tree.root.findByType(Modal).props.onShow();
+  });
+  expect(mockAlert).toHaveBeenCalledWith(
+    'SemiTraX action could not complete',
+    expect.any(String),
+  );
+  const count = mockAlert.mock.calls.length;
+  await act(async () => {
+    tree.root.findByType(Modal).props.onShow();
+  });
+  expect(mockAlert).toHaveBeenCalledTimes(count);
 });

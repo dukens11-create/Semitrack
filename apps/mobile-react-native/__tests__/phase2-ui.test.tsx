@@ -32,7 +32,7 @@ import {
 import Mapbox from '@rnmapbox/maps';
 import { AppNavigator, DriverShell } from '../src/navigation/AppNavigator';
 import { PlanningScreen } from '../src/screens/PlanningScreen';
-import {CopilotPlannerMap} from '../src/features/map/CopilotPlannerMap';
+import { CopilotPlannerMap } from '../src/features/map/CopilotPlannerMap';
 import { TruckMap } from '../src/features/map/TruckMap';
 import { WeatherStatus } from '../src/features/weather/WeatherStatus';
 import { RoutePoiBadges } from '../src/features/navigation/RoutePoiBadges';
@@ -950,9 +950,14 @@ test('active driving keeps optional weather, POI badges, satellite and duplicate
   await press('Close Weather');
   await press('Navigation Controls');
   await press('Satellite map');
+  expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(0);
+  expect(screen.root.findByType(TruckMap).props.satellite).toBe(true);
+  expect(screen.root.findByType(TruckMap).props.navigationActive).toBe(false);
+  expect(services.guidance.startNavigation).not.toHaveBeenCalled();
+  await press('Navigation Controls');
+  await press('Satellite map');
   expect(screen.root.findAllByType(TruckMap)).toHaveLength(0);
   expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(1);
-  expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test.each(['preview', 'unavailable', 'failure'] as const)(
   'cancel from %s clears route but preserves truck, login and GPS',
@@ -1115,10 +1120,14 @@ test('navigation menu connects real map commands, settings, report UI and confir
   });
   await press('Navigation Controls');
   await press('Route Overview');
-  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe('overview');
+  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe(
+    'overview',
+  );
   await press('Navigation Controls');
   await press('Recenter');
-  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe('recenter');
+  expect(screen.root.findByType(CopilotPlannerMap).props.command.type).toBe(
+    'recenter',
+  );
   await press('Navigation Controls');
   await press('Audio Settings');
   expect(settings).toHaveBeenCalledTimes(1);
@@ -1834,14 +1843,12 @@ test.each(['before confirmation', 'after confirmation'])(
       });
       // A marker can be selected while a previous map-place lookup is pending.
       await act(async () => {
-        screen.root
-          .findByType(TruckMap)
-          .props.onPoi({
-            id: 'dest',
-            name: 'Selected place',
-            latitude: 41,
-            longitude: -100,
-          });
+        screen.root.findByType(TruckMap).props.onPoi({
+          id: 'dest',
+          name: 'Selected place',
+          latitude: 41,
+          longitude: -100,
+        });
       });
       if (timing === 'before confirmation') {
         await act(async () => {

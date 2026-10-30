@@ -32,12 +32,16 @@ test('only the root resolver reads system appearance; screens never override it'
       .map(file => file.name),
   ).toEqual(['app/AppRoot.tsx']);
   expect(
-    files.filter(file =>
-      /import\s*\{[^}]*\bAlert\b[^}]*\}\s*from ['"]react-native['"]/.test(
-        file.source,
-      ),
-    ),
-  ).toEqual([]);
+    files
+      .filter(file =>
+        /import\s*\{[^}]*\bAlert\b[^}]*\}\s*from ['"]react-native['"]/.test(
+          file.source,
+        ),
+      )
+      .map(file => file.name),
+    // Guidance confirmation must appear above its Android Modal window.
+    // Other app dialogs continue to use the shared themed alert host.
+  ).toEqual(['features/map/HybridNavigation.tsx']);
 });
 test('one runtime resolved theme provider, no nested screen appearance owners', () => {
   expect(

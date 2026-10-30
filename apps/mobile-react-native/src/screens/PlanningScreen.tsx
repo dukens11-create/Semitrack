@@ -342,7 +342,6 @@ export function PlanningScreen({
       /* Unsupported platforms retain the unavailable adapter. */
     }
     if (nativeHost?.openEngineTrip) {
-      origin();
       closeSheet();
       setEnginePlan(current.plan);
       return;
@@ -553,10 +552,6 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
-      if (routes.route) {
-        setError('Satellite view is unavailable for Trimble route previews.');
-        return;
-      }
       setSatelliteOverride(v => !(v ?? mapPreferences(settings).satellite));
       closeSheet();
       return;
@@ -758,6 +753,7 @@ export function PlanningScreen({
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {enginePlan && (
         <HybridNavigation
+          autoStart
           services={services}
           plan={enginePlan}
           onClose={() => setEnginePlan(null)}
@@ -765,7 +761,7 @@ export function PlanningScreen({
       )}
       <View style={styles.map}>
         {!enginePlan &&
-          (routes.route ? (
+          (routes.route && !(satelliteOverride ?? mapPrefs.satellite) ? (
             <CopilotPlannerMap
               route={routes.route}
               plan={routes.plan}

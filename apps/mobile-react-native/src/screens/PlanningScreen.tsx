@@ -552,6 +552,10 @@ export function PlanningScreen({
       return;
     }
     if (action === 'satellite') {
+      if (routes.route) {
+        setError('Route previews use the Trimble map. Satellite imagery is unavailable in this view.');
+        return;
+      }
       setSatelliteOverride(v => !(v ?? mapPreferences(settings).satellite));
       closeSheet();
       return;
@@ -761,7 +765,7 @@ export function PlanningScreen({
       )}
       <View style={styles.map}>
         {!enginePlan &&
-          (routes.route && !(satelliteOverride ?? mapPrefs.satellite) ? (
+          (routes.route ? (
             <CopilotPlannerMap
               route={routes.route}
               plan={routes.plan}

@@ -950,14 +950,9 @@ test('active driving keeps optional weather, POI badges, satellite and duplicate
   await press('Close Weather');
   await press('Navigation Controls');
   await press('Satellite map');
-  expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(0);
-  expect(screen.root.findByType(TruckMap).props.satellite).toBe(true);
-  expect(screen.root.findByType(TruckMap).props.navigationActive).toBe(false);
-  expect(services.guidance.startNavigation).not.toHaveBeenCalled();
-  await press('Navigation Controls');
-  await press('Satellite map');
   expect(screen.root.findAllByType(TruckMap)).toHaveLength(0);
   expect(screen.root.findAllByType(CopilotPlannerMap)).toHaveLength(1);
+  expect(services.guidance.startNavigation).not.toHaveBeenCalled();
 });
 test.each(['preview', 'unavailable', 'failure'] as const)(
   'cancel from %s clears route but preserves truck, login and GPS',

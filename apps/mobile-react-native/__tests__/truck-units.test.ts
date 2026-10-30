@@ -165,3 +165,15 @@ test('hazmat labels and unexpected failures never leak internal identifiers', ()
     ).fields.currentWeightLbs,
   ).toContain('whole pounds');
 });
+
+test.each([
+  [0, 'Unable to reach SemiTraX'],
+  [429, 'too many requests'],
+  [503, 'server is temporarily unavailable'],
+])('profile failure distinguishes HTTP status %s', (status, expected) => {
+  const result = profileErrors(
+    new ApiError('REQUEST_FAILED', 'private details', status, true),
+  );
+  expect(result.message).toContain(expected);
+  expect(result.message).not.toContain('private details');
+});

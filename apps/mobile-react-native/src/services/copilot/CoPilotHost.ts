@@ -1,6 +1,12 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  routeEngine?: {
+    status: string;
+    readyToAddStops?: boolean;
+    receivingGps?: boolean;
+    hasDestination?: boolean;
+  };
   buildIdentity?: {
     commit: string;
     builtAt: string;

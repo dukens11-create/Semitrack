@@ -702,6 +702,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         result.putMap("appStorage", storage);
         result.putMap("nativeDisplay", nativeDisplayDiagnostics());
+        WritableMap routeEngine = Arguments.createMap();
+        routeEngine.putString("status", "NOT_STARTED");
+        if (started) {
+          try {
+            routeEngine.putBoolean("readyToAddStops", RouteMgr.isCopilotReadyToAddStops());
+            routeEngine.putBoolean("receivingGps", RouteMgr.isReceivingGPSSignal());
+            routeEngine.putBoolean("hasDestination", RouteMgr.hasDestination());
+            routeEngine.putString("status", "AVAILABLE");
+          } catch (Exception ignored) { routeEngine.putString("status", "UNAVAILABLE"); }
+        }
+        result.putMap("routeEngine", routeEngine);
         WritableMap download = Arguments.createMap();
         download.putString("response", mapDownloadResponse);
         download.putString("callback", mapDownloadCallback);
@@ -1384,6 +1395,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
           case "recenter": drawer.lockToChevron(); break;
+          case "two-dimensional": drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS); break;
+          case "three-dimensional": drawer.setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS); break;
           case "north-up": drawer.setMapOrientation(MapDrawer.MapOrientation.NORTH_UP); break;
           case "heading-up": drawer.setMapOrientation(MapDrawer.MapOrientation.HEADING_UP); break;
           case "zoom-in": drawer.mapZoom(MapDrawer.ZoomAction.ZOOM_IN); break;
@@ -1505,7 +1518,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void guidanceSnapshot(Promise promise) {
     main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }
-  /** Read-only Mapbox proof: the next 25 miles of the actual engine route. */
+  /** Read-only guidance with optional route geometry. Trimble renders its own route. */
   @ReactMethod public void guidanceMapSnapshot(Promise promise) {
     main.post(() -> {
       try {
@@ -1514,6 +1527,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         WritableMap value = guidanceTelemetry.snapshot();
         if (value.hasKey("routeStatus") && "ready".equals(value.getString("routeStatus"))
             && RouteMgr.hasDestination()) {
+          try {
           java.util.List<Coordinate> points = GuidanceMgr.getRouteCoordinates(true, 25.0, 1.0);
           if (points == null || points.size() > 20000) throw new IllegalStateException("ROUTE_GEOMETRY_UNAVAILABLE");
           com.facebook.react.bridge.WritableArray coordinates = Arguments.createArray();
@@ -1526,6 +1540,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             coordinates.pushArray(pair);
           }
           value.putArray("routeCoordinates", coordinates);
+          } catch (Exception ignored) { /* Optional geometry must not hide turn instructions or ETA. */ }
         }
         promise.resolve(value);
       } catch (Exception e) {

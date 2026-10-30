@@ -1,3 +1,4 @@
+import { CoPilotFeatureControls } from '../../components/CoPilotFeatureControls';
 import { CoPilotMapCatalog } from '../../components/CoPilotMapCatalog';
 import { recordHybridFailure } from '../../services/copilot/HybridControlDiagnostics';
 import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigation';
@@ -255,6 +256,14 @@ export function HybridNavigation({
               onPress={() => setShowMaps(value => !value)}
             />
             {showMaps && <CoPilotMapCatalog />}
+            <CoPilotFeatureControls
+              disabled={
+                !state.initialized ||
+                !state.mapsReady ||
+                !state.licensingReady ||
+                pending
+              }
+            />
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
             <DriverButton
               title="Check readiness"

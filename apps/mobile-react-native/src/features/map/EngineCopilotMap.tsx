@@ -1,3 +1,4 @@
+import { CoPilotFeatureControls } from '../../components/CoPilotFeatureControls';
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CopilotOfflineMap } from '../../components/CopilotOfflineMap';
@@ -218,6 +219,7 @@ export function EngineCopilotMap({
           </Text>
           {weather}
           <CoPilotVoiceControls />
+          <CoPilotFeatureControls disabled={!ready} />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Trip controls"

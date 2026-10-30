@@ -15,8 +15,12 @@ export function standardTruckRequest(input: unknown) {
   const problems: string[] = [];
   if (!isServerVerifiedTruck(t))
     problems.push('Save and verify the selected truck');
-  if (t.lengthFt !== 53 || t.trailerCount !== 1 || t.axleCount !== 5)
-    problems.push('This mode requires one 53-foot trailer and five axles');
+  if (t.lengthFt !== 53)
+    problems.push('Trailer length: this mode requires 53 feet');
+  if (t.trailerCount !== 1)
+    problems.push('Trailer count: this mode requires one trailer');
+  if (t.axleCount !== 5)
+    problems.push('Axle count: this mode requires five axles');
   if (!['dry van', 'reefer'].includes((t.trailerType ?? '').toLowerCase()))
     problems.push('This mode supports a dry van or reefer');
   if (
@@ -25,37 +29,39 @@ export function standardTruckRequest(input: unknown) {
     )
   )
     problems.push('Select a day cab or sleeper tractor');
-  if (
-    t.heightFt < 5 ||
-    t.heightFt > 13.5 ||
-    t.widthFt < 5 ||
-    t.widthFt > 8.5 ||
-    t.weightLbs < 1500 ||
-    t.weightLbs > 80000
-  )
-    problems.push('Oversize or overweight configurations are not supported');
+  if (t.heightFt < 5 || t.heightFt > 13.5)
+    problems.push('Height: supported range is 5 to 13.5 feet');
+  if (t.widthFt < 5 || t.widthFt > 8.5)
+    problems.push('Width: supported range is 5 to 8.5 feet');
+  if (t.weightLbs < 1500 || t.weightLbs > 80000)
+    problems.push('Maximum weight: supported range is 1,500 to 80,000 lb');
   if (
     t.weightPerAxleLbs === null ||
     t.weightPerAxleLbs < 800 ||
     t.weightPerAxleLbs > 34000
   )
     problems.push(
-      'Enter a maximum axle-group weight no greater than 34,000 lb',
+      'Maximum axle-group weight: required range is 800 to 34,000 lb',
     );
   if (t.hazmatEnabled || t.hazardousGoods.length)
     problems.push('Hazardous cargo is not supported in this mode');
-  if (
-    t.avoidFerries ||
-    t.avoidHighways ||
-    t.avoidResidential ||
-    t.avoidDirtRoads
-  )
+  if (t.avoidFerries)
+    problems.push('Avoid ferries is enabled but cannot be enforced in this mode');
+  if (t.avoidHighways)
+    problems.push('Avoid highways is enabled but cannot be enforced in this mode');
+  if (t.avoidResidential)
     problems.push(
-      'Strict ferry, highway, residential or dirt-road avoidance is not supported in this mode',
+      'Avoid residential roads is enabled but cannot be enforced in this mode',
+    );
+  if (t.avoidDirtRoads)
+    problems.push(
+      'Avoid dirt roads is enabled but cannot be enforced in this mode',
     );
   if (problems.length)
     throw new Error(
-      problems.join('. ') + '. Saved settings have not been changed.',
+      'Truck settings need review:\n\n' +
+        problems.map(problem => '- ' + problem).join('\n') +
+        '\n\nSaved settings have not been changed. Keep your actual vehicle specifications and any restrictions required for this trip.',
     );
   return {
     mode: 'STANDARD_SINGLE_53' as const,

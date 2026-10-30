@@ -1,3 +1,4 @@
+import { CoPilotVoiceControls } from './CoPilotVoiceControls';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -150,6 +151,7 @@ export function CoPilotFeatureControls({
                 }}
               />
             ))}
+            {open && !disabled && <CoPilotVoiceControls />}
             {keys.map(key => (
               <View key={key} style={styles.row}>
                 <Text style={[styles.label, { color: p.text }]}>

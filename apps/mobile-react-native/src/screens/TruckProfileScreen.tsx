@@ -73,7 +73,7 @@ const labels: Record<string, string> = {
   lengthFt: 'Length (ft)',
   weightLbs: 'Gross weight (lb)',
   currentWeightLbs: 'Current weight (lb, optional)',
-  weightPerAxleLbs: 'Weight per axle (lb, optional)',
+  weightPerAxleLbs: 'Maximum loaded axle-group weight (lb)',
   axleCount: 'Axles',
   trailerCount: 'Trailers',
   name: 'Profile name',
@@ -562,8 +562,8 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             {key === 'weightPerAxleLbs' && (
               <Copy>
                 For Trimble this means the maximum loaded axle-group weight, not
-                total weight divided by axle count. Optional; enter a measured
-                group value.
+                total weight divided by axle count. Required for current native
+                navigation; enter a measured group value.
               </Copy>
             )}
             {(key === 'axleCount' || key === 'trailerCount') && (

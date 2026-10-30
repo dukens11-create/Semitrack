@@ -100,9 +100,13 @@ export function HybridNavigation({
   }
   async function start() {
     const host = coPilotHost();
-    if (!state.readyToAddStops)
+    const checked = await setup.checkForStart();
+    if (!checked.readyToAddStops)
       throw new HybridControlError(
-        'Complete the license, offline-map and GPS checks below before starting.',
+        checked.initialized && checked.licensingReady && checked.mapsReady
+          ? 'Trimble has not confirmed that its route engine can accept stops. Licenses and the setup map passed. Guidance has not started. Share diagnostics to identify the remaining engine failure.'
+          : 'Navigation setup is incomplete. Check the engine, licenses and offline map status below.',
+        'COPILOT_NOT_READY',
       );
     await synchronizeHybridTruck(services, host);
     const resuming = await host.hasEngineTrip?.();

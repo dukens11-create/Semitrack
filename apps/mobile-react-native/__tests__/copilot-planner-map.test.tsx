@@ -66,7 +66,8 @@ test('draws planning geometry on CoPilot and forwards verified map interactions'
   });
   expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(1);
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith(route.routeGeometry);
-  expect(mockHost.mapFrame).toHaveBeenCalledWith(-120, 39, -119, 40);
+  expect(mockHost.mapFrame).not.toHaveBeenCalled();
+  expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
   expect(mockHost.drawMarkers).toHaveBeenCalledWith([
     { id: 0, lat: 39, lng: -120 },
   ]);
@@ -184,4 +185,14 @@ test('equivalent route refresh preserves the driver camera', async () => {
   });
   expect(mockHost.mapFrame).not.toHaveBeenCalled();
   expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
+});
+
+test('opens Trimble before address selection and clears old planning geometry', async () => {
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={null} plan={null} pois={[]} />);
+  });
+  expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(1);
+  expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
+  expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
+  expect(mockHost.mapFrame).not.toHaveBeenCalled();
 });

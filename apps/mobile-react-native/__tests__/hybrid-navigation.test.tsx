@@ -17,6 +17,7 @@ const mockHost = {
 };
 const mockAlert = jest.fn();
 const mockRefresh = jest.fn();
+const mockCheckForStart = jest.fn();
 let mockReady = true;
 jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockHost,
@@ -30,6 +31,7 @@ jest.mock('../src/services/copilot/CopilotProvider', () => ({
   }),
   useCopilotSetup: () => ({
     refresh: mockRefresh,
+    checkForStart: mockCheckForStart,
     downloadStatus: 'Downloading offline map…',
   }),
 }));
@@ -66,6 +68,12 @@ async function press(title: string) {
 beforeEach(async () => {
   jest.clearAllMocks();
   mockReady = true;
+  mockCheckForStart.mockImplementation(async () => ({
+    readyToAddStops: mockReady,
+    initialized: true,
+    licensingReady: true,
+    mapsReady: true,
+  }));
   mockHost.acceptStandardTruckMode.mockResolvedValue(undefined);
   mockHost.hasEngineTrip.mockResolvedValue(false);
   mockHost.reviewEngineTripProfile.mockResolvedValue({
@@ -263,4 +271,21 @@ test('planner Start runs checks once when its modal becomes visible', async () =
     tree.root.findByType(Modal).props.onShow();
   });
   expect(mockAlert).toHaveBeenCalledTimes(count);
+});
+
+test('Start uses a fresh readiness check and reports a route-engine failure explicitly', async () => {
+  mockCheckForStart.mockResolvedValueOnce({
+    readyToAddStops: false,
+    initialized: true,
+    licensingReady: true,
+    mapsReady: true,
+  });
+  await press('Start / Resume Navigation');
+  expect(mockCheckForStart).toHaveBeenCalledTimes(1);
+  expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
+  expect(mockHost.reviewEngineTripProfile).not.toHaveBeenCalled();
+  expect(mockAlert).toHaveBeenCalledWith(
+    'SemiTraX action could not complete',
+    expect.stringContaining('route engine can accept stops'),
+  );
 });

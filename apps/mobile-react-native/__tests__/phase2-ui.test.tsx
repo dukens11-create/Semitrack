@@ -422,7 +422,7 @@ test('places panel retains seven categories and omits separate Truck Fuel and CA
   expect(content()).not.toContain('Add a verified truck profile');
 });
 
-test('retained Map applies saved night preference without remounting', async () => {
+test('standalone Mapbox map applies saved night preference without remounting', async () => {
   const { services } = setup();
   services.environment = {
     ...services.environment,
@@ -431,7 +431,13 @@ test('retained Map applies saved night preference without remounting', async () 
   await act(async () => {
     screen = create(
       <DriverPreferences services={services}>
-        <PlanningScreen services={services} />
+        <TruckMap
+          token="pk.test"
+          route={null}
+          plan={null}
+          fix={null}
+          pois={[]}
+        />
       </DriverPreferences>,
     );
   });
@@ -1041,7 +1047,7 @@ test.each(['navigating', 'paused', 'rerouting'] as const)(
   },
 );
 
-test('preview cancellation removes route geometry, stop markers and advisories while keeping GPS marker', async () => {
+test('preview cancellation keeps Trimble mounted and clears its route and stop plan', async () => {
   const fix = {
     latitude: 40,
     longitude: -100,
@@ -1067,9 +1073,9 @@ test('preview cancellation removes route geometry, stop markers and advisories w
     0,
   );
   expect(screen.root.findAllByType(Mapbox.PointAnnotation)).toHaveLength(0);
-  expect(
-    screen.root.findAll(n => n.props.id === 'truck-position').length,
-  ).toBeGreaterThan(0);
+  expect(screen.root.findByType(CopilotPlannerMap).props.route).toBeNull();
+  expect(screen.root.findByType(CopilotPlannerMap).props.plan).toBeNull();
+  expect(screen.root.findAllByType(TruckMap)).toHaveLength(0);
 });
 test('cancel does not wait for native stop, and late guidance events cannot restore navigation', async () => {
   const { services } = setup();
@@ -1490,7 +1496,7 @@ test('search failure never disables unrelated POI categories and releases the se
 });
 
 test.each(['day', 'night'] as const)(
-  'first native map style honors persisted %s without rendering the default style',
+  'standalone Mapbox style honors persisted %s without rendering the default style',
   async mode => {
     const { services } = setup();
     services.environment = { ...services.environment, mapboxToken: 'pk.test' };
@@ -1501,7 +1507,13 @@ test.each(['day', 'night'] as const)(
     await act(async () => {
       screen = create(
         <DriverPreferences services={services}>
-          <PlanningScreen services={services} />
+          <TruckMap
+            token="pk.test"
+            route={null}
+            plan={null}
+            fix={null}
+            pois={[]}
+          />
         </DriverPreferences>,
       );
     });
@@ -1833,12 +1845,12 @@ test.each(['before confirmation', 'after confirmation'])(
       });
       await act(async () => {
         screen.root
-          .findByType(TruckMap)
+          .findByType(CopilotPlannerMap)
           .props.onCoordinate({ lat: 41, lng: -100 });
       });
       // A marker can be selected while a previous map-place lookup is pending.
       await act(async () => {
-        screen.root.findByType(TruckMap).props.onPoi({
+        screen.root.findByType(CopilotPlannerMap).props.onPoi({
           id: 'dest',
           name: 'Selected place',
           latitude: 41,

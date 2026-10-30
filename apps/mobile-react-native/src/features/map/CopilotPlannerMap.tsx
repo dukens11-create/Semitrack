@@ -34,7 +34,7 @@ export function CopilotPlannerMap({
   onCoordinate,
   onAudio,
 }: {
-  route: TruckRoute;
+  route: TruckRoute | null;
   plan: StopPlan | null;
   pois: Poi[];
   command?: { type: 'overview' | 'recenter'; id: number };
@@ -50,10 +50,11 @@ export function CopilotPlannerMap({
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const queue = useRef(Promise.resolve());
+  const geometryKey = JSON.stringify(route?.routeGeometry ?? []);
   const latest = useRef({ route, plan, pois, onPoi, onCoordinate });
   latest.current = { route, plan, pois, onPoi, onCoordinate };
   async function overview() {
-    const points = latest.current.route.routeGeometry;
+    const points = latest.current.route?.routeGeometry ?? [];
     if (!points.length) return;
     const lngs = points.map(p => p[0]),
       lats = points.map(p => p[1]);
@@ -94,9 +95,9 @@ export function CopilotPlannerMap({
     queue.current = queue.current
       .then(async () => {
         if (!current) return;
-        await coPilotHost().drawRoutePreview(route.routeGeometry);
+        await coPilotHost().drawRoutePreview(JSON.parse(geometryKey));
         if (!current) return;
-        await overview();
+        await coPilotHost().mapCommand('recenter');
       })
       .catch(() => {
         if (current) setError('Route preview could not be displayed.');
@@ -104,7 +105,7 @@ export function CopilotPlannerMap({
     return () => {
       current = false;
     };
-  }, [ready, blocker, route]);
+  }, [ready, blocker, geometryKey]);
   useEffect(() => {
     let current = true;
     if (!ready || blocker) return;

@@ -12,10 +12,10 @@ const files={
  'com/alk/cpik/Stop.java':'package com.alk.cpik; public class Stop {public final String id; public Stop(String x){id=x;} public String getID(){return id;} public boolean isVehicleRestricted(){return StopBuilder.restricted;}}',
  'com/alk/cpik/StopList.java':'package com.alk.cpik; public class StopList extends java.util.ArrayList<Stop> {}',
  'com/alk/cpik/StopBuilder.java':'package com.alk.cpik; public class StopBuilder {public static boolean restricted; String id; public static StopBuilder fromLatLon(Coordinate x){return new StopBuilder();} public StopBuilder setName(String x){return this;} public StopBuilder setID(String x){id=x;return this;} public StopList geocode(GeocodeSearchType t){StopList s=new StopList();s.add(new Stop(id));return s;}}',
- 'com/alk/cpik/route/RouteEnums.java':'package com.alk.cpik.route; public class RouteEnums {public enum VehicleType {TRUCK_HEAVY_DUTY,CAR} public enum AddStopPurpose {NEW_TRIP} public enum RoutePreviewMode {PREVIEW_TRIP_MAP_NO_WIDGET}}',
+ 'com/alk/cpik/route/RouteEnums.java':'package com.alk.cpik.route; public class RouteEnums {public enum VehicleType {TRUCK_HEAVY_DUTY,CAR} public enum AddStopPurpose {NEW_TRIP} public enum RoutePreviewMode {NO_PREVIEW,PREVIEW_TRIP_MAP_NO_WIDGET}}',
  'com/alk/cpik/route/VehicleRoutingProfile.java':'package com.alk.cpik.route; public class VehicleRoutingProfile {public RouteEnums.VehicleType type=RouteEnums.VehicleType.TRUCK_HEAVY_DUTY; public String name="truck"; public VehicleRoutingProfileSource source=VehicleRoutingProfileSource.FLEET_PORTAL; public int restriction=1; public VehicleRoutingProfileSource getVehicleRoutingProfileSource(){return source;} public String toString(){return name+type+source+restriction;} public String getName(){return name;} public RouteEnums.VehicleType getVehicleType(){return type;} public boolean equals_RoutingFieldsOnly(VehicleRoutingProfile p){return name.equals(p.name)&&type==p.type&&restriction==p.restriction;}}',
  'com/alk/cpik/route/RouteListener.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteListener {public static RouteListener current; public static void registerListener(RouteListener l){current=l;} public static void unregisterListener(RouteListener l){current=null;} public void onStopsAdded(StopList s){} public void onStopsDeleted(StopList s){} public void onStartRouteCalculation(){} public void onCompleteRouteCalculation(){} public void onFailedRouteCalculation(int l,Stop s){}}',
- 'com/alk/cpik/route/RouteMgr.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteMgr {public static VehicleRoutingProfile profile=new VehicleRoutingProfile(); public static StopList stops=new StopList(); public static boolean ready=true; public static boolean selectionWorks=true; public static java.util.List<VehicleRoutingProfile> profiles=new java.util.ArrayList<>(); public static java.util.List<VehicleRoutingProfile> getVehicleRoutingProfiles(){return profiles;} public static VehicleRoutingProfile getVehicleRoutingProfile(String name){for(VehicleRoutingProfile p:profiles)if(p.name.equals(name))return p;return null;} public static void setActiveVehicleRoutingProfile(VehicleRoutingProfile p){if(selectionWorks)profile=p;} public static VehicleRoutingProfile getActiveVehicleRoutingProfile(){return profile;} public static boolean hasDestination(){return !stops.isEmpty();} public static boolean isCopilotReadyToAddStops(){return ready;} public static StopList getStopList(){return stops;} public static void addStops(RouteEnums.AddStopPurpose p,StopList s,RouteEnums.RoutePreviewMode m){stops=s;}}',
+ 'com/alk/cpik/route/RouteMgr.java':'package com.alk.cpik.route; import com.alk.cpik.*; public class RouteMgr {public static VehicleRoutingProfile profile=new VehicleRoutingProfile(); public static StopList stops=new StopList(); public static boolean ready=true; public static boolean selectionWorks=true; public static java.util.List<VehicleRoutingProfile> profiles=new java.util.ArrayList<>(); public static java.util.List<VehicleRoutingProfile> getVehicleRoutingProfiles(){return profiles;} public static VehicleRoutingProfile getVehicleRoutingProfile(String name){for(VehicleRoutingProfile p:profiles)if(p.name.equals(name))return p;return null;} public static void setActiveVehicleRoutingProfile(VehicleRoutingProfile p){if(selectionWorks)profile=p;} public static VehicleRoutingProfile getActiveVehicleRoutingProfile(){return profile;} public static boolean hasDestination(){return !stops.isEmpty();} public static boolean isCopilotReadyToAddStops(){return ready;} public static StopList getStopList(){return stops;} public static void addStops(RouteEnums.AddStopPurpose p,StopList s,RouteEnums.RoutePreviewMode m){if(m!=RouteEnums.RoutePreviewMode.NO_PREVIEW)throw new AssertionError("must start without preview");stops=s;}}',
  'com/semitrax/nativebridge/HandoffTest.java':`package com.semitrax.nativebridge;
 import com.alk.cpik.*; import com.alk.cpik.route.*;
 public class HandoffTest {
@@ -41,6 +41,23 @@ public class HandoffTest {
  }
 }`,
 };
+files['com/semitrax/nativebridge/CoPilotMapDownload.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotMapDownload.java'),'utf8');
+files['com/semitrax/nativebridge/MapDownloadTest.java']=`package com.semitrax.nativebridge;
+public class MapDownloadTest {
+ static int downloads, resumes;
+ static String call(String result, String resumed) {
+  return CoPilotMapDownload.request(()->{downloads++;return result;},()->{resumes++;return resumed;},"FAILURE_PAUSED");
+ }
+ static void check(boolean value){if(!value)throw new AssertionError();}
+ public static void main(String[] args) {
+  check("SUCCESS".equals(call("FAILURE_PAUSED","SUCCESS"))); check(downloads==1 && resumes==1);
+  check("FAILURE_PAUSED".equals(call("FAILURE_PAUSED","FAILURE_PAUSED"))); check(resumes==2);
+  check("FAILURE_INSUFFICIENT_DISK_SPACE".equals(call("FAILURE_PAUSED","FAILURE_INSUFFICIENT_DISK_SPACE"))); check(resumes==3);
+  for(String status:new String[]{"SUCCESS","FAILURE_DOWNLOADING","FAILURE_DOWNLOADED","FAILURE_INSTALLED","FAILURE_MANAGER_BUSY","FAILURE_UNLICENSED","FAILURE_INSUFFICIENT_DISK_SPACE"}) check(status.equals(call(status,"SUCCESS")));
+  check(resumes==3); check(downloads==10);
+  System.out.println("PASS: paused map resumes once; active, installed, storage and license results preserved");
+ }
+}`;
 files['com/alk/cpik/route/VehicleRoutingProfileSource.java']='package com.alk.cpik.route; public enum VehicleRoutingProfileSource {DEFAULT,MANUAL,FLEET_PORTAL,API}';
 files['com/semitrax/nativebridge/CoPilotFleetProfiles.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotFleetProfiles.java'),'utf8');
 files['com/semitrax/nativebridge/FleetProfilesTest.java']=`package com.semitrax.nativebridge;
@@ -63,6 +80,39 @@ public class FleetProfilesTest {
   String changed=f.read().get(0).ticket;fleet.source=VehicleRoutingProfileSource.MANUAL;denied(()->f.select(changed));fleet.source=VehicleRoutingProfileSource.FLEET_PORTAL;
   String mismatch=f.read().get(0).ticket;RouteMgr.profile=car;RouteMgr.selectionWorks=false;denied(()->f.select(mismatch));
   System.out.println("PASS: fleet origin, native profile preservation, changed/stale tickets, trip guard and selection readback");
+ }
+}`;
+files['com/alk/cpik/DistanceUnit.java']='package com.alk.cpik; public class DistanceUnit {public int n; public DistanceUnit(int v){n=v;} public int getInches(){return n;}}';
+files['com/alk/cpik/WeightUnit.java']='package com.alk.cpik; public class WeightUnit {public int n; public WeightUnit(int v){n=v;} public int getPounds(){return n;}}';
+files['com/alk/cpik/route/VehicleDimensions.java']='package com.alk.cpik.route; import com.alk.cpik.*; public class VehicleDimensions {public DistanceUnit height=new DistanceUnit(162),width=new DistanceUnit(102),length=new DistanceUnit(636); public WeightUnit weight=new WeightUnit(80000),axle=new WeightUnit(34000); public DistanceUnit getHeight(){return height;} public DistanceUnit getWidth(){return width;} public DistanceUnit getLength(){return length;} public WeightUnit getTotalWeight(){return weight;} public WeightUnit getWeightPerAxle(){return axle;} public String toString(){return height.n+":"+width.n+":"+length.n+":"+weight.n+":"+axle.n;}}';
+files['com/alk/cpik/route/RouteEnums.java']=files['com/alk/cpik/route/RouteEnums.java'].replace('public enum VehicleType', 'public enum RoutingType {QUICKEST,SHORTEST} public enum HazmatType {NONE,FLAMMABLE} public enum TollRoads {ALWAYS_AVOID,NO_RESTRICTION} public enum VehicleType');
+files['com/alk/cpik/route/VehicleRoutingProfile.java']=files['com/alk/cpik/route/VehicleRoutingProfile.java'].replace('public int restriction=1;', 'public int restriction=1; public VehicleDimensions dims=new VehicleDimensions(); public RouteEnums.RoutingType routing=RouteEnums.RoutingType.QUICKEST; public RouteEnums.HazmatType hazmat=RouteEnums.HazmatType.NONE; public RouteEnums.TollRoads toll=RouteEnums.TollRoads.NO_RESTRICTION; public VehicleDimensions getVehicleDimensions(){return dims;} public RouteEnums.RoutingType getRoutingType(){return routing;} public RouteEnums.HazmatType getHazmatType(){return hazmat;} public RouteEnums.TollRoads getTollRoadUsage(){return toll;}').replace('name+type+source+restriction','name+type+source+restriction+dims.toString()+routing+hazmat+toll');
+files['com/semitrax/nativebridge/CoPilotStandardTruck.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotStandardTruck.java'),'utf8');
+files['com/semitrax/nativebridge/StandardTruckTest.java']=`package com.semitrax.nativebridge;
+import com.alk.cpik.*; import com.alk.cpik.route.*;
+public class StandardTruckTest {
+ interface Action {void run();}
+ static void denied(Action a){try{a.run();throw new AssertionError("unverified truck accepted");}catch(IllegalStateException expected){}}
+ static void verify(CoPilotStandardTruck v){v.verify(162,102,636,80000,34000,1,5,false);}
+ public static void main(String[] args){
+  CoPilotStandardTruck v=new CoPilotStandardTruck();
+  denied(()->v.requireAccepted());verify(v);denied(()->v.requireAccepted());v.accept();v.requireAccepted();
+  RouteMgr.profile.dims.height.n=161;denied(()->v.requireAccepted());denied(()->verify(v));RouteMgr.profile.dims.height.n=162;
+  verify(v);v.accept();RouteMgr.profile.restriction++;denied(()->v.requireAccepted());
+  verify(v);v.accept();verify(v);denied(()->v.requireAccepted());
+  v.accept();v.clear();denied(()->v.requireAccepted());
+  RouteMgr.profile.source=VehicleRoutingProfileSource.MANUAL;denied(()->verify(v));RouteMgr.profile.source=VehicleRoutingProfileSource.FLEET_PORTAL;
+  RouteMgr.profile.hazmat=RouteEnums.HazmatType.FLAMMABLE;denied(()->verify(v));RouteMgr.profile.hazmat=RouteEnums.HazmatType.NONE;
+  RouteMgr.profile.routing=RouteEnums.RoutingType.SHORTEST;denied(()->verify(v));RouteMgr.profile.routing=RouteEnums.RoutingType.QUICKEST;
+  RouteMgr.profile.toll=RouteEnums.TollRoads.ALWAYS_AVOID;denied(()->verify(v));v.verify(162,102,636,80000,34000,1,5,true);v.accept();v.requireAccepted();
+  denied(()->v.verify(162,102,636,80000,34000,2,5,true));
+  denied(()->v.verify(162,102,882,80000,34000,1,5,true));
+  denied(()->v.verify(163,102,636,80000,34000,1,5,true));
+  denied(()->v.verify(162,102,636,80001,34000,1,5,true));
+  denied(()->v.verify(162,102,636,80000,34001,1,5,true));
+  denied(()->v.verify(162,102,636,80000,34000,1,6,true));
+  denied(()->v.requireAccepted());
+  System.out.println("PASS: standard truck scope, native readback, preferences, explicit consent and profile changes");
  }
 }`;
 try{
@@ -105,5 +155,5 @@ public class ProvisioningTest {
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
+ else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

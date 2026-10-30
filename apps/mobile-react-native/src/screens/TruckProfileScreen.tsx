@@ -1,3 +1,4 @@
+import { standardTruckRequest } from '../services/copilot/StandardTruckNavigation';
 import { useDriverPalette } from '../components/DriverUI';
 import {
   dimensionFields,
@@ -73,7 +74,7 @@ const labels: Record<string, string> = {
   lengthFt: 'Length (ft)',
   weightLbs: 'Gross weight (lb)',
   currentWeightLbs: 'Current weight (lb, optional)',
-  weightPerAxleLbs: 'Weight per axle (lb, optional)',
+  weightPerAxleLbs: 'Maximum loaded axle-group weight (lb)',
   axleCount: 'Axles',
   trailerCount: 'Trailers',
   name: 'Profile name',
@@ -88,6 +89,17 @@ const labels: Record<string, string> = {
   avoidDirtRoads: 'Avoid dirt roads',
   isDefault: 'Default truck',
 };
+function nativeCompatibility(profile: TruckProfile): string {
+  try {
+    standardTruckRequest(profile);
+    return 'Saved settings pass the current standard-truck check. Engine profile, maps and guidance still need confirmation when starting navigation.';
+  } catch (error) {
+    return error instanceof Error &&
+      error.message.startsWith('Truck settings need review:')
+      ? error.message
+      : 'These settings could not be checked for native navigation. Review all truck values before starting.';
+  }
+}
 function formFrom(profile?: TruckProfile): Record<string, unknown> {
   return profile
     ? { ...profile, ...dimensionForm(profile) }
@@ -562,8 +574,8 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             {key === 'weightPerAxleLbs' && (
               <Copy>
                 For Trimble this means the maximum loaded axle-group weight, not
-                total weight divided by axle count. Optional; enter a measured
-                group value.
+                total weight divided by axle count. Required for current native
+                navigation; enter a measured group value.
               </Copy>
             )}
             {(key === 'axleCount' || key === 'trailerCount') && (
@@ -654,6 +666,14 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           <Copy>
             Check these values against the actual vehicle and load before
             activating this profile.
+          </Copy>
+          <Heading>Native navigation compatibility</Heading>
+          <Copy>{nativeCompatibility(review.profile)}</Copy>
+          <Copy>
+            Saving a profile does not guarantee native navigation support. Enter
+            total axles across the tractor and trailers, the actual trailer
+            count, and the measured maximum loaded axle-group weight. If your
+            equipment is outside the supported mode, keep its actual values.
           </Copy>
           {[...stringFields, ...numericFields].map(key => (
             <Copy key={key}>

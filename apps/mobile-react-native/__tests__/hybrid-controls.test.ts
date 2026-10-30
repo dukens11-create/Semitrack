@@ -59,7 +59,7 @@ test('required axle/trailer restrictions prevent partial native profile writes',
     synchronizeHybridTruck(services, {
       applyTruckProfile: apply,
     } as unknown as CoPilotHost),
-  ).rejects.toMatchObject({ code: 'TRUCK_RESTRICTIONS_UNREPRESENTABLE' });
+  ).rejects.toThrow('Trailer length: this mode requires 53 feet');
   expect(apply).not.toHaveBeenCalled();
 });
 test('raw native errors cannot leak into driver messages', () => {

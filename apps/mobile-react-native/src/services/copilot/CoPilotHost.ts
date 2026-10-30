@@ -1,6 +1,12 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  routeEngine?: {
+    status: string;
+    readyToAddStops?: boolean;
+    receivingGps?: boolean;
+    hasDestination?: boolean;
+  };
   buildIdentity?: {
     commit: string;
     builtAt: string;
@@ -63,6 +69,8 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  verifyStandardTruckProfile?(profile: unknown): Promise<void>;
+  acceptStandardTruckMode?(): Promise<void>;
   readFleetTruckProfiles?(): Promise<unknown>;
   selectFleetTruckProfile?(ticket: string): Promise<unknown>;
   recordHybridControl?(action: string, stage: string): Promise<void>;

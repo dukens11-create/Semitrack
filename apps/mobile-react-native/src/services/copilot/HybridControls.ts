@@ -1,6 +1,6 @@
 import type { Services } from '../../app/services';
 import { coPilotHost, type CoPilotHost } from './CoPilotHost';
-import { assessCopilotTruckProfile } from './CopilotTruckProfile';
+import { standardTruckRequest } from './StandardTruckNavigation';
 
 export type HybridAction =
   | 'START_RESUME'
@@ -27,12 +27,25 @@ export function logHybridControl(action: HybridAction, stage: HybridStage) {
     /* Bridge may be unavailable; never block the control. */
   }
 }
-export class HybridControlError extends Error {}
+export class HybridControlError extends Error {
+  constructor(message: string, readonly code = 'UNCLASSIFIED_FAILURE') { super(message); }
+}
 export function hybridError(error: unknown): string {
   if (error instanceof HybridControlError) return error.message;
   const code =
     error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
+    case 'FLEET_PROFILE_REQUIRED':
+      return 'Check assigned fleet profiles and select the matching heavy-duty truck profile.';
+    case 'TRUCK_DIMENSIONS_MISMATCH':
+      return 'The engine dimensions or axle-group weight do not match your saved truck. Review both profiles; no settings were changed.';
+    case 'TRUCK_PREFERENCES_MISMATCH':
+      return 'The fleet profile must use Practical routing, no hazardous cargo, and the same toll preference as your saved truck.';
+    case 'STANDARD_TRUCK_RECHECK_REQUIRED':
+    case 'STANDARD_TRUCK_CONFIRMATION_REQUIRED':
+      return 'The truck profile needs a fresh check and confirmation before starting.';
+    case 'STANDARD_TRUCK_UNSUPPORTED':
+      return 'This configuration is outside the standard single 53-foot semitrailer mode.';
     case 'TRUCK_RESTRICTIONS_UNREPRESENTABLE':
       return 'Truck synchronization is blocked in this build: the required truck-profile mapping has not been verified against the Trimble SDK. Saved truck details have not been removed.';
     case 'ENGINE_STOP_UNCONFIRMED':
@@ -55,18 +68,26 @@ export async function synchronizeHybridTruck(
   if (!truck)
     throw new HybridControlError(
       'Open Truck settings, save and verify the truck profile before starting.',
+      'TRUCK_NOT_SELECTED',
     );
-  // Do not partially apply a profile: an unsupported required restriction blocks all changes.
-  const assessment = assessCopilotTruckProfile(truck);
-  if (!assessment.canApply)
-    throw Object.assign(new Error(), {
-      code: 'TRUCK_RESTRICTIONS_UNREPRESENTABLE',
-    });
-  if (!host.applyTruckProfile)
+  let request;
+  try {
+    request = standardTruckRequest(truck);
+  } catch (e) {
+    throw new HybridControlError(
+      e instanceof Error && !('issues' in e)
+        ? e.message
+        : 'The saved truck profile is invalid. Review Truck settings.',
+      e instanceof Error && !('issues' in e) ? 'STANDARD_TRUCK_SCOPE' : 'SAVED_TRUCK_INVALID',
+    );
+  }
+  if (!host.verifyStandardTruckProfile)
     throw new HybridControlError(
       'This APK does not contain the truck-profile bridge. Install the matching Hybrid build.',
+      'PROFILE_BRIDGE_MISSING',
     );
-  await host.applyTruckProfile(truck);
+  // Read-only matching. Never overwrite an assigned native fleet profile.
+  await host.verifyStandardTruckProfile(request);
 }
 export async function resumeHybridTrip(host: CoPilotHost) {
   if (!host.resumeEngineTrip)

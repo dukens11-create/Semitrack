@@ -66,7 +66,8 @@ test('draws planning geometry on CoPilot and forwards verified map interactions'
   });
   expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(1);
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith(route.routeGeometry);
-  expect(mockHost.mapFrame).toHaveBeenCalledWith(-120, 39, -119, 40);
+  expect(mockHost.mapFrame).not.toHaveBeenCalled();
+  expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
   expect(mockHost.drawMarkers).toHaveBeenCalledWith([
     { id: 0, lat: 39, lng: -120 },
   ]);
@@ -131,8 +132,10 @@ test('compact tools stay in the inset scroll area and retain accessible native a
   const buttons = React.Children.toArray(tools.props.children).filter(
     (
       child,
-    ): child is React.ReactElement<{ accessibilityLabel: string; onPress: () => void }> =>
-      React.isValidElement(child) && child.type === Pressable,
+    ): child is React.ReactElement<{
+      accessibilityLabel: string;
+      onPress: () => void;
+    }> => React.isValidElement(child) && child.type === Pressable,
   );
   expect(buttons).toHaveLength(6);
   for (const [label, command] of [
@@ -160,4 +163,36 @@ test('compact tools stay in the inset scroll area and retain accessible native a
       .props.onPress(),
   );
   expect(audio).toHaveBeenCalledTimes(1);
+});
+
+test('equivalent route refresh preserves the driver camera', async () => {
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={route} plan={null} pois={[]} />);
+  });
+  mockHost.mapFrame.mockClear();
+  mockHost.drawRoutePreview.mockClear();
+  await act(async () => {
+    tree.update(
+      <CopilotPlannerMap
+        route={{
+          ...route,
+          routeGeometry: route.routeGeometry.map(p => [...p]),
+        }}
+        plan={null}
+        pois={[]}
+      />,
+    );
+  });
+  expect(mockHost.mapFrame).not.toHaveBeenCalled();
+  expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
+});
+
+test('opens Trimble before address selection and clears old planning geometry', async () => {
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={null} plan={null} pois={[]} />);
+  });
+  expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(1);
+  expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
+  expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
+  expect(mockHost.mapFrame).not.toHaveBeenCalled();
 });

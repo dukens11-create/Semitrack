@@ -116,6 +116,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     });
   }
   private final CoPilotFleetProfiles fleetProfiles = new CoPilotFleetProfiles();
+  private final CoPilotStandardTruck standardTruck = new CoPilotStandardTruck();
   private WritableMap fleetProfileValue(com.alk.cpik.route.VehicleRoutingProfile profile, String ticket) {
     com.alk.cpik.route.VehicleDimensions dims = profile.getVehicleDimensions();
     WritableMap result = Arguments.createMap();
@@ -151,6 +152,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (tripPreparing || stoppingTrip || tripHandoff.pendingStops())
           throw new IllegalStateException("FLEET_TRIP_ACTIVE");
         com.alk.cpik.route.VehicleRoutingProfile profile = fleetProfiles.select(ticket);
+        standardTruck.clear();
         tripHandoff.invalidateReview();
         promise.resolve(fleetProfileValue(profile, ""));
       } catch (Exception e) {
@@ -161,11 +163,66 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       }
     });
   }
+  private final Runnable standardProfileMonitor = new Runnable() {
+    @Override public void run() {
+      if (invalidated || !started || !connected) return;
+      try {
+        requireMap();
+        standardTruck.requireAccepted();
+        main.postDelayed(this, 1000);
+      } catch (Exception e) {
+        try { GuidanceMgr.suspendNavigation(true); } catch (Exception ignored) {}
+        standardTruck.clear();
+        control("SYNC_PROFILE", "PROFILE_CHANGED_GUIDANCE_PAUSED");
+      }
+    }
+  };
   private void requireSyncedTruck() {
-    // CPIK 11.3 has no verified separate overall-length/trailer-count readback here.
-    // Never certify a partial truck profile or bypass the heavy-duty safety gate.
-    control("SYNC_PROFILE", "BLOCKED_UNSUPPORTED_RESTRICTIONS");
-    throw new IllegalStateException("TRUCK_RESTRICTIONS_UNREPRESENTABLE");
+    standardTruck.requireAccepted();
+  }
+  private int standardInt(ReadableMap value, String key) {
+    if (!value.hasKey(key) || value.isNull(key) || value.getType(key) != com.facebook.react.bridge.ReadableType.Number)
+      throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
+    double number = value.getDouble(key);
+    if (!Double.isFinite(number) || number != Math.rint(number) || number <= 0 || number > Integer.MAX_VALUE)
+      throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
+    return (int) number;
+  }
+  @ReactMethod public void verifyStandardTruckProfile(ReadableMap value, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap();
+        if (RouteMgr.hasDestination()) GuidanceMgr.suspendNavigation(true);
+        standardTruck.clear();
+        if (tripPreparing || stoppingTrip) throw new IllegalStateException("STANDARD_TRUCK_RECHECK_REQUIRED");
+        if (!"11.3.0.2016".equals(CopilotMgr.getVersionInfo().getAppVersion()) || value == null
+            || !value.hasKey("mode") || !"STANDARD_SINGLE_53".equals(value.getString("mode"))
+            || !value.hasKey("avoidTolls") || value.getType("avoidTolls") != com.facebook.react.bridge.ReadableType.Boolean)
+          throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
+        standardTruck.verify(standardInt(value, "heightInches"), standardInt(value, "widthInches"),
+            standardInt(value, "lengthInches"), standardInt(value, "weightLbs"), standardInt(value, "weightPerAxleLbs"),
+            standardInt(value, "trailerCount"), standardInt(value, "axleCount"), value.getBoolean("avoidTolls"));
+        control("SYNC_PROFILE", "STANDARD_PROFILE_MATCH");
+        promise.resolve(null);
+      } catch (Exception e) {
+        standardTruck.clear();
+        String code = e.getMessage();
+        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
+            "TRUCK_PREFERENCES_MISMATCH", "STANDARD_TRUCK_RECHECK_REQUIRED").contains(code)) code = "STANDARD_TRUCK_RECHECK_REQUIRED";
+        promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
+      }
+    });
+  }
+  @ReactMethod public void acceptStandardTruckMode(Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap(); requireTripForeground(); standardTruck.accept();
+        main.removeCallbacks(standardProfileMonitor);
+        main.postDelayed(standardProfileMonitor, 1000);
+        promise.resolve(null);
+      }
+      catch (Exception e) { promise.reject("STANDARD_TRUCK_RECHECK_REQUIRED", "Review the truck profile again before starting."); }
+    });
   }
   @ReactMethod public void applyTruckProfile(ReadableMap profile, Promise promise) {
     main.post(() -> {
@@ -500,6 +557,9 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     }
   };
   private void release() {
+    try { GuidanceMgr.suspendNavigation(true); } catch (Exception ignored) {}
+    main.removeCallbacks(standardProfileMonitor);
+    standardTruck.clear();
     guidanceTelemetry.stop();
     trace(CoPilotLoginTrace.Event.SERVICE_RELEASED);
     main.removeCallbacks(startupTimeout);
@@ -628,9 +688,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           item.putBoolean("serviceConnected", Boolean.parseBoolean(entry[4])); controls.pushMap(item);
         }
         result.putArray("controlTimeline", controls);
-        // This is a known code-level blocker, independent of SDK login or service binding.
-        // Report it explicitly rather than making a failed Start/Resume look like a dead button.
-        result.putString("truckRestrictionSync", "BLOCKED_UNSUPPORTED_AXLE_TRAILER_MAPPING");
+        // Standard mode does not certify separate axle/trailer/overall-length fields.
+        result.putString("truckRestrictionSync", "LIMITED_STANDARD_MODE_REQUIRES_PROFILE_CHECK");
         result.putBoolean("truckRestrictionsVerified", false);
         WritableMap storage = Arguments.createMap();
         try {
@@ -643,6 +702,17 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         result.putMap("appStorage", storage);
         result.putMap("nativeDisplay", nativeDisplayDiagnostics());
+        WritableMap routeEngine = Arguments.createMap();
+        routeEngine.putString("status", "NOT_STARTED");
+        if (started) {
+          try {
+            routeEngine.putBoolean("readyToAddStops", RouteMgr.isCopilotReadyToAddStops());
+            routeEngine.putBoolean("receivingGps", RouteMgr.isReceivingGPSSignal());
+            routeEngine.putBoolean("hasDestination", RouteMgr.hasDestination());
+            routeEngine.putString("status", "AVAILABLE");
+          } catch (Exception ignored) { routeEngine.putString("status", "UNAVAILABLE"); }
+        }
+        result.putMap("routeEngine", routeEngine);
         WritableMap download = Arguments.createMap();
         download.putString("response", mapDownloadResponse);
         download.putString("callback", mapDownloadCallback);
@@ -917,7 +987,19 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           new Thread(() -> {
             try {
               // Add to installed maps; keep every map component enabled.
-              MapDownloadResponse response = MapDataMgr.downloadMap(requested, Collections.emptyList(), false);
+              MapDownloadResponse response = MapDownloadResponse.SUCCESS;
+              // Handle each selected region separately so a paused member can resume
+              // without restarting or cancelling other installed/in-flight maps.
+              for (MapRegion target : requested) {
+                MapDownloadResponse item = CoPilotMapDownload.request(
+                    () -> MapDataMgr.downloadMap(Collections.singletonList(target), Collections.emptyList(), false),
+                    () -> MapDataMgr.resumeMapDownload(target), MapDownloadResponse.FAILURE_PAUSED);
+                regionDownloadStatus.put(target, item.name());
+                if (item != MapDownloadResponse.SUCCESS && item != MapDownloadResponse.FAILURE_DOWNLOADING
+                    && item != MapDownloadResponse.FAILURE_DOWNLOADED && item != MapDownloadResponse.FAILURE_INSTALLED) {
+                  response = item; break;
+                }
+              }
               mapDownloadResponse = response.name();
               mapDownloadStage = "SDK_RESPONSE";
               promise.resolve(response.name());
@@ -979,7 +1061,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         }
         new Thread(() -> {
           try {
-            MapDownloadResponse response = MapDataMgr.downloadMap(Collections.singletonList(region()), Collections.emptyList(), initialInstall);
+            final MapRegion target = region();
+            MapDownloadResponse response = CoPilotMapDownload.request(
+                () -> MapDataMgr.downloadMap(Collections.singletonList(target), Collections.emptyList(), initialInstall),
+                () -> MapDataMgr.resumeMapDownload(target), MapDownloadResponse.FAILURE_PAUSED);
             mapDownloadResponse = response.name();
             mapDownloadStage = "SDK_RESPONSE";
             promise.resolve(response.name());
@@ -1110,6 +1195,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       control("END_ROUTE", "REQUEST");
       if (stoppingTrip) { promise.reject("ENGINE_STOP_UNCONFIRMED", "Stop confirmation pending."); return; }
       stoppingTrip = true;
+      main.removeCallbacks(standardProfileMonitor);
+      standardTruck.clear();
       ++tripGeneration; tripPreparing = false; tripHandoff.invalidateReview();
       if (pendingTrip != null) { pendingTrip.reject("ENGINE_TRIP_CANCELLED", "Start cancelled."); pendingTrip = null; }
       // Ending must remain possible if licensing/maps/readiness later become unavailable.
@@ -1249,7 +1336,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private void pollStarted(Promise promise, int generation, long deadline) {
     if (generation != tripGeneration) return;
     try {
-      requireMap(); requireTripForeground();
+      requireMap(); requireTripForeground(); requireSyncedTruck();
       if (tripHandoff.failed()) { failStart(promise, generation, "ENGINE_TRIP_FAILED"); return; }
       if (tripHandoff.confirmed()) {
         tripPreparing = false; pendingTrip = null;
@@ -1272,6 +1359,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (tripPreparing || !tripHandoff.canReturnToPlanner())
           throw new IllegalStateException("Use Trip controls to finish or cancel the engine trip before returning to the planner.");
         GuidanceMgr.suspendNavigation(true);
+        main.removeCallbacks(standardProfileMonitor);
+        standardTruck.clear();
         promise.resolve(null);
       } catch (Exception e) { promise.reject("ENGINE_TRIP_ACTIVE", "End Route before returning to planner."); }
     });
@@ -1289,13 +1378,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             drawer.lockToChevron();
             break;
           case "native-map":
-            // Opening the native navigation screen hands control to CoPilot.
-            // Merely enabling GPS does not undo startup suspension.
+            // Display-only. Only the verified trip start/resume path may unsuspend guidance.
             if (context.getLifecycleState() != LifecycleState.RESUMED ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
               throw new IllegalStateException("VISIBLE_PRECISE_LOCATION_REQUIRED");
             CopilotMgr.enableGPS();
-            GuidanceMgr.suspendNavigation(false);
             drawer.lockToChevron();
             GuidanceSettings.setSpeedLimitOnMap(true);
             drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL);
@@ -1308,6 +1395,8 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
           case "recenter": drawer.lockToChevron(); break;
+          case "two-dimensional": drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS); break;
+          case "three-dimensional": drawer.setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS); break;
           case "north-up": drawer.setMapOrientation(MapDrawer.MapOrientation.NORTH_UP); break;
           case "heading-up": drawer.setMapOrientation(MapDrawer.MapOrientation.HEADING_UP); break;
           case "zoom-in": drawer.mapZoom(MapDrawer.ZoomAction.ZOOM_IN); break;
@@ -1429,14 +1518,16 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @ReactMethod public void guidanceSnapshot(Promise promise) {
     main.post(() -> promise.resolve(guidanceTelemetry.snapshot()));
   }
-  /** Read-only Mapbox proof: the next 25 miles of the actual engine route. */
+  /** Read-only guidance with optional route geometry. Trimble renders its own route. */
   @ReactMethod public void guidanceMapSnapshot(Promise promise) {
     main.post(() -> {
       try {
         requireMap();
+        if (RouteMgr.hasDestination()) requireSyncedTruck();
         WritableMap value = guidanceTelemetry.snapshot();
         if (value.hasKey("routeStatus") && "ready".equals(value.getString("routeStatus"))
             && RouteMgr.hasDestination()) {
+          try {
           java.util.List<Coordinate> points = GuidanceMgr.getRouteCoordinates(true, 25.0, 1.0);
           if (points == null || points.size() > 20000) throw new IllegalStateException("ROUTE_GEOMETRY_UNAVAILABLE");
           com.facebook.react.bridge.WritableArray coordinates = Arguments.createArray();
@@ -1449,6 +1540,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             coordinates.pushArray(pair);
           }
           value.putArray("routeCoordinates", coordinates);
+          } catch (Exception ignored) { /* Optional geometry must not hide turn instructions or ETA. */ }
         }
         promise.resolve(value);
       } catch (Exception e) {

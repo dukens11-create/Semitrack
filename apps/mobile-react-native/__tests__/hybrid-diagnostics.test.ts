@@ -65,15 +65,43 @@ test('arbitrary native messages are not exported as event codes', () => {
 });
 test('readiness precedes native timelines and preserves safe failure codes', () => {
   const report = coPilotDiagnosticReport(native, {
-    ...state, readyToAddStops: false, error: 'COPILOT_NOT_READY',
+    ...state,
+    readyToAddStops: false,
+    error: 'COPILOT_NOT_READY',
   });
-  expect(report.indexOf('"readiness"')).toBeLessThan(report.indexOf('"native"'));
+  expect(report.indexOf('"readiness"')).toBeLessThan(
+    report.indexOf('"native"'),
+  );
   expect(report).toContain('"readyToAddStops": false');
   expect(report).toContain('"error": "COPILOT_NOT_READY"');
 });
 test('readiness exports null or known errors without leaking unknown error text', () => {
-  expect(coPilotDiagnosticReport(native, {...state, error: null})).toContain('"error": null');
-  const report = coPilotDiagnosticReport(native, {...state, error: 'SENSITIVE'});
+  expect(coPilotDiagnosticReport(native, { ...state, error: null })).toContain(
+    '"error": null',
+  );
+  const report = coPilotDiagnosticReport(native, {
+    ...state,
+    error: 'SENSITIVE',
+  });
   expect(report).not.toContain('SENSITIVE');
   expect(report).toContain('"error": "NOT_AVAILABLE"');
+});
+
+test('route readiness and GPS are separate, bounded diagnostic fields', () => {
+  const report = coPilotDiagnosticReport(
+    {
+      ...native,
+      routeEngine: {
+        status: 'AVAILABLE',
+        readyToAddStops: false,
+        receivingGps: true,
+        hasDestination: false,
+        location: 'SENSITIVE',
+      },
+    },
+    state,
+  );
+  expect(report).toContain('"readyToAddStops": false');
+  expect(report).toContain('"receivingGps": true');
+  expect(report).not.toContain('SENSITIVE');
 });

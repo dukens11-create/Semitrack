@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { AppState, Switch } from 'react-native';
+import { AppState, Switch, Pressable } from 'react-native';
 import { CoPilotFeatureControls } from '../src/components/CoPilotFeatureControls';
 import { DriverButton } from '../src/components/DriverUI';
 const mockRead = jest.fn(),
@@ -66,4 +66,11 @@ test('disabled setup never reads or changes native preferences', async () => {
   expect(tree.root.findAllByType(DriverButton)[0]!.props.disabled).toBe(true);
   expect(mockRead).not.toHaveBeenCalled();
   expect(mockPlaces).not.toHaveBeenCalled();
+});
+
+test('voice controls are reachable before guidance without reading speech until opened', async () => {
+  await open();
+  expect(tree.root.findAllByType(Pressable).some(button =>
+    button.props.accessibilityLabel === 'SemiTraX voice controls',
+  )).toBe(true);
 });

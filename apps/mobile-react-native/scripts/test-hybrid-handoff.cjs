@@ -49,6 +49,21 @@ public class HandoffTest {
  }
 }`,
 };
+files['com/semitrax/nativebridge/CoPilotCalculationState.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotCalculationState.java'),'utf8');
+files['com/semitrax/nativebridge/CalculationStateTest.java']=`package com.semitrax.nativebridge;
+public class CalculationStateTest {
+ static void check(CoPilotCalculationState s,String expected){if(!expected.equals(s.status()))throw new AssertionError(s.status());}
+ public static void main(String[] args){
+  CoPilotCalculationState s=new CoPilotCalculationState();s.complete();check(s,"unknown");
+  s.begin();check(s,"calculating");s.complete();check(s,"ready");
+  s.begin();s.fail();s.complete();check(s,"failed");
+  s.begin();s.complete();check(s,"ready");
+  s.clear();s.complete();check(s,"none");
+  s.begin();s.arrive();s.complete();check(s,"arrived");
+  s.reset();s.complete();check(s,"unknown");
+  System.out.println("PASS: calculation completion cannot revive failure, cancellation, arrival or reset");
+ }
+}`;
 files['com/semitrax/nativebridge/CoPilotMapDownload.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotMapDownload.java'),'utf8');
 files['com/semitrax/nativebridge/MapDownloadTest.java']=`package com.semitrax.nativebridge;
 public class MapDownloadTest {
@@ -163,5 +178,5 @@ public class ProvisioningTest {
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{for(const name of ['HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
+ else{for(const name of ['CalculationStateTest','HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

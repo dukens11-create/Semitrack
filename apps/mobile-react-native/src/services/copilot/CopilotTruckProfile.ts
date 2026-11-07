@@ -86,7 +86,14 @@ export function feetToConservativeInches(feet: number): number {
   if (!Number.isFinite(feet) || feet <= 0) {
     throw new CopilotP0Error('INVALID_DIMENSION');
   }
-  const inches = Math.ceil(feet * 12);
+  const raw = feet * 12;
+  // Undo only machine-precision noise from feet/inches round trips. Genuine
+  // fractional inches still round upward, never downward to fit a limit.
+  const nearest = Math.round(raw);
+  const inches =
+    Math.abs(raw - nearest) <= Number.EPSILON * Math.max(1, Math.abs(raw)) * 2
+      ? nearest
+      : Math.ceil(raw);
   if (!Number.isSafeInteger(inches)) {
     throw new CopilotP0Error('INVALID_DIMENSION');
   }
@@ -149,6 +156,8 @@ export function assessCopilotTruckProfile(input: unknown) {
   return {
     canApply: false as const,
     blockers,
+    missingFields: blockers.filter(field => field === 'weightPerAxleLbs'),
+    unsupportedFields: blockers.filter(field => field !== 'weightPerAxleLbs'),
     conversionEvidence: {
       heightInches: feetToConservativeInches(truck.heightFt),
       widthInches: feetToConservativeInches(truck.widthFt),
@@ -168,6 +177,11 @@ export function requireRepresentableCopilotTruckProfile(
   profile: TruckProfile,
 ): never {
   const assessment = assessCopilotTruckProfile(profile);
+  if (assessment.missingFields.length)
+    throw new CopilotP0Error(
+      'TRUCK_PROFILE_INCOMPLETE',
+      assessment.missingFields,
+    );
   throw new CopilotP0Error(
     'TRUCK_RESTRICTIONS_UNREPRESENTABLE',
     assessment.blockers,

@@ -23,7 +23,7 @@ function fixture(count=3) {
     ]};
   });
   geometry.push([points.at(-1).lng,40]);
-  const input={origin:points[0],viaStops:points.slice(1,-1),destination:points.at(-1),truck:{heightFt:13.5,widthFt:8.5,lengthFt:53,weightLbs:80000,axleCount:5,trailerCount:1,trailerType:'semi trailer',hazmatEnabled:false,hazardousGoods:[],avoidTolls:false,avoidFerries:false,avoidHighways:false,avoidResidential:false,avoidDirtRoads:false},alternatives:0};
+  const input={origin:points[0],viaStops:points.slice(1,-1),destination:points.at(-1),truck:{heightFt:13.5,widthFt:8.5,lengthFt:53,weightLbs:80000,weightPerAxleLbs:34000,axleCount:5,trailerCount:1,trailerType:'semi trailer',hazmatEnabled:false,hazardousGoods:[],avoidTolls:false,avoidFerries:false,avoidHighways:false,avoidResidential:false,avoidDirtRoads:false},alternatives:0};
   const reports=[{__type:'DirectionsReport',Origin:loc(points[0],0),Destination:loc(points.at(-1),count-1),ReportLegs:legs},
     {__type:'MileageReport',ReportLines:points.map((p,i)=>({Stop:loc(p,i),LMiles:i?'5':'0',LHours:clock(i?120:0),TMiles:String(i*5),THours:clock(i*120)}))},
     {__type:'RoutePathReport',geometry:{type:'LineString',coordinates:geometry}}];
@@ -94,7 +94,7 @@ test('27-location request retains every truck restriction and ordered provider s
   assert.equal(f.input.viaStops.length,MAX_INTERMEDIATE_STOPS);
   assert.deepEqual(r.Stops.map(s=>({lat:s.Coords.Lat,lng:s.Coords.Lon})),f.points);
   assert.equal(r.Options.VehicleType,0);assert.equal(r.Options.OverrideRestrict,false);
-  assert.deepEqual(r.Options.TruckCfg,{Units:0,Height:'162',Width:'102',Length:'636',Weight:'80000',Axles:5,LCV:false});
+  assert.deepEqual(r.Options.TruckCfg,{Units:0,Height:'162',Width:'102',Length:'636',Weight:'80000',Axles:5,MaxWeightPerAxleGroup:34000,LCV:false});
   assert.equal(r.Options.TrailerCfg.Count,1);assert.deepEqual(r.Options.HazMatTypes,[]);
 });
 test('metadata-only origin followed by one authoritative straight line is valid',()=>{

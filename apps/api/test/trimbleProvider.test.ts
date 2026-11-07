@@ -357,3 +357,10 @@ test("invalid maneuver coordinates cannot acquire a fabricated geometry offset",
     assert.throws(()=>matchTrimbleManeuversToGeometry([{step:1,instruction:"Fixture",distanceMiles:0,coordinate}], [[-120,40],[-119.999,40]]));
   }
 });
+
+for (const missing of [null, undefined]) {
+  test(`missing axle-group weight ${missing} fails before provider routing`, () => {
+    assert.throws(() => buildTrimbleRouteRequest({ ...input, truck: { ...input.truck, weightPerAxleLbs: missing } }, config),
+      (error: unknown) => error instanceof RoutingProviderError && error.code === 'TRIMBLE_AXLE_GROUP_WEIGHT_REQUIRED');
+  });
+}

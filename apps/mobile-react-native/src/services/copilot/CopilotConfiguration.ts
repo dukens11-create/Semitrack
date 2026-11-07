@@ -39,7 +39,9 @@ export class CopilotP0Error extends Error {
   ) {
     // Never interpolate supplied configuration or native credential payloads.
     super(
-      code === 'TRUCK_RESTRICTIONS_UNREPRESENTABLE'
+      code === 'TRUCK_PROFILE_INCOMPLETE'
+        ? 'Enter the measured maximum loaded axle-group weight in Truck Settings. Do not calculate it by dividing total weight by axle count.'
+        : code === 'TRUCK_RESTRICTIONS_UNREPRESENTABLE'
         ? 'Truck guidance is unavailable because required truck restrictions are unsupported.'
         : 'SemiTraX setup or navigation prerequisites could not be verified.',
     );

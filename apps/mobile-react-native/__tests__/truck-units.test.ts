@@ -1,3 +1,4 @@
+import { feetToConservativeInches } from '../src/services/copilot/CopilotTruckProfile';
 import {
   parseTruckForm,
   dimensionForm,
@@ -176,4 +177,13 @@ test.each([
   );
   expect(result.message).toContain(expected);
   expect(result.message).not.toContain('private details');
+});
+
+// A repeated save/reload must not increase an exact inch due to binary floats.
+test('native dimension conversion preserves every whole inch across form round trips', () => {
+  for (let inches = 60; inches <= 840; inches++) {
+    expect(feetToConservativeInches(inches / 12)).toBe(inches);
+  }
+  expect(feetToConservativeInches(97.000001 / 12)).toBe(98);
+  expect(feetToConservativeInches(97.5 / 12)).toBe(98);
 });

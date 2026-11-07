@@ -303,3 +303,73 @@ test('failure querying maps remains non-ready and does not escape the callback',
   });
   h.lifecycle.dispose();
 });
+
+test('hung readiness read times out and an explicit recheck can recover', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  const goodRead = h.port.licenseState;
+  let release!: (value: Awaited<ReturnType<typeof goodRead>>) => void;
+  h.port.licenseState = () =>
+    new Promise(resolve => {
+      release = resolve;
+    });
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  await jest.advanceTimersByTimeAsync(10000);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    copilotReady: false,
+    operation: 'license-verification: COPILOT_READINESS_TIMEOUT',
+  });
+  h.port.licenseState = goodRead;
+  await h.lifecycle.recheck();
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  await h.event('onCPShutdown');
+  release(await goodRead());
+  await jest.advanceTimersByTimeAsync(1);
+  expect(h.lifecycle.snapshot()).toMatchObject({
+    initialized: false,
+    copilotReady: false,
+    operation: 'shutdown',
+  });
+  h.lifecycle.dispose();
+});
+
+test('restarting a disposed lifecycle is not held behind an unresolved previous query', async () => {
+  jest.useFakeTimers();
+  const h = harness();
+  const goodRead = h.port.licenseState;
+  h.port.licenseState = () => new Promise(() => {});
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  h.lifecycle.dispose();
+  h.port.licenseState = goodRead;
+  await h.lifecycle.start();
+  await h.event('onCPStartup');
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  await jest.advanceTimersByTimeAsync(10000);
+  expect(h.lifecycle.snapshot().copilotReady).toBe(true);
+  h.lifecycle.dispose();
+});
+
+test.each([
+  ['licenseState', 'license-verification'],
+  ['configuration', 'map-version-inventory'],
+  ['mapState', 'installed-map-inventory'],
+  ['readyToAddStops', 'route-manager-readiness'],
+] as const)(
+  'a stalled %s reports its stage without claiming readiness',
+  async (method, stage) => {
+    jest.useFakeTimers();
+    const h = harness();
+    h.port[method] = jest.fn(() => new Promise<never>(() => {}));
+    await h.lifecycle.start();
+    await h.event('onCPStartup');
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(h.lifecycle.snapshot()).toMatchObject({
+      copilotReady: false,
+      error: 'COPILOT_NOT_READY',
+      operation: `${stage}: COPILOT_READINESS_TIMEOUT`,
+    });
+    h.lifecycle.dispose();
+  },
+);

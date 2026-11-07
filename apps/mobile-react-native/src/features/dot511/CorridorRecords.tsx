@@ -2,6 +2,7 @@ import {
   currentObservation,
   currentDieselPrice,
 } from '../navigation/providerEvidence';
+import { parkingStatus } from '../poi/parkingStatus';
 import { stationStatus } from '../poi/stationStatus';
 import React, { useEffect, useState } from 'react';
 import { Image, Linking, StyleSheet } from 'react-native';
@@ -67,12 +68,10 @@ export function recordLines(item: Record<string, unknown>): string[] {
         'Reported status: ' +
           (key === 'currentStatus'
             ? stationStatus(report)
-            : report.stale === false &&
-              currentObservation(report, 900000) &&
-              typeof report.value === 'string'
-            ? report.value
-            : 'UNKNOWN'),
+            : parkingStatus(report).value),
       );
+      if (key === 'currentAvailability')
+        lines.push('Availability type: ' + parkingStatus(report).kind);
       if (typeof report.source === 'string')
         lines.push('Status source: ' + report.source);
       if (typeof report.lastReportedAt === 'string')

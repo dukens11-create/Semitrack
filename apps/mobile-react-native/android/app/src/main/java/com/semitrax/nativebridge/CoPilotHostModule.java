@@ -95,7 +95,11 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   private boolean binding, connected, invalidated, mapPrepared;
   private final CoPilotTripHandoff tripHandoff = new CoPilotTripHandoff();
   private volatile boolean tripPreparing;
-  private int tripGeneration;
+  private volatile boolean tripGeocoding;
+  private final CoPilotStartAttempt startAttempt = new CoPilotStartAttempt(new CoPilotStartAttempt.Scheduler() {
+    public void postDelayed(Runnable task, long delayMillis) { main.postDelayed(task, delayMillis); }
+    public void removeCallbacks(Runnable task) { main.removeCallbacks(task); }
+  });
   private Promise pendingTrip;
   private boolean stoppingTrip;
   private final long controlCreatedAt = android.os.SystemClock.elapsedRealtime();
@@ -1197,7 +1201,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       stoppingTrip = true;
       main.removeCallbacks(standardProfileMonitor);
       standardTruck.clear();
-      ++tripGeneration; tripPreparing = false; tripHandoff.invalidateReview();
+      startAttempt.cancel(); tripPreparing = false; tripHandoff.invalidateReview();
       if (pendingTrip != null) { pendingTrip.reject("ENGINE_TRIP_CANCELLED", "Start cancelled."); pendingTrip = null; }
       // Ending must remain possible if licensing/maps/readiness later become unavailable.
       try {
@@ -1286,6 +1290,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         requireTripForeground();
         requireSyncedTruck();
         control("START", "REQUEST");
+        if (tripGeocoding) { promise.reject("ENGINE_GEOCODE_BUSY", "The previous native destination lookup is still finishing. Wait before retrying."); return; }
         if (stoppingTrip || tripPreparing) throw new IllegalStateException("A trip is already being prepared.");
         tripHandoff.validate(ticket);
         int count = locations.size();
@@ -1299,14 +1304,15 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           if (names[i] == null || names[i].trim().isEmpty()) throw new IllegalArgumentException("Stop name required.");
         }
         tripPreparing = true;
-        final int generation = ++tripGeneration;
+        final int generation = startAttempt.begin(token -> failStart(promise, token, "ENGINE_TRIP_TIMEOUT"));
         pendingTrip = promise;
+        tripGeocoding = true;
         new Thread(() -> {
           try {
             com.alk.cpik.StopList stops = tripHandoff.geocode(ticket, points, names);
             main.post(() -> {
               try {
-                if (generation != tripGeneration || invalidated) return;
+                if (!startAttempt.isCurrent(generation) || invalidated) return;
                 requireMap(); requireTripForeground(); requireSyncedTruck();
                 tripHandoff.validate(ticket);
                 UIMgr.getMapDrawer().clearDashedLine();
@@ -1322,23 +1328,26 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
             });
           } catch (Exception e) {
             main.post(() -> failStart(promise, generation, "ENGINE_TRIP_FAILED"));
+          } finally {
+            tripGeocoding = false;
           }
         }, "SemiTraXTripGeocode").start();
       } catch (Exception e) { control("START", "FAILED"); promise.reject("TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(e.getMessage()) ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE" : "ENGINE_TRIP_FAILED", "Start requires a verified profile, licenses, maps and GPS."); }
     });
   }
   private void failStart(Promise promise, int generation, String code) {
-    if (generation != tripGeneration) return;
+    if (!startAttempt.finish(generation)) return;
     tripPreparing = false; pendingTrip = null;
     try { GuidanceMgr.suspendNavigation(true); } catch (Exception ignored) {}
     control("START", "FAILED"); promise.reject(code, "Route not confirmed. End Route before retrying.");
   }
   private void pollStarted(Promise promise, int generation, long deadline) {
-    if (generation != tripGeneration) return;
+    if (!startAttempt.isCurrent(generation)) return;
     try {
       requireMap(); requireTripForeground(); requireSyncedTruck();
       if (tripHandoff.failed()) { failStart(promise, generation, "ENGINE_TRIP_FAILED"); return; }
       if (tripHandoff.confirmed()) {
+        if (!startAttempt.finish(generation)) return;
         tripPreparing = false; pendingTrip = null;
         control("START", "CONFIRMED"); promise.resolve(null); return;
       }
@@ -1611,7 +1620,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
   @Override public void onHostDestroy() { main.post(() -> { rejectWaiters("COPILOT_HOST_DESTROYED"); release(); }); }
   @Override public void invalidate() {
     invalidated = true;
-    ++tripGeneration;
+    startAttempt.cancel();
     if (pendingTrip != null) { pendingTrip.reject("ENGINE_TRIP_CANCELLED", "Session closed."); pendingTrip = null; }
     context.removeLifecycleEventListener(this);
     main.post(() -> {

@@ -50,6 +50,8 @@ export function hybridError(error: unknown): string {
       return 'Truck synchronization is blocked in this build: the required truck-profile mapping has not been verified against the Trimble SDK. Saved truck details have not been removed.';
     case 'ENGINE_STOP_UNCONFIRMED':
       return 'The engine has not confirmed stopping. Keep this session open and retry End Route.';
+    case 'ENGINE_GEOCODE_BUSY':
+      return 'CoPilot is still finishing the previous destination lookup. Wait before retrying; no new route was started.';
     case 'ENGINE_TRIP_TIMEOUT':
       return 'The engine did not confirm the route in time. End Route before retrying, then check offline maps and GPS.';
     case 'ENGINE_TRIP_CANCELLED':

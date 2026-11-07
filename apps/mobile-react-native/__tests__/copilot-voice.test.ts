@@ -46,3 +46,21 @@ test('successful read clears its timeout', async () => {
   });
   expect(jest.getTimerCount()).toBe(0);
 });
+
+test('mute rejects unchanged SDK readback without retrying or forcing audio', async () => {
+  await expect(setCoPilotMute(true)).rejects.toThrow('not confirmed');
+  expect(NativeModules.SpeechMgr.setMuteState).toHaveBeenCalledTimes(1);
+  expect(NativeModules.SpeechMgr.playTTSMessage).not.toHaveBeenCalled();
+});
+test('mute accepts matching SDK readback', async () => {
+  NativeModules.SpeechMgr.isMuted.mockResolvedValue(true);
+  await expect(setCoPilotMute(true)).resolves.toMatchObject({ muted: true });
+});
+test('unmute rejects a still-muted SDK readback', async () => {
+  NativeModules.SpeechMgr.isMuted.mockResolvedValue(true);
+  await expect(setCoPilotMute(false)).rejects.toThrow('not confirmed');
+});
+test('voice test preserves current speech and respects mute override', async () => {
+  await testCoPilotVoice();
+  expect(NativeModules.SpeechMgr.playTTSMessage).toHaveBeenCalledWith('Welcome to SemiTraX', 0, false, false);
+});

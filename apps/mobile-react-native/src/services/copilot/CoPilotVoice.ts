@@ -49,7 +49,10 @@ export async function readCoPilotVoice() {
 }
 export async function setCoPilotMute(muted: boolean) {
   await confirmedVoice(bridge().setMuteState(muted));
-  return readCoPilotVoice();
+  const state = await readCoPilotVoice();
+  if (state.muted !== muted)
+    throw new Error('Voice mute change was not confirmed');
+  return state;
 }
 export async function setCoPilotVolume(volume: number) {
   const valid = z.number().finite().min(0).max(1).parse(volume);

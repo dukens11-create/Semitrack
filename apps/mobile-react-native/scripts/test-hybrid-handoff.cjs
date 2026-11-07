@@ -27,15 +27,23 @@ public class HandoffTest {
   RouteMgr.profile.type=RouteEnums.VehicleType.CAR;denied(()->h.review());
   RouteMgr.profile.type=RouteEnums.VehicleType.TRUCK_HEAVY_DUTY;h.review();String ticket=h.ticket();
   RouteMgr.ready=false;denied(()->h.validate(ticket));RouteMgr.ready=true;
-  double[][] points={{40,-120},{41,-120}};String[] names={"origin","destination"};
+  double[][] points={{40,-120},{40.5,-120},{41,-120}};String[] names={"origin","via","destination"};
   StopBuilder.restricted=true;denied(()->h.geocode(ticket,points,names));StopBuilder.restricted=false;
-  StopList stops=h.geocode(ticket,points,names);h.submit(ticket,stops);check(!h.confirmed());
+  StopList stops=h.geocode(ticket,points,names);h.submit(ticket,stops);check(!h.confirmed());denied(()->h.requireResumable());
   StopList unrelated=new StopList();unrelated.add(new Stop("unrelated"));RouteListener.current.onStopsAdded(unrelated);check(h.pendingStops());
   RouteListener.current.onStopsAdded(stops);check(!h.pendingStops());check(!h.confirmed());
   RouteListener.current.onCompleteRouteCalculation();check(!h.confirmed());
   RouteListener.current.onStartRouteCalculation();RouteListener.current.onCompleteRouteCalculation();check(h.confirmed());
-  RouteListener.current.onFailedRouteCalculation(1,stops.get(1));check(h.failed());check(!h.confirmed());
+  h.requireResumable();
+  RouteMgr.profile.dims.height.n++;denied(()->h.requireResumable());RouteMgr.profile.dims.height.n--;
+  RouteListener.current.onFailedRouteCalculation(1,new Stop("unrelated"));h.requireResumable();
+  RouteListener.current.onFailedRouteCalculation(1,stops.get(1));check(h.failed());check(!h.confirmed());denied(()->h.requireResumable());
   RouteMgr.stops=new StopList();h.stopped();check(h.canReturnToPlanner());check(!h.confirmed());
+  RouteListener.current.onStartRouteCalculation();RouteListener.current.onCompleteRouteCalculation();denied(()->h.requireResumable());
+  h.review();String nullFailure=h.ticket();StopList next=h.geocode(nullFailure,points,names);h.submit(nullFailure,next);
+  RouteListener.current.onStopsAdded(next);RouteListener.current.onStartRouteCalculation();RouteListener.current.onCompleteRouteCalculation();h.requireResumable();
+  RouteListener.current.onFailedRouteCalculation(0,null);denied(()->h.requireResumable());
+  RouteMgr.stops=new StopList();h.stopped();
   h.review();String cancelled=h.ticket();h.invalidateReview();denied(()->h.validate(cancelled));
   h.close();check(RouteListener.current==null);System.out.println("PASS: handoff safety, callbacks, correlation, failure and cancellation");
  }

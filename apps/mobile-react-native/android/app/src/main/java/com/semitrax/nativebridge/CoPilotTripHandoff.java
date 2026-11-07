@@ -15,6 +15,8 @@ import java.util.UUID;
 final class CoPilotTripHandoff {
   private VehicleRoutingProfile profile;
   private String ticket;
+  private String profileSnapshot;
+  private volatile String tripPrefix;
   private volatile String destinationId;
   private volatile boolean awaitingStops;
   private boolean registered;
@@ -38,7 +40,7 @@ final class CoPilotTripHandoff {
       }
     }
     @Override public void onFailedRouteCalculation(int leg, Stop stop) {
-      if (stop != null && destinationId != null && destinationId.equals(stop.getID())) { awaitingStops = false; failed = true; }
+      if (tripPrefix != null && (stop == null || (stop.getID() != null && stop.getID().startsWith(tripPrefix)))) { awaitingStops = false; failed = true; }
     }
   };
 
@@ -49,6 +51,7 @@ final class CoPilotTripHandoff {
     if (selected == null || selected.getVehicleType() != RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
       throw new IllegalStateException("Select a Heavy-Duty Truck profile in engine settings.");
     profile = selected;
+    profileSnapshot = selected.toString();
     ticket = UUID.randomUUID().toString();
     return selected;
   }
@@ -57,7 +60,7 @@ final class CoPilotTripHandoff {
     VehicleRoutingProfile selected = RouteMgr.getActiveVehicleRoutingProfile();
     if (profile == null || ticket == null || !ticket.equals(expected) || selected == null ||
         selected.getVehicleType() != RouteEnums.VehicleType.TRUCK_HEAVY_DUTY ||
-        !profile.getName().equals(selected.getName()) || !profile.equals_RoutingFieldsOnly(selected))
+        !profile.getName().equals(selected.getName()) || !profileSnapshot.equals(selected.toString()) || !profile.equals_RoutingFieldsOnly(selected))
       throw new IllegalStateException("The engine truck profile changed. Review it again.");
     if (awaitingStops || RouteMgr.hasDestination() || !RouteMgr.isCopilotReadyToAddStops())
       throw new IllegalStateException("Finish the existing engine trip or engine setup first.");
@@ -84,6 +87,7 @@ final class CoPilotTripHandoff {
     validate(expected);
     if (!registered) { RouteListener.registerListener(listener); registered = true; }
     destinationId = stops.get(stops.size() - 1).getID();
+    tripPrefix = expected + ":";
     awaitingStops = true;
     calculated = false; calculating = false; failed = false;
     // The first point is the explicit GPS origin, so the SDK cannot consume the first via stop as origin.
@@ -97,16 +101,24 @@ final class CoPilotTripHandoff {
     return stops != null && !stops.isEmpty() && destinationId.equals(stops.get(stops.size()-1).getID());
   }
   boolean confirmed() throws Exception { return calculated && !failed && !awaitingStops && ownsDestination(); }
+  void requireResumable() throws Exception {
+    VehicleRoutingProfile active = RouteMgr.getActiveVehicleRoutingProfile();
+    if (profile == null || profileSnapshot == null || !confirmed() || active == null
+        || active.getVehicleType() != RouteEnums.VehicleType.TRUCK_HEAVY_DUTY
+        || !profile.getName().equals(active.getName())
+        || !profileSnapshot.equals(active.toString()) || !profile.equals_RoutingFieldsOnly(active))
+      throw new IllegalStateException("ENGINE_ROUTE_UNCONFIRMED");
+  }
   boolean failed() { return failed; }
   boolean pendingStops() { return awaitingStops; }
-  void invalidateReview() { ticket = null; profile = null; }
-  void stopped() { destinationId = null; awaitingStops = false; calculating = false; calculated = false; failed = false; invalidateReview(); }
+  void invalidateReview() { ticket = null; profile = null; profileSnapshot = null; }
+  void stopped() { tripPrefix = null; destinationId = null; awaitingStops = false; calculating = false; calculated = false; failed = false; invalidateReview(); }
   boolean canReturnToPlanner() throws Exception {
     return !awaitingStops && !RouteMgr.hasDestination();
   }
   void close() {
     if (registered) RouteListener.unregisterListener(listener);
     registered = false;
-    profile = null; ticket = null;
+    stopped();
   }
 }

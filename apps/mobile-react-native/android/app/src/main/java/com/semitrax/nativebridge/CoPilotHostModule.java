@@ -1240,6 +1240,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (tripPreparing || stoppingTrip || !RouteMgr.hasDestination() ||
             RouteMgr.getActiveVehicleRoutingProfile().getVehicleType() != com.alk.cpik.route.RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
           throw new IllegalStateException();
+        tripHandoff.requireResumable();
         control("RESUME", "NATIVE_CALL");
         CopilotMgr.enableGPS(); GuidanceMgr.suspendNavigation(false);
         control("RESUME", "CONFIRMED"); promise.resolve(null);
@@ -1250,6 +1251,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         String code = "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(reason)
             ? "TRUCK_RESTRICTIONS_UNREPRESENTABLE"
             : "MAP_UNVERIFIED".equals(reason) ? "COPILOT_MAP_OR_LICENSE_UNVERIFIED"
+            : "ENGINE_ROUTE_UNCONFIRMED".equals(reason) ? "ENGINE_ROUTE_UNCONFIRMED"
             : "ENGINE_TRIP_UNAVAILABLE";
         control("RESUME", "FAILED");
         promise.reject(code, "TRUCK_RESTRICTIONS_UNREPRESENTABLE".equals(code)

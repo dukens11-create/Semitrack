@@ -14,3 +14,11 @@ test('native geocoding still pending gives an actionable error without native de
   recordHybridFailure('START_RESUME', { code: 'ENGINE_GEOCODE_BUSY' });
   expect(hybridFailureSnapshot()?.code).toBe('ENGINE_GEOCODE_BUSY');
 });
+
+test('unconfirmed resume explains recovery and keeps diagnostics sanitized', () => {
+  const error = { code: 'ENGINE_ROUTE_UNCONFIRMED', message: 'private profile' };
+  expect(hybridError(error)).toContain('End Route');
+  expect(hybridError(error)).not.toContain('private profile');
+  recordHybridFailure('START_RESUME', error);
+  expect(hybridFailureSnapshot()?.code).toBe('ENGINE_ROUTE_UNCONFIRMED');
+});

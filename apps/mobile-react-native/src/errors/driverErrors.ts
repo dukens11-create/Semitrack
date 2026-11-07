@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  TRIMBLE_AXLE_GROUP_WEIGHT_REQUIRED:
+    'Enter the measured maximum loaded axle-group weight in Truck Settings before planning a route. Do not divide total weight by axle count.',
   PLACE_SEARCH_CONFIGURATION:
     'Address search is unavailable until a public map token is configured. Contact support with code PLACE_SEARCH_CONFIGURATION.',
   PLACE_SEARCH_UNAUTHORIZED:

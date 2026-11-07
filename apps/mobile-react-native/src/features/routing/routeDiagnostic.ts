@@ -1,6 +1,7 @@
 import { sanitizeRestrictionDiagnostic } from './restrictionDiagnostic';
 import { safeDriverError } from '../../errors/driverErrors';
 const codes = {
+  TRIMBLE_AXLE_GROUP_WEIGHT_REQUIRED: 'TRUCK_PROFILE',
   TRIMBLE_RESTRICTION_WARNING: 'UNCLASSIFIED_PROVIDER_WARNING',
   TRIMBLE_RESTRICTION_UNSUPPORTED: 'UNSUPPORTED_AVOIDANCE',
   TRIMBLE_API_KEY_MISSING: 'CONFIGURATION',

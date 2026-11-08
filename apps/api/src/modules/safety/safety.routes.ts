@@ -311,7 +311,7 @@ const reportSchema = z.object({
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   note: z.string().trim().max(500).optional(),
-  sourceContext: z.record(z.unknown()).optional(),
+  sourceContext: z.record(z.string(), z.unknown()).optional(),
 });
 
 safetyRouter.post("/community-reports", requireAuth, asyncRoute(async (req, res, next) => {

@@ -280,7 +280,7 @@ app.put("/navigation-settings", requireAuth, asyncRoute(async (req, res) => {
   const input = z.object({
     voiceEnabled: z.boolean(), voiceMuted: z.boolean(), voiceLocale: z.string().min(2).max(20),
     units: z.enum(["imperial", "metric"]), dayNightMode: z.enum(["system", "day", "night"]),
-    trafficReroute: z.boolean(), settingsJson: z.record(z.unknown()).nullable().optional(),
+    trafficReroute: z.boolean(), settingsJson: z.record(z.string(), z.unknown()).nullable().optional(),
   }).parse(req.body);
   res.json(await prisma.navigationSettings.upsert({
     where: { userId: req.user!.userId },
@@ -386,7 +386,7 @@ const reportSchema = z.object({
   longitude: z.number().min(-180).max(180).optional(),
   category: z.string().min(1).max(80),
   description: z.string().max(2000).optional(),
-  evidenceJson: z.record(z.unknown()).optional(),
+  evidenceJson: z.record(z.string(), z.unknown()).optional(),
   expiresAt: z.coerce.date().optional(),
 });
 app.post("/community/reports", requireAuth, asyncRoute(async (req, res) => {

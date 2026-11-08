@@ -1405,10 +1405,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           case "trip-plan": UIMgr.showDialog(UIMgr.Dialog.PREVIEW_TRIP_PLAN_DIALOG); break;
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
-          case "recenter": drawer.lockToChevron(); break;
+          case "recenter": CoPilotCameraCommands.recenter(drawer); break;
           case "two-dimensional": drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS); break;
           case "three-dimensional": drawer.setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS); break;
-          case "north-up": drawer.setMapOrientation(MapDrawer.MapOrientation.NORTH_UP); break;
+          case "north-up": CoPilotCameraCommands.northUp(drawer); break;
           case "heading-up": drawer.setMapOrientation(MapDrawer.MapOrientation.HEADING_UP); break;
           case "zoom-in": drawer.mapZoom(MapDrawer.ZoomAction.ZOOM_IN); break;
           case "zoom-out": drawer.mapZoom(MapDrawer.ZoomAction.ZOOM_OUT); break;

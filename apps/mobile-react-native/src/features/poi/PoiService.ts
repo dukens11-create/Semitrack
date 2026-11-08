@@ -121,7 +121,7 @@ export class PoiService {
     fix?: LocationFix,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>[]> {
-    const data = z.object({ items: z.array(z.record(z.unknown())) }).parse(
+    const data = z.object({ items: z.array(z.record(z.string(), z.unknown())) }).parse(
       await this.api.request(
         'POST',
         '/safety/' + kind + '/corridor',
@@ -147,7 +147,7 @@ export class PoiService {
     return data.items;
   }
   async currentWeather(fix: LocationFix, signal?: AbortSignal) {
-    return z.record(z.unknown()).parse(
+    return z.record(z.string(), z.unknown()).parse(
       await this.api.request(
         'POST',
         '/weather/current',
@@ -166,7 +166,7 @@ export class PoiService {
     fix: LocationFix,
     signal?: AbortSignal,
   ) {
-    return z.object({ items: z.array(z.record(z.unknown())) }).parse(
+    return z.object({ items: z.array(z.record(z.string(), z.unknown())) }).parse(
       await this.api.request(
         'POST',
         '/weather/route',

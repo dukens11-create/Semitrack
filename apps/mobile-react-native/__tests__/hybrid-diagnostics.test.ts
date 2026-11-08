@@ -115,3 +115,11 @@ test.each(['PROFILE_CHANGED_GUIDANCE_PAUSED', 'STANDARD_PROFILE_MATCH'])('preser
   expect(report).not.toContain('PRIVATE_PROFILE');
   expect(report).not.toContain('PRIVATE_LOCATION');
 });
+
+ test('missing native SDK metadata remains exportable after schema upgrades', () => {
+  const { sdkVersion, ...withoutVersion } = native;
+  const report = coPilotDiagnosticReport(withoutVersion, state);
+  expect(report).toContain('"sdkVersion": "NOT_AVAILABLE"');
+  expect(report).toContain('"deviceConfigurationStatus": "NOT_AVAILABLE"');
+  expect(report).toContain('"deviceReadbackKind": "NOT_AVAILABLE"');
+});

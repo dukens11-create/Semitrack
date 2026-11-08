@@ -72,7 +72,7 @@ const configSchema = z.object({
     updatedAt: z.string().default("lastUpdated"),
     imageUrl: z.string().default("imageUrl"),
     streamUrl: z.string().default("streamUrl"),
-  }).default({}),
+  }).prefault({}),
 });
 
 export type DotProviderConfig = z.infer<typeof configSchema>;

@@ -107,6 +107,8 @@ const snapshot = z.object({
           'BUSY',
           'REQUEST',
           'BLOCKED_UNSUPPORTED_RESTRICTIONS',
+          'PROFILE_CHANGED_GUIDANCE_PAUSED',
+          'STANDARD_PROFILE_MATCH',
         ]),
         elapsedMs: count,
         engineStarted: z.boolean(),

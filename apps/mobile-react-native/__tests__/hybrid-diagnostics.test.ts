@@ -105,3 +105,13 @@ test('route readiness and GPS are separate, bounded diagnostic fields', () => {
   expect(report).toContain('"receivingGps": true');
   expect(report).not.toContain('SENSITIVE');
 });
+
+test.each(['PROFILE_CHANGED_GUIDANCE_PAUSED', 'STANDARD_PROFILE_MATCH'])('preserves safe truck-profile event %s while excluding private fields', stage => {
+  const report = coPilotDiagnosticReport({
+    ...native,
+    controlTimeline: [{ action: 'SYNC_PROFILE', stage, elapsedMs: 10, engineStarted: true, serviceConnected: true, truckProfile: 'PRIVATE_PROFILE', latitude: 'PRIVATE_LOCATION' }],
+  }, state);
+  expect(report).toContain(stage);
+  expect(report).not.toContain('PRIVATE_PROFILE');
+  expect(report).not.toContain('PRIVATE_LOCATION');
+});

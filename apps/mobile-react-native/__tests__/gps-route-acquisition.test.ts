@@ -64,3 +64,19 @@ test('resume while the permission request is pending does not cancel its startup
   const start = f.service.start(); await flush(); const resume = f.service.startIfPermitted(); grant('granted'); await Promise.all([start, resume]);
   f.emit(fix()); expect(f.service.getFreshFix()).not.toBeNull(); expect(f.provider.start).toHaveBeenCalledTimes(1);
 });
+
+test.each(['stale', 'error'])('GPS recovery preserves requested background mode after %s', async reason => {
+  const f = setup(); await f.service.start(true); f.emit(fix());
+  if (reason === 'stale') await jest.advanceTimersByTimeAsync(15001);
+  else f.error();
+  const request = f.service.requestFreshFix(); await flush();
+  expect(f.provider.start).toHaveBeenLastCalledWith(true);
+  f.emit(fix()); await request;
+});
+test('foreground resume preserves background tracking intent until explicit stop', async () => {
+  const f = setup(); await f.service.start(true); f.error();
+  await f.service.startIfPermitted();
+  expect(f.provider.start).toHaveBeenLastCalledWith(true);
+  await f.service.stop(); await f.service.startIfPermitted();
+  expect(f.provider.start).toHaveBeenLastCalledWith(false);
+});

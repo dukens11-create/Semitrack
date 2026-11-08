@@ -60,6 +60,7 @@ const events = [
 const fixedCode = (allowed: readonly string[]) =>
   z
     .unknown()
+    .optional()
     .transform(value =>
       typeof value === 'string' && allowed.includes(value)
         ? value
@@ -107,6 +108,8 @@ const snapshot = z.object({
           'BUSY',
           'REQUEST',
           'BLOCKED_UNSUPPORTED_RESTRICTIONS',
+          'PROFILE_CHANGED_GUIDANCE_PAUSED',
+          'STANDARD_PROFILE_MATCH',
         ]),
         elapsedMs: count,
         engineStarted: z.boolean(),
@@ -203,6 +206,7 @@ const snapshot = z.object({
   androidApi: count.optional(),
   sdkVersion: z
     .unknown()
+    .optional()
     .transform(value =>
       typeof value === 'string' &&
       /^[0-9]+(?:\.[0-9]+){1,4}$/.test(value) &&

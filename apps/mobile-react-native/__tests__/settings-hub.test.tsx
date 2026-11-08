@@ -208,13 +208,15 @@ test.each(['Automatic', 'Day', 'Night'])(
     expect(button('Save preferences')).toBeUndefined();
   },
 );
-test('map toggles and units persist without discarding unrelated preferences', async () => {
+test('map preferences persist while unsupported satellite is clearly unavailable', async () => {
   const { settings } = await setup();
   await press('Map & display');
+  expect(content()).toContain('Satellite imagery is not available');
+  expect(screen.root.findAllByType(Switch).some(n => n.props.accessibilityLabel === 'Satellite map')).toBe(false);
   await act(async () =>
     screen.root
       .findAllByType(Switch)
-      .find(n => n.props.accessibilityLabel === 'Satellite map')!
+      .find(n => n.props.accessibilityLabel === 'Automatic camera zoom')!
       .props.onValueChange(true),
   );
   await press('Back');
@@ -226,7 +228,7 @@ test('map toggles and units persist without discarding unrelated preferences', a
     settingsJson: {
       keep: 'untouched',
       rnTemperatureUnit: 'C',
-      rnMap: { satellite: true },
+      rnMap: { autoZoom: true },
     },
   });
   expect(content()).toContain('Truck measurements keep their original units.');

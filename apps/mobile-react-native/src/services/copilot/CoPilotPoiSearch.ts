@@ -48,6 +48,8 @@ function checkAbort(signal?: AbortSignal) {
 }
 export class CoPilotPoiSearch {
   private tail: Promise<unknown> = Promise.resolve();
+  // Static place results only; this cache does not establish live fuel/parking data.
+  private cache = new Map<string, { expires: number; items: Poi[] }>();
   nearby(
     category: PlaceCategory,
     center: Coordinate,
@@ -57,6 +59,12 @@ export class CoPilotPoiSearch {
       .catch(() => {})
       .then(async () => {
         checkAbort(signal);
+        const key = JSON.stringify([category, center.lat, center.lng]);
+        const now = Date.now();
+        for (const [oldKey, entry] of this.cache)
+          if (entry.expires <= now) this.cache.delete(oldKey);
+        const cached = this.cache.get(key);
+        if (cached) return cached.items.map(item => ({ ...item }));
         const host = coPilotHost();
         if (!host.searchNativePois)
           throw new DriverError('COPILOT_POI_UNAVAILABLE');
@@ -79,7 +87,7 @@ export class CoPilotPoiSearch {
           throw new DriverError('COPILOT_POI_UNAVAILABLE');
         }
         checkAbort(signal);
-        return uniquePois(
+        const items = uniquePois(
           z
             .array(z.unknown())
             .parse(raw)
@@ -106,6 +114,9 @@ export class CoPilotPoiSearch {
               ];
             }),
         ).sort((a, b) => a.distanceMeters! - b.distanceMeters!);
+        if (this.cache.size >= 24) this.cache.delete(this.cache.keys().next().value!);
+        this.cache.set(key, { expires: Date.now() + 60000, items });
+        return items.map(item => ({ ...item }));
       });
     this.tail = task;
     return task;

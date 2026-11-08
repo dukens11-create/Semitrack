@@ -520,19 +520,15 @@ export function SettingsScreen({
                   savePreference(current => ({ ...current, dayNightMode }))
                 }
               />
-              {(['satellite', 'autoZoom'] as const).map(key => (
+              <DriverCopy>
+                Satellite imagery is not available in the current Trimble map
+                integration. Your saved satellite preference is preserved.
+              </DriverCopy>
+              {(['autoZoom'] as const).map(key => (
                 <SettingToggle
                   key={key}
-                  label={
-                    key === 'satellite'
-                      ? 'Satellite map'
-                      : 'Automatic camera zoom'
-                  }
-                  description={
-                    key === 'satellite'
-                      ? 'Show satellite imagery on the map.'
-                      : 'Adjust zoom while following your truck.'
-                  }
+                  label="Automatic camera zoom"
+                  description="Adjust zoom while following your truck."
                   value={mapPreferences(settings)[key]}
                   disabled={disabledPreferences}
                   onChange={value =>

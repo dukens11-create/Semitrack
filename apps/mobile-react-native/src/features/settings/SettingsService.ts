@@ -8,7 +8,7 @@ export const settingsSchema = z.object({
   units: z.enum(['imperial', 'metric']),
   dayNightMode: z.enum(['system', 'day', 'night']),
   trafficReroute: z.boolean(),
-  settingsJson: z.record(z.unknown()).nullable(),
+  settingsJson: z.record(z.string(), z.unknown()).nullable(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export type SettingsState = {

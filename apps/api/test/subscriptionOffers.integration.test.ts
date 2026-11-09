@@ -20,7 +20,7 @@ test('account offer endpoint enforces authentication, ownership, verified-only r
   const users: string[]=[];
   try {
     const publicResponse=await fetch(base); assert.equal(publicResponse.status,200);
-    const catalog=await publicResponse.json() as any; assert.equal(catalog.catalog.trialDays,14); assert.equal(catalog.purchaseAvailable,false);
+    const catalog=await publicResponse.json() as any; assert.equal(catalog.catalog.trialDays,7); assert.equal(catalog.purchaseAvailable,false);
     assert.equal((await fetch(base+'/account')).status,401);
     const a=await prisma.user.create({data:{email:randomUUID()+'@example.invalid',fullName:'Pricing fixture',passwordHash:'test-only'}});users.push(a.id);
     const b=await prisma.user.create({data:{email:randomUUID()+'@example.invalid',fullName:'Other fixture',passwordHash:'test-only'}});users.push(b.id);

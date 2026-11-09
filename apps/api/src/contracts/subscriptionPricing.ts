@@ -1,14 +1,14 @@
 // Approved offers only. This catalog never grants access or changes an existing contract.
 export const subscriptionPricing = {
-  revision: '2026-09-19', currency: 'USD', trialDays: 14,
+  revision: '2026-11-08', currency: 'USD', trialDays: 7,
   monthly: {
     regularCents: 1999, introCents: 1499, introPaidPeriods: 3,
-    summary: '14 days free. Then $14.99/month for your first 3 months. After that, $19.99/month until canceled.',
+    summary: '7 days free. Then $14.99/month for your first 3 months. After that, $19.99/month until canceled.',
     renewal: 'Your subscription automatically renews at $19.99/month after the introductory period unless canceled before renewal.',
   },
   annual: {
     priceCents: 19999,
-    summary: '14 days free. Then $199.99/year.',
+    summary: '7 days free. Then $199.99/year.',
     renewal: 'Your subscription automatically renews at $199.99/year unless canceled before renewal.',
   },
   fleet: [
@@ -47,9 +47,9 @@ export function createSubscriptionPricing(prices: SubscriptionPrices) {
   const fleetPrices=[prices.fleet1,prices.fleet5,prices.fleet25,prices.fleet100,null];
   return {...subscriptionPricing,
     monthly:{...subscriptionPricing.monthly,regularCents:prices.monthlyRegular,introCents:prices.monthlyIntro,
-      summary:'14 days free. Then '+money(prices.monthlyIntro)+'/month for your first 3 months. After that, '+money(prices.monthlyRegular)+'/month until canceled.',
+      summary:'7 days free. Then '+money(prices.monthlyIntro)+'/month for your first 3 months. After that, '+money(prices.monthlyRegular)+'/month until canceled.',
       renewal:'Your subscription automatically renews at '+money(prices.monthlyRegular)+'/month after the introductory period unless canceled before renewal.'},
-    annual:{...subscriptionPricing.annual,priceCents:prices.annual,summary:'14 days free. Then '+money(prices.annual)+'/year.',
+    annual:{...subscriptionPricing.annual,priceCents:prices.annual,summary:'7 days free. Then '+money(prices.annual)+'/year.',
       renewal:'Your subscription automatically renews at '+money(prices.annual)+'/year unless canceled before renewal.'},
     fleet:subscriptionPricing.fleet.map((tier,i)=>({...tier,cents:fleetPrices[i]??null})),
   };

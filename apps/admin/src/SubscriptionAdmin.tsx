@@ -73,7 +73,7 @@ export function PriceForm({
     <form className="plan-editor" onSubmit={save}>
       <h3>App display prices · USD</h3>
       <p>
-        14-day trial and 3 introductory paid periods stay unchanged. Fleet 250+
+        7-day trial and 3 introductory paid periods stay unchanged. Fleet 250+
         remains Contact Sales.
       </p>
       <div className="plan-fields">

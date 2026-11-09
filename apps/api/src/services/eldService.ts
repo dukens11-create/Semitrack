@@ -108,6 +108,7 @@ export async function revokeProviderToken(provider: EldProviderName, refreshToke
       Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
     },
     body: new URLSearchParams({ token: refreshToken }),
+    redirect: "error",
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`SAMSARA token revocation failed (${response.status})`);

@@ -147,3 +147,21 @@ test("billing endpoint attempts return BILLING_DISABLED while disabled", async (
     });
   }
 });
+
+for (const prefix of ["sk_live_", "rk_live_"]) {
+  test(`test billing rejects ${prefix} credentials without exposing their value`, () => {
+    const credential = `${prefix}synthetic-regression-fixture`;
+    assert.throws(
+      () => parseBillingConfiguration({ ...enabledConfiguration, STRIPE_SECRET_KEY: `  ${credential}  ` }),
+      (error) => error instanceof BillingConfigurationError
+        && error.variable === "STRIPE_SECRET_KEY"
+        && !error.message.includes(credential),
+    );
+  });
+}
+for (const prefix of ["sk_test_", "rk_test_"]) {
+  test(`test billing accepts ${prefix} credentials`, () => {
+    const credential = `${prefix}synthetic-regression-fixture`;
+    assert.equal(parseBillingConfiguration({ ...enabledConfiguration, STRIPE_SECRET_KEY: credential }).stripeSecretKey, credential);
+  });
+}

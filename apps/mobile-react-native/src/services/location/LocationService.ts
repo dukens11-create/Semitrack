@@ -29,6 +29,7 @@ export type LocationState = {
 export class LocationService extends Store<LocationState> {
   private unsubscribe?: () => void;
   private generation = 0;
+  private background = false;
   private tail: Promise<unknown> = Promise.resolve();
   private starting?: Promise<void>;
   private staleTimer?: ReturnType<typeof setInterval>;
@@ -88,9 +89,9 @@ export class LocationService extends Store<LocationState> {
         // Recheck Android/iOS permission even when the map retains a previous fix.
         const permission = await this.provider.permissionStatus();
         if (done) return;
-        if (permission !== 'granted') await this.start(false, true);
+        if (permission !== 'granted') await this.start(this.background, true);
         else if (!this.value.tracking || !this.getFreshFix())
-          await this.start(false, false);
+          await this.start(this.background, false);
         if (done) return;
         ready = true;
         check();
@@ -107,9 +108,10 @@ export class LocationService extends Store<LocationState> {
   startIfPermitted() {
     if (this.starting) return this.starting;
     if (this.value.tracking) return Promise.resolve();
-    return this.start(false, false);
+    return this.start(this.background, false);
   }
   start(background = false, requestPermission = true) {
+    this.background = background;
     const generation = ++this.generation;
     const operation = this.enqueue(async () => {
       if (generation !== this.generation) {
@@ -213,6 +215,7 @@ export class LocationService extends Store<LocationState> {
     await this.provider.stop();
   }
   stop() {
+    this.background = false;
     ++this.generation;
     return this.enqueue(async () => {
       await this.stopProvider();

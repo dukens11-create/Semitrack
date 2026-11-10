@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { subscriptionPricing as p, plannedIndividualPrice } from '../dist/contracts/subscriptionPricing.js';
+import { subscriptionPricing as p, plannedIndividualPrice, createSubscriptionPricing, defaultSubscriptionPrices } from '../dist/contracts/subscriptionPricing.js';
 import { promotionEligibility, mayContinueWelcomeOffer } from '../dist/modules/billing/approvedOffers.js';
 import { fleetPricingTier } from '../dist/modules/billing/billingPolicy.js';
 import { parseBillingConfiguration } from '../dist/config/billingConfig.js';
 
-test('approved trial is 14 days; trial does not consume a paid introductory period', () => {
-  assert.equal(p.trialDays, 14); assert.equal(parseBillingConfiguration({}).stripeTrialDays, 14);
+test('approved trial is 7 days; trial does not consume a paid introductory period', () => {
+  assert.equal(p.trialDays, 7); assert.equal(parseBillingConfiguration({}).stripeTrialDays, 7);
   assert.equal(plannedIndividualPrice('monthly', 'trial', 0), 0);
   assert.equal(p.monthly.introPaidPeriods, 3);
   assert.throws(() => plannedIndividualPrice('monthly', 'trial', 1));
@@ -59,4 +59,12 @@ test('catalog preserves product identifiers and does not invent provider price o
   assert.equal(p.products.GOOGLE_PLAY.offerId,null);
   assert.equal(p.products.APPLE.offerId,null);
   assert.equal(p.products.STRIPE.monthlyPriceId,null);
+});
+
+test('default and customized catalog summaries use the seven-day trial', () => {
+  for (const catalog of [p, createSubscriptionPricing(defaultSubscriptionPrices)]) {
+    assert.equal(catalog.trialDays, 7);
+    assert.match(catalog.monthly.summary, /^7 days free/);
+    assert.match(catalog.annual.summary, /^7 days free/);
+  }
 });

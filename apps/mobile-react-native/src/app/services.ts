@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+import { CoPilotPoiSearch } from '../services/copilot/CoPilotPoiSearch';
 import { writeAppearance } from '../features/settings/AppearanceStorage';
 import { safeLog } from '../services/telemetry/safeLog';
 import { ApiClient } from '../services/api/ApiClient';
@@ -44,7 +46,10 @@ export function createServices(environment: Environment) {
     location,
     guidance,
     search: new SearchService(environment.mapboxToken),
-    poi: new PoiService(api),
+    poi: new PoiService(
+      api,
+      Platform.OS === 'android' ? new CoPilotPoiSearch() : undefined,
+    ),
     settings: new SettingsService(api, writeAppearance, async settings => {
       const state = auth.getSnapshot();
       if (state.status === 'signedIn' && state.user)

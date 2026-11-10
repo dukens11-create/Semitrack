@@ -302,3 +302,24 @@ test('unknown safety fields and malformed profiles are rejected', () => {
     CopilotP0Error,
   );
 });
+
+test('missing measured weight is distinct from unsupported SDK fields', () => {
+  const result = assessCopilotTruckProfile({
+    ...truck,
+    weightPerAxleLbs: null,
+  });
+  expect(result.missingFields).toEqual(['weightPerAxleLbs']);
+  expect(result.unsupportedFields).not.toContain('weightPerAxleLbs');
+  expect(result.unsupportedFields).toContain('trailerCount');
+  expect(result.canApply).toBe(false);
+});
+
+test('missing axle weight emits an actionable incomplete-profile error without mutating input', () => {
+  const input = { ...truck, weightPerAxleLbs: null };
+  const before = JSON.stringify(input);
+  const error = failure(() => requireRepresentableCopilotTruckProfile(input));
+  expect(error.code).toBe('TRUCK_PROFILE_INCOMPLETE');
+  expect(error.fields).toEqual(['weightPerAxleLbs']);
+  expect(error.message).toContain('measured');
+  expect(JSON.stringify(input)).toBe(before);
+});

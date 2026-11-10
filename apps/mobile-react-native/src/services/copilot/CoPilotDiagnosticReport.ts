@@ -1,3 +1,4 @@
+import { hybridFailureSnapshot } from './HybridControlDiagnostics';
 import { z } from 'zod';
 import { amsLoginFailures } from './CopilotLicenseDiagnostics';
 
@@ -59,6 +60,7 @@ const events = [
 const fixedCode = (allowed: readonly string[]) =>
   z
     .unknown()
+    .optional()
     .transform(value =>
       typeof value === 'string' && allowed.includes(value)
         ? value
@@ -66,6 +68,14 @@ const fixedCode = (allowed: readonly string[]) =>
     );
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const snapshot = z.object({
+  routeEngine: z
+    .object({
+      status: fixedCode(['AVAILABLE', 'UNAVAILABLE', 'NOT_STARTED']),
+      readyToAddStops: z.boolean().optional(),
+      receivingGps: z.boolean().optional(),
+      hasDestination: z.boolean().optional(),
+    })
+    .optional(),
   buildIdentity: z
     .object({
       commit: z.string().regex(/^(?:[a-f0-9]{40}|local-unverified)$/),
@@ -98,6 +108,8 @@ const snapshot = z.object({
           'BUSY',
           'REQUEST',
           'BLOCKED_UNSUPPORTED_RESTRICTIONS',
+          'PROFILE_CHANGED_GUIDANCE_PAUSED',
+          'STANDARD_PROFILE_MATCH',
         ]),
         elapsedMs: count,
         engineStarted: z.boolean(),
@@ -194,6 +206,7 @@ const snapshot = z.object({
   androidApi: count.optional(),
   sdkVersion: z
     .unknown()
+    .optional()
     .transform(value =>
       typeof value === 'string' &&
       /^[0-9]+(?:\.[0-9]+){1,4}$/.test(value) &&
@@ -259,7 +272,9 @@ const readiness = z.object({
     'COPILOT_TRUCK_PROFILE_INVALID',
     'COPILOT_ROUTE_FAILED',
     'COPILOT_GUIDANCE_UNAVAILABLE',
-  ]).nullable().optional(),
+  ])
+    .nullable()
+    .optional(),
   phase: fixedCode([
     'NOT_STARTED',
     'STARTING',
@@ -290,6 +305,14 @@ export function coPilotDiagnosticReport(
     'Elapsed times are milliseconds since this native host was created, oldest first.',
     'START_REUSED means a setup check reused the running engine; it did not send a fresh login.',
     'No credentials, account IDs, serial numbers, location or raw exception messages included.',
-    JSON.stringify({ readiness: checks, native: data }, null, 2),
+    JSON.stringify(
+      {
+        lastControlFailure: hybridFailureSnapshot(),
+        readiness: checks,
+        native: data,
+      },
+      null,
+      2,
+    ),
   ].join('\n\n');
 }

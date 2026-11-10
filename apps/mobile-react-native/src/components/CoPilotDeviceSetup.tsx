@@ -1,3 +1,4 @@
+import { CoPilotMapCatalog } from './CoPilotMapCatalog';
 import { Alert } from './ThemedAlert';
 import { NativeModules } from 'react-native';
 import { amsSetupExplanation } from '../services/copilot/CopilotLicenseDiagnostics';
@@ -30,6 +31,7 @@ export function CoPilotDeviceSetup() {
   const [company, setCompany] = useState('');
   const [device, setDevice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showMaps, setShowMaps] = useState(false);
   const [message, setMessage] = useState('');
   const [diagnostics, setDiagnostics] =
     useState<CoPilotSetupDiagnostics | null>(null);
@@ -239,6 +241,10 @@ export function CoPilotDeviceSetup() {
         Shares setup checks and a native login timeline from this app session.
         Passwords, IDs and location are excluded.
       </Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Manage offline maps" style={styles.button} onPress={() => setShowMaps(value => !value)}>
+        <Text style={styles.buttonText}>{showMaps ? 'Hide offline maps' : 'Manage offline maps'}</Text>
+      </Pressable>
+      {showMaps && <CoPilotMapCatalog />}
       {!!diagnostics && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           Saved Company ID matches assignment:{' '}

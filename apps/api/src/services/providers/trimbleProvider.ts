@@ -126,6 +126,10 @@ export function buildTrimbleRouteRequest(input: RouteBuildInput, config: Trimble
   assertRange("Truck/trailer length (feet)", truck.lengthFt, 8, 70);
   assertRange("Gross weight (pounds)", truck.weightLbs, 1_500, 156_470);
   assertRange("Axle count", truck.axleCount, 2, 14);
+  if (truck.weightPerAxleLbs == null) {
+    throw new RoutingProviderError('Trimble', 'TRIMBLE_AXLE_GROUP_WEIGHT_REQUIRED',
+      'Enter the measured maximum loaded axle-group weight before calculating a truck route.', 422);
+  }
   if (truck.weightPerAxleLbs != null) {
     assertRange("Maximum weight per axle group (pounds)", truck.weightPerAxleLbs, 800, 45_000);
   }

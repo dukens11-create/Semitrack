@@ -121,6 +121,28 @@ export function initialCopilotState(): CopilotState {
   };
 }
 
+/** Bound read-only bridge queries; timeout never restarts or mutates the SDK. */
+function boundedRead<T>(read: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject({ code: 'COPILOT_READINESS_TIMEOUT' }),
+      10000,
+    );
+    Promise.resolve()
+      .then(read)
+      .then(
+        value => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        error => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+  });
+}
+
 /** Readiness observer only. It never adds stops, applies a partial profile or enables guidance. */
 export class CopilotLifecycle {
   private state = initialCopilotState();
@@ -166,6 +188,8 @@ export class CopilotLifecycle {
     this.startupRejected = false;
     this.state = initialCopilotState();
     this.config = null;
+    // A disposed generation cannot hold a new startup behind its pending reads.
+    this.queue = Promise.resolve();
     this.readinessRetries = 0;
     clearTimeout(this.readinessTimer);
     const generation = ++this.generation;
@@ -338,7 +362,7 @@ export class CopilotLifecycle {
     this.readinessTimer = undefined;
     let stage = 'license-verification';
     try {
-      const license = await this.port.licenseState();
+      const license = await boundedRead(() => this.port.licenseState());
       if (!current()) return;
       this.publish(license);
       if (
@@ -355,7 +379,9 @@ export class CopilotLifecycle {
       }
       stage = 'map-version-inventory';
       if (this.port.configuration) {
-        const configuration = await this.port.configuration();
+        const configuration = await boundedRead(() =>
+          this.port.configuration!(),
+        );
         if (!current()) return;
         if (!configuration) {
           this.fail('COPILOT_LICENSE_PROVISIONING_REQUIRED', 'secure-restore');
@@ -364,7 +390,7 @@ export class CopilotLifecycle {
         this.config = configuration;
       }
       stage = 'installed-map-inventory';
-      const maps = await this.port.mapState(this.config);
+      const maps = await boundedRead(() => this.port.mapState(this.config!));
       if (!current()) return;
       this.publish({ maps, mapsReady: maps.mapsReady });
       if (!maps.mapsReady) {
@@ -372,7 +398,9 @@ export class CopilotLifecycle {
         return;
       }
       stage = 'route-manager-readiness';
-      const readyToAddStops = await this.port.readyToAddStops();
+      const readyToAddStops = await boundedRead(() =>
+        this.port.readyToAddStops(),
+      );
       if (!current()) return;
       this.publish({ readyToAddStops });
       if (!this.state.initialized || !readyToAddStops) {
@@ -392,6 +420,7 @@ export class CopilotLifecycle {
     } catch (error) {
       const nativeCode = (error as { code?: unknown } | null)?.code;
       const safeCodes = [
+        'COPILOT_READINESS_TIMEOUT',
         ...amsDiagnosticCodes,
         'COPILOT_IDENTITY_UNVERIFIED',
         'COPILOT_LICENSE_QUERY_FAILED',

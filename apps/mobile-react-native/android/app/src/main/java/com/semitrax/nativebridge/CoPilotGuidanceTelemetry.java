@@ -34,16 +34,16 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
   private boolean limitImperial;
   private boolean positionImperial;
   private long routeRevision;
-  private String routeStatus = "unknown";
+  private final CoPilotCalculationState calculation = new CoPilotCalculationState();
   private final RouteListener routes = new RouteListener() {
     @Override public void onStartRouteCalculation() {
-      dispatch(() -> { routeRevision++; routeStatus = "calculating"; });
+      dispatch(() -> { routeRevision++; calculation.begin(); });
     }
     @Override public void onCompleteRouteCalculation() {
-      dispatch(() -> routeStatus = "ready");
+      dispatch(() -> calculation.complete());
     }
     @Override public void onFailedRouteCalculation(int leg, Stop stop) {
-      dispatch(() -> routeStatus = "failed");
+      dispatch(() -> calculation.fail());
     }
   };
 
@@ -64,10 +64,10 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
     }
     registered = false; generation++;
     position = null; positionReceivedAt = 0; roadLimit = truckLimit = null;
-    routeStatus = "unknown";
+    calculation.reset();
   }
   void clearRoute() {
-    generation++; routeRevision++; routeStatus = "none";
+    generation++; routeRevision++; calculation.clear();
     roadLimit = truckLimit = null;
     sink.accept(snapshot());
   }
@@ -99,7 +99,7 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
   @Override public void onTurnInstructionEvent(TurnInstruction instruction) { dispatch(() -> {}); }
   @Override public void onItineraryUpdated() { dispatch(() -> {}); }
   @Override public void onArrivedAtStop(boolean last, Stop stop) {
-    dispatch(() -> { if (last) routeStatus = "arrived"; });
+    dispatch(() -> { if (last) calculation.arrive(); });
   }
 
   WritableMap snapshot() {
@@ -140,10 +140,10 @@ final class CoPilotGuidanceTelemetry extends GuidanceListener {
     try {
       boolean destination = RouteMgr.hasDestination();
       out.putBoolean("hasDestination", destination);
-      if (!destination && !"calculating".equals(routeStatus) && !"failed".equals(routeStatus) && !"arrived".equals(routeStatus)) routeStatus = "none";
-      out.putString("routeStatus", routeStatus);
+      if (!destination && !"calculating".equals(calculation.status()) && !"failed".equals(calculation.status()) && !"arrived".equals(calculation.status())) calculation.clear();
+      out.putString("routeStatus", calculation.status());
       // Never present the previous route's ETA during a new calculation or failure.
-      if (destination && "ready".equals(routeStatus)) {
+      if (destination && "ready".equals(calculation.status())) {
         Date eta = GuidanceMgr.getETA();
         if (eta != null && eta.getTime() >= now) out.putDouble("etaAt", eta.getTime());
         // Imperial distance is documented as miles. Metric contracts differ across SDK versions.

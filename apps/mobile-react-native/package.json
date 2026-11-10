@@ -13,12 +13,13 @@
     "postinstall": "npm run configure && patch-package",
     "configure:release": "npm run configure -- --release",
     "check:native": "node scripts/check-native.cjs",
-    "check": "npm run typecheck && npm run lint -- --max-warnings=0 && npm test && npm run check:native && npm run test:tooling && npm run test:hybrid-native",
+    "check": "npm run typecheck && npm run lint -- --max-warnings=0 && npm test && npm run check:native && npm run test:tooling && npm run test:hybrid-native && npm run test:start-attempt",
     "check:page-size": "node scripts/check-android-page-size.cjs",
     "test:tooling": "node --test scripts/check-android-page-size.test.cjs",
     "copilot:check": "node scripts/check-copilot-setup.cjs",
     "test:hybrid-native": "node scripts/test-hybrid-handoff.cjs",
-    "prepare:copilot": "python3 scripts/prepare-copilot-v11.py"
+    "prepare:copilot": "python3 scripts/prepare-copilot-v11.py",
+    "test:start-attempt": "node scripts/test-start-attempt.cjs"
   },
   "dependencies": {
     "@react-navigation/native": "7.3.18",
@@ -31,7 +32,7 @@
     "react-native-screens": "4.27.0",
     "react-native-url-polyfill": "4.0.0",
     "trimble-maps-cpik-react-native-library": "file:vendor/copilot",
-    "zod": "3.25.76"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

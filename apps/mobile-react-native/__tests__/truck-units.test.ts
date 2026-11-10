@@ -1,3 +1,4 @@
+import { feetToConservativeInches } from '../src/services/copilot/CopilotTruckProfile';
 import {
   parseTruckForm,
   dimensionForm,
@@ -164,4 +165,25 @@ test('hazmat labels and unexpected failures never leak internal identifiers', ()
       new ApiError('VALIDATION_ERROR', 'raw', 400, false, ['currentWeightLbs']),
     ).fields.currentWeightLbs,
   ).toContain('whole pounds');
+});
+
+test.each([
+  [0, 'Unable to reach SemiTraX'],
+  [429, 'too many requests'],
+  [503, 'server is temporarily unavailable'],
+])('profile failure distinguishes HTTP status %s', (status, expected) => {
+  const result = profileErrors(
+    new ApiError('REQUEST_FAILED', 'private details', status, true),
+  );
+  expect(result.message).toContain(expected);
+  expect(result.message).not.toContain('private details');
+});
+
+// A repeated save/reload must not increase an exact inch due to binary floats.
+test('native dimension conversion preserves every whole inch across form round trips', () => {
+  for (let inches = 60; inches <= 840; inches++) {
+    expect(feetToConservativeInches(inches / 12)).toBe(inches);
+  }
+  expect(feetToConservativeInches(97.000001 / 12)).toBe(98);
+  expect(feetToConservativeInches(97.5 / 12)).toBe(98);
 });

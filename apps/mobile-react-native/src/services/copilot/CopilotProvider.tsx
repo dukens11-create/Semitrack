@@ -20,6 +20,7 @@ const SetupContext = createContext({
   allowCellularDownload: async () => {},
   retry: async () => {},
   refresh: async () => {},
+  checkForStart: async () => initialCopilotState(),
   configure: async (_company: string, _device: string) => {},
 });
 export const useCopilotState = () => useContext(StateContext);
@@ -28,7 +29,12 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
   const [state, setState] = useState(initialCopilotState);
   const greeted = useRef(false);
   useEffect(() => {
-    if (!state.copilotReady || greeted.current || AppState.currentState !== 'active') return;
+    if (
+      !state.copilotReady ||
+      greeted.current ||
+      AppState.currentState !== 'active'
+    )
+      return;
     greeted.current = true;
     void testCoPilotVoice().catch(() => {});
   }, [state.copilotReady]);
@@ -175,9 +181,17 @@ export function CopilotProvider({ children }: React.PropsWithChildren) {
           allowCellularDownload,
           retry: retrySaved,
           refresh: async () => {
-            if (!latest.current.initialized) { await retrySaved(); return; }
+            if (!latest.current.initialized) {
+              await retrySaved();
+              return;
+            }
             await lifecycle.current?.recheck(true);
             synchronize();
+          },
+          checkForStart: async () => {
+            if (!latest.current.initialized) await retrySaved();
+            await lifecycle.current?.recheck(true);
+            return latest.current;
           },
           configure,
         }}

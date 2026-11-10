@@ -65,15 +65,61 @@ test('arbitrary native messages are not exported as event codes', () => {
 });
 test('readiness precedes native timelines and preserves safe failure codes', () => {
   const report = coPilotDiagnosticReport(native, {
-    ...state, readyToAddStops: false, error: 'COPILOT_NOT_READY',
+    ...state,
+    readyToAddStops: false,
+    error: 'COPILOT_NOT_READY',
   });
-  expect(report.indexOf('"readiness"')).toBeLessThan(report.indexOf('"native"'));
+  expect(report.indexOf('"readiness"')).toBeLessThan(
+    report.indexOf('"native"'),
+  );
   expect(report).toContain('"readyToAddStops": false');
   expect(report).toContain('"error": "COPILOT_NOT_READY"');
 });
 test('readiness exports null or known errors without leaking unknown error text', () => {
-  expect(coPilotDiagnosticReport(native, {...state, error: null})).toContain('"error": null');
-  const report = coPilotDiagnosticReport(native, {...state, error: 'SENSITIVE'});
+  expect(coPilotDiagnosticReport(native, { ...state, error: null })).toContain(
+    '"error": null',
+  );
+  const report = coPilotDiagnosticReport(native, {
+    ...state,
+    error: 'SENSITIVE',
+  });
   expect(report).not.toContain('SENSITIVE');
   expect(report).toContain('"error": "NOT_AVAILABLE"');
+});
+
+test('route readiness and GPS are separate, bounded diagnostic fields', () => {
+  const report = coPilotDiagnosticReport(
+    {
+      ...native,
+      routeEngine: {
+        status: 'AVAILABLE',
+        readyToAddStops: false,
+        receivingGps: true,
+        hasDestination: false,
+        location: 'SENSITIVE',
+      },
+    },
+    state,
+  );
+  expect(report).toContain('"readyToAddStops": false');
+  expect(report).toContain('"receivingGps": true');
+  expect(report).not.toContain('SENSITIVE');
+});
+
+test.each(['PROFILE_CHANGED_GUIDANCE_PAUSED', 'STANDARD_PROFILE_MATCH'])('preserves safe truck-profile event %s while excluding private fields', stage => {
+  const report = coPilotDiagnosticReport({
+    ...native,
+    controlTimeline: [{ action: 'SYNC_PROFILE', stage, elapsedMs: 10, engineStarted: true, serviceConnected: true, truckProfile: 'PRIVATE_PROFILE', latitude: 'PRIVATE_LOCATION' }],
+  }, state);
+  expect(report).toContain(stage);
+  expect(report).not.toContain('PRIVATE_PROFILE');
+  expect(report).not.toContain('PRIVATE_LOCATION');
+});
+
+ test('missing native SDK metadata remains exportable after schema upgrades', () => {
+  const { sdkVersion, ...withoutVersion } = native;
+  const report = coPilotDiagnosticReport(withoutVersion, state);
+  expect(report).toContain('"sdkVersion": "NOT_AVAILABLE"');
+  expect(report).toContain('"deviceConfigurationStatus": "NOT_AVAILABLE"');
+  expect(report).toContain('"deviceReadbackKind": "NOT_AVAILABLE"');
 });

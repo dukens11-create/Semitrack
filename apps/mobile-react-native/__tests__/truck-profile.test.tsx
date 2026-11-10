@@ -529,3 +529,29 @@ test('ambiguous create retries the same operation, including after dialog close'
     creates[0]![2]?.createOperationId,
   );
 });
+
+test('profile review explains native blockers without rewriting actual equipment', async () => {
+  const profile = {
+    ...valid,
+    axleCount: 3,
+    trailerCount: 2,
+    weightPerAxleLbs: null,
+    avoidResidential: true,
+    avoidDirtRoads: true,
+  };
+  const { store, request } = await mount([profile]);
+  await press('Set Active');
+  const rendered = JSON.stringify(screen!.toJSON());
+  for (const message of [
+    'Native navigation compatibility',
+    'Axle count: this mode requires five axles',
+    'Trailer count: this mode requires one trailer',
+    'Maximum axle-group weight: required',
+    'Avoid residential roads is enabled',
+    'Avoid dirt roads is enabled',
+  ]) {
+    expect(rendered).toContain(message);
+  }
+  expect(store.getSnapshot().profiles[0]).toMatchObject(profile);
+  expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
+});

@@ -107,7 +107,7 @@ export function parseBillingConfiguration(source: NodeJS.ProcessEnv = process.en
     );
   }
   const mode = rawMode as BillingMode;
-  const stripeTrialDays = parseInteger(source, "STRIPE_TRIAL_DAYS", 14, 0);
+  const stripeTrialDays = parseInteger(source, "STRIPE_TRIAL_DAYS", 7, 0);
   const stripeGracePeriodDays = parseInteger(source, "STRIPE_GRACE_PERIOD_DAYS", 3, 0);
   const pilotMaxRedemptions = parseInteger(source, "PILOT_MAX_REDEMPTIONS", 100, 1);
   if (pilotMaxRedemptions > 100) {
@@ -136,7 +136,7 @@ export function parseBillingConfiguration(source: NodeJS.ProcessEnv = process.en
   if (mode !== "disabled") {
     stripeSecretKey = requireEnabledValue(source, "STRIPE_SECRET_KEY");
     stripeWebhookSecret = requireEnabledValue(source, "STRIPE_WEBHOOK_SECRET");
-    if (stripeSecretKey.startsWith("sk_live_")) {
+    if ((stripeSecretKey.startsWith("sk_live_") || stripeSecretKey.startsWith("rk_live_"))) {
       throw new BillingConfigurationError("STRIPE_SECRET_KEY", "live Stripe keys are not allowed in test billing mode");
     }
     if (stripeAllowedWebOrigins.length === 0) {

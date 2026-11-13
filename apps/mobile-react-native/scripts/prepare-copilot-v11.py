@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -60,6 +61,28 @@ def prepare(archive_path):
     print('Prepared verified CPIK 11.3.0-2016 for RN 0.85.0; native/device validation remains required.')
 
 
+def download(url, archive):
+    """Report safe failure categories without logging private URLs or responses."""
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as output:
+            shutil.copyfileobj(response, output)
+    except urllib.error.HTTPError as error:
+        status = error.code
+        if status in (401, 403):
+            reason = 'access denied; renew authorized private SDK access'
+        elif status in (404, 410):
+            reason = 'download unavailable; obtain a current authorized SDK link'
+        elif status == 429:
+            reason = 'provider rate limit; retry later'
+        else:
+            reason = 'provider HTTP failure; check vendor availability'
+        raise SystemExit(f'SDK download failed (HTTP {status}): {reason}.') from None
+    except (urllib.error.URLError, TimeoutError):
+        raise SystemExit('SDK download failed: network or TLS connection unavailable; check connectivity.') from None
+    except Exception:
+        raise SystemExit('SDK download failed; check private download access and local storage.') from None
+
+
 if __name__ == '__main__':
     local = os.environ.get('SEMITRAX_COPILOT_ARCHIVE')
     if local:
@@ -70,9 +93,5 @@ if __name__ == '__main__':
             raise SystemExit('Set SEMITRAX_COPILOT_ARCHIVE or private SEMITRAX_COPILOT_SDK_URL before npm ci.')
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / 'sdk.zip'
-            try:
-                with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as output:
-                    shutil.copyfileobj(response, output)
-            except Exception:
-                raise SystemExit('SDK download failed; check private download access.') from None
+            download(url, archive)
             prepare(archive)

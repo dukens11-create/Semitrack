@@ -11,7 +11,7 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED = 'c5db24a1ae9feca69fd0726faf59337803b46407fface803534d16cc8a688de7'
+EXPECTED = 'a5c5c0fd63cef6e1acc92d2816db8c8cc79f33e7a6c73b2746545bc726e6b571'
 
 
 def unpack(archive, destination):
@@ -41,24 +41,24 @@ def prepare(archive_path):
         with zipfile.ZipFile(archive_path) as outer:
             with zipfile.ZipFile(io.BytesIO(outer.read('CPIKReactNativeLibrary.zip'))) as sdk:
                 unpack(sdk, root)
-        source = root / 'CPIKReactNativeLibrary'
+        source = root  # 11.4 delivery places package.json at the inner ZIP root.
         pkg_path = source / 'package.json'
         pkg = json.loads(pkg_path.read_text())
-        if pkg['version'] != '11.3.0-2016':
+        if pkg['version'] != '11.4.0-2142':
             raise ValueError('Unexpected SDK package version')
-        # Keep one RN runtime; the delivered package otherwise installs RN 0.79.5.
+        # Keep one RN runtime; the reviewed 11.4 package has empty dependencies.
         pkg.pop('dependencies', None)
         pkg.pop('devDependencies', None)
         pkg['peerDependencies'] = {'react-native': '0.85.0'}
         pkg_path.write_text(json.dumps(pkg, indent=2) + '\n')
         (source / 'package-lock.json').unlink(missing_ok=True)
-        replace_once(source / 'android/build.gradle', 'com.facebook.react:react-android:0.79.5', 'com.facebook.react:react-android')
+        replace_once(source / 'android/build.gradle', 'com.facebook.react:react-android:0.85.0', 'com.facebook.react:react-android')
         replace_once(source / 'android/src/main/java/com/alk/cpik/react/CopilotStartupModule.java', '.setSmallIcon(null)', '.setSmallIcon(reactContext.getApplicationInfo().icon)')
         destination = ROOT / 'vendor/copilot'
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(source, destination)
-    print('Prepared verified CPIK 11.3.0-2016 for RN 0.85.0; native/device validation remains required.')
+    print('Prepared verified CPIK 11.4.0-2142 for RN 0.85.0; native/device validation remains required.')
 
 
 def download(url, archive):

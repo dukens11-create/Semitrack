@@ -22,7 +22,7 @@ jest.mock('../src/native/navigation/NativeSemiTraxPlatform', () => ({
 
 // Unit-test inputs only: no SDK runtime, credentials, routes or callback stream.
 const config = {
-  sdkVersion: '11.3.0.2016',
+  sdkVersion: '11.4.0.2142',
   platform: 'android',
   environment: 'development',
   licensingMode: 'ams-company',

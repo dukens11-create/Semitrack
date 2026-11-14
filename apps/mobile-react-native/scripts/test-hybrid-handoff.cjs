@@ -188,11 +188,11 @@ public class ProvisioningTest {
  public static void main(String[] args)throws Exception {
   ProvisioningTest h=new ProvisioningTest();
   WritableMap before=h.publicConfiguration();
-  check("11.3.0.2016".equals(before.get("sdkVersion")));
+  check("11.4.0.2142".equals(before.get("sdkVersion")));
   check(h.inventoryReads==0);
   check("NOT_INSTALLED".equals(((WritableMap)before.get("mapVersion")).get("version")));
   h.started=true; WritableMap after=h.publicConfiguration();
-  check("11.3.0.2016".equals(after.get("sdkVersion")));
+  check("11.4.0.2142".equals(after.get("sdkVersion")));
   check(h.inventoryReads==1);
   check("installed".equals(((WritableMap)after.get("mapVersion")).get("version")));
   System.out.println("PASS: cold provisioning before SDK startup and installed-map readback after startup");

@@ -5,7 +5,7 @@ import com.alk.cpik.route.RouteEnums;
 import com.alk.cpik.route.VehicleRoutingProfile;
 import com.alk.cpik.route.VehicleDimensions;
 
-/** Read-only verification of the existing 11.3 standard semitrailer mode.
+/** Read-only verification of the reviewed standard semitrailer mode.
  * Does not assert separate overall-length or trailer-count API support. */
 final class CoPilotStandardTruck {
   private VehicleRoutingProfile reviewed;

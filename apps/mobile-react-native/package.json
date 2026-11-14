@@ -15,7 +15,7 @@
     "check:native": "node scripts/check-native.cjs",
     "check": "npm run typecheck && npm run lint -- --max-warnings=0 && npm test && npm run check:native && npm run test:tooling && npm run test:hybrid-native && npm run test:start-attempt",
     "check:page-size": "node scripts/check-android-page-size.cjs",
-    "test:tooling": "node --test scripts/check-android-page-size.test.cjs",
+    "test:tooling": "node --test scripts/check-android-page-size.test.cjs scripts/copilot-sdk-version.test.cjs",
     "copilot:check": "node scripts/check-copilot-setup.cjs",
     "test:hybrid-native": "node scripts/test-hybrid-handoff.cjs",
     "prepare:copilot": "python3 scripts/prepare-copilot-v11.py",

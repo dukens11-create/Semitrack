@@ -10,7 +10,7 @@ Local checks passed with this SDK: TypeScript, zero-warning ESLint, 75 Jest suit
 
 Public Java API inspection confirms VehicleDimensions now exposes trailer count, bumper-to-bumper length and maximum straight length. No truck safety gate is removed by this SDK preparation change. These APIs require a separate semantics/readback integration review before representing additional truck specifications. CopilotVersion.getAppVersion remains available.
 
-CI download-secret renewal was attempted but GitHub requires account verification; the passkey attempt failed. Native Android compilation, final signing verification and physical-device testing remain pending. Do not rerun the obsolete candidate to claim validation of these changes.
+CI download-secret renewal completed on November 13, 2026 at 23:54 UTC; GitHub confirmed the secret update. A fresh candidate push requests the APK workflow with the verified delivery. Native Android compilation, final signing verification and physical-device testing remain pending. Do not rerun the obsolete candidate to claim validation of these changes.
 
 ## Historical October 27 delivery
 

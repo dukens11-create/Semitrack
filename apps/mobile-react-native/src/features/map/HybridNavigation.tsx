@@ -1,6 +1,6 @@
 import { CoPilotFeatureControls } from '../../components/CoPilotFeatureControls';
 import { CoPilotMapCatalog } from '../../components/CoPilotMapCatalog';
-import { recordHybridFailure } from '../../services/copilot/HybridControlDiagnostics';
+import { recordHybridFailure, clearHybridFailure } from '../../services/copilot/HybridControlDiagnostics';
 import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigation';
 import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
@@ -84,6 +84,7 @@ export function HybridNavigation({
     try {
       logHybridControl(name, 'VALIDATING');
       await action();
+      clearHybridFailure(name);
       logHybridControl(name, 'CONFIRMED');
     } catch (e) {
       setError(hybridError(e));
@@ -195,7 +196,7 @@ export function HybridNavigation({
                 'Save and verify your truck below, then check that it matches the assigned fleet profile. Unsupported configurations remain blocked.'}
             </DriverCopy>
             <DriverButton
-              title="Synchronize truck with engine"
+              title="Check truck against engine profile"
               disabled={pending}
               onPress={() => {
                 void run(
@@ -204,6 +205,10 @@ export function HybridNavigation({
                 );
               }}
             />
+            <DriverCopy>
+              This compares your saved truck with the active Trimble fleet
+              profile. It does not copy settings or change the fleet profile.
+            </DriverCopy>
             <TruckProfileScreen services={services} />
           </View>
         ) : (

@@ -18,11 +18,12 @@ const mockHost = {
   mapCommand: jest.fn(),
 };
 let mockBlocker: string | null = null;
+let mockReadyToAddStops = true;
 jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockHost,
 }));
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
-  useCopilotState: () => ({}),
+  useCopilotState: () => ({ readyToAddStops: mockReadyToAddStops }),
 }));
 jest.mock('../src/components/CopilotOfflineMap', () => ({
   CopilotOfflineMap: () => null,
@@ -43,6 +44,7 @@ const poi = {
 let tree: ReactTestRenderer;
 beforeEach(() => {
   mockBlocker = null;
+  mockReadyToAddStops = true;
   Object.values(mockHost).forEach(fn =>
     fn.mockReset().mockResolvedValue(undefined),
   );
@@ -195,4 +197,12 @@ test('opens Trimble before address selection and clears old planning geometry', 
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
   expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
   expect(mockHost.mapFrame).not.toHaveBeenCalled();
+});
+
+test('native setup receives no map mutations before route-engine readiness', async () => {
+  mockReadyToAddStops = false;
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={route} plan={null} pois={[poi]} />);
+  });
+  Object.values(mockHost).forEach(fn => expect(fn).not.toHaveBeenCalled());
 });

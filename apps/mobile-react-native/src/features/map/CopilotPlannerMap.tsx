@@ -46,7 +46,11 @@ export function CopilotPlannerMap({
 }) {
   const state = useCopilotState();
   const palette = useDriverPalette();
-  const blocker = copilotMapBlocker(state);
+  const blocker =
+    copilotMapBlocker(state) ??
+    (!state.readyToAddStops
+      ? 'Complete Trimble setup before using map controls.'
+      : null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const queue = useRef(Promise.resolve());

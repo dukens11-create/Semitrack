@@ -1,3 +1,4 @@
+import { enrollmentMatchLabel } from '../services/copilot/enrollmentMatchLabel';
 import { CoPilotMapCatalog } from './CoPilotMapCatalog';
 import { Alert } from './ThemedAlert';
 import { NativeModules } from 'react-native';
@@ -248,14 +249,14 @@ export function CoPilotDeviceSetup() {
       {!!diagnostics && (
         <Text accessibilityLiveRegion="polite" style={{ color: palette.text }}>
           Saved Company ID matches assignment:{' '}
-          {diagnostics.savedCompanyMatches ? 'Yes' : 'No'}.{'\n'}
+          {enrollmentMatchLabel(diagnostics, 'savedCompanyMatches')}.{'\n'}
           Saved Device ID matches assignment:{' '}
-          {diagnostics.savedDeviceMatches ? 'Yes' : 'No'}.{'\n'}
+          {enrollmentMatchLabel(diagnostics, 'savedDeviceMatches')}.{'\n'}
           Credential hook: {diagnostics.credentialHook}.{'\n'}
           Hook supplied assigned pair:{' '}
-          {diagnostics.hookMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
+          {enrollmentMatchLabel(diagnostics, 'hookMatchedAssigned')}.{'\n'}
           Login callback matches assignment:{' '}
-          {diagnostics.callbackMatchedAssigned ? 'Yes' : 'No'}.{'\n'}
+          {enrollmentMatchLabel(diagnostics, 'callbackMatchedAssigned')}.{'\n'}
           Login response: {diagnostics.loginResponse}.{'\n'}
           SDK Device ID setup:{' '}
           {diagnostics.deviceConfigurationStatus ?? 'Not reported'}.{'\n'}

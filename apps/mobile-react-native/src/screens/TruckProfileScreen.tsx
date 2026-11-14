@@ -75,8 +75,8 @@ const labels: Record<string, string> = {
   weightLbs: 'Gross weight (lb)',
   currentWeightLbs: 'Current weight (lb, optional)',
   weightPerAxleLbs: 'Maximum loaded axle-group weight (lb)',
-  axleCount: 'Axles',
-  trailerCount: 'Trailers',
+  axleCount: 'Total axles (tractor + all trailers)',
+  trailerCount: 'Number of trailers attached',
   name: 'Profile name',
   tractorType: 'Tractor type',
   trailerType: 'Trailer type',
@@ -574,8 +574,7 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             {key === 'weightPerAxleLbs' && (
               <Copy>
                 For Trimble this means the maximum loaded axle-group weight, not
-                total weight divided by axle count. Required for current native
-                navigation; enter a measured group value.
+                total weight divided by axle count. Use the heaviest loaded axle group from your measured weights. Do not enter a legal limit or a guessed value. Required for current native navigation.
               </Copy>
             )}
             {(key === 'axleCount' || key === 'trailerCount') && (
@@ -595,14 +594,12 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             )}
             {key === 'axleCount' && (
               <Copy>
-                Total vehicle axles. Select a common count or enter 2–14 above.
+                Count every axle on the tractor AND attached trailers. Example: 3 tractor axles + 2 trailer axles = 5 total axles. Enter the actual total, not just the tractor count.
               </Copy>
             )}
             {key === 'trailerCount' && (
               <Copy>
-                Actual trailers: 0–4 supported by the existing API. Select 0
-                with No Trailer. Multiple trailers are sent as a longer
-                combination vehicle; this is not permit approval.
+                Count trailer units, not trailer axles. One dry van with two axles is ONE trailer. Enter 0 for no trailer. The current native navigation mode supports one 53-foot trailer; other configurations can be saved but cannot start in that mode.
               </Copy>
             )}
           </View>
@@ -611,6 +608,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
       {boolFields.map(key => (
         <View key={key}>
           <Copy>{labels[key]}</Copy>
+          {['avoidResidential', 'avoidDirtRoads', 'avoidFerries', 'avoidHighways'].includes(key) && (
+            <Copy>Current native navigation cannot enforce this option. If enabled, Start is blocked. Keep it enabled when required for your trip; saving this preference does not add SDK support.</Copy>
+          )}
           <Switch
             trackColor={{ false: p.border, true: p.toggleActive }}
             thumbColor={p.toggleThumb}
@@ -665,7 +665,7 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           <Heading>VERIFY TRUCK PROFILE</Heading>
           <Copy>
             Check these values against the actual vehicle and load before
-            activating this profile.
+            activating this profile. Confirm & Use selects the saved profile; it does not clear the navigation blockers listed below.
           </Copy>
           <Heading>Native navigation compatibility</Heading>
           <Copy>{nativeCompatibility(review.profile)}</Copy>

@@ -233,8 +233,8 @@ test('Set Active shows all thirteen values; acknowledgement is required before a
     'Gross weight',
     'Current weight',
     'Weight per axle',
-    'Axles',
-    'Trailers',
+    'Total axles (tractor + all trailers)',
+    'Number of trailers attached',
   ])
     expect(json).toContain(label);
   expect(

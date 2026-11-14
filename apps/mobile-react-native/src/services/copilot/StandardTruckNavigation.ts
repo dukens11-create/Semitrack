@@ -5,7 +5,7 @@ import {
 } from './CopilotTruckProfile';
 
 export const standardTruckNotice =
-  'Standard single 53-foot semitrailer only, with no hazardous cargo or oversize/overweight permit requirements. CoPilot 11.3 routes using trailer length; separate overall-length and trailer-count fields are not verified by this SDK. Do not use this mode when those additional controls are required.';
+  'Standard single 53-foot semitrailer only, with no hazardous cargo or oversize/overweight permit requirements. This integration routes using trailer length; separate overall-length and trailer-count controls have not been validated for this navigation mode. Do not use this mode when those additional controls are required.';
 
 /** A limited existing CoPilot routing mode, not certification of 11.4 fields. */
 export function standardTruckRequest(input: unknown) {

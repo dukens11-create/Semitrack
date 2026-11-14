@@ -1,3 +1,7 @@
+import {
+  truckProfileBlockers,
+  type TruckProfileBlocker,
+} from './TruckProfileBlockers';
 const allowed = [
   'COPILOT_NOT_READY',
   'TRUCK_NOT_SELECTED',
@@ -19,7 +23,11 @@ const allowed = [
   'ENGINE_TRIP_UNAVAILABLE',
   'COPILOT_MAP_OR_LICENSE_UNVERIFIED',
 ] as const;
-let lastFailure: { action: string; code: string } | null = null;
+let lastFailure: {
+  action: string;
+  code: string;
+  profileBlockers?: TruckProfileBlocker[];
+} | null = null;
 export function recordHybridFailure(action: string, error: unknown) {
   const actions = [
     'START_RESUME',
@@ -38,7 +46,29 @@ export function recordHybridFailure(action: string, error: unknown) {
         ? code
         : 'UNCLASSIFIED_FAILURE',
   };
+  if (
+    lastFailure.code === 'STANDARD_TRUCK_SCOPE' &&
+    error &&
+    typeof error === 'object' &&
+    'profileBlockers' in error &&
+    Array.isArray(error.profileBlockers)
+  ) {
+    const supplied: unknown[] = error.profileBlockers;
+    lastFailure.profileBlockers = truckProfileBlockers.filter(blocker =>
+      supplied.includes(blocker),
+    );
+  }
+}
+export function clearHybridFailure(action: string) {
+  if (lastFailure?.action === action) lastFailure = null;
 }
 export function hybridFailureSnapshot() {
-  return lastFailure ? { ...lastFailure } : null;
+  return lastFailure
+    ? {
+        ...lastFailure,
+        ...(lastFailure.profileBlockers
+          ? { profileBlockers: [...lastFailure.profileBlockers] }
+          : {}),
+      }
+    : null;
 }

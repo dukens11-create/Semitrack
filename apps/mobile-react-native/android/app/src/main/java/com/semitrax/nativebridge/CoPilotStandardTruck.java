@@ -5,8 +5,7 @@ import com.alk.cpik.route.RouteEnums;
 import com.alk.cpik.route.VehicleRoutingProfile;
 import com.alk.cpik.route.VehicleDimensions;
 
-/** Read-only verification of the existing 11.3 standard semitrailer mode.
- * Does not assert separate overall-length or trailer-count API support. */
+/** Read-only verification of the limited standard semitrailer mode against CPIK 11.4. */
 final class CoPilotStandardTruck {
   private VehicleRoutingProfile reviewed;
   private String snapshot;
@@ -24,7 +23,11 @@ final class CoPilotStandardTruck {
       throw new IllegalStateException("FLEET_PROFILE_REQUIRED");
     VehicleDimensions d = p.getVehicleDimensions();
     if (d == null || d.getHeight().getInches() != height || d.getWidth().getInches() != width
-        || d.getLength().getInches() != length || d.getTotalWeight().getPounds() != weight
+        || d.getLength().getInches() != length
+        || d.getMaximumStraightLength().getInches() != length
+        || d.getTrailerCount() != trailers
+        || d.getBumperToBumperLength().getInches() < length
+        || d.getTotalWeight().getPounds() != weight
         || d.getWeightPerAxle().getPounds() != axleWeight)
       throw new IllegalStateException("TRUCK_DIMENSIONS_MISMATCH");
     // The supplied sample maps QUICKEST to its PRACTICAL label.

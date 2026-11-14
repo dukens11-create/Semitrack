@@ -79,6 +79,10 @@ beforeEach(async () => {
   mockHost.reviewEngineTripProfile.mockResolvedValue({
     ticket: 'review',
     name: 'Truck',
+    weightPerAxleLbs: 34000,
+    trailerCount: 1,
+    maximumStraightLengthInches: 636,
+    bumperToBumperLengthInches: 882,
     heightInches: 162,
     widthInches: 102,
     lengthInches: 636,

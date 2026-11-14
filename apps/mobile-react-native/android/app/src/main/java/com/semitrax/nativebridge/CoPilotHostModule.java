@@ -1280,6 +1280,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         value.putInt("widthInches", dims.getWidth().getInches());
         value.putInt("lengthInches", dims.getLength().getInches());
         value.putInt("weightLbs", dims.getTotalWeight().getPounds());
+        value.putInt("weightPerAxleLbs", dims.getWeightPerAxle().getPounds());
+        value.putInt("trailerCount", dims.getTrailerCount());
+        value.putInt("maximumStraightLengthInches", dims.getMaximumStraightLength().getInches());
+        value.putInt("bumperToBumperLengthInches", dims.getBumperToBumperLength().getInches());
         // These are SDK readbacks, not proof of axle/trailer enforcement.
         value.putBoolean("heavyDutyProfileVerified", true);
         value.putBoolean("axleCountVerified", false);

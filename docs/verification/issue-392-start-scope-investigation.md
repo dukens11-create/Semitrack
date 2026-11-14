@@ -59,3 +59,36 @@ and a supported policy for each required road preference. Removing the current
 check without implementing those contracts would discard restrictions. Build
 144 remains limited; its successful build did not establish universal truck
 support or resolve the supplied profile's Start rejection.
+
+
+## Follow-up: complete 11.4 standard-profile readback
+
+The old native verifier compared deprecated length but did not compare trailer count
+or maximum straight length. It could therefore accept inconsistent native routing
+fields. Verification now also requires one native trailer, 636-inch maximum straight
+length, and a reported bumper-to-bumper length at least as long as the trailer.
+The last condition establishes a usable readback, not a measurement of the driver's
+vehicle. The driver must review the displayed overall length against the vehicle.
+
+The pre-navigation review now includes both length fields, trailer count, and
+axle-group routing weight, distinguishing routing values from measured load weights.
+Incomplete readback cannot reach confirmation. Behavioral tests reject conflicting
+native trailer/length fields and invalidate acceptance when overall length changes.
+
+Validation: full mobile check passed (76 suites, 1,043 tests), TypeScript,
+zero-warning ESLint, native source/codegen and tooling, Java helper tests. The actual
+CoPilotStandardTruck and CoPilotFleetProfiles classes also compiled against the
+licensed 11.4 classes.jar. This is not Android APK compilation or device acceptance.
+No APK was generated for this source follow-up. Saved-profile synchronization remains
+unimplemented; no native setter, fleet overwrite, or restriction removal was added.
+
+SDK review confirms createNewProfile and setActiveVehicleRoutingProfile exist;
+setVehicleDimensions returns per-field modification results that must be checked.
+A complete transfer must model explicit maximum-straight and bumper-to-bumper length,
+weight provenance/routing-limit consent, and supported restrictions, then verify
+all effective fields after activation. The existing single length field must not be
+silently reused as the combination length. Unsupported avoidance preferences still
+cannot be silently disabled. This work does not certify all truck configurations.
+
+Primary API reference:
+https://developer.trimblemaps.com/copilot-navigation/cpik-libraries/native-and-dot-net/api-functions/routemgr/

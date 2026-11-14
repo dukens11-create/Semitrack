@@ -6,7 +6,7 @@ import {
 } from './CopilotTruckProfile';
 
 export const standardTruckNotice =
-  'Standard single 53-foot semitrailer only, with no hazardous cargo or oversize/overweight permit requirements. This integration routes using trailer length; separate overall-length and trailer-count controls have not been validated for this navigation mode. Do not use this mode when those additional controls are required.';
+  'Standard single 53-foot semitrailer only, with no hazardous cargo or oversize/overweight permit requirements. The engine must report one trailer and a 53-foot maximum straight length. Review its bumper-to-bumper length and routing weights against your vehicle and load. This limited mode does not support other truck configurations.';
 
 export class StandardTruckValidationError extends Error {
   constructor(

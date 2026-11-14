@@ -127,6 +127,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     result.putString("ticket", ticket);
     result.putString("name", profile.getName());
     result.putString("source", "FLEET_PORTAL");
+    result.putString("vehicleType", profile.getVehicleType().name());
+    result.putInt("trailerCount", dims.getTrailerCount());
+    result.putInt("maximumStraightLengthInches", dims.getMaximumStraightLength().getInches());
+    result.putInt("bumperToBumperLengthInches", dims.getBumperToBumperLength().getInches());
     result.putInt("heightInches", dims.getHeight().getInches());
     result.putInt("widthInches", dims.getWidth().getInches());
     result.putInt("lengthInches", dims.getLength().getInches());

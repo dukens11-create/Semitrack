@@ -5,6 +5,12 @@ export const fleetTruckProfileSchema = z.object({
   ticket: z.string(),
   name: z.string().trim().min(1),
   source: z.literal('FLEET_PORTAL'),
+  vehicleType: z
+    .enum(['TRUCK_LIGHT_DUTY', 'TRUCK_MEDIUM_DUTY', 'TRUCK_HEAVY_DUTY'])
+    .optional(),
+  trailerCount: z.number().int().nonnegative().optional(),
+  maximumStraightLengthInches: z.number().int().nonnegative().optional(),
+  bumperToBumperLengthInches: z.number().int().nonnegative().optional(),
   heightInches: z.number().int().positive(),
   widthInches: z.number().int().positive(),
   lengthInches: z.number().int().positive(),
@@ -32,6 +38,11 @@ export async function selectFleetTruckProfile(
   if (
     !active.active ||
     active.name !== profile.name ||
+    active.vehicleType !== profile.vehicleType ||
+    active.trailerCount !== profile.trailerCount ||
+    active.maximumStraightLengthInches !==
+      profile.maximumStraightLengthInches ||
+    active.bumperToBumperLengthInches !== profile.bumperToBumperLengthInches ||
     active.heightInches !== profile.heightInches ||
     active.widthInches !== profile.widthInches ||
     active.lengthInches !== profile.lengthInches ||

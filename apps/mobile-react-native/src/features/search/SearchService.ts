@@ -469,47 +469,60 @@ export class SearchService {
     signal: AbortSignal | undefined,
     schema: z.ZodType<T>,
   ): Promise<T> {
+    checkCancelled(signal);
     const controller = new AbortController();
-    const abort = () => controller.abort();
+    let rejectInterrupted!: (error: Error) => void;
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      rejectInterrupted = reject;
+    });
+    const abort = () => {
+      controller.abort();
+      rejectInterrupted(new Error('Search interrupted'));
+    };
 
     signal?.addEventListener('abort', abort);
-    if (signal?.aborted) abort();
 
     const timer = setTimeout(abort, 15000);
 
     try {
-      checkCancelled(signal);
-      const response = await this.transport(url, {
-        signal: controller.signal,
-      });
+      // Bound transport AND body parsing even if native fetch ignores abort.
+      return await Promise.race([
+        interrupted,
+        (async () => {
+          checkCancelled(signal);
+          const response = await this.transport(url, {
+            signal: controller.signal,
+          });
 
-      if (!response.ok) {
-        // Do not read or retain error bodies: they can echo addresses or tokens.
-        const code =
-          response.status === 401
-            ? 'PLACE_SEARCH_UNAUTHORIZED'
-            : response.status === 403
-            ? 'PLACE_SEARCH_FORBIDDEN'
-            : response.status === 429
-            ? 'PLACE_SEARCH_RATE_LIMITED'
-            : response.status === 400 || response.status === 422
-            ? 'PLACE_SEARCH_REQUEST_INVALID'
-            : 'PLACE_SEARCH_UNAVAILABLE';
-        throw new DriverError(code, 'provider');
-      }
+          if (!response.ok) {
+            // Do not read or retain error bodies: they can echo addresses or tokens.
+            const code =
+              response.status === 401
+                ? 'PLACE_SEARCH_UNAUTHORIZED'
+                : response.status === 403
+                ? 'PLACE_SEARCH_FORBIDDEN'
+                : response.status === 429
+                ? 'PLACE_SEARCH_RATE_LIMITED'
+                : response.status === 400 || response.status === 422
+                ? 'PLACE_SEARCH_REQUEST_INVALID'
+                : 'PLACE_SEARCH_UNAVAILABLE';
+            throw new DriverError(code, 'provider');
+          }
 
-      let data: unknown;
-      try {
-        data = await response.json();
-      } catch {
-        throw new DriverError('PLACE_SEARCH_INVALID_RESPONSE', 'provider');
-      }
-      checkCancelled(signal);
-      if (controller.signal.aborted) throw new Error('Request expired');
-      const parsed = schema.safeParse(data);
-      if (!parsed.success)
-        throw new DriverError('PLACE_SEARCH_INVALID_RESPONSE', 'provider');
-      return parsed.data;
+          let data: unknown;
+          try {
+            data = await response.json();
+          } catch {
+            throw new DriverError('PLACE_SEARCH_INVALID_RESPONSE', 'provider');
+          }
+          checkCancelled(signal);
+          if (controller.signal.aborted) throw new Error('Request expired');
+          const parsed = schema.safeParse(data);
+          if (!parsed.success)
+            throw new DriverError('PLACE_SEARCH_INVALID_RESPONSE', 'provider');
+          return parsed.data;
+        })(),
+      ]);
     } catch (error) {
       checkCancelled(signal);
       if (controller.signal.aborted)

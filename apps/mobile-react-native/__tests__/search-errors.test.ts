@@ -124,3 +124,38 @@ test('reverse lookup uses the same safe access classification', async () => {
     code: 'PLACE_SEARCH_FORBIDDEN',
   });
 });
+
+
+test.each(['transport', 'body'] as const)(
+  'deadline settles a stalled %s even when abort is ignored', async stage => {
+    jest.useFakeTimers();
+    try {
+      let finish!: (value: never) => void;
+      const stalled = new Promise<never>(resolve => { finish = resolve; });
+      const transport = jest.fn(async () => stage === 'transport'
+        ? stalled : ({ ok: true, json: () => stalled } as unknown as Response));
+      const search = new SearchService('pk.synthetic-secret', transport);
+      const result = search.search('warehouse').catch(error => error);
+      await jest.advanceTimersByTimeAsync(15000);
+      expect(await result).toMatchObject({ code: 'PLACE_SEARCH_TIMEOUT' });
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(jest.getTimerCount()).toBe(0);
+      // A late response cannot revive the failed search or leak an error.
+      finish({ ok: true, json: async () => ({ features: [] }), features: [] } as never);
+      await Promise.resolve();
+      expect(await result).toMatchObject({ code: 'PLACE_SEARCH_TIMEOUT' });
+    } finally { jest.useRealTimers(); }
+  },
+);
+
+test('caller cancellation settles an abort-ignoring request immediately', async () => {
+  jest.useFakeTimers();
+  try {
+    const controller = new AbortController();
+    const search = new SearchService('pk.synthetic-secret', () => new Promise<Response>(() => {}));
+    const result = search.search('warehouse', undefined, controller.signal).catch(error => error);
+    controller.abort();
+    expect(await result).toMatchObject({ message: 'Search cancelled.' });
+    expect(jest.getTimerCount()).toBe(0);
+  } finally { jest.useRealTimers(); }
+});

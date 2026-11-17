@@ -546,7 +546,7 @@ test('profile review explains native blockers without rewriting actual equipment
     'Native navigation compatibility',
     'Axle count: this mode requires five axles',
     'Trailer count: this mode requires one trailer',
-    'Maximum axle-group weight: required',
+    'Axle-group routing weight: 34,000 lb',
     'Avoid residential roads is enabled',
     'Avoid dirt roads is enabled',
   ]) {
@@ -595,4 +595,20 @@ test('an active truck can review edits through Set Active, and invalid edits can
     .toBe(false);
   expect(request.mock.calls.filter(call => call[0] !== 'GET')).toHaveLength(0);
   expect(store.getSnapshot().selected?.axleCount).toBe(valid.axleCount);
+});
+
+test.each(['Avoid residential roads', 'Avoid dirt roads'])('disabling %s requires an explicit choice and does not save automatically', async label => {
+  const { request, store } = await mount([{...valid, avoidResidential: true, avoidDirtRoads: true}]);
+  await press('Edit');
+  const toggle = () => screen!.root.findAllByType(Switch).find(item => item.props.accessibilityLabel === label)!;
+  await act(async () => toggle().props.onValueChange(false));
+  expect(toggle().props.value).toBe(true);
+  expect(JSON.stringify(screen!.toJSON())).toContain('legal restrictions remain checked');
+  await press('Keep required');
+  expect(toggle().props.value).toBe(true);
+  await act(async () => toggle().props.onValueChange(false));
+  await press('Turn off preference');
+  expect(toggle().props.value).toBe(false);
+  expect(store.getSnapshot().profiles[0]).toMatchObject({avoidResidential: true, avoidDirtRoads: true});
+  expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
 });

@@ -1,7 +1,13 @@
 import { CoPilotFeatureControls } from '../../components/CoPilotFeatureControls';
 import { CoPilotMapCatalog } from '../../components/CoPilotMapCatalog';
-import { recordHybridFailure, clearHybridFailure } from '../../services/copilot/HybridControlDiagnostics';
-import { standardTruckNotice } from '../../services/copilot/StandardTruckNavigation';
+import {
+  recordHybridFailure,
+  clearHybridFailure,
+} from '../../services/copilot/HybridControlDiagnostics';
+import {
+  standardTruckNotice,
+  standardAxleWeightNotice,
+} from '../../services/copilot/StandardTruckNavigation';
 import { FleetTruckProfiles } from '../../components/FleetTruckProfiles';
 import { CoPilotDeviceSetup } from '../../components/CoPilotDeviceSetup';
 import React, { useRef, useState } from 'react';
@@ -119,7 +125,9 @@ export function HybridNavigation({
       'Confirm standard truck navigation',
       `${
         profile ? engineTripProfileSummary(profile) + '\n\n' : ''
-      }${standardTruckNotice}\n\nRouting uses your saved maximum weight. Confirm that this mode and the matched fleet profile are appropriate for this trip.`,
+      }${standardTruckNotice}\n\n${standardAxleWeightNotice(
+        services.trucks.getSnapshot().selected?.weightPerAxleLbs ?? null,
+      )}\n\nRouting uses your saved maximum weight. Confirm that this mode and the matched fleet profile are appropriate for this trip.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {

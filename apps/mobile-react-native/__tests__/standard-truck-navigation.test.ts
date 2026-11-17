@@ -47,7 +47,6 @@ test('reproduces phone profile failure and retains each blocker without calling 
       profileBlockers: [
         'TRAILER_COUNT_UNSUPPORTED',
         'AXLE_COUNT_UNSUPPORTED',
-        'AXLE_GROUP_WEIGHT_MISSING',
         'AVOID_RESIDENTIAL_UNSUPPORTED',
         'AVOID_DIRT_ROADS_UNSUPPORTED',
       ],
@@ -70,7 +69,6 @@ test('corrected counts remove only their blockers; malformed input is not mislab
       {
         code: 'STANDARD_TRUCK_SCOPE',
         profileBlockers: [
-          'AXLE_GROUP_WEIGHT_MISSING',
           'AVOID_RESIDENTIAL_UNSUPPORTED',
           'AVOID_DIRT_ROADS_UNSUPPORTED',
         ],
@@ -111,7 +109,6 @@ test.each([
   { heightFt: 13.51 },
   { widthFt: 8.51 },
   { weightLbs: 80001 },
-  { weightPerAxleLbs: null },
   { weightPerAxleLbs: 34001 },
   { trailerType: 'tanker' },
   { tractorType: 'Straight / Box Truck' },
@@ -150,4 +147,31 @@ test('synchronization verifies readback without changing engine fields', async (
       verifyStandardTruckProfile,
     } as unknown as CoPilotHost),
   ).rejects.toEqual({ code: 'TRUCK_DIMENSIONS_MISMATCH' });
+});
+
+test('blank measured weight requests documented routing default without modifying saved data; native mismatch still rejects', async () => {
+  const selected = { ...standard, weightPerAxleLbs: null };
+  const verifyStandardTruckProfile = jest.fn().mockResolvedValue(undefined);
+  const services = {
+    trucks: { getSnapshot: () => ({ selected }) },
+  } as unknown as Services;
+  await synchronizeHybridTruck(services, {
+    verifyStandardTruckProfile,
+  } as unknown as CoPilotHost);
+  expect(verifyStandardTruckProfile).toHaveBeenCalledWith(
+    expect.objectContaining({ weightPerAxleLbs: 34000 }),
+  );
+  expect(selected.weightPerAxleLbs).toBeNull();
+  verifyStandardTruckProfile.mockRejectedValue({
+    code: 'TRUCK_DIMENSIONS_MISMATCH',
+  });
+  await expect(
+    synchronizeHybridTruck(services, {
+      verifyStandardTruckProfile,
+    } as unknown as CoPilotHost),
+  ).rejects.toEqual({ code: 'TRUCK_DIMENSIONS_MISMATCH' });
+  expect(
+    standardTruckRequest({ ...standard, weightPerAxleLbs: 32000 })
+      .weightPerAxleLbs,
+  ).toBe(32000);
 });

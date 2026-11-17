@@ -148,6 +148,8 @@ public class StandardTruckTest {
   verify(v);v.accept();RouteMgr.profile.restriction++;denied(()->v.requireAccepted());
   verify(v);v.accept();verify(v);denied(()->v.requireAccepted());
   v.accept();v.clear();denied(()->v.requireAccepted());
+  RouteMgr.profile.dims.axle.n=32000;denied(()->verify(v));RouteMgr.profile.dims.axle.n=34000;
+  verify(v);v.accept();RouteMgr.profile.dims.axle.n=35000;denied(()->v.requireAccepted());denied(()->verify(v));RouteMgr.profile.dims.axle.n=34000;
   RouteMgr.profile.dims.trailers=2;denied(()->verify(v));RouteMgr.profile.dims.trailers=1;
   RouteMgr.profile.dims.straight.n=600;denied(()->verify(v));RouteMgr.profile.dims.straight.n=636;
   RouteMgr.profile.dims.bumper.n=0;denied(()->verify(v));RouteMgr.profile.dims.bumper.n=882;

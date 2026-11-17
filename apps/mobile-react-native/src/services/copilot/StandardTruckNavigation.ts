@@ -5,6 +5,16 @@ import {
   feetToConservativeInches,
 } from './CopilotTruckProfile';
 
+// Trimble's North America Heavy Duty Semitrailer default, not a measured load.
+// The native verifier must read back this exact value before driver acceptance.
+export const standardAxleGroupRoutingWeightLbs = 34000;
+
+export function standardAxleWeightNotice(weight: number | null) {
+  return weight === null
+    ? 'Axle-group routing weight: 34,000 lb from the standard CoPilot semitrailer profile, not a measured load weight. The engine must match this value. Confirm this profile is appropriate for your vehicle and load; do not use it if an axle group exceeds this routing value.'
+    : `Axle-group routing weight: ${weight.toLocaleString()} lb from your saved profile. The engine must match this value.`;
+}
+
 export const standardTruckNotice =
   'Standard single 53-foot semitrailer only, with no hazardous cargo or oversize/overweight permit requirements. The engine must report one trailer and a 53-foot maximum straight length. Review its bumper-to-bumper length and routing weights against your vehicle and load. This limited mode does not support other truck configurations.';
 
@@ -70,14 +80,11 @@ export function standardTruckRequest(input: unknown) {
       'Maximum weight: supported range is 1,500 to 80,000 lb',
     );
   if (
-    t.weightPerAxleLbs === null ||
-    t.weightPerAxleLbs < 800 ||
-    t.weightPerAxleLbs > 34000
+    t.weightPerAxleLbs !== null &&
+    (t.weightPerAxleLbs < 800 || t.weightPerAxleLbs > 34000)
   )
     problem(
-      t.weightPerAxleLbs === null
-        ? 'AXLE_GROUP_WEIGHT_MISSING'
-        : 'AXLE_GROUP_WEIGHT_UNSUPPORTED',
+      'AXLE_GROUP_WEIGHT_UNSUPPORTED',
       'Maximum axle-group weight: required range is 800 to 34,000 lb',
     );
   if (t.hazmatEnabled || t.hazardousGoods.length)
@@ -113,7 +120,7 @@ export function standardTruckRequest(input: unknown) {
     widthInches: feetToConservativeInches(t.widthFt),
     lengthInches: 636,
     weightLbs: t.weightLbs,
-    weightPerAxleLbs: t.weightPerAxleLbs!,
+    weightPerAxleLbs: t.weightPerAxleLbs ?? standardAxleGroupRoutingWeightLbs,
     trailerCount: 1,
     axleCount: 5,
     avoidTolls: t.avoidTolls,

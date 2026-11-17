@@ -1,4 +1,7 @@
-import { standardTruckRequest } from '../services/copilot/StandardTruckNavigation';
+import {
+  standardTruckRequest,
+  standardAxleWeightNotice,
+} from '../services/copilot/StandardTruckNavigation';
 import { useDriverPalette } from '../components/DriverUI';
 import {
   dimensionFields,
@@ -220,6 +223,7 @@ export function TruckProfileScreen({ services }: { services: Services }) {
   const p = useDriverPalette();
   const state = useStore(services.trucks);
   const [form, setForm] = useState(formFrom());
+  const [roadPreference, setRoadPreference] = useState<'avoidResidential' | 'avoidDirtRoads'>();
   const [formKey, setFormKey] = useState(0);
   const [error, setError] = useState<string>();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -581,7 +585,12 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             {key === 'weightPerAxleLbs' && (
               <Copy>
                 For Trimble this means the maximum loaded axle-group weight, not
-                total weight divided by axle count. Use the heaviest loaded axle group from your measured weights. Do not enter a legal limit or a guessed value. Required for current native navigation.
+                total weight divided by axle count. Optional measured override:
+                use the heaviest loaded axle group if known. Leave blank to
+                request the standard semitrailer routing default of 34,000 lb,
+                subject to native profile verification and trip confirmation.
+                This does not record a measured weight or apply to every truck
+                configuration.
               </Copy>
             )}
             {(key === 'axleCount' || key === 'trailerCount') && (
@@ -601,12 +610,17 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             )}
             {key === 'axleCount' && (
               <Copy>
-                Count every axle on the tractor AND attached trailers. Example: 3 tractor axles + 2 trailer axles = 5 total axles. Enter the actual total, not just the tractor count.
+                Count every axle on the tractor AND attached trailers. Example:
+                3 tractor axles + 2 trailer axles = 5 total axles. Enter the
+                actual total, not just the tractor count.
               </Copy>
             )}
             {key === 'trailerCount' && (
               <Copy>
-                Count trailer units, not trailer axles. One dry van with two axles is ONE trailer. Enter 0 for no trailer. The current native navigation mode supports one 53-foot trailer; other configurations can be saved but cannot start in that mode.
+                Count trailer units, not trailer axles. One dry van with two
+                axles is ONE trailer. Enter 0 for no trailer. The current native
+                navigation mode supports one 53-foot trailer; other
+                configurations can be saved but cannot start in that mode.
               </Copy>
             )}
           </View>
@@ -615,8 +629,17 @@ export function TruckProfileScreen({ services }: { services: Services }) {
       {boolFields.map(key => (
         <View key={key}>
           <Copy>{labels[key]}</Copy>
-          {['avoidResidential', 'avoidDirtRoads', 'avoidFerries', 'avoidHighways'].includes(key) && (
-            <Copy>Current native navigation cannot enforce this option. If enabled, Start is blocked. Keep it enabled when required for your trip; saving this preference does not add SDK support.</Copy>
+          {[
+            'avoidResidential',
+            'avoidDirtRoads',
+            'avoidFerries',
+            'avoidHighways',
+          ].includes(key) && (
+            <Copy>
+              Current native navigation cannot enforce this option. If enabled,
+              Start is blocked. Keep it enabled when required for your trip;
+              saving this preference does not add SDK support.
+            </Copy>
           )}
           <Switch
             trackColor={{ false: p.border, true: p.toggleActive }}
@@ -625,7 +648,15 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             accessibilityLabel={labels[key]}
             disabled={busy}
             value={form[key] === true}
-            onValueChange={value => update(key, value)}
+            onValueChange={value => {
+              if (
+                !value &&
+                form[key] === true &&
+                (key === 'avoidResidential' || key === 'avoidDirtRoads')
+              ) {
+                setRoadPreference(key);
+              } else update(key, value);
+            }}
           />
         </View>
       ))}
@@ -672,15 +703,16 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           <Heading>VERIFY TRUCK PROFILE</Heading>
           <Copy>
             Check these values against the actual vehicle and load before
-            activating this profile. Confirm & Use selects the saved profile; it does not clear the navigation blockers listed below.
+            activating this profile. Confirm & Use selects the saved profile; it
+            does not clear the navigation blockers listed below.
           </Copy>
           <Heading>Native navigation compatibility</Heading>
           <Copy>{nativeCompatibility(review.profile)}</Copy>
           <Copy>
             Saving a profile does not guarantee native navigation support. Enter
             total axles across the tractor and trailers, the actual trailer
-            count, and the measured maximum loaded axle-group weight. If your
-            equipment is outside the supported mode, keep its actual values.
+            count, and a measured axle-group weight if known. If your equipment
+            is outside the supported mode, keep its actual values.
           </Copy>
           {[...stringFields, ...numericFields].map(key => (
             <Copy key={key}>
@@ -691,6 +723,9 @@ export function TruckProfileScreen({ services }: { services: Services }) {
             Trimble routing weight: {review.profile.weightLbs} lb (Gross
             Weight). Weight per axle is interpreted as maximum axle-group
             weight.
+          </Copy>
+          <Copy>
+            {standardAxleWeightNotice(review.profile.weightPerAxleLbs)}
           </Copy>
           <Copy>
             Hazardous goods:{' '}
@@ -734,6 +769,17 @@ export function TruckProfileScreen({ services }: { services: Services }) {
               void run(confirm);
             }}
           />
+        </Dialog>
+      )}
+      {roadPreference && (
+        <Dialog close={() => setRoadPreference(undefined)}>
+          <Heading>Change road preference?</Heading>
+          <Copy>{labels[roadPreference]} cannot be enforced by the current CoPilot integration. Turn it off only if it is optional for this trip. Truck dimensions and legal restrictions remain checked, but residential or dirt roads may be used.</Copy>
+          <Button title="Keep required" secondary onPress={() => setRoadPreference(undefined)} />
+          <Button title="Turn off preference" onPress={() => {
+            update(roadPreference, false);
+            setRoadPreference(undefined);
+          }} />
         </Dialog>
       )}
       {deleting && (

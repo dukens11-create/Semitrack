@@ -415,9 +415,16 @@ export function TruckProfileScreen({ services }: { services: Services }) {
           )}
           <Button
             title="Set Active"
-            disabled={busy || state.selected?.id === profile.id}
+            disabled={
+              busy ||
+              (state.selected?.id === profile.id && form.id !== profile.id)
+            }
             onPress={() => {
-              void run(() => openReview(profile));
+              // An open edit belongs to this truck: review and save that draft,
+              // never replace it with the older card snapshot during activation.
+              void run(() =>
+                openReview(form.id === profile.id ? undefined : profile),
+              );
             }}
           />
         </Card>

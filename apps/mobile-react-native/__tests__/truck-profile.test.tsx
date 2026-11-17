@@ -555,3 +555,44 @@ test('profile review explains native blockers without rewriting actual equipment
   expect(store.getSnapshot().profiles[0]).toMatchObject(profile);
   expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
 });
+
+
+test('activating an edited truck reviews and saves the edited counts instead of the older saved copy', async () => {
+  const { store, request } = await mount([
+    { ...valid, axleCount: 3, trailerCount: 2, verifiedRevision: null,
+      verificationState: 'DRIVER_VERIFICATION_REQUIRED' },
+  ]);
+  await press('Edit');
+  const field = (label: string) => screen!.root.findAllByType(TextInput)
+    .find(input => input.props.accessibilityLabel === label)!;
+  await act(async () => {
+    field('Total axles (tractor + all trailers)').props.onChangeText('5');
+    field('Number of trailers attached').props.onChangeText('1');
+  });
+  await press('Set Active');
+  expect(request.mock.calls.filter(call => call[0] !== 'GET')).toHaveLength(0);
+  await act(async () => screen!.root.findAllByType(Switch)
+    .find(item => item.props.accessibilityLabel === 'I verified the actual truck and load')!
+    .props.onValueChange(true));
+  await press('Confirm & Use');
+  expect(request.mock.calls.find(call => call[0] === 'PATCH')?.[2])
+    .toMatchObject({ axleCount: 5, trailerCount: 1 });
+  expect(store.getSnapshot().selected).toMatchObject({ axleCount: 5, trailerCount: 1 });
+});
+
+
+test('an active truck can review edits through Set Active, and invalid edits cannot select its old copy', async () => {
+  const { store, request } = await mount();
+  await press('Edit');
+  const button = () => screen!.root.findAllByType(Button)
+    .find(item => item.props.title === 'Set Active')!;
+  expect(button().props.disabled).toBe(false);
+  await act(async () => screen!.root.findAllByType(TextInput)
+    .find(input => input.props.accessibilityLabel === 'Total axles (tractor + all trailers)')!
+    .props.onChangeText('0'));
+  await press('Set Active');
+  expect(screen!.root.findAllByType(Button).some(item => item.props.title === 'Confirm & Use'))
+    .toBe(false);
+  expect(request.mock.calls.filter(call => call[0] !== 'GET')).toHaveLength(0);
+  expect(store.getSnapshot().selected?.axleCount).toBe(valid.axleCount);
+});

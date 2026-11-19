@@ -215,7 +215,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       } catch (Exception e) {
         standardTruck.clear();
         String code = e.getMessage();
-        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
+        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "HEAVY_TRUCK_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
             "TRUCK_PREFERENCES_MISMATCH", "STANDARD_TRUCK_RECHECK_REQUIRED").contains(code)) code = "STANDARD_TRUCK_RECHECK_REQUIRED";
         promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
       }

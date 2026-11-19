@@ -26,7 +26,7 @@ export function FleetTruckProfiles({ ready }: { ready: boolean }) {
       setMessage(
         found.length
           ? 'Downloaded heavy-duty fleet profiles:'
-          : 'No downloaded heavy-duty fleet profile was found. An Account Manager assignment alone does not confirm it has reached this phone.',
+          : 'No downloaded heavy-duty fleet profile was found. You can also select a matching heavy-duty profile in Truck settings, then retry Start / Resume for verification. An Account Manager assignment alone does not confirm it has reached this phone.',
       );
     } catch {
       setMessage(

@@ -154,7 +154,17 @@ public class StandardTruckTest {
   RouteMgr.profile.dims.straight.n=600;denied(()->verify(v));RouteMgr.profile.dims.straight.n=636;
   RouteMgr.profile.dims.bumper.n=0;denied(()->verify(v));RouteMgr.profile.dims.bumper.n=882;
   verify(v);v.accept();RouteMgr.profile.dims.bumper.n++;denied(()->v.requireAccepted());RouteMgr.profile.dims.bumper.n--;
-  RouteMgr.profile.source=VehicleRoutingProfileSource.MANUAL;denied(()->verify(v));RouteMgr.profile.source=VehicleRoutingProfileSource.FLEET_PORTAL;
+  for(VehicleRoutingProfileSource source:VehicleRoutingProfileSource.values()) {
+   RouteMgr.profile.source=source;verify(v);denied(()->v.requireAccepted());v.accept();v.requireAccepted();
+   RouteMgr.profile.dims.height.n=161;denied(()->v.requireAccepted());denied(()->verify(v));RouteMgr.profile.dims.height.n=162;
+  }
+  RouteMgr.profile.source=null;denied(()->verify(v));
+  RouteMgr.profile.source=VehicleRoutingProfileSource.DEFAULT;verify(v);v.accept();
+  RouteMgr.profile.source=VehicleRoutingProfileSource.MANUAL;denied(()->v.requireAccepted());
+  RouteMgr.profile.type=RouteEnums.VehicleType.CAR;denied(()->verify(v));
+  RouteMgr.profile.type=RouteEnums.VehicleType.TRUCK_HEAVY_DUTY;
+  VehicleRoutingProfile saved=RouteMgr.profile;RouteMgr.profile=null;denied(()->verify(v));RouteMgr.profile=saved;
+  RouteMgr.profile.source=VehicleRoutingProfileSource.FLEET_PORTAL;
   RouteMgr.profile.hazmat=RouteEnums.HazmatType.FLAMMABLE;denied(()->verify(v));RouteMgr.profile.hazmat=RouteEnums.HazmatType.NONE;
   RouteMgr.profile.routing=RouteEnums.RoutingType.SHORTEST;denied(()->verify(v));RouteMgr.profile.routing=RouteEnums.RoutingType.QUICKEST;
   RouteMgr.profile.toll=RouteEnums.TollRoads.ALWAYS_AVOID;denied(()->verify(v));v.verify(162,102,636,80000,34000,1,5,true);v.accept();v.requireAccepted();

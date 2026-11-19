@@ -45,12 +45,14 @@ export function hybridError(error: unknown): string {
   const code =
     error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
+    case 'HEAVY_TRUCK_PROFILE_REQUIRED':
+      return 'Open Truck settings and select a heavy-duty CoPilot profile matching your actual vehicle. Default, manual, API and assigned fleet profiles can be checked. Then retry Start / Resume; selecting a profile alone does not start guidance.';
     case 'FLEET_PROFILE_REQUIRED':
       return 'Check assigned fleet profiles and select the matching heavy-duty truck profile.';
     case 'TRUCK_DIMENSIONS_MISMATCH':
       return 'The engine dimensions or axle-group weight do not match your saved truck. Review both profiles; no settings were changed.';
     case 'TRUCK_PREFERENCES_MISMATCH':
-      return 'The fleet profile must use Practical routing, no hazardous cargo, and the same toll preference as your saved truck.';
+      return 'The active CoPilot truck profile must use Practical routing, no hazardous cargo, and the same toll preference as your saved truck.';
     case 'STANDARD_TRUCK_RECHECK_REQUIRED':
     case 'STANDARD_TRUCK_CONFIRMATION_REQUIRED':
       return 'The truck profile needs a fresh check and confirmation before starting.';

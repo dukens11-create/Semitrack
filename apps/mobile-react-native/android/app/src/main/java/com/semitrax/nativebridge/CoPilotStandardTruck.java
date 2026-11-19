@@ -4,12 +4,24 @@ import com.alk.cpik.route.RouteMgr;
 import com.alk.cpik.route.RouteEnums;
 import com.alk.cpik.route.VehicleRoutingProfile;
 import com.alk.cpik.route.VehicleDimensions;
+import com.alk.cpik.route.VehicleRoutingProfileSource;
 
 /** Read-only verification of the limited standard semitrailer mode against CPIK 11.4. */
 final class CoPilotStandardTruck {
   private VehicleRoutingProfile reviewed;
   private String snapshot;
   private boolean accepted;
+  // Source describes provenance, not whether a profile is a valid truck profile.
+  // Keep fleet-only selection separate; never rewrite an assigned profile.
+  private static boolean isHeavyTruck(VehicleRoutingProfile p) {
+    if (p == null || p.getVehicleType() != RouteEnums.VehicleType.TRUCK_HEAVY_DUTY)
+      return false;
+    VehicleRoutingProfileSource source = p.getVehicleRoutingProfileSource();
+    return source == VehicleRoutingProfileSource.DEFAULT
+        || source == VehicleRoutingProfileSource.MANUAL
+        || source == VehicleRoutingProfileSource.API
+        || source == VehicleRoutingProfileSource.FLEET_PORTAL;
+  }
   void clear() { reviewed = null; snapshot = null; accepted = false; }
   void verify(int height, int width, int length, int weight, int axleWeight,
       int trailers, int axles, boolean avoidTolls) {
@@ -19,8 +31,8 @@ final class CoPilotStandardTruck {
         || trailers != 1 || axles != 5)
       throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
     VehicleRoutingProfile p = RouteMgr.getActiveVehicleRoutingProfile();
-    if (!CoPilotFleetProfiles.isFleetTruck(p))
-      throw new IllegalStateException("FLEET_PROFILE_REQUIRED");
+    if (!isHeavyTruck(p))
+      throw new IllegalStateException("HEAVY_TRUCK_PROFILE_REQUIRED");
     VehicleDimensions d = p.getVehicleDimensions();
     if (d == null || d.getHeight().getInches() != height || d.getWidth().getInches() != width
         || d.getLength().getInches() != length
@@ -40,7 +52,7 @@ final class CoPilotStandardTruck {
   }
   void requireVerified() {
     VehicleRoutingProfile active = RouteMgr.getActiveVehicleRoutingProfile();
-    if (reviewed == null || !CoPilotFleetProfiles.isFleetTruck(active)
+    if (reviewed == null || !isHeavyTruck(active)
         || !reviewed.getName().equals(active.getName())
         || !snapshot.equals(active.toString()) || !reviewed.equals_RoutingFieldsOnly(active)) {
       clear();

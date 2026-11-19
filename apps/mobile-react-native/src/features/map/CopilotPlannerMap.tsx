@@ -99,12 +99,23 @@ export function CopilotPlannerMap({
     queue.current = queue.current
       .then(async () => {
         if (!current) return;
-        await coPilotHost().drawRoutePreview(JSON.parse(geometryKey));
+        const failures: string[] = [];
+        try {
+          await coPilotHost().drawRoutePreview(JSON.parse(geometryKey));
+        } catch {
+          failures.push('Route preview could not be displayed.');
+        }
         if (!current) return;
-        await coPilotHost().mapCommand('recenter');
+        // Preview drawing must not prevent the independent GPS-follow command.
+        try {
+          await coPilotHost().mapCommand('recenter');
+        } catch {
+          failures.push('Map could not follow your position. Check GPS and tap Recenter.');
+        }
+        if (current) setError(failures.join(' '));
       })
       .catch(() => {
-        if (current) setError('Route preview could not be displayed.');
+        if (current) setError('Map setup could not complete. Try Recenter.');
       });
     return () => {
       current = false;

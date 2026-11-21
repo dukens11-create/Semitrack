@@ -8,6 +8,10 @@ const profile = {
   ticket: 'native-review',
   name: 'Assigned truck',
   source: 'FLEET_PORTAL' as const,
+  vehicleType: 'TRUCK_HEAVY_DUTY' as const,
+  trailerCount: 1,
+  maximumStraightLengthInches: 636,
+  bumperToBumperLengthInches: 882,
   heightInches: 162,
   widthInches: 102,
   lengthInches: 636,
@@ -33,6 +37,11 @@ test.each([
   { ticket: '' },
   { weightPerAxleLbs: 0 },
   { heightInches: -1 },
+  { vehicleType: 'AUTO' },
+  { trailerCount: -1 },
+  { trailerCount: 1.5 },
+  { maximumStraightLengthInches: -1 },
+  { bumperToBumperLengthInches: -1 },
 ])('rejects invalid or untrusted fleet readback %j', async change => {
   await expect(
     readFleetTruckProfiles(host([{ ...profile, ...change }])),
@@ -49,6 +58,11 @@ test.each([
   { name: 'Other truck' },
   { weightLbs: 10000 },
   { lengthInches: 400 },
+  { vehicleType: 'TRUCK_MEDIUM_DUTY' },
+  { trailerCount: 2 },
+  { maximumStraightLengthInches: 500 },
+  { bumperToBumperLengthInches: 800 },
+  { trailerCount: undefined },
 ])('rejects mismatched selection %j', async change => {
   await expect(
     selectFleetTruckProfile(

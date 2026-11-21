@@ -18,11 +18,12 @@ const mockHost = {
   mapCommand: jest.fn(),
 };
 let mockBlocker: string | null = null;
+let mockReadyToAddStops = true;
 jest.mock('../src/services/copilot/CoPilotHost', () => ({
   coPilotHost: () => mockHost,
 }));
 jest.mock('../src/services/copilot/CopilotProvider', () => ({
-  useCopilotState: () => ({}),
+  useCopilotState: () => ({ readyToAddStops: mockReadyToAddStops }),
 }));
 jest.mock('../src/components/CopilotOfflineMap', () => ({
   CopilotOfflineMap: () => null,
@@ -43,6 +44,7 @@ const poi = {
 let tree: ReactTestRenderer;
 beforeEach(() => {
   mockBlocker = null;
+  mockReadyToAddStops = true;
   Object.values(mockHost).forEach(fn =>
     fn.mockReset().mockResolvedValue(undefined),
   );
@@ -195,4 +197,58 @@ test('opens Trimble before address selection and clears old planning geometry', 
   expect(mockHost.drawRoutePreview).toHaveBeenCalledWith([]);
   expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
   expect(mockHost.mapFrame).not.toHaveBeenCalled();
+});
+
+test('native setup receives no map mutations before route-engine readiness', async () => {
+  mockReadyToAddStops = false;
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={route} plan={null} pois={[poi]} />);
+  });
+  Object.values(mockHost).forEach(fn => expect(fn).not.toHaveBeenCalled());
+});
+
+
+test('a failed preview does not prevent GPS follow or place markers', async () => {
+  mockHost.drawRoutePreview.mockRejectedValueOnce(new Error('preview unavailable'));
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={route} plan={null} pois={[poi]} />);
+  });
+  expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
+  expect(mockHost.drawMarkers).toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain('Route preview could not be displayed.');
+  expect(JSON.stringify(tree.toJSON())).not.toContain('Map could not follow your position.');
+});
+
+test('a follow failure is not reported as a route-preview failure', async () => {
+  mockHost.mapCommand.mockRejectedValueOnce(new Error('chevron unavailable'));
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={null} plan={null} pois={[]} />);
+  });
+  expect(JSON.stringify(tree.toJSON())).toContain('Map could not follow your position.');
+  expect(JSON.stringify(tree.toJSON())).not.toContain('Route preview could not be displayed.');
+});
+
+test('a later successful preview and follow clears the earlier failure', async () => {
+  mockHost.drawRoutePreview.mockRejectedValueOnce(new Error('preview unavailable'));
+  mockHost.mapCommand.mockRejectedValueOnce(new Error('chevron unavailable'));
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={null} plan={null} pois={[]} />);
+  });
+  expect(JSON.stringify(tree.toJSON())).toContain('Map could not follow your position.');
+  await act(async () => {
+    tree.update(<CopilotPlannerMap route={route} plan={null} pois={[]} />);
+  });
+  expect(JSON.stringify(tree.toJSON())).not.toContain('Map could not follow your position.');
+  expect(JSON.stringify(tree.toJSON())).not.toContain('Route preview could not be displayed.');
+});
+
+test('unmount during a failing preview prevents a late follow command', async () => {
+  let fail!: (reason: Error) => void;
+  mockHost.drawRoutePreview.mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+  await act(async () => {
+    tree = create(<CopilotPlannerMap route={route} plan={null} pois={[]} />);
+  });
+  act(() => tree.unmount());
+  await act(async () => { fail(new Error('preview unavailable')); });
+  expect(mockHost.mapCommand).not.toHaveBeenCalled();
 });

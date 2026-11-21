@@ -127,6 +127,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     result.putString("ticket", ticket);
     result.putString("name", profile.getName());
     result.putString("source", "FLEET_PORTAL");
+    result.putString("vehicleType", profile.getVehicleType().name());
+    result.putInt("trailerCount", dims.getTrailerCount());
+    result.putInt("maximumStraightLengthInches", dims.getMaximumStraightLength().getInches());
+    result.putInt("bumperToBumperLengthInches", dims.getBumperToBumperLength().getInches());
     result.putInt("heightInches", dims.getHeight().getInches());
     result.putInt("widthInches", dims.getWidth().getInches());
     result.putInt("lengthInches", dims.getLength().getInches());
@@ -199,7 +203,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         if (RouteMgr.hasDestination()) GuidanceMgr.suspendNavigation(true);
         standardTruck.clear();
         if (tripPreparing || stoppingTrip) throw new IllegalStateException("STANDARD_TRUCK_RECHECK_REQUIRED");
-        if (!"11.3.0.2016".equals(CopilotMgr.getVersionInfo().getAppVersion()) || value == null
+        if (!"11.4.0.2142".equals(CopilotMgr.getVersionInfo().getAppVersion()) || value == null
             || !value.hasKey("mode") || !"STANDARD_SINGLE_53".equals(value.getString("mode"))
             || !value.hasKey("avoidTolls") || value.getType("avoidTolls") != com.facebook.react.bridge.ReadableType.Boolean)
           throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
@@ -211,9 +215,25 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       } catch (Exception e) {
         standardTruck.clear();
         String code = e.getMessage();
-        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
+        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "HEAVY_TRUCK_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
             "TRUCK_PREFERENCES_MISMATCH", "STANDARD_TRUCK_RECHECK_REQUIRED").contains(code)) code = "STANDARD_TRUCK_RECHECK_REQUIRED";
-        promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
+        if (e instanceof CoPilotStandardTruck.DimensionsMismatch) {
+          WritableMap info = Arguments.createMap();
+          WritableArray rows = Arguments.createArray();
+          for (CoPilotStandardTruck.Difference difference : ((CoPilotStandardTruck.DimensionsMismatch) e).differences) {
+            WritableMap row = Arguments.createMap();
+            row.putString("field", difference.field);
+            row.putInt("expected", difference.expected);
+            if (difference.actual == null) row.putNull("actual");
+            else row.putInt("actual", difference.actual);
+            row.putString("comparison", difference.minimum ? "minimum" : "equal");
+            rows.pushMap(row);
+          }
+          info.putArray("dimensionMismatches", rows);
+          promise.reject(code, "Truck dimensions differ. No engine settings were changed.", info);
+        } else {
+          promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
+        }
       }
     });
   }
@@ -592,7 +612,7 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
     // would make startup depend on an engine that has not been started yet.
     // This is the checksum-pinned build dependency, not runtime evidence.
     // diagnosticReport continues to read the actual version only after startup.
-    result.putString("sdkVersion", "11.3.0.2016");
+    result.putString("sdkVersion", "11.4.0.2142");
     result.putString("platform", "android");
     result.putString("environment", "development");
     result.putString("licensingMode", "ams-company");
@@ -1276,6 +1296,10 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         value.putInt("widthInches", dims.getWidth().getInches());
         value.putInt("lengthInches", dims.getLength().getInches());
         value.putInt("weightLbs", dims.getTotalWeight().getPounds());
+        value.putInt("weightPerAxleLbs", dims.getWeightPerAxle().getPounds());
+        value.putInt("trailerCount", dims.getTrailerCount());
+        value.putInt("maximumStraightLengthInches", dims.getMaximumStraightLength().getInches());
+        value.putInt("bumperToBumperLengthInches", dims.getBumperToBumperLength().getInches());
         // These are SDK readbacks, not proof of axle/trailer enforcement.
         value.putBoolean("heavyDutyProfileVerified", true);
         value.putBoolean("axleCountVerified", false);

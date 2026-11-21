@@ -1,6 +1,9 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  enrollmentReferenceConfigured?: boolean;
+  enrollmentReferenceStatus?: string;
+  savedSetupPresent?: boolean;
   routeEngine?: {
     status: string;
     readyToAddStops?: boolean;

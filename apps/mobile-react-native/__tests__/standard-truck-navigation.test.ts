@@ -3,6 +3,11 @@ import { synchronizeHybridTruck } from '../src/services/copilot/HybridControls';
 import type { Services } from '../src/app/services';
 import type { CoPilotHost } from '../src/services/copilot/CoPilotHost';
 import { truck } from './fixtures';
+import {
+  recordHybridFailure,
+  hybridFailureSnapshot,
+  clearHybridFailure,
+} from '../src/services/copilot/HybridControlDiagnostics';
 
 const standard = {
   ...truck,
@@ -14,6 +19,75 @@ const standard = {
   avoidResidential: false,
   avoidDirtRoads: false,
 };
+
+test('reproduces phone profile failure and retains each blocker without calling native code', async () => {
+  const saved = {
+    ...standard,
+    axleCount: 3,
+    trailerCount: 2,
+    weightPerAxleLbs: null,
+    avoidResidential: true,
+    avoidDirtRoads: true,
+  };
+  const original = JSON.stringify(saved);
+  const verifyStandardTruckProfile = jest.fn();
+  const services = {
+    trucks: { getSnapshot: () => ({ selected: saved }) },
+  } as unknown as Services;
+  try {
+    await synchronizeHybridTruck(services, {
+      verifyStandardTruckProfile,
+    } as unknown as CoPilotHost);
+    throw new Error('Expected profile rejection');
+  } catch (error) {
+    recordHybridFailure('START_RESUME', error);
+    expect(hybridFailureSnapshot()).toEqual({
+      action: 'START_RESUME',
+      code: 'STANDARD_TRUCK_SCOPE',
+      profileBlockers: [
+        'TRAILER_COUNT_UNSUPPORTED',
+        'AXLE_COUNT_UNSUPPORTED',
+        'AVOID_RESIDENTIAL_UNSUPPORTED',
+        'AVOID_DIRT_ROADS_UNSUPPORTED',
+      ],
+    });
+  }
+  expect(verifyStandardTruckProfile).not.toHaveBeenCalled();
+  expect(JSON.stringify(saved)).toBe(original);
+  clearHybridFailure('START_RESUME');
+});
+
+test('corrected counts remove only their blockers; malformed input is not mislabeled as standard-truck scope', async () => {
+  for (const [selected, expected] of [
+    [
+      {
+        ...standard,
+        weightPerAxleLbs: null,
+        avoidResidential: true,
+        avoidDirtRoads: true,
+      },
+      {
+        code: 'STANDARD_TRUCK_SCOPE',
+        profileBlockers: [
+          'AVOID_RESIDENTIAL_UNSUPPORTED',
+          'AVOID_DIRT_ROADS_UNSUPPORTED',
+        ],
+      },
+    ],
+    [{ ...standard, axleCount: '5' }, { code: 'SAVED_TRUCK_INVALID' }],
+    [
+      { ...standard, unreviewedRestriction: true },
+      { code: 'SAVED_TRUCK_INVALID' },
+    ],
+  ] as const) {
+    const services = {
+      trucks: { getSnapshot: () => ({ selected }) },
+    } as unknown as Services;
+    await expect(
+      synchronizeHybridTruck(services, {} as CoPilotHost),
+    ).rejects.toMatchObject(expected);
+  }
+});
 test('standard truck produces native units and conservative maximum routing weight', () => {
   expect(standardTruckRequest(standard)).toEqual({
     mode: 'STANDARD_SINGLE_53',
@@ -35,7 +109,6 @@ test.each([
   { heightFt: 13.51 },
   { widthFt: 8.51 },
   { weightLbs: 80001 },
-  { weightPerAxleLbs: null },
   { weightPerAxleLbs: 34001 },
   { trailerType: 'tanker' },
   { tractorType: 'Straight / Box Truck' },
@@ -74,4 +147,31 @@ test('synchronization verifies readback without changing engine fields', async (
       verifyStandardTruckProfile,
     } as unknown as CoPilotHost),
   ).rejects.toEqual({ code: 'TRUCK_DIMENSIONS_MISMATCH' });
+});
+
+test('blank measured weight requests documented routing default without modifying saved data; native mismatch still rejects', async () => {
+  const selected = { ...standard, weightPerAxleLbs: null };
+  const verifyStandardTruckProfile = jest.fn().mockResolvedValue(undefined);
+  const services = {
+    trucks: { getSnapshot: () => ({ selected }) },
+  } as unknown as Services;
+  await synchronizeHybridTruck(services, {
+    verifyStandardTruckProfile,
+  } as unknown as CoPilotHost);
+  expect(verifyStandardTruckProfile).toHaveBeenCalledWith(
+    expect.objectContaining({ weightPerAxleLbs: 34000 }),
+  );
+  expect(selected.weightPerAxleLbs).toBeNull();
+  verifyStandardTruckProfile.mockRejectedValue({
+    code: 'TRUCK_DIMENSIONS_MISMATCH',
+  });
+  await expect(
+    synchronizeHybridTruck(services, {
+      verifyStandardTruckProfile,
+    } as unknown as CoPilotHost),
+  ).rejects.toEqual({ code: 'TRUCK_DIMENSIONS_MISMATCH' });
+  expect(
+    standardTruckRequest({ ...standard, weightPerAxleLbs: 32000 })
+      .weightPerAxleLbs,
+  ).toBe(32000);
 });

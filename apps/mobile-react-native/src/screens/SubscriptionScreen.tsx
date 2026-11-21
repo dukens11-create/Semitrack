@@ -227,7 +227,7 @@ export function SubscriptionScreen({ services }: { services: Services }) {
       <DriverCard>
         <DriverTitle small>SEMITRAX PREMIUM MONTHLY</DriverTitle>
         <Text style={[styles.badge, { color: p.actionText }]}>
-          14 DAYS FREE
+          {pricing.trialDays} DAYS FREE
         </Text>
         <Text style={[styles.price, { color: p.text }]}>
           {price(pricing.monthly.introCents)}/month
@@ -262,7 +262,7 @@ export function SubscriptionScreen({ services }: { services: Services }) {
       <DriverCard>
         <DriverTitle small>SEMITRAX PREMIUM ANNUAL</DriverTitle>
         <Text style={[styles.badge, { color: p.actionText }]}>
-          14 DAYS FREE
+          {pricing.trialDays} DAYS FREE
         </Text>
         <Text style={[styles.price, { color: p.text }]}>
           {price(pricing.annual.priceCents)}/year

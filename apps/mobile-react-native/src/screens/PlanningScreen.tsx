@@ -1,3 +1,5 @@
+import { CopilotStartupView, needsCopilotStartupView } from '../components/CopilotStartupView';
+import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
 import { HybridNavigation } from '../features/map/HybridNavigation';
 import { MAX_INTERMEDIATE_STOPS } from '../models/routeLimits';
@@ -92,6 +94,7 @@ export function PlanningScreen({
   active?: boolean;
   onNavigationActiveChange?: (active: boolean) => void;
 }) {
+  const copilotState = useCopilotState();
   const routes = useStore(services.routes),
     trucks = useStore(services.trucks),
     location = useStore(services.location);
@@ -741,6 +744,9 @@ export function PlanningScreen({
       )}
     </>
   );
+  if (!enginePlan && needsCopilotStartupView(copilotState)) {
+    return <CopilotStartupView state={copilotState} />;
+  }
   return (
     <View style={[styles.screen, { backgroundColor: palette.canvas }]}>
       {enginePlan && (

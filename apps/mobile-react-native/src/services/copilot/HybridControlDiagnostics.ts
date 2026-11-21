@@ -1,4 +1,8 @@
 import {
+  truckDimensionDifferences,
+  type DimensionDifference,
+} from './TruckDimensionDifferences';
+import {
   truckProfileBlockers,
   type TruckProfileBlocker,
 } from './TruckProfileBlockers';
@@ -28,6 +32,7 @@ let lastFailure: {
   action: string;
   code: string;
   profileBlockers?: TruckProfileBlocker[];
+  dimensionMismatches?: DimensionDifference[];
 } | null = null;
 export function recordHybridFailure(action: string, error: unknown) {
   const actions = [
@@ -47,6 +52,8 @@ export function recordHybridFailure(action: string, error: unknown) {
         ? code
         : 'UNCLASSIFIED_FAILURE',
   };
+  const dimensions = truckDimensionDifferences(error);
+  if (dimensions.length) lastFailure.dimensionMismatches = dimensions;
   if (
     lastFailure.code === 'STANDARD_TRUCK_SCOPE' &&
     error &&
@@ -67,6 +74,13 @@ export function hybridFailureSnapshot() {
   return lastFailure
     ? {
         ...lastFailure,
+        ...(lastFailure.dimensionMismatches
+          ? {
+              dimensionMismatches: lastFailure.dimensionMismatches.map(row => ({
+                ...row,
+              })),
+            }
+          : {}),
         ...(lastFailure.profileBlockers
           ? { profileBlockers: [...lastFailure.profileBlockers] }
           : {}),

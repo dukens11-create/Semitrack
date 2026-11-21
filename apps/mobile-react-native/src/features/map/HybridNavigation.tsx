@@ -201,7 +201,7 @@ export function HybridNavigation({
             />
             <DriverCopy>
               {error ||
-                'Save and verify your truck below, then check that it matches the assigned fleet profile. Unsupported configurations remain blocked.'}
+                'Save and verify your truck below, then check that it matches the active heavy-duty CoPilot profile. Unsupported configurations remain blocked.'}
             </DriverCopy>
             <DriverButton
               title="Check truck against engine profile"
@@ -214,8 +214,8 @@ export function HybridNavigation({
               }}
             />
             <DriverCopy>
-              This compares your saved truck with the active Trimble fleet
-              profile. It does not copy settings or change the fleet profile.
+              This compares your saved truck with the active Trimble truck
+              profile. It does not copy settings or change the engine profile.
             </DriverCopy>
             <TruckProfileScreen services={services} />
           </View>
@@ -235,13 +235,13 @@ export function HybridNavigation({
             <DriverCopy>
               SemiTraX controls the navigation screen. Trimble calculates the
               truck route and supplies live directions. Start requires a
-              matching assigned fleet profile and confirmation of the standard
-              truck mode.
+              matching active heavy-duty CoPilot profile and confirmation of the
+              standard truck mode.
             </DriverCopy>
             <DriverCopy>
               {error ||
                 (state.readyToAddStops
-                  ? 'Engine setup is ready. Start will check your saved truck against the active fleet profile.'
+                  ? 'Engine setup is ready. Start will check your saved truck against the active truck profile.'
                   : 'Navigation is waiting for the checks below.')}
             </DriverCopy>
             <DriverCopy>

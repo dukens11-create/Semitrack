@@ -175,6 +175,27 @@ public class StandardTruckTest {
   denied(()->v.verify(162,102,636,80000,34001,1,5,true));
   denied(()->v.verify(162,102,636,80000,34000,1,6,true));
   denied(()->v.requireAccepted());
+  RouteMgr.profile.toll=RouteEnums.TollRoads.NO_RESTRICTION;
+  RouteMgr.profile.dims.height.n=160;RouteMgr.profile.dims.axle.n=32000;
+  try {verify(v);throw new AssertionError("mismatch accepted");}
+  catch(CoPilotStandardTruck.DimensionsMismatch e) {
+   if(e.differences.size()!=2 || !e.differences.get(0).field.equals("heightInches")
+       || e.differences.get(0).expected!=162 || e.differences.get(0).actual!=160
+       || !e.differences.get(1).field.equals("axleGroupWeightLbs")) throw new AssertionError("wrong differences");
+  }
+  denied(()->v.requireAccepted());
+  RouteMgr.profile.dims.height.n=162;RouteMgr.profile.dims.axle.n=34000;
+  RouteMgr.profile.dims.bumper=null;
+  try {verify(v);throw new AssertionError("missing length accepted");}
+  catch(CoPilotStandardTruck.DimensionsMismatch e) {
+   if(e.differences.size()!=1 || e.differences.get(0).actual!=null || !e.differences.get(0).minimum)
+     throw new AssertionError("missing value lost");
+  }
+  RouteMgr.profile.dims.bumper=new DistanceUnit(882);
+  VehicleDimensions dimensions=RouteMgr.profile.dims;RouteMgr.profile.dims=null;
+  try {verify(v);throw new AssertionError("missing dimensions accepted");}
+  catch(CoPilotStandardTruck.DimensionsMismatch e) {if(e.differences.size()!=8)throw new AssertionError("incomplete differences");}
+  RouteMgr.profile.dims=dimensions;verify(v);denied(()->v.requireAccepted());v.accept();v.requireAccepted();
   System.out.println("PASS: standard truck scope, native readback, preferences, explicit consent and profile changes");
  }
 }`;

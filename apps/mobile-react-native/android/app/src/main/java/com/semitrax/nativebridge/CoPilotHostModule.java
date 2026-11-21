@@ -217,7 +217,23 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
         String code = e.getMessage();
         if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "FLEET_PROFILE_REQUIRED", "HEAVY_TRUCK_PROFILE_REQUIRED", "TRUCK_DIMENSIONS_MISMATCH",
             "TRUCK_PREFERENCES_MISMATCH", "STANDARD_TRUCK_RECHECK_REQUIRED").contains(code)) code = "STANDARD_TRUCK_RECHECK_REQUIRED";
-        promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
+        if (e instanceof CoPilotStandardTruck.DimensionsMismatch) {
+          WritableMap info = Arguments.createMap();
+          WritableArray rows = Arguments.createArray();
+          for (CoPilotStandardTruck.Difference difference : ((CoPilotStandardTruck.DimensionsMismatch) e).differences) {
+            WritableMap row = Arguments.createMap();
+            row.putString("field", difference.field);
+            row.putInt("expected", difference.expected);
+            if (difference.actual == null) row.putNull("actual");
+            else row.putInt("actual", difference.actual);
+            row.putString("comparison", difference.minimum ? "minimum" : "equal");
+            rows.pushMap(row);
+          }
+          info.putArray("dimensionMismatches", rows);
+          promise.reject(code, "Truck dimensions differ. No engine settings were changed.", info);
+        } else {
+          promise.reject(code, "The standard truck profile could not be verified. No engine settings were changed.");
+        }
       }
     });
   }

@@ -46,6 +46,18 @@ export function hybridError(error: unknown): string {
   const code =
     error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
+    case 'OVERALL_LENGTH_REQUIRED':
+      return 'Enter your actual overall tractor-and-trailer length, from front bumper to the rear of the combination. It must be longer than the trailer alone.';
+    case 'PROFILE_APPLY_TRIP_ACTIVE':
+      return 'End Route before applying truck settings to CoPilot.';
+    case 'FLEET_PROFILE_MANAGED':
+      return 'Your active CoPilot profile is fleet-assigned. Have the fleet administrator correct it; SemiTraX will not overwrite or replace an assigned profile.';
+    case 'PROFILE_APPLY_REJECTED':
+      return 'CoPilot rejected the requested profile. Check the actual dimensions, whole-vehicle weight and axle-group weight. Guidance has not started.';
+    case 'PROFILE_APPLY_UNCONFIRMED':
+      return 'CoPilot did not confirm every requested value. Review the active truck profile and retry. Guidance has not started.';
+    case 'PROFILE_RESTORE_UNCONFIRMED':
+      return 'CoPilot could not confirm restoring the previous profile after a failed update. Open Trimble settings and review the active truck profile before retrying. Guidance has not started.';
     case 'HEAVY_TRUCK_PROFILE_REQUIRED':
       return 'Open Truck settings and select a heavy-duty CoPilot profile matching your actual vehicle. Default, manual, API and assigned fleet profiles can be checked. Then retry Start / Resume; selecting a profile alone does not start guidance.';
     case 'FLEET_PROFILE_REQUIRED':

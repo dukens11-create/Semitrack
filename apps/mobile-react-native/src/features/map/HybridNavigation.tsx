@@ -1,3 +1,4 @@
+import { ApplyStandardTruck } from '../../components/ApplyStandardTruck';
 import { CoPilotFeatureControls } from '../../components/CoPilotFeatureControls';
 import { CoPilotMapCatalog } from '../../components/CoPilotMapCatalog';
 import {
@@ -127,7 +128,7 @@ export function HybridNavigation({
         profile ? engineTripProfileSummary(profile) + '\n\n' : ''
       }${standardTruckNotice}\n\n${standardAxleWeightNotice(
         services.trucks.getSnapshot().selected?.weightPerAxleLbs ?? null,
-      )}\n\nRouting uses your saved maximum weight. Confirm that this mode and the matched fleet profile are appropriate for this trip.`,
+      )}\n\nRouting uses your saved maximum weight. Confirm that this mode and the matched truck profile are appropriate for this trip.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -278,6 +279,11 @@ export function HybridNavigation({
               }
             />
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
+            <ApplyStandardTruck
+              services={services}
+              disabled={!state.readyToAddStops || pending}
+              run={action => run(action, 'SYNC_PROFILE')}
+            />
             <DriverButton
               title="Check readiness"
               disabled={pending}

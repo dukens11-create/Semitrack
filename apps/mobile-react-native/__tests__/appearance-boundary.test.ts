@@ -39,9 +39,12 @@ test('only the root resolver reads system appearance; screens never override it'
         ),
       )
       .map(file => file.name),
-    // Guidance confirmation must appear above its Android Modal window.
+    // Guidance and profile application confirmations must appear above the Android navigation Modal.
     // Other app dialogs continue to use the shared themed alert host.
-  ).toEqual(['features/map/HybridNavigation.tsx']);
+  ).toEqual([
+    'components/ApplyStandardTruck.tsx',
+    'features/map/HybridNavigation.tsx',
+  ]);
 });
 test('one runtime resolved theme provider, no nested screen appearance owners', () => {
   expect(

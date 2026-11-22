@@ -199,6 +199,36 @@ public class StandardTruckTest {
   System.out.println("PASS: standard truck scope, native readback, preferences, explicit consent and profile changes");
  }
 }`;
+
+files['com/alk/cpik/DistanceUnit.java']=files['com/alk/cpik/DistanceUnit.java'].replace('public int n;', 'public static DistanceUnit fromInches(int n){return new DistanceUnit(n);} public int n;');
+files['com/alk/cpik/WeightUnit.java']=files['com/alk/cpik/WeightUnit.java'].replace('public int n;', 'public static WeightUnit fromPounds(int n){return new WeightUnit(n);} public int n;');
+files['com/alk/cpik/route/VehicleDimensions.java']=files['com/alk/cpik/route/VehicleDimensions.java'].replace('public int getTrailerCount()', 'public void setHeight(DistanceUnit v){height=v;} public void setWidth(DistanceUnit v){width=v;} public void setLength(DistanceUnit v){length=v;} public void setMaximumStraightLength(DistanceUnit v){straight=v;} public void setBumperToBumperLength(DistanceUnit v){bumper=v;} public void setTrailerCount(int v){trailers=v;} public void setTotalWeight(WeightUnit v){weight=v;} public void setWeightPerAxle(WeightUnit v){axle=v;} public int getTrailerCount()');
+files['com/alk/cpik/route/RouteEnums.java']=files['com/alk/cpik/route/RouteEnums.java'].replace('public enum VehicleType', 'public enum VehicleProfileModificationResult {SUCCESS,REJECTED} public enum RoutingProfileAdditionResult {SUCCESS,FAILED} public enum VehicleType');
+files['com/alk/cpik/route/VehicleRoutingProfile.java']=files['com/alk/cpik/route/VehicleRoutingProfile.java'].replace('public int restriction=1;', 'public static boolean reject=false; public Boolean ferries=false; public static VehicleRoutingProfile createNewProfile(String n,RouteEnums.VehicleType t){VehicleRoutingProfile p=new VehicleRoutingProfile();p.name=n;p.type=t;p.source=VehicleRoutingProfileSource.API;return p;} public java.util.List<RouteEnums.VehicleProfileModificationResult> setVehicleDimensions(VehicleDimensions d){dims=d;return java.util.Arrays.asList(reject?RouteEnums.VehicleProfileModificationResult.REJECTED:RouteEnums.VehicleProfileModificationResult.SUCCESS);} public RouteEnums.VehicleProfileModificationResult setRoutingType(RouteEnums.RoutingType v){routing=v;return RouteEnums.VehicleProfileModificationResult.SUCCESS;} public RouteEnums.VehicleProfileModificationResult setHazmatType(RouteEnums.HazmatType v){hazmat=v;return RouteEnums.VehicleProfileModificationResult.SUCCESS;} public RouteEnums.VehicleProfileModificationResult setTollRoadUsage(RouteEnums.TollRoads v){toll=v;return RouteEnums.VehicleProfileModificationResult.SUCCESS;} public RouteEnums.VehicleProfileModificationResult setDiscouragedFerries(boolean v){ferries=v;return RouteEnums.VehicleProfileModificationResult.SUCCESS;} public Boolean getDiscouragedFerries(){return ferries;} public int restriction=1;');
+files['com/alk/cpik/route/RouteMgr.java']=files['com/alk/cpik/route/RouteMgr.java'].replace('public static boolean selectionWorks=true;', 'public static boolean selectionWorks=true; public static boolean addWorks=true,corruptReadback=false,restoreWorks=true; public static int additions=0; public static RouteEnums.RoutingProfileAdditionResult addVehicleRoutingProfile(VehicleRoutingProfile p,boolean overwrite){if(overwrite)throw new AssertionError("overwrite forbidden"); additions++; if(!addWorks)return RouteEnums.RoutingProfileAdditionResult.FAILED;profiles.add(p);return RouteEnums.RoutingProfileAdditionResult.SUCCESS;}').replace('if(selectionWorks)profile=p;', 'if(selectionWorks && (restoreWorks || p.getName().startsWith("SemiTraX "))){profile=p;if(corruptReadback && p.getName().startsWith("SemiTraX "))p.dims.straight.n=0;}');
+files['com/semitrax/nativebridge/CoPilotStandardTruckApply.java']=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotStandardTruckApply.java'),'utf8');
+files['com/semitrax/nativebridge/StandardTruckApplyTest.java']=`package com.semitrax.nativebridge;
+import com.alk.cpik.*; import com.alk.cpik.route.*;
+public class StandardTruckApplyTest {
+ interface Action {void run() throws Exception;}
+ static void denied(Action a,String code)throws Exception{try{a.run();throw new AssertionError("unsafe apply");}catch(IllegalStateException e){if(!code.equals(e.getMessage()))throw new AssertionError(e.getMessage());}}
+ static void apply()throws Exception{CoPilotStandardTruckApply.apply(162,102,636,34000,32000,1,5,false,882);}
+ public static void main(String[] args)throws Exception{
+  VehicleRoutingProfile old=RouteMgr.profile;old.source=VehicleRoutingProfileSource.DEFAULT;old.dims.straight.n=0;old.dims.bumper.n=0;
+  String snapshot=old.toString();apply();VehicleRoutingProfile next=RouteMgr.profile;
+  if(next==old || !old.toString().equals(snapshot) || next.dims.straight.n!=636 || next.dims.bumper.n!=882 || next.dims.weight.n!=34000 || next.dims.axle.n!=32000)throw new AssertionError("wrong profile mapping");
+  CoPilotStandardTruck verify=new CoPilotStandardTruck();verify.verify(162,102,636,34000,32000,1,5,false);denied(()->verify.requireAccepted(),"STANDARD_TRUCK_CONFIRMATION_REQUIRED");
+  RouteMgr.profile=old;old.source=VehicleRoutingProfileSource.FLEET_PORTAL;int before=RouteMgr.additions;denied(()->apply(),"FLEET_PROFILE_MANAGED");if(RouteMgr.additions!=before)throw new AssertionError("fleet mutated");old.source=VehicleRoutingProfileSource.DEFAULT;
+  RouteMgr.stops.add(new Stop("pending"));denied(()->apply(),"PROFILE_APPLY_TRIP_ACTIVE");RouteMgr.stops.clear();
+  denied(()->CoPilotStandardTruckApply.apply(162,102,636,34000,32000,1,5,false,636),"OVERALL_LENGTH_REQUIRED");
+  VehicleRoutingProfile.reject=true;denied(()->apply(),"PROFILE_APPLY_REJECTED");VehicleRoutingProfile.reject=false;
+  RouteMgr.addWorks=false;denied(()->apply(),"PROFILE_APPLY_REJECTED");RouteMgr.addWorks=true;
+  RouteMgr.selectionWorks=false;denied(()->apply(),"PROFILE_APPLY_UNCONFIRMED");RouteMgr.selectionWorks=true;
+  RouteMgr.corruptReadback=true;denied(()->apply(),"PROFILE_APPLY_UNCONFIRMED");if(RouteMgr.profile!=old)throw new AssertionError("rollback failed");
+  RouteMgr.restoreWorks=false;denied(()->apply(),"PROFILE_RESTORE_UNCONFIRMED");
+  System.out.println("PASS: explicit apply, separate lengths/weights, fleet/trip guards, rejection and rollback");
+ }
+}`;
 try{
  const host=fs.readFileSync(path.join(root,'android/app/src/main/java/com/semitrax/nativebridge/CoPilotHostModule.java'),'utf8');
  const provisioning=host.slice(host.indexOf('  private WritableMap publicConfiguration()'),host.indexOf('  @ReactMethod public void configureDevice('));
@@ -239,5 +269,5 @@ public class ProvisioningTest {
  for(const [name,body] of Object.entries(files)){const dest=path.join(dir,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,body);}
  const compile=spawnSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,...Object.keys(files).map(f=>path.join(dir,f))],{stdio:'inherit'});
  if(compile.status!==0)process.exitCode=1;
- else{for(const name of ['CameraCommandsTest','CalculationStateTest','HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
+ else{for(const name of ['CameraCommandsTest','CalculationStateTest','HandoffTest','ProvisioningTest','FleetProfilesTest','StandardTruckTest','StandardTruckApplyTest','MapDownloadTest']){const run=spawnSync('java',['-cp',dir,'com.semitrax.nativebridge.'+name],{stdio:'inherit'});if(run.status!==0)process.exitCode=1;}}
 }finally{fs.rmSync(dir,{recursive:true,force:true});}

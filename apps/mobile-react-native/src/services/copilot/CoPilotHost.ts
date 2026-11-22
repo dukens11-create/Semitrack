@@ -72,6 +72,7 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  applyStandardTruckProfile?(profile: unknown): Promise<void>;
   verifyStandardTruckProfile?(profile: unknown): Promise<void>;
   acceptStandardTruckMode?(): Promise<void>;
   readFleetTruckProfiles?(): Promise<unknown>;

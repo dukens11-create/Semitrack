@@ -237,6 +237,38 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
       }
     });
   }
+  @ReactMethod public void applyStandardTruckProfile(ReadableMap value, Promise promise) {
+    main.post(() -> {
+      try {
+        requireMap(); requireTripForeground();
+        if (tripPreparing || stoppingTrip || tripHandoff.pendingStops())
+          throw new IllegalStateException("PROFILE_APPLY_TRIP_ACTIVE");
+        if (!"11.4.0.2142".equals(CopilotMgr.getVersionInfo().getAppVersion()) || value == null
+            || !value.hasKey("mode") || !"STANDARD_SINGLE_53".equals(value.getString("mode"))
+            || !value.hasKey("confirmedWholeVehicleWeight")
+            || value.getType("confirmedWholeVehicleWeight") != com.facebook.react.bridge.ReadableType.Boolean
+            || !value.getBoolean("confirmedWholeVehicleWeight")
+            || !value.hasKey("avoidTolls") || value.getType("avoidTolls") != com.facebook.react.bridge.ReadableType.Boolean)
+          throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
+        main.removeCallbacks(standardProfileMonitor);
+        standardTruck.clear();
+        tripHandoff.invalidateReview();
+        CoPilotStandardTruckApply.apply(standardInt(value, "heightInches"), standardInt(value, "widthInches"),
+            standardInt(value, "lengthInches"), standardInt(value, "weightLbs"), standardInt(value, "weightPerAxleLbs"),
+            standardInt(value, "trailerCount"), standardInt(value, "axleCount"), value.getBoolean("avoidTolls"),
+            standardInt(value, "bumperToBumperLengthInches"));
+        control("SYNC_PROFILE", "STANDARD_PROFILE_APPLIED");
+        promise.resolve(null);
+      } catch (Exception e) {
+        standardTruck.clear();
+        String code = e.getMessage();
+        if (!java.util.Arrays.asList("STANDARD_TRUCK_UNSUPPORTED", "OVERALL_LENGTH_REQUIRED", "PROFILE_APPLY_TRIP_ACTIVE",
+            "FLEET_PROFILE_MANAGED", "PROFILE_APPLY_REJECTED", "PROFILE_APPLY_UNCONFIRMED", "PROFILE_RESTORE_UNCONFIRMED").contains(code))
+          code = "PROFILE_APPLY_UNCONFIRMED";
+        promise.reject(code, "The truck profile application was not confirmed. Guidance has not started.");
+      }
+    });
+  }
   @ReactMethod public void acceptStandardTruckMode(Promise promise) {
     main.post(() -> {
       try {

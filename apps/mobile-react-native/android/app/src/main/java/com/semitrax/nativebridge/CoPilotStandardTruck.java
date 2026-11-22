@@ -50,13 +50,17 @@ final class CoPilotStandardTruck {
       rows.add(new Difference(field, expected, actual, minimum));
   }
   void clear() { reviewed = null; snapshot = null; accepted = false; }
-  void verify(int height, int width, int length, int weight, int axleWeight,
-      int trailers, int axles, boolean avoidTolls) {
-    clear();
+  static void validateRequest(int height, int width, int length, int weight, int axleWeight,
+      int trailers, int axles) {
     if (height < 60 || height > 162 || width < 60 || width > 102 || length != 636
         || weight < 1500 || weight > 80000 || axleWeight < 800 || axleWeight > 34000
         || trailers != 1 || axles != 5)
       throw new IllegalStateException("STANDARD_TRUCK_UNSUPPORTED");
+  }
+  void verify(int height, int width, int length, int weight, int axleWeight,
+      int trailers, int axles, boolean avoidTolls) {
+    clear();
+    validateRequest(height, width, length, weight, axleWeight, trailers, axles);
     VehicleRoutingProfile p = RouteMgr.getActiveVehicleRoutingProfile();
     if (!isHeavyTruck(p))
       throw new IllegalStateException("HEAVY_TRUCK_PROFILE_REQUIRED");

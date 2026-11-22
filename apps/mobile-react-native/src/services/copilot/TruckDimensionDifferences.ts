@@ -67,6 +67,6 @@ export function truckDimensionMessage(error: unknown): string {
         return `${label}: required ${expected}; CoPilot ${actual}.`;
       })
       .join('\n') +
-    '\n\nOpen Trimble map and guidance settings to review the active truck profile, or edit an incorrect saved truck value. Checking the profiles does not copy settings. Keep actual vehicle dimensions and load weights; no settings were changed.'
+    '\n\nUse Apply saved truck to CoPilot to review and apply your actual vehicle dimensions and separate routing weights. For a fleet-assigned profile, ask the fleet administrator to correct it. Checking alone does not copy settings; no settings were changed.'
   );
 }

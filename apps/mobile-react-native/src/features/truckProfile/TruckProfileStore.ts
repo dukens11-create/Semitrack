@@ -41,7 +41,14 @@ export class TruckProfileStore extends Store<{
         .parse(response);
       profiles = data.items;
     } catch (error) {
-      if (generation === this.generation) this.invalidate();
+      if (generation === this.generation) {
+        // Block navigation while retaining the identity for authenticated recovery.
+        // A failed request is not evidence that the server changed the truck.
+        ++this.generation;
+        const hadSelection = this.value.selected !== null;
+        this.publish({ ...this.value, selected: null });
+        if (hadSelection) this.onChange();
+      }
       throw error;
     }
     if (generation !== this.generation) return;

@@ -525,3 +525,22 @@ test('Cancel Route at capacity permits a new plan and preserves the active truck
   });
   expect(routes.getSnapshot().plan).toEqual(createStopPlan(a));
 });
+
+test.each([false, true])('missing axle measurement requires explicit preset acceptance: %s', async accepted => {
+  const {services,request}=await setup();
+  const selected={...truck,lengthFt:53,hazmatEnabled:false,hazardousGoods:[],
+    avoidFerries:false,avoidResidential:false,avoidDirtRoads:false,weightPerAxleLbs:null};
+  services.trucks=Object.assign(new Store({profiles:[selected],selected}),{load:jest.fn(async()=>{})}) as unknown as Services['trucks'];
+  const alert=jest.spyOn(Alert,'alert').mockImplementation(()=>{});
+  await mount(services);
+  await selectNext();
+  await press('Add Stop & recalculate');
+  expect(request).not.toHaveBeenCalled();
+  expect(alert.mock.calls.at(-1)?.[1]).toContain('not a measured load weight');
+  await act(async()=>{alert.mock.calls.at(-1)?.[2]?.[accepted?1:0]?.onPress?.();});
+  if(accepted){
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[2]).toMatchObject({acceptedRoutingPreset:'STANDARD_SINGLE_53_AXLE_34000',truck:{weightPerAxleLbs:null}});
+  }else expect(request).not.toHaveBeenCalled();
+  expect(selected.weightPerAxleLbs).toBeNull();
+});

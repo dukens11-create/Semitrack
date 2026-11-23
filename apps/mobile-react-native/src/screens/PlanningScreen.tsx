@@ -1,3 +1,4 @@
+import { standardTruckRequest, standardAxleWeightNotice } from '../services/copilot/StandardTruckNavigation';
 import { CopilotStartupView, needsCopilotStartupView } from '../components/CopilotStartupView';
 import { useCopilotState } from '../services/copilot/CopilotProvider';
 import { coPilotHost } from '../services/copilot/CoPilotHost';
@@ -333,7 +334,7 @@ export function PlanningScreen({
   }
   async function startNavigation() {
     const current = services.routes.getSnapshot();
-    if (!current.route || !current.plan) return;
+    if (!current.route || !current.plan) throw new DriverError('ROUTE_PLAN_REQUIRED');
     let nativeHost;
     try {
       nativeHost = coPilotHost();
@@ -458,6 +459,20 @@ export function PlanningScreen({
     if (!truck) {
       throw new DriverError('VERIFIED_TRUCK_REQUIRED');
     }
+    let acceptedRoutingPreset: 'STANDARD_SINGLE_53_AXLE_34000' | undefined;
+    if (truck.weightPerAxleLbs === null) {
+      standardTruckRequest(truck);
+      const accepted = await new Promise<boolean>(resolve => {
+        Alert.alert('Review axle-group routing weight', standardAxleWeightNotice(null), [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Use routing preset', onPress: () => resolve(true) },
+        ]);
+      });
+      if (!accepted) return;
+      if (services.trucks.getSnapshot().selected !== truck)
+        throw new DriverError('VERIFIED_TRUCK_REQUIRED');
+      acceptedRoutingPreset = 'STANDARD_SINGLE_53_AXLE_34000';
+    }
     const controller = new AbortController();
     gpsRequest.current = controller;
     setAcquiringGps(true);
@@ -481,7 +496,7 @@ export function PlanningScreen({
       setAcquiringGps(false);
     }
     // Re-read at dispatch; do not route using a fix that expired while waiting.
-    if (await services.routes.calculate(origin(), plan, truck, alternatives)) {
+    if (await services.routes.calculate(origin(), plan, truck, alternatives, acceptedRoutingPreset)) {
       // Store only what the driver typed, never temporary provider geometry or a route.
       if (query.trim())
         void saveRecent(services.settings, items =>

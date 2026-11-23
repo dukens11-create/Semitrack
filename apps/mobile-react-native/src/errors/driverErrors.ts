@@ -1,5 +1,6 @@
 import { ZodError } from 'zod';
 const messages: Record<string, string> = {
+  ROUTE_PLAN_REQUIRED: 'The route is no longer available. Choose your destination and calculate the route again.',
   TRIMBLE_AXLE_GROUP_WEIGHT_REQUIRED:
     'Enter the measured maximum loaded axle-group weight in Truck Settings before planning a route. Do not divide total weight by axle count.',
   PLACE_SEARCH_CONFIGURATION:

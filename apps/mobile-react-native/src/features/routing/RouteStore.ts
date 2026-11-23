@@ -39,6 +39,7 @@ export class RouteStore extends Store<RouteState> {
     plan: StopPlan,
     truck: TruckProfile,
     alternatives = 0,
+    acceptedRoutingPreset?: 'STANDARD_SINGLE_53_AXLE_34000',
   ): Promise<boolean> {
     const generation = ++this.generation;
     this.controller?.abort();
@@ -79,6 +80,7 @@ export class RouteStore extends Store<RouteState> {
         this.controller.signal,
         alternatives,
         attempt,
+        acceptedRoutingPreset,
       );
       if (generation !== this.generation) {
         return false;

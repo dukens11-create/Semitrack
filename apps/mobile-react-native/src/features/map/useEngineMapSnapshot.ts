@@ -15,6 +15,7 @@ export function useEngineMapSnapshot() {
       pending = false,
       generation = 0;
     let revision: number | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       setNow(Date.now());
       if (pending || AppState.currentState !== 'active') return;
@@ -22,7 +23,12 @@ export function useEngineMapSnapshot() {
       const ticket = generation;
       try {
         const parsed = engineMapSnapshotSchema.safeParse(
-          await coPilotHost().guidanceMapSnapshot?.(),
+          await Promise.race([
+            Promise.resolve().then(() => coPilotHost().guidanceMapSnapshot?.()),
+            new Promise((_, reject) => {
+              deadline = setTimeout(() => reject(new Error('Map snapshot timed out')), 10000);
+            }),
+          ]),
         );
         if (
           !current ||
@@ -42,6 +48,7 @@ export function useEngineMapSnapshot() {
       } catch {
         if (current && ticket === generation) setSample(undefined);
       } finally {
+        clearTimeout(deadline);
         pending = false;
       }
     };
@@ -72,6 +79,7 @@ export function useEngineMapSnapshot() {
       current = false;
       generation++;
       clearInterval(timer);
+      clearTimeout(deadline);
       events.remove();
       lifecycle.remove();
     };

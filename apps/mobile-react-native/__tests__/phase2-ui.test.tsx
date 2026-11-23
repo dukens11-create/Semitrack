@@ -640,6 +640,7 @@ test('route selection requests GPS and sends the exact fresh origin only after a
       }),
       truck,
       0,
+      undefined,
     );
   } finally {
     await act(async () => {
@@ -1429,6 +1430,7 @@ test('recent destination selection resolves fresh search results and routes with
       }),
       truck,
       0,
+      undefined,
     );
     expect(services.guidance.startNavigation).not.toHaveBeenCalled();
     expect(content()).not.toContain('Add Truck Route Plan');

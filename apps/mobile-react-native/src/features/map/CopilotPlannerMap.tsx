@@ -1,3 +1,4 @@
+import { followPosition, followPositionError } from '../../services/copilot/FollowPosition';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
@@ -23,6 +24,22 @@ import {
 import type { StopPlan } from '../stops/StopPlan';
 import type { Poi } from '../poi/PoiService';
 
+// Bound the display acknowledgement only. Never replay an uncertain native call.
+// Native display operations are posted in order on the Android main thread.
+async function displayCall(action: () => Promise<unknown>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(action),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Map display acknowledgement timed out')), 10000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function CopilotPlannerMap({
   route,
   plan,
@@ -46,7 +63,11 @@ export function CopilotPlannerMap({
 }) {
   const state = useCopilotState();
   const palette = useDriverPalette();
-  const blocker = copilotMapBlocker(state);
+  const blocker =
+    copilotMapBlocker(state) ??
+    (!state.readyToAddStops
+      ? 'Complete Trimble setup before using map controls.'
+      : null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const queue = useRef(Promise.resolve());
@@ -73,7 +94,7 @@ export function CopilotPlannerMap({
     queue.current = queue.current
       .then(async () => {
         if (!current) return;
-        await coPilotHost().setMapAppearance(palette.dark);
+        await displayCall(() => coPilotHost().setMapAppearance(palette.dark));
         if (current) {
           setReady(true);
           setError('');
@@ -95,12 +116,23 @@ export function CopilotPlannerMap({
     queue.current = queue.current
       .then(async () => {
         if (!current) return;
-        await coPilotHost().drawRoutePreview(JSON.parse(geometryKey));
+        const failures: string[] = [];
+        try {
+          await displayCall(() => coPilotHost().drawRoutePreview(JSON.parse(geometryKey)));
+        } catch {
+          failures.push('Route preview could not be displayed.');
+        }
         if (!current) return;
-        await coPilotHost().mapCommand('recenter');
+        // Preview drawing must not prevent the independent GPS-follow command.
+        try {
+          await displayCall(() => followPosition(coPilotHost(), () => current));
+        } catch (failure) {
+          failures.push(followPositionError(failure));
+        }
+        if (current) setError(failures.join(' '));
       })
       .catch(() => {
-        if (current) setError('Route preview could not be displayed.');
+        if (current) setError('Map setup could not complete. Try Recenter.');
       });
     return () => {
       current = false;
@@ -139,7 +171,7 @@ export function CopilotPlannerMap({
     );
     queue.current = queue.current
       .then(async () => {
-        if (current) await coPilotHost().drawMarkers(markers);
+        if (current) await displayCall(() => coPilotHost().drawMarkers(markers));
       })
       .catch(() => {
         if (current) setError('Some places could not be displayed.');
@@ -152,10 +184,12 @@ export function CopilotPlannerMap({
   }, [ready, blocker, plan, pois]);
   async function run(action: () => Promise<void>) {
     try {
-      await action();
+      await displayCall(action);
       setError('');
-    } catch {
-      setError('Map control unavailable. Check navigation setup.');
+    } catch (failure) {
+      const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : '';
+      setError(code === 'COPILOT_CHEVRON_UNAVAILABLE' || code === 'COPILOT_VISIBLE_PRECISE_LOCATION_REQUIRED'
+        ? followPositionError(failure) : 'Map control unavailable. Check navigation setup.');
     }
   }
   useEffect(() => {
@@ -163,7 +197,7 @@ export function CopilotPlannerMap({
     void run(() =>
       command.type === 'overview'
         ? overview()
-        : coPilotHost().mapCommand('recenter'),
+        : followPosition(coPilotHost()),
     );
   }, [command, ready, blocker]);
   const controls: [
@@ -174,7 +208,7 @@ export function CopilotPlannerMap({
   ][] = [
     [
       'Recenter / follow truck',
-      () => coPilotHost().mapCommand('recenter'),
+      () => followPosition(coPilotHost()),
       'my_location_rounded',
       '',
     ],
@@ -190,7 +224,10 @@ export function CopilotPlannerMap({
   ];
   return (
     <View style={styles.fill}>
-      {(ready || blocker) && <CopilotOfflineMap state={state} />}
+      {/* Mount the verified native view before issuing appearance/camera calls.
+          CopilotOfflineMap owns the startup/license gate; display acknowledgement
+          must not be a prerequisite for mounting the renderer it configures. */}
+      <CopilotOfflineMap state={state} />
       {!!error && (
         <Text
           accessibilityRole="alert"

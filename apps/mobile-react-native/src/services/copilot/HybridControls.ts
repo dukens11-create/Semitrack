@@ -1,6 +1,11 @@
+import { truckDimensionMessage } from './TruckDimensionDifferences';
+import type { TruckProfileBlocker } from './TruckProfileBlockers';
 import type { Services } from '../../app/services';
 import { coPilotHost, type CoPilotHost } from './CoPilotHost';
-import { standardTruckRequest } from './StandardTruckNavigation';
+import {
+  standardTruckRequest,
+  StandardTruckValidationError,
+} from './StandardTruckNavigation';
 
 export type HybridAction =
   | 'START_RESUME'
@@ -28,19 +33,39 @@ export function logHybridControl(action: HybridAction, stage: HybridStage) {
   }
 }
 export class HybridControlError extends Error {
-  constructor(message: string, readonly code = 'UNCLASSIFIED_FAILURE') { super(message); }
+  constructor(
+    message: string,
+    readonly code = 'UNCLASSIFIED_FAILURE',
+    readonly profileBlockers?: readonly TruckProfileBlocker[],
+  ) {
+    super(message);
+  }
 }
 export function hybridError(error: unknown): string {
   if (error instanceof HybridControlError) return error.message;
   const code =
     error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
+    case 'OVERALL_LENGTH_REQUIRED':
+      return 'Enter your actual overall tractor-and-trailer length, from front bumper to the rear of the combination. It must be longer than the trailer alone.';
+    case 'PROFILE_APPLY_TRIP_ACTIVE':
+      return 'End Route before applying truck settings to CoPilot.';
+    case 'FLEET_PROFILE_MANAGED':
+      return 'Your active CoPilot profile is fleet-assigned. Have the fleet administrator correct it; SemiTraX will not overwrite or replace an assigned profile.';
+    case 'PROFILE_APPLY_REJECTED':
+      return 'CoPilot rejected the requested profile. Check the actual dimensions, whole-vehicle weight and axle-group weight. Guidance has not started.';
+    case 'PROFILE_APPLY_UNCONFIRMED':
+      return 'CoPilot did not confirm every requested value. Review the active truck profile and retry. Guidance has not started.';
+    case 'PROFILE_RESTORE_UNCONFIRMED':
+      return 'CoPilot could not confirm restoring the previous profile after a failed update. Open Trimble settings and review the active truck profile before retrying. Guidance has not started.';
+    case 'HEAVY_TRUCK_PROFILE_REQUIRED':
+      return 'Open Truck settings and select a heavy-duty CoPilot profile matching your actual vehicle. Default, manual, API and assigned fleet profiles can be checked. Then retry Start / Resume; selecting a profile alone does not start guidance.';
     case 'FLEET_PROFILE_REQUIRED':
       return 'Check assigned fleet profiles and select the matching heavy-duty truck profile.';
     case 'TRUCK_DIMENSIONS_MISMATCH':
-      return 'The engine dimensions or axle-group weight do not match your saved truck. Review both profiles; no settings were changed.';
+      return truckDimensionMessage(error);
     case 'TRUCK_PREFERENCES_MISMATCH':
-      return 'The fleet profile must use Practical routing, no hazardous cargo, and the same toll preference as your saved truck.';
+      return 'The active CoPilot truck profile must use Practical routing, no hazardous cargo, and the same toll preference as your saved truck.';
     case 'STANDARD_TRUCK_RECHECK_REQUIRED':
     case 'STANDARD_TRUCK_CONFIRMATION_REQUIRED':
       return 'The truck profile needs a fresh check and confirmation before starting.';
@@ -79,10 +104,13 @@ export async function synchronizeHybridTruck(
     request = standardTruckRequest(truck);
   } catch (e) {
     throw new HybridControlError(
-      e instanceof Error && !('issues' in e)
+      e instanceof StandardTruckValidationError
         ? e.message
         : 'The saved truck profile is invalid. Review Truck settings.',
-      e instanceof Error && !('issues' in e) ? 'STANDARD_TRUCK_SCOPE' : 'SAVED_TRUCK_INVALID',
+      e instanceof StandardTruckValidationError
+        ? 'STANDARD_TRUCK_SCOPE'
+        : 'SAVED_TRUCK_INVALID',
+      e instanceof StandardTruckValidationError ? e.profileBlockers : undefined,
     );
   }
   if (!host.verifyStandardTruckProfile)

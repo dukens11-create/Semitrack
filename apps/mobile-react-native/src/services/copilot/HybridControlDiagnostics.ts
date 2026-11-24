@@ -1,10 +1,25 @@
+import {
+  truckDimensionDifferences,
+  type DimensionDifference,
+} from './TruckDimensionDifferences';
+import {
+  truckProfileBlockers,
+  type TruckProfileBlocker,
+} from './TruckProfileBlockers';
 const allowed = [
+  'OVERALL_LENGTH_REQUIRED',
+  'PROFILE_APPLY_TRIP_ACTIVE',
+  'FLEET_PROFILE_MANAGED',
+  'PROFILE_APPLY_REJECTED',
+  'PROFILE_APPLY_UNCONFIRMED',
+  'PROFILE_RESTORE_UNCONFIRMED',
   'COPILOT_NOT_READY',
   'TRUCK_NOT_SELECTED',
   'SAVED_TRUCK_INVALID',
   'STANDARD_TRUCK_SCOPE',
   'PROFILE_BRIDGE_MISSING',
   'FLEET_PROFILE_REQUIRED',
+  'HEAVY_TRUCK_PROFILE_REQUIRED',
   'TRUCK_DIMENSIONS_MISMATCH',
   'TRUCK_PREFERENCES_MISMATCH',
   'STANDARD_TRUCK_RECHECK_REQUIRED',
@@ -19,7 +34,12 @@ const allowed = [
   'ENGINE_TRIP_UNAVAILABLE',
   'COPILOT_MAP_OR_LICENSE_UNVERIFIED',
 ] as const;
-let lastFailure: { action: string; code: string } | null = null;
+let lastFailure: {
+  action: string;
+  code: string;
+  profileBlockers?: TruckProfileBlocker[];
+  dimensionMismatches?: DimensionDifference[];
+} | null = null;
 export function recordHybridFailure(action: string, error: unknown) {
   const actions = [
     'START_RESUME',
@@ -38,7 +58,38 @@ export function recordHybridFailure(action: string, error: unknown) {
         ? code
         : 'UNCLASSIFIED_FAILURE',
   };
+  const dimensions = truckDimensionDifferences(error);
+  if (dimensions.length) lastFailure.dimensionMismatches = dimensions;
+  if (
+    lastFailure.code === 'STANDARD_TRUCK_SCOPE' &&
+    error &&
+    typeof error === 'object' &&
+    'profileBlockers' in error &&
+    Array.isArray(error.profileBlockers)
+  ) {
+    const supplied: unknown[] = error.profileBlockers;
+    lastFailure.profileBlockers = truckProfileBlockers.filter(blocker =>
+      supplied.includes(blocker),
+    );
+  }
+}
+export function clearHybridFailure(action: string) {
+  if (lastFailure?.action === action) lastFailure = null;
 }
 export function hybridFailureSnapshot() {
-  return lastFailure ? { ...lastFailure } : null;
+  return lastFailure
+    ? {
+        ...lastFailure,
+        ...(lastFailure.dimensionMismatches
+          ? {
+              dimensionMismatches: lastFailure.dimensionMismatches.map(row => ({
+                ...row,
+              })),
+            }
+          : {}),
+        ...(lastFailure.profileBlockers
+          ? { profileBlockers: [...lastFailure.profileBlockers] }
+          : {}),
+      }
+    : null;
 }

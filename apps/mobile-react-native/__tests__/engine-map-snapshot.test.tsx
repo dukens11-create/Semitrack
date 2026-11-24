@@ -102,3 +102,14 @@ test('polling recovers a newer route after a missed recalculation event', async 
   });
   expect(state.sample?.routeRevision).toBe(2);
 });
+
+test('a timed-out snapshot cannot overwrite the recovered newer route', async () => {
+  let late!: (value: unknown) => void;
+  mockRead.mockImplementationOnce(() => new Promise(resolve => { late = resolve; }));
+  mockRead.mockImplementation(() => Promise.resolve(sample(2)));
+  await act(async () => { screen = create(<Probe />); });
+  await act(async () => { await jest.advanceTimersByTimeAsync(12000); });
+  expect(state.sample?.routeRevision).toBe(2);
+  await act(async () => { late(sample(1)); });
+  expect(state.sample?.routeRevision).toBe(2);
+});

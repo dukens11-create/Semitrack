@@ -24,7 +24,7 @@ if (!exists('package.json')) {
     elfAlignmentPasses: libraries.length > 0 && libraries.every(lib => lib.passes16KB),
     startupUsesNullNotificationIcon: /\.setSmallIcon\(null\)/.test(source),
   };
-  if (pkg.version !== '11.3.0-2016') {
+  if (pkg.version !== '11.4.0-2142') {
     blockers.push('Package version changed; repeat the API, native and 16 KB audit.');
   }
   if (!report.android.elfAlignmentPasses) { blockers.push('Android ELF alignment failed.'); }

@@ -105,9 +105,9 @@ export class LocationService extends Store<LocationState> {
     });
   }
   /** Map opening may reuse permission, but must never trigger a permission prompt. */
-  startIfPermitted() {
+  startIfPermitted(refreshAfterResume = false) {
     if (this.starting) return this.starting;
-    if (this.value.tracking) return Promise.resolve();
+    if (this.value.tracking && !refreshAfterResume) return Promise.resolve();
     return this.start(this.background, false);
   }
   start(background = false, requestPermission = true) {

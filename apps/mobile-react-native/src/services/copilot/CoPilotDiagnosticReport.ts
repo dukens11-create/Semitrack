@@ -215,6 +215,9 @@ const snapshot = z.object({
         : 'NOT_AVAILABLE',
     ),
   savedCompanyMatches: z.boolean(),
+  enrollmentReferenceConfigured: z.boolean().optional(),
+  enrollmentReferenceStatus: z.enum(['CONFIGURED', 'NOT_CONFIGURED']).optional(),
+  savedSetupPresent: z.boolean().optional(),
   savedDeviceMatches: z.boolean(),
   credentialHook: fixedCode([
     'NOT_CALLED',

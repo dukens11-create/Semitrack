@@ -1,6 +1,9 @@
 import { NativeModules, Platform } from 'react-native';
 import { z } from 'zod';
 export interface CoPilotSetupDiagnostics {
+  enrollmentReferenceConfigured?: boolean;
+  enrollmentReferenceStatus?: string;
+  savedSetupPresent?: boolean;
   routeEngine?: {
     status: string;
     readyToAddStops?: boolean;
@@ -69,6 +72,7 @@ export interface CoPilotSetupDiagnostics {
   }[];
 }
 export interface CoPilotHost {
+  applyStandardTruckProfile?(profile: unknown): Promise<void>;
   verifyStandardTruckProfile?(profile: unknown): Promise<void>;
   acceptStandardTruckMode?(): Promise<void>;
   readFleetTruckProfiles?(): Promise<unknown>;

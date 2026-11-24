@@ -1,3 +1,4 @@
+import { applyStandardRoutingPreset } from './modules/trucks/standardRoutingPreset.js';
 import { subscriptionControlsRouter } from './modules/billing/subscriptionControls.routes.js';
 import { subscriptionOffersRouter } from './modules/subscriptions/subscriptionOffers.routes.js';
 import { MAX_INTERMEDIATE_STOPS } from './contracts/routeLimits.js';
@@ -300,11 +301,11 @@ const routeSchema = z.object({
   avoidSegments: z.array(z.string().min(1)).max(250).optional(),
 });
 app.post("/routing/truck-route", requireAuth, asyncRoute(async (req, res) => {
-  const input = routeSchema.extend({ truckProfileId: z.string().min(1).max(120), truckRevision: z.number().int().positive() }).parse(req.body);
+  const input = routeSchema.extend({ truckProfileId: z.string().min(1).max(120), truckRevision: z.number().int().positive(), acceptedRoutingPreset: z.literal('STANDARD_SINGLE_53_AXLE_34000').optional() }).parse(req.body);
   const where = { id: input.truckProfileId, userId: req.user!.userId, isDefault: true };
   const saved = await prisma.truck.findFirst({ where });
   if (!saved || !isVerifiedTruck(saved) || saved.revision !== input.truckRevision || !matchesSavedRoutingProfile(saved, input.truck)) return res.status(409).json({ error: { code: 'TRUCK_PROFILE_CHANGED', message: 'Refresh and verify the saved truck profile before routing.' } });
-  const route = await buildTruckRoute({...input, truck:routingTruckSchema.parse(saved)});
+  const route = await buildTruckRoute({...input, truck:applyStandardRoutingPreset(saved, input.acceptedRoutingPreset)});
   // An edit/default change during provider work invalidates the calculated result.
   const current = await prisma.truck.findFirst({ where });
   if (!current || !isVerifiedTruck(current) || current.revision !== saved.revision || current.updatedAt.getTime() !== saved.updatedAt.getTime() || !matchesSavedRoutingProfile(current, input.truck)) return res.status(409).json({ error: { code: 'TRUCK_PROFILE_CHANGED', message: 'Truck profile changed during routing. Review it again.' } });

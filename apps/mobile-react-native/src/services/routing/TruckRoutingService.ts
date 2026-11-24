@@ -24,6 +24,7 @@ export class TruckRoutingService {
     signal?: AbortSignal,
     alternatives = 0,
     diagnosticAttempt?: number,
+    acceptedRoutingPreset?: 'STANDARD_SINGLE_53_AXLE_34000',
   ) {
     const attempt =
       diagnosticAttempt ??
@@ -50,6 +51,7 @@ export class TruckRoutingService {
         viaStops: plan.stops.map(stop => coordinateSchema.parse(stop)),
         truck: serializeTruck(truck, true),
         truckProfileId: truck.id,
+        ...(acceptedRoutingPreset ? { acceptedRoutingPreset } : {}),
         truckRevision: truck.revision,
         routeMode: 'fastest',
         alternatives,

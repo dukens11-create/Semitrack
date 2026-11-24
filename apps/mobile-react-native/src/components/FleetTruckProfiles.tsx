@@ -26,7 +26,7 @@ export function FleetTruckProfiles({ ready }: { ready: boolean }) {
       setMessage(
         found.length
           ? 'Downloaded heavy-duty fleet profiles:'
-          : 'No downloaded heavy-duty fleet profile was found. An Account Manager assignment alone does not confirm it has reached this phone.',
+          : 'No downloaded heavy-duty fleet profile was found. You can also select a matching heavy-duty profile in Truck settings, then retry Start / Resume for verification. An Account Manager assignment alone does not confirm it has reached this phone.',
       );
     } catch {
       setMessage(
@@ -79,10 +79,23 @@ export function FleetTruckProfiles({ ready }: { ready: boolean }) {
             profile.weightPerAxleLbs
           } lb`}</DriverCopy>
           <DriverCopy>
-            Read from CoPilot. This SDK does not expose separate overall length
-            or trailer count here. These values do not certify all truck
-            restrictions.
+            Read from CoPilot; these values do not certify all truck
+            restrictions. Zero SDK length values mean no usable length was
+            reported, not a zero-length vehicle.
           </DriverCopy>
+          <DriverCopy>{`SDK vehicle type: ${
+            profile.vehicleType ?? 'Not reported'
+          }\nTrailer count: ${
+            profile.trailerCount ?? 'Not reported'
+          }\nMaximum straight length: ${
+            profile.maximumStraightLengthInches
+              ? `${profile.maximumStraightLengthInches} in`
+              : 'Not reported'
+          }\nBumper-to-bumper length: ${
+            profile.bumperToBumperLengthInches
+              ? `${profile.bumperToBumperLengthInches} in`
+              : 'Not reported'
+          }`}</DriverCopy>
           {!profile.active && !!profile.ticket && (
             <DriverButton
               title={`Select ${profile.name}`}

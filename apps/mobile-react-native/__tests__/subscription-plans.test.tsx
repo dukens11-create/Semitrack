@@ -79,14 +79,15 @@ test.each(['day', 'night'] as const)(
       '$14.99/month',
       'first 3 paid months',
       '$19.99/month',
-      '14 DAYS FREE',
+      '7 DAYS FREE',
       '$199.99/year',
       'Billed annually.',
       'automatically renews',
     ])
       expect(content()).toContain(text);
     expect(content()).not.toContain('$9.99');
-    expect(content()).not.toContain('7 days');
+    expect(content()).not.toContain('14 DAYS FREE');
+    expect(content()).toContain('7 days free.');
     const title = screen.root
       .findAllByType(Text)
       .find(n => n.props.children === 'Plans & Subscription')!;

@@ -1,3 +1,4 @@
+import { followPosition, followPositionError } from '../../services/copilot/FollowPosition';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
@@ -124,9 +125,9 @@ export function CopilotPlannerMap({
         if (!current) return;
         // Preview drawing must not prevent the independent GPS-follow command.
         try {
-          await displayCall(() => coPilotHost().mapCommand('recenter'));
-        } catch {
-          failures.push('Map could not follow your position. Check GPS and tap Recenter.');
+          await displayCall(() => followPosition(coPilotHost(), () => current));
+        } catch (failure) {
+          failures.push(followPositionError(failure));
         }
         if (current) setError(failures.join(' '));
       })
@@ -185,8 +186,10 @@ export function CopilotPlannerMap({
     try {
       await displayCall(action);
       setError('');
-    } catch {
-      setError('Map control unavailable. Check navigation setup.');
+    } catch (failure) {
+      const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : '';
+      setError(code === 'COPILOT_CHEVRON_UNAVAILABLE' || code === 'COPILOT_VISIBLE_PRECISE_LOCATION_REQUIRED'
+        ? followPositionError(failure) : 'Map control unavailable. Check navigation setup.');
     }
   }
   useEffect(() => {
@@ -194,7 +197,7 @@ export function CopilotPlannerMap({
     void run(() =>
       command.type === 'overview'
         ? overview()
-        : coPilotHost().mapCommand('recenter'),
+        : followPosition(coPilotHost()),
     );
   }, [command, ready, blocker]);
   const controls: [
@@ -205,7 +208,7 @@ export function CopilotPlannerMap({
   ][] = [
     [
       'Recenter / follow truck',
-      () => coPilotHost().mapCommand('recenter'),
+      () => followPosition(coPilotHost()),
       'my_location_rounded',
       '',
     ],

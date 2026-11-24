@@ -1461,7 +1461,22 @@ public final class CoPilotHostModule extends ReactContextBaseJavaModule implemen
           case "trip-plan": UIMgr.showDialog(UIMgr.Dialog.PREVIEW_TRIP_PLAN_DIALOG); break;
           case "settings": UIMgr.showDialog(UIMgr.Dialog.SETTINGS_MENU); break;
           case "map": UIMgr.showDialog(UIMgr.Dialog.MAP_NAVIGATION_VIEW); break;
-          case "recenter": CoPilotCameraCommands.recenter(drawer); break;
+          case "recenter":
+            if (context.getLifecycleState() != LifecycleState.RESUMED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+              promise.reject("COPILOT_VISIBLE_PRECISE_LOCATION_REQUIRED", "Open the app and allow precise location before following your position.");
+              return;
+            }
+            // Restore GPS independently of guidance/profile approval. A failed
+            // chevron lock is explicit so JS can retry only this safe operation.
+            CopilotMgr.enableGPS();
+            try { CoPilotCameraCommands.recenter(drawer); }
+            catch (IllegalStateException unavailable) {
+              if (!"COPILOT_CHEVRON_UNAVAILABLE".equals(unavailable.getMessage())) throw unavailable;
+              promise.reject("COPILOT_CHEVRON_UNAVAILABLE", "CoPilot has not made its position marker available yet.");
+              return;
+            }
+            break;
           case "two-dimensional": drawer.setMapView(MapDrawer.MapViewType.TWO_DIMENSIONAL_NO_WIDGETS); break;
           case "three-dimensional": drawer.setMapView(MapDrawer.MapViewType.THREE_DIMENSIONAL_NO_WIDGETS); break;
           case "north-up": CoPilotCameraCommands.northUp(drawer); break;

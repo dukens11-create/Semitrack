@@ -74,6 +74,7 @@ export function HybridNavigation({
   const [settings, setSettings] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [repairRequest, setRepairRequest] = useState(0);
   async function run(
     action: () => Promise<void>,
     name: HybridAction = 'START_RESUME',
@@ -97,7 +98,19 @@ export function HybridNavigation({
       setError(hybridError(e));
       recordHybridFailure(name, e);
       controls.current?.scrollTo({ y: 0, animated: true });
-      Alert.alert('SemiTraX action could not complete', hybridError(e));
+      const mismatch = e !== null && typeof e === 'object' &&
+        'code' in e && e.code === 'TRUCK_DIMENSIONS_MISMATCH';
+      if (mismatch) {
+        Alert.alert('SemiTraX action could not complete', hybridError(e), [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Review and apply truck', onPress: () => {
+            setRepairRequest(value => value + 1);
+            controls.current?.scrollTo({ y: 0, animated: true });
+          } },
+        ]);
+      } else {
+        Alert.alert('SemiTraX action could not complete', hybridError(e));
+      }
       logHybridControl(name, 'FAILED');
     } finally {
       if (generation === actionGeneration.current) {
@@ -245,6 +258,12 @@ export function HybridNavigation({
                   ? 'Engine setup is ready. Start will check your saved truck against the active truck profile.'
                   : 'Navigation is waiting for the checks below.')}
             </DriverCopy>
+            <ApplyStandardTruck
+              openRequest={repairRequest}
+              services={services}
+              disabled={!state.readyToAddStops || pending}
+              run={action => run(action, 'SYNC_PROFILE')}
+            />
             <DriverCopy>
               Engine: {state.initialized ? 'started' : 'not ready'} · Navigation
               license:{' '}
@@ -279,11 +298,7 @@ export function HybridNavigation({
               }
             />
             <FleetTruckProfiles ready={state.readyToAddStops && !pending} />
-            <ApplyStandardTruck
-              services={services}
-              disabled={!state.readyToAddStops || pending}
-              run={action => run(action, 'SYNC_PROFILE')}
-            />
+
             <DriverButton
               title="Check readiness"
               disabled={pending}

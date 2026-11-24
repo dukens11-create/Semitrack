@@ -274,7 +274,7 @@ test('unanswered appearance does not claim the map is ready or replay setup', as
   try {
     await act(async()=>{tree=create(<CopilotPlannerMap route={route} plan={null} pois={[]}/>);});
     await act(async()=>{await jest.advanceTimersByTimeAsync(10000);});
-    expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(0);
+    expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(1);
     expect(mockHost.setMapAppearance).toHaveBeenCalledTimes(1);
     expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
   } finally {jest.useRealTimers();}

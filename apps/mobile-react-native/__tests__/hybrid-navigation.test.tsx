@@ -293,3 +293,18 @@ test('Start uses a fresh readiness check and reports a route-engine failure expl
     expect.stringContaining('route engine can accept stops'),
   );
 });
+
+ test('dimension mismatch opens the repair form without applying or starting', async () => {
+  const sync = jest.spyOn(controls, 'synchronizeHybridTruck').mockRejectedValueOnce(
+    Object.assign(new Error('Mismatch'), { code: 'TRUCK_DIMENSIONS_MISMATCH' }),
+  );
+  try {
+    await press('Start / Resume Navigation');
+    const buttons = mockAlert.mock.calls[0][2];
+    await act(async () => buttons.find((b: {text: string}) => b.text === 'Review and apply truck').onPress());
+    expect(JSON.stringify(tree.toJSON())).toContain('Actual overall length');
+    expect(mockHost.openEngineTrip).not.toHaveBeenCalled();
+    expect(mockHost.acceptStandardTruckMode).not.toHaveBeenCalled();
+    expect(sync).toHaveBeenCalledTimes(1);
+  } finally { sync.mockRestore(); }
+});

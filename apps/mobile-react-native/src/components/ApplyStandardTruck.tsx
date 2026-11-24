@@ -19,14 +19,19 @@ export function ApplyStandardTruck({
   services,
   disabled,
   run,
+  openRequest = 0,
 }: {
   services: Services;
   disabled: boolean;
+  openRequest?: number;
   run: (action: () => Promise<void>) => Promise<void>;
 }) {
   const truck = useStore(services.trucks).selected;
   const fingerprint = JSON.stringify(truck);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
   const [feet, setFeet] = useState('');
   const [inches, setInches] = useState('0');
   const [confirmed, setConfirmed] = useState(false);

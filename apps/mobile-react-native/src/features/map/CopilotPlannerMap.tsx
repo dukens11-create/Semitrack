@@ -221,7 +221,10 @@ export function CopilotPlannerMap({
   ];
   return (
     <View style={styles.fill}>
-      {(ready || blocker) && <CopilotOfflineMap state={state} />}
+      {/* Mount the verified native view before issuing appearance/camera calls.
+          CopilotOfflineMap owns the startup/license gate; display acknowledgement
+          must not be a prerequisite for mounting the renderer it configures. */}
+      <CopilotOfflineMap state={state} />
       {!!error && (
         <Text
           accessibilityRole="alert"

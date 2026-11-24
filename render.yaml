@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Preparation only. Review paid plans/region before creating resources.
+# Select the reviewed branch containing this file in the Render dashboard.
+services:
+  - type: web
+    name: semitrax-api
+    runtime: node
+    plan: 0.5c-512mb
+    region: oregon
+    rootDir: apps/api
+    autoDeployTrigger: off
+    buildCommand: npm ci --include=dev && npm run prisma:generate && npm run build
+    preDeployCommand: npm run prisma:deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.16.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: semitrax-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: "15"
+      - key: REFRESH_TOKEN_DAYS
+        value: "30"
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: BILLING_MODE
+        value: disabled
+      - key: ROUTING_PROVIDER
+        value: trimble
+      - key: ROUTING_COMPARE_ENABLED
+        value: "false"
+      - key: TRIMBLE_API_KEY
+        sync: false
+
+databases:
+  - name: semitrax-db
+    plan: 0.1c-256mb
+    region: oregon
+    postgresMajorVersion: "16"
+    databaseName: semitrax
+    user: semitrax
+    ipAllowList: []

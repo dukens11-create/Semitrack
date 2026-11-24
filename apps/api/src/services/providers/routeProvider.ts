@@ -1,10 +1,16 @@
+import type { RestrictionDiagnostic } from "./restrictionDiagnostic.js";
 import type { RouteBuildInput, RouteBuildResult, RoutingProviderName } from "../../types.js";
 
 export class RoutingProviderError extends Error {
+  // Set only after the provider transport boundary has been entered.
+  providerAttempted = false;
+  readonly truckSafe = false;
+  readonly navigationAllowed = false;
   readonly provider: RoutingProviderName;
   readonly code: string;
   readonly httpStatus: number;
   readonly retryable: boolean;
+  restrictionDiagnostic?: RestrictionDiagnostic;
 
   constructor(
     provider: RoutingProviderName,

@@ -24,10 +24,15 @@ export async function refreshDotProviders(force = false) {
     try {
       const snapshot = await provider.fetchSnapshot();
       await prisma.$transaction([
-        ...snapshot.events.map((event) => prisma.dotRoadEvent.upsert({
+        ...(snapshot.complete === true ? (provider.config.dataType === "ROAD_EVENTS" ? [prisma.dotRoadEvent.updateMany({
+          where: {provider: provider.id, providerEventId: {notIn: snapshot.events.map(event => event.providerEventId)}}, data: {active: false},
+        })] : [prisma.trafficCamera.updateMany({
+          where: {provider: provider.id, providerCameraId: {notIn: snapshot.cameras.map(camera => camera.providerCameraId)}}, data: {active: false},
+        })]) : []),
+        ...snapshot.events.map(({geometry, ...event}) => prisma.dotRoadEvent.upsert({
           where: { provider_providerEventId: { provider: provider.id, providerEventId: event.providerEventId } },
-          create: { provider: provider.id, ...event, geometryJson: event.geometry as object | undefined },
-          update: { ...event, geometryJson: event.geometry as object | undefined },
+          create: { provider: provider.id, ...event, geometryJson: geometry as object | undefined },
+          update: { ...event, geometryJson: geometry as object | undefined },
         })),
         ...snapshot.cameras.map((camera) => prisma.trafficCamera.upsert({
           where: { provider_providerCameraId: { provider: provider.id, providerCameraId: camera.providerCameraId } },
@@ -37,15 +42,17 @@ export async function refreshDotProviders(force = false) {
         prisma.providerSyncState.update({
           where: { id: state.id },
           data: {
-            status: "HEALTHY", lastSuccessAt: snapshot.fetchedAt,
-            lastErrorCode: null, lastErrorMessage: null,
+            status: snapshot.complete ? "HEALTHY" : "DEGRADED",
+            lastSuccessAt: snapshot.complete ? snapshot.fetchedAt : state.lastSuccessAt,
+            lastErrorCode: snapshot.complete ? null : "SNAPSHOT_COMPLETENESS_UNVERIFIED",
+            lastErrorMessage: snapshot.complete ? null : "Feed completeness is unverified; existing records were not retired.",
             itemCount: snapshot.events.length + snapshot.cameras.length,
           },
         }),
       ]);
       return { provider: provider.id, skipped: false, itemCount: snapshot.events.length + snapshot.cameras.length };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Provider sync failed";
+      const message = "Provider sync failed; previous data is not current.";
       await prisma.providerSyncState.update({
         where: { id: state.id },
         data: { status: state.lastSuccessAt ? "DEGRADED" : "ERROR", lastErrorCode: "FETCH_FAILED", lastErrorMessage: message },

@@ -1,0 +1,65 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+// Device-test APKs use their embedded bundle. Metro is an explicit development opt-in.
+def semitraxUseMetro = providers.gradleProperty("semitraxUseMetro").map { it.toBoolean() }.getOrElse(false)
+react {
+ autolinkLibrariesWithApp()
+ codegenJavaPackageName = "com.semitrax.nativebridge"
+ debuggableVariants = semitraxUseMetro ? ["debug", "debugOptimized"] : []
+}
+android {
+ ndkVersion rootProject.ext.ndkVersion
+ buildToolsVersion rootProject.ext.buildToolsVersion
+ compileSdk rootProject.ext.compileSdkVersion
+ namespace "com.semitrax"
+ defaultConfig {
+  applicationId "com.semitrax.app"
+  minSdkVersion rootProject.ext.minSdkVersion
+  targetSdkVersion rootProject.ext.targetSdkVersion
+  versionCode 1
+  versionName "0.1.0"
+  // NDK r27 opt-in for source-built libraries. Prebuilt .so files still need
+  // independent inspection; this cannot repair a vendor's 4 KB binary.
+  externalNativeBuild {
+   cmake { arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" }
+  }
+ }
+ buildTypes {
+  debug {
+  applicationIdSuffix ".migration.debug"
+  manifestPlaceholders = [usesCleartextTraffic:"true"]
+  buildConfigField "boolean", "SEMITRAX_USE_METRO", semitraxUseMetro.toString()
+ }
+  release {
+   buildConfigField "boolean", "SEMITRAX_USE_METRO", "false"
+   // Unsigned until verified production signing is supplied outside this repository.
+   manifestPlaceholders = [usesCleartextTraffic:"false"]
+   minifyEnabled true
+   proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+  }
+ }
+ packaging { jniLibs { useLegacyPackaging = false } }
+}
+// Fail before native compilation/bundling if the build has no explicit API environment.
+tasks.register("configureSemiTraxDebug", Exec) {
+ workingDir rootProject.projectDir.parentFile
+ commandLine "node", "--experimental-strip-types", "scripts/configure.mts", "--require-api-url", "--diagnostics"
+}
+// Release configuration is regenerated from the environment, never a stale debug file.
+tasks.register("configureSemiTraxRelease", Exec) {
+ workingDir rootProject.projectDir.parentFile
+ commandLine "node", "--experimental-strip-types", "scripts/configure.mts", "--release"
+}
+tasks.configureEach { task ->
+ if (task.name == "preDebugBuild" || task.name == "createBundleDebugJsAndAssets") {
+  task.dependsOn "configureSemiTraxDebug"
+ }
+ if (task.name == "preReleaseBuild" || task.name == "createBundleReleaseJsAndAssets") {
+  task.dependsOn "configureSemiTraxRelease"
+ }
+}
+dependencies {
+ implementation("com.facebook.react:react-android")
+ implementation("com.facebook.react:hermes-android")
+}

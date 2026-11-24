@@ -1,16 +1,17 @@
 import dotenv from "dotenv";
 import { parseBillingConfiguration } from "./billingConfig.js";
+import { validateProductionConfiguration } from "./productionConfig.js";
+import { parseRecoveryConfiguration } from './recoveryConfig.js';
 dotenv.config();
+
+validateProductionConfiguration(process.env);
 
 const nodeEnv = process.env.NODE_ENV ?? "development";
 const jwtSecret = process.env.JWT_SECRET ?? "";
-if (nodeEnv === "production" && jwtSecret.length < 32) {
-  throw new Error("JWT_SECRET must contain at least 32 characters in production");
-}
 
 const routingProvider = (process.env.ROUTING_PROVIDER ?? "trimble").trim().toLowerCase();
-if (!new Set(["here", "trimble"]).has(routingProvider)) {
-  throw new Error("ROUTING_PROVIDER must be either 'here' or 'trimble'");
+if (routingProvider !== "trimble") {
+  throw new Error("ROUTING_PROVIDER must be 'trimble'");
 }
 
 const parseBoolean = (value: string | undefined, fallback = false) => {
@@ -53,10 +54,12 @@ export const env = {
   jwtSecret: jwtSecret || "development-only-change-before-production",
   accessTokenMinutes: Number(process.env.ACCESS_TOKEN_MINUTES ?? 15),
   refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS ?? 30),
+  openWeatherApiKey: process.env.OPENWEATHER_API_KEY ?? "",
   hereApiKey: process.env.HERE_API_KEY ?? "",
   mapboxToken: process.env.MAPBOX_TOKEN ?? "",
-  routingProvider: routingProvider as "here" | "trimble",
-  routingCompareEnabled: parseBoolean(process.env.ROUTING_COMPARE_ENABLED),
+  routingProvider: routingProvider as "trimble",
+  // Compatibility flag is permanently disabled; it cannot enable another provider.
+  routingCompareEnabled: false,
   trimbleApiKey: process.env.TRIMBLE_API_KEY ?? "",
   trimbleBaseUrl: process.env.TRIMBLE_BASE_URL ?? "https://pcmiler.alk.com/apis/rest/v1.0/Service.svc",
   trimbleDataVersion: process.env.TRIMBLE_DATA_VERSION ?? "Current",
@@ -106,7 +109,7 @@ export const env = {
   stripeCheckoutSuccessUrl: billing.stripeCheckoutSuccessUrl,
   stripeCheckoutCancelUrl: billing.stripeCheckoutCancelUrl,
   stripePortalReturnUrl: billing.stripePortalReturnUrl,
-  passwordResetBaseUrl: process.env.PASSWORD_RESET_BASE_URL ?? "",
+  recoveryEmail: parseRecoveryConfiguration(process.env),
   eldEncryptionKey: process.env.ELD_ENCRYPTION_KEY ?? "",
   samsaraClientId: process.env.SAMSARA_CLIENT_ID ?? "",
   samsaraClientSecret: process.env.SAMSARA_CLIENT_SECRET ?? "",

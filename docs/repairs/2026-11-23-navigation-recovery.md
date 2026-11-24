@@ -16,3 +16,9 @@ This change does not certify physical guidance, background GPS, all truck config
 ## Verification
 
 Run the API suite, mobile typecheck, mobile Jest suite and lint on changed mobile files. Added cases cover explicit preset acceptance/cancellation, preservation of measured fields, incompatible presets, recovery after timeouts, changed profiles/logout, and delayed native snapshots. Database-dependent API tests still require an isolated database. Physical phone checks remain required before release.
+
+## Foreground GPS recovery follow-up
+
+Returning to the foreground explicitly refreshes the app location subscription even if its previous state still said tracking. The restart rechecks permission without a new permission prompt, clears the old fix, and preserves the service's existing background intent. Initial map opening retains the non-restarting behavior. This does not enable background tracking or alter CoPilot's separate GPS source.
+
+Validation: mobile typecheck and 80 Jest suites / 1,077 tests pass, including resume after a silent subscription and revoked permission. The preceding API/mobile repair passed APK CI run 45290698050 (build 152). This follow-up still requires its own Android build and physical-device acceptance.

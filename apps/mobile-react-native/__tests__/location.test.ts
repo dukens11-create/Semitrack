@@ -71,3 +71,30 @@ test('map opening without permission does not prompt or start GPS', async () => 
   expect(service.getSnapshot().tracking).toBe(false);
   await service.stop();
 });
+
+test('foreground resume rechecks permission and replaces a silent GPS subscription', async () => {
+  const p = provider();
+  const service = new LocationService(p.mock);
+  await service.startIfPermitted();
+  p.emit(fix());
+  await service.startIfPermitted(true);
+  expect(p.mock.start).toHaveBeenCalledTimes(2);
+  expect(p.mock.permissionStatus).toHaveBeenCalledTimes(2);
+  expect(p.mock.permission).not.toHaveBeenCalled();
+  expect(service.getFreshFix()).toBeNull();
+  p.emit(fix());
+  expect(service.getFreshFix()).not.toBeNull();
+  await service.stop();
+});
+test('foreground resume respects revoked permission and clears the old fix', async () => {
+  const p = provider();
+  const service = new LocationService(p.mock);
+  await service.startIfPermitted();p.emit(fix());
+  p.mock.permissionStatus = jest.fn(async () => 'denied');
+  await service.startIfPermitted(true);
+  expect(p.mock.start).toHaveBeenCalledTimes(1);
+  expect(p.mock.permission).not.toHaveBeenCalled();
+  expect(service.getSnapshot().tracking).toBe(false);
+  expect(service.getFreshFix()).toBeNull();
+  await service.stop();
+});

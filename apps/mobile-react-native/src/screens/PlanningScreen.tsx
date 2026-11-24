@@ -222,14 +222,14 @@ export function PlanningScreen({
   }, [services, guidanceSession]);
   useEffect(() => {
     if (!active) return;
-    const resume = () => {
+    const resume = (refreshAfterResume = false) => {
       void services.location
-        .startIfPermitted()
+        .startIfPermitted(refreshAfterResume)
         .catch(e => setError(errorMessage(e)));
     };
     resume();
     const listener = AppState.addEventListener('change', state => {
-      if (state === 'active') resume();
+      if (state === 'active') resume(true);
     });
     return () => listener.remove();
   }, [active, services]);

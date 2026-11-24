@@ -23,6 +23,22 @@ import {
 import type { StopPlan } from '../stops/StopPlan';
 import type { Poi } from '../poi/PoiService';
 
+// Bound the display acknowledgement only. Never replay an uncertain native call.
+// Native display operations are posted in order on the Android main thread.
+async function displayCall(action: () => Promise<unknown>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(action),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Map display acknowledgement timed out')), 10000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function CopilotPlannerMap({
   route,
   plan,
@@ -77,7 +93,7 @@ export function CopilotPlannerMap({
     queue.current = queue.current
       .then(async () => {
         if (!current) return;
-        await coPilotHost().setMapAppearance(palette.dark);
+        await displayCall(() => coPilotHost().setMapAppearance(palette.dark));
         if (current) {
           setReady(true);
           setError('');
@@ -101,14 +117,14 @@ export function CopilotPlannerMap({
         if (!current) return;
         const failures: string[] = [];
         try {
-          await coPilotHost().drawRoutePreview(JSON.parse(geometryKey));
+          await displayCall(() => coPilotHost().drawRoutePreview(JSON.parse(geometryKey)));
         } catch {
           failures.push('Route preview could not be displayed.');
         }
         if (!current) return;
         // Preview drawing must not prevent the independent GPS-follow command.
         try {
-          await coPilotHost().mapCommand('recenter');
+          await displayCall(() => coPilotHost().mapCommand('recenter'));
         } catch {
           failures.push('Map could not follow your position. Check GPS and tap Recenter.');
         }
@@ -154,7 +170,7 @@ export function CopilotPlannerMap({
     );
     queue.current = queue.current
       .then(async () => {
-        if (current) await coPilotHost().drawMarkers(markers);
+        if (current) await displayCall(() => coPilotHost().drawMarkers(markers));
       })
       .catch(() => {
         if (current) setError('Some places could not be displayed.');
@@ -167,7 +183,7 @@ export function CopilotPlannerMap({
   }, [ready, blocker, plan, pois]);
   async function run(action: () => Promise<void>) {
     try {
-      await action();
+      await displayCall(action);
       setError('');
     } catch {
       setError('Map control unavailable. Check navigation setup.');

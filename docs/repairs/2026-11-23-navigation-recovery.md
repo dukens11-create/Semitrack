@@ -22,3 +22,7 @@ Run the API suite, mobile typecheck, mobile Jest suite and lint on changed mobil
 Returning to the foreground explicitly refreshes the app location subscription even if its previous state still said tracking. The restart rechecks permission without a new permission prompt, clears the old fix, and preserves the service's existing background intent. Initial map opening retains the non-restarting behavior. This does not enable background tracking or alter CoPilot's separate GPS source.
 
 Validation: mobile typecheck and 80 Jest suites / 1,077 tests pass, including resume after a silent subscription and revoked permission. The preceding API/mobile repair passed APK CI run 45290698050 (build 152). This follow-up still requires its own Android build and physical-device acceptance.
+
+## Native display acknowledgement follow-up
+
+Appearance, route-preview, marker and map-control acknowledgements now have ten-second deadlines. A lost preview acknowledgement no longer holds follow-position and markers indefinitely. Calls are not replayed automatically; an appearance timeout never claims readiness. Android still owns serialized main-thread execution, and a blocked SDK/main thread cannot be repaired by a JavaScript deadline alone. Tests cover a late preview response and a missing appearance response.

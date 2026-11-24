@@ -252,3 +252,30 @@ test('unmount during a failing preview prevents a late follow command', async ()
   await act(async () => { fail(new Error('preview unavailable')); });
   expect(mockHost.mapCommand).not.toHaveBeenCalled();
 });
+
+test('unanswered preview cannot indefinitely block follow and marker setup', async () => {
+  jest.useFakeTimers();
+  let finish!: () => void;
+  mockHost.drawRoutePreview.mockImplementationOnce(() => new Promise<void>(resolve => {finish=resolve;}));
+  try {
+    await act(async()=>{tree=create(<CopilotPlannerMap route={route} plan={null} pois={[poi]}/>);});
+    expect(mockHost.mapCommand).not.toHaveBeenCalled();
+    await act(async()=>{await jest.advanceTimersByTimeAsync(10000);});
+    expect(mockHost.mapCommand).toHaveBeenCalledWith('recenter');
+    expect(mockHost.drawMarkers).toHaveBeenCalledTimes(1);
+    expect(mockHost.drawRoutePreview).toHaveBeenCalledTimes(1);
+    await act(async()=>{finish();});
+    expect(mockHost.mapCommand).toHaveBeenCalledTimes(1);
+  } finally {jest.useRealTimers();}
+});
+test('unanswered appearance does not claim the map is ready or replay setup', async () => {
+  jest.useFakeTimers();
+  mockHost.setMapAppearance.mockImplementationOnce(()=>new Promise(()=>{}));
+  try {
+    await act(async()=>{tree=create(<CopilotPlannerMap route={route} plan={null} pois={[]}/>);});
+    await act(async()=>{await jest.advanceTimersByTimeAsync(10000);});
+    expect(tree.root.findAllByType(CopilotOfflineMap)).toHaveLength(0);
+    expect(mockHost.setMapAppearance).toHaveBeenCalledTimes(1);
+    expect(mockHost.drawRoutePreview).not.toHaveBeenCalled();
+  } finally {jest.useRealTimers();}
+});
